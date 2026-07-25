@@ -43,8 +43,3 @@ pub fn format(file: FileId, source: &str) -> Result<String, Vec<Diagnostic>> {
 
     Ok(printer::print(source, &parsed.module, &lexed.trivia))
 }
-
-/// Whether a file is already in canonical form.
-pub fn is_formatted(file: FileId, source: &str) -> Result<bool, Vec<Diagnostic>> {
-    format(file, source).map(|formatted| formatted == source)
-}

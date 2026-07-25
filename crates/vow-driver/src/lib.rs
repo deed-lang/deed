@@ -88,7 +88,7 @@ impl Checked {
     }
 
     pub fn error_count(&self) -> usize {
-        self.diagnostics.iter().filter(|d| d.is_error()).count()
+        fix::error_count(&self.diagnostics)
     }
 
     pub fn warning_count(&self) -> usize {

@@ -168,7 +168,7 @@ fn the_worked_example_row_is_exactly_what_the_body_does() {
 
     let declared = analysis.effects.declared(def).unwrap();
     let performed = analysis.effects.performed(def).unwrap();
-    assert_eq!(declared.len(), 3);
+    assert_eq!(declared.iter().count(), 3);
     assert_eq!(
         declared, performed,
         "the row should be tight, not merely sufficient"

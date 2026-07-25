@@ -221,7 +221,6 @@ impl<'a> Checker<'a> {
                 }
                 Stmt::Assert { condition, .. } => self.calls_in(condition, found),
                 Stmt::Expr(expr) => self.calls_in(expr, found),
-                Stmt::Error(_) => {}
             }
         }
         if let Some(tail) = &block.tail {
@@ -566,7 +565,6 @@ impl<'a> Checker<'a> {
             },
             Stmt::Assert { condition, .. } => self.infer_expr(condition),
             Stmt::Expr(expr) => self.infer_expr(expr),
-            Stmt::Error(_) => Row::new(),
         }
     }
 

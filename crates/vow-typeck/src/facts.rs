@@ -637,6 +637,10 @@ pub fn promised_by(condition: &Expr, subject: &str, names: &[&str]) -> Guarantee
 /// because a difference between two names is not the only useful shape here:
 /// `result == n + n` counts `n` twice and there is nowhere in the facts to put
 /// that, while there is somewhere in a promise.
+///
+/// The parameter count is what a recursive walk over a tree costs when it
+/// carries both what it is looking for and where it is putting the answer.
+/// Bundling them into a struct would name the same six things one level down.
 #[allow(clippy::too_many_arguments)]
 fn collect_scaled(
     condition: &Expr,

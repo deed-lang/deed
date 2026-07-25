@@ -11,10 +11,15 @@
 //! range they can point at, and a node that cannot be located is a node that
 //! can only produce a vague error.
 //!
-//! **Errors are nodes, not absences.** [`Expr::Error`] and friends mean the
-//! parser gave up on a subtree but kept its extent. Later passes skip them
-//! instead of tripping over a missing branch, which is what keeps one syntax
-//! error from silencing everything after it.
+//! **Errors are nodes, not absences.** [`Expr::Error`], [`Type::Error`] and
+//! [`Pattern::Error`] mean the parser gave up on a subtree but kept its extent.
+//! Later passes skip them instead of tripping over a missing branch, which is
+//! what keeps one syntax error from silencing everything after it.
+//!
+//! An item and a statement have no such node, because they do not need one.
+//! Both live in a list, and a list with one entry dropped is still the shape
+//! every pass expects. The rule is about positions where an absence would
+//! change what the tree means.
 
 use vow_diagnostics::Span;
 
@@ -79,7 +84,6 @@ pub enum Item {
     Handler(HandlerDecl),
     Function(FnDecl),
     Test(TestDecl),
-    Error(Span),
 }
 
 impl Item {
@@ -92,7 +96,6 @@ impl Item {
             Item::Handler(d) => d.span,
             Item::Function(d) => d.span,
             Item::Test(d) => d.span,
-            Item::Error(span) => *span,
         }
     }
 }
@@ -314,7 +317,6 @@ pub enum Stmt {
         span: Span,
     },
     Expr(Expr),
-    Error(Span),
 }
 
 impl Stmt {
@@ -323,8 +325,7 @@ impl Stmt {
             Stmt::Let { span, .. }
             | Stmt::Assign { span, .. }
             | Stmt::Return { span, .. }
-            | Stmt::Assert { span, .. }
-            | Stmt::Error(span) => *span,
+            | Stmt::Assert { span, .. } => *span,
             Stmt::Expr(expr) => expr.span(),
         }
     }
