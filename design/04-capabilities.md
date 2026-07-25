@@ -6,6 +6,51 @@ resource* it is allowed to do it to.
 `uses Net.send` means a function can send over the network. It does not say where. A
 capability is the value that answers that, and it can only be obtained by being handed one.
 
+## What actually exists
+
+Enough to run a program, and not much more. `vow run` calls `main`, hands it the one
+`System` there is, and everything below it holds whatever it was passed.
+
+```vow
+fn greet(out: Console, name: String) -> ()
+  uses
+    Io.write,
+{
+    Io.write(out, "hello, ")
+    Io.write(out, name)
+}
+
+fn main(sys: System) -> Int
+  uses
+    Io.write,
+{
+    greet(sys.console, "world")
+    0
+}
+```
+
+`System` carries `console` and `clock`. Both are opaque: there is no field to read, no
+constructor, nothing to know about one except that you were handed it. `Io.write` takes the
+`Console` it writes to and `Io.now` takes the `Clock` it reads, so the operation cannot be
+performed without naming the thing it acts on.
+
+The parts that are real:
+
+- `greet` cannot read a clock. It holds no `Clock`, and there is nowhere to get one.
+- Passing a `Clock` where a `Console` is wanted is a type error, not a runtime surprise.
+- Holding a `Console` is not enough on its own. `uses Io.write` still has to be there, and
+  declaring it without performing it is also an error.
+- Writing `Io.write(Console, "hi")` does not work. `Console` is a type, and a type in
+  expression position is `VOW4019`, not a value.
+
+That last one is the whole thing in one rule, and it was not true when this was first
+written. The type checker gave a type name in expression position no type at all, and a
+type-less expression is compatible with everything, so authority could be conjured by
+spelling it. The test that was supposed to prove capabilities work found it.
+
+`Dir` and the filesystem are not implemented. Neither is attenuation, which is the more
+interesting half. The rest of this document is the target, not the state.
+
 ## No ambient authority
 
 In every mainstream language, any code can do anything the process can do. `import os` and
@@ -68,6 +113,11 @@ Each derived capability is strictly weaker. There is no widening operation, no w
 back up, and `..` does not escape a `Dir`. A function that receives `cache` cannot reach
 `/var/lib/app`, and no audit is required to know that.
 
+None of this exists yet. What exists is the trivial case, `sys.console` being weaker than
+`sys`, which is narrowing by projection and does not need any of the machinery a `Dir`
+would. Deriving a capability from another one is the part that is actually hard, and until
+it is built the claim above is a plan.
+
 ## What this changes
 
 **Dependency risk becomes visible and bounded.** A left-pad style package that takes no
@@ -119,6 +169,10 @@ The list is longer than I would like, and this is the least settled document her
   not worked out.
 - **Time and memory are also resources.** Nothing here bounds them. A function with an empty
   row can still allocate forever.
+- **The clock is a lie.** `Io.now` counts calls rather than reading a wall clock, because P8
+  says the default is deterministic and a real clock would make every run different. That is
+  the right default for testing and the wrong answer for a program that needs the actual
+  time, and there is currently no way to ask for the real one.
 
 ## Prior art worth reading
 

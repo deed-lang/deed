@@ -28,6 +28,30 @@ pub enum Value {
         ok: bool,
         value: Rc<Value>,
     },
+    /// Authority to do something to something.
+    ///
+    /// Opaque on purpose. There is nothing to know about a capability except
+    /// that you were handed it, and the only way to get one is to be passed
+    /// one, which is what makes the absence of an argument mean something.
+    Capability(Capability),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Capability {
+    /// The root. The runtime hands out exactly one, to `main`.
+    System,
+    Console,
+    Clock,
+}
+
+impl Capability {
+    pub fn name(self) -> &'static str {
+        match self {
+            Capability::System => "System",
+            Capability::Console => "Console",
+            Capability::Clock => "Clock",
+        }
+    }
 }
 
 /// Field values, ordered by name so that two records built in different orders
@@ -92,6 +116,7 @@ impl Value {
             Value::Record(_) => "a record",
             Value::Variant(_) => "a variant",
             Value::Result { .. } => "a Result",
+            Value::Capability(_) => "a capability",
         }
     }
 }
@@ -114,6 +139,7 @@ impl fmt::Display for Value {
             Value::Result { ok, value } => {
                 write!(f, "{}({value})", if *ok { "ok" } else { "err" })
             }
+            Value::Capability(capability) => write!(f, "<{}>", capability.name()),
         }
     }
 }

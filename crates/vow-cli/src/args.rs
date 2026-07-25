@@ -12,6 +12,7 @@ vow, a contract-first language
 Usage:
   vow check [options] <path>...
   vow test  [options] <path>...
+  vow run   [options] <path>...
 
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
@@ -22,6 +23,7 @@ Options:
 Paths may be files or directories. A directory is searched for `.vow` files.
 
 `vow test` refuses to run anything that does not check.
+`vow run` calls `main`, handing it the one `System` capability there is.
 
 Exit codes:
   0   no errors, though there may be warnings
@@ -39,6 +41,7 @@ pub enum Format {
 pub enum Mode {
     Check,
     Test,
+    Run,
 }
 
 #[derive(Debug)]
@@ -66,9 +69,10 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "-V" | "--version" | "version" => return Ok(Command::Version),
         "check" => Mode::Check,
         "test" => Mode::Test,
+        "run" => Mode::Run,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `check` and `test`"
+                "unknown command `{other}`, the choices are `check`, `test` and `run`"
             ));
         }
     };
@@ -103,6 +107,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             match mode {
                 Mode::Check => "check",
                 Mode::Test => "test",
+                Mode::Run => "run",
             }
         ));
     }

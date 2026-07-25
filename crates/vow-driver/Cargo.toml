@@ -18,6 +18,11 @@ vow-resolve = { path = "../vow-resolve" }
 vow-typeck = { path = "../vow-typeck" }
 
 [dev-dependencies]
+vow-diagnostics = { path = "../vow-diagnostics" }
+vow-effects = { path = "../vow-effects" }
+vow-interp = { path = "../vow-interp" }
+vow-resolve = { path = "../vow-resolve" }
+vow-typeck = { path = "../vow-typeck" }
 
 [lints]
 workspace = true
