@@ -50,6 +50,21 @@ pub const PRELUDE: &[&str] = &[
 /// describes.
 pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read"];
 
+/// The effects the language provides, available in every module without an
+/// import.
+///
+/// A row naming one of these travels between modules under
+/// [`PRELUDE_MODULE`], because the module that declared it is nobody's module
+/// and every module can name it.
+pub const PRELUDE_EFFECTS: &[&str] = &["Io", "Diverge"];
+
+/// The module path builtins are named under.
+///
+/// Not a real module and not writable in source, so nothing can collide with
+/// it. There is exactly one `Io` and every module has to agree about that,
+/// which it would not if each one named it after itself.
+pub const PRELUDE_MODULE: &str = "<prelude>";
+
 /// How many "did you mean" suggestions one file gets.
 ///
 /// See [`Resolver::suggest`] for why there is a limit at all. The number is

@@ -78,6 +78,16 @@ fn analyse_ok(src: &str) {
     }
 }
 
+fn analyse_ok_in(src: &str, universe: &Universe) {
+    let (sources, _, _, analysis) = analyse_source_in(src, universe);
+    if !analysis.diagnostics.is_empty() {
+        panic!(
+            "expected a clean analysis:\n{}",
+            rendered(&sources, &analysis.diagnostics)
+        );
+    }
+}
+
 fn codes_of(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics.iter().map(|d| d.code).collect()
 }
@@ -530,6 +540,120 @@ fn a_test_performing_an_effect_with_no_with_block_is_an_error() {
         codes_of(&analysis.diagnostics),
         vec![codes::UNHANDLED_EFFECT]
     );
+}
+
+// -- a call into another module --------------------------------------------
+
+/// A module declaring `Log` and a function that uses it.
+const LOGGER: &str = "module logger\n\n\
+     effect Log {\n\
+     \x20 fn note(message: String) -> ()\n\
+     }\n\n\
+     fn shout(message: String) -> Int\n\
+     \x20 uses Log.note,\n\
+     { Log.note(message)\n  1 }\n\n\
+     fn quiet(n: Int) -> Int { n }\n";
+
+#[test]
+fn calling_into_another_module_is_not_free() {
+    // It used to be. `call_effects` had no answer for an import, so the effect
+    // system stopped at the module boundary, which is where most calls are.
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse logger.{Log, shout}\n\nfn f() -> Int { shout(\"hi\") }\n",
+        &universe_of(&[LOGGER]),
+    );
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNDECLARED_EFFECT]
+    );
+    assert!(rendered(&sources, &analysis.diagnostics).contains("Log.note"));
+}
+
+#[test]
+fn declaring_what_the_imported_call_does_is_enough() {
+    analyse_ok_in(
+        "module a\n\nuse logger.{Log, shout}\n\nfn f() -> Int\n  uses Log.note,\n{ shout(\"hi\") }\n",
+        &universe_of(&[LOGGER]),
+    );
+}
+
+#[test]
+fn a_pure_imported_call_stays_pure() {
+    analyse_ok_in(
+        "module a\n\nuse logger.{quiet}\n\nfn f() -> Int { quiet(1) }\n",
+        &universe_of(&[LOGGER]),
+    );
+}
+
+#[test]
+fn the_tightness_rule_still_applies_across_the_boundary() {
+    let (_, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse logger.{Log, quiet}\n\nfn f() -> Int\n  uses Log.note,\n{ quiet(1) }\n",
+        &universe_of(&[LOGGER]),
+    );
+    assert_eq!(codes_of(&analysis.diagnostics), vec![codes::UNUSED_EFFECT]);
+}
+
+#[test]
+fn an_effect_that_cannot_be_named_here_says_where_to_import_it() {
+    // A function cannot promise something it has no word for, so this is an
+    // error rather than a silent pass, and the message is the fix.
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse logger.{shout}\n\nfn f() -> Int { shout(\"hi\") }\n",
+        &universe_of(&[LOGGER]),
+    );
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::EFFECT_NOT_IMPORTED]
+    );
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(text.contains("`Log` is not in scope here"), "{text}");
+    assert!(text.contains("use logger.{Log}"), "{text}");
+}
+
+#[test]
+fn a_prelude_effect_needs_no_import_to_travel() {
+    // `Io` is in the prelude, so every module can name it and there is nothing
+    // to import. A row entry for one arrives under the prelude rather than
+    // under whichever module happened to mention it.
+    analyse_ok_in(
+        "module a\n\nuse writer.{shout}\n\nfn f(out: Console) -> ()\n  uses Io.write,\n{ shout(out) }\n",
+        &universe_of(&[
+            "module writer\n\nfn shout(out: Console) -> ()\n  uses Io.write,\n{ Io.write(out, \"hi\") }\n",
+        ]),
+    );
+}
+
+#[test]
+fn an_effect_travels_through_a_module_in_the_middle() {
+    // The middle module had to declare it to call through, so the row it
+    // exports carries it, and the third module inherits it the same way.
+    let (_, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse middle.{relay}\n\nfn f() -> Int { relay() }\n",
+        &universe_of(&[
+            LOGGER,
+            "module middle\n\nuse logger.{Log, shout}\n\nfn relay() -> Int\n  uses Log.note,\n{ shout(\"hi\") }\n",
+        ]),
+    );
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::EFFECT_NOT_IMPORTED]
+    );
+}
+
+#[test]
+fn an_uncheckable_row_does_not_make_its_callers_look_pure() {
+    // `sys.*` is not a row anyone can read, so a caller inheriting an empty
+    // one would move the loophole rather than close it.
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse wide.{everything}\n\nfn f(sys: System) -> Int { everything(sys) }\n",
+        &universe_of(&["module wide\n\nfn everything(sys: System) -> Int\n  uses sys.*,\n{ 0 }\n"]),
+    );
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNVERIFIABLE_ROW]
+    );
+    assert!(rendered(&sources, &analysis.diagnostics).contains("not checked"));
 }
 
 // -- rows across a module boundary -----------------------------------------

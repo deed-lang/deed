@@ -38,3 +38,16 @@ handler Discard implements Sink {
         0
     }
 }
+
+// A function whose row has to reach its callers, wherever they are. A call
+// into another module used to be free: this function's `uses` clause stopped
+// at the file boundary, so anything calling it looked pure. Now the row
+// crosses in the export, and a caller either declares `Sink.emit` or hears
+// about it.
+fn emit_twice(line: String) -> ()
+  uses
+    Sink.emit,
+{
+    Sink.emit(line)
+    Sink.emit(line)
+}

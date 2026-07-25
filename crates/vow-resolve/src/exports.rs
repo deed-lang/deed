@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 
 use vow_ast::{Item, Module};
 
+use crate::resolver::{PRELUDE_EFFECTS, PRELUDE_MODULE};
+
 /// What kind of thing a name refers to on the other side of an import.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ExportKind {
@@ -41,6 +43,25 @@ impl ExportKind {
     }
 }
 
+/// One entry of an exported function's effect row.
+///
+/// An entry cannot travel as a `DefId`, for the same reason a type could not:
+/// a `DefId` is an index into one module's table and means nothing outside it.
+/// It travels as the module the effect was declared in, its name there, and the
+/// operation, which is the same identity the interpreter uses for an effect at
+/// runtime.
+///
+/// The declaring module knows the path from its own syntax and nothing else:
+/// either the effect is declared in it, or it is in its `use` list. That is
+/// what keeps exports computable without resolving anything first.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RowEntry {
+    pub module: String,
+    pub effect: String,
+    /// `None` means every operation of the effect.
+    pub operation: Option<String>,
+}
+
 /// One exported name.
 #[derive(Clone, Debug)]
 pub struct Export {
@@ -52,6 +73,51 @@ pub struct Export {
     /// when `Ledger` came from another file, and what lets a `with` block
     /// naming an imported handler discharge that handler's effect and no more.
     pub members: Vec<String>,
+    /// What a function declares it does, for the caller to inherit.
+    ///
+    /// Empty for everything that is not a function, and for a function that is
+    /// pure. Without this a call into another module was free: the effect
+    /// system, which is the pass this language exists for, stopped at the
+    /// module boundary.
+    pub row: Vec<RowEntry>,
+    /// Whether that row is the whole story.
+    ///
+    /// False when the declaration contains something no caller could read,
+    /// which today means `sys.*`. Exporting an empty row in that case would
+    /// make every caller look pure, so the loophole would move rather than
+    /// close.
+    pub row_complete: bool,
+}
+
+/// A declared row, as the far side of an import will read it.
+///
+/// The flag is false when the row contains something no caller could read,
+/// which today means `sys.*`: it grants everything a capability carries and
+/// there is no name for "everything" on the far side.
+fn row_of(
+    uses: &[vow_ast::EffectRef],
+    here: &str,
+    origins: &BTreeMap<&str, String>,
+) -> (Vec<RowEntry>, bool) {
+    let complete = uses.iter().all(|entry| !entry.all);
+    let entries = uses
+        .iter()
+        .filter(|entry| !entry.all && !entry.effect.name.is_empty())
+        .map(|entry| RowEntry {
+            module: match origins.get(entry.effect.name.as_str()) {
+                Some(path) => path.clone(),
+                // The language provides it, so every module can name it and
+                // no import is involved anywhere.
+                None if PRELUDE_EFFECTS.contains(&entry.effect.name.as_str()) => {
+                    PRELUDE_MODULE.to_string()
+                }
+                None => here.to_string(),
+            },
+            effect: entry.effect.name.clone(),
+            operation: entry.operation.as_ref().map(|op| op.name.clone()),
+        })
+        .collect();
+    (entries, complete)
 }
 
 /// Everything one module offers.
@@ -69,6 +135,22 @@ impl Exports {
     pub fn of(module: &Module) -> Self {
         let mut names = BTreeMap::new();
 
+        // Where each imported name came from, so a row naming an imported
+        // effect can say which module declared it. Straight off the `use`
+        // lines, so nothing has to be resolved first.
+        let here = module
+            .name
+            .as_ref()
+            .map(|name| name.to_string_path())
+            .unwrap_or_default();
+        let mut origins: BTreeMap<&str, String> = BTreeMap::new();
+        for entry in &module.uses {
+            let path = entry.path.to_string_path();
+            for name in &entry.names {
+                origins.insert(name.name.as_str(), path.clone());
+            }
+        }
+
         for item in &module.items {
             // A choice's variants are usable unqualified inside the module
             // that declares them, which is what makes `err(NotFound { .. })`
@@ -83,18 +165,26 @@ impl Exports {
                         Export {
                             kind: ExportKind::Variant,
                             members: Vec::new(),
+                            row: Vec::new(),
+                            row_complete: true,
                         },
                     );
                 }
             }
 
-            let (name, kind, members) = match item {
-                Item::TypeAlias(decl) => (&decl.name, ExportKind::Type, Vec::new()),
-                Item::Record(decl) => (&decl.name, ExportKind::Record, Vec::new()),
+            let (name, kind, members, row, row_complete) = match item {
+                Item::TypeAlias(decl) => {
+                    (&decl.name, ExportKind::Type, Vec::new(), Vec::new(), true)
+                }
+                Item::Record(decl) => {
+                    (&decl.name, ExportKind::Record, Vec::new(), Vec::new(), true)
+                }
                 Item::Choice(decl) => (
                     &decl.name,
                     ExportKind::Choice,
                     decl.variants.iter().map(|v| v.name.name.clone()).collect(),
+                    Vec::new(),
+                    true,
                 ),
                 Item::Effect(decl) => (
                     &decl.name,
@@ -103,19 +193,40 @@ impl Exports {
                         .iter()
                         .map(|o| o.name.name.clone())
                         .collect(),
+                    Vec::new(),
+                    true,
                 ),
                 Item::Handler(decl) => (
                     &decl.name,
                     ExportKind::Handler,
                     vec![decl.effect.name.clone()],
+                    Vec::new(),
+                    true,
                 ),
-                Item::Function(decl) => (&decl.sig.name, ExportKind::Function, Vec::new()),
+                Item::Function(decl) => {
+                    let (row, complete) = row_of(&decl.contract.uses, &here, &origins);
+                    (
+                        &decl.sig.name,
+                        ExportKind::Function,
+                        Vec::new(),
+                        row,
+                        complete,
+                    )
+                }
                 // A `test` is not part of the surface, and an error node is
                 // not part of anything.
                 Item::Test(_) | Item::Error(_) => continue,
             };
 
-            names.insert(name.name.clone(), Export { kind, members });
+            names.insert(
+                name.name.clone(),
+                Export {
+                    kind,
+                    members,
+                    row,
+                    row_complete,
+                },
+            );
         }
 
         Self { names }

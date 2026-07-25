@@ -200,6 +200,13 @@ more in the first run and a third once those were fixed: closure bodies, handler
 every call to an imported effect's operation. `crates/vow-driver/tests/fully_typed.rs` is
 where the next one gets found on purpose.
 
+Looking for the same shape one level up found the biggest one. A function's effect row did
+not cross a module boundary, so every call into another file was free, and in a program with
+more than one file that is most calls. The pass this language exists for was doing its work
+on the calls that mattered least. Rows travel now, and a caller that inherits an effect it
+never imported is told which module to import it from, because a row that cannot name what it
+grants is not a row.
+
 `vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
 is not configurable long before anything enforced it, which meant the files were formatted
 the way they happened to have been typed. A test now asserts that every `.vow` file in the
