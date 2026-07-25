@@ -47,6 +47,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use vow_ast::{BinaryOp, Expr, UnaryOp};
+use vow_diagnostics::Span;
 use vow_resolve::DefId;
 
 /// A closed range of integers, or nothing at all.
@@ -951,6 +952,89 @@ pub fn ok_range_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
         Expr::Call { callee, args, .. } => (env.call)(callee).ok.applied(args, facts, env),
         _ => Range::ANY,
     }
+}
+
+/// Where the arithmetic in `expr` can have no answer, if anywhere.
+///
+/// This is not a check, it is an explanation. `n + 1` where `n` is `Positive`
+/// is not provably positive, and a reader looking at that has every right to
+/// think the reasoning is weak. It is not: the sum has no answer when `n` is
+/// the largest integer there is, so there is no value to prove anything about.
+/// Saying which operation, rather than leaving it to be worked out, is the
+/// difference between a diagnostic and a shrug.
+///
+/// Worked out in a width that cannot overflow, so the answer is about the
+/// program's arithmetic rather than about this function's.
+pub fn overflowing(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Span> {
+    match expr {
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+            span,
+            ..
+        } => {
+            if let Some(inner) = overflowing(operand, facts, env) {
+                return Some(inner);
+            }
+            let (low, _) = range_of(operand, facts, env).bounds()?;
+            (low == i64::MIN).then_some(*span)
+        }
+
+        Expr::Binary {
+            op, lhs, rhs, span, ..
+        } => {
+            // The innermost one, because that is the one that has to be fixed
+            // and the outer one is only a consequence of it.
+            if let Some(inner) = overflowing(lhs, facts, env) {
+                return Some(inner);
+            }
+            if let Some(inner) = overflowing(rhs, facts, env) {
+                return Some(inner);
+            }
+
+            let left = range_of(lhs, facts, env);
+            let right = range_of(rhs, facts, env);
+            match op {
+                // Dividing by zero has no answer, and neither does the
+                // smallest integer divided by minus one.
+                BinaryOp::Div | BinaryOp::Rem => {
+                    let (low, high) = right.bounds()?;
+                    (low <= 0 && high >= 0).then_some(*span)
+                }
+                _ => {
+                    let (low, high) = exact(*op, left, right)?;
+                    (low < i64::MIN as i128 || high > i64::MAX as i128).then_some(*span)
+                }
+            }
+        }
+
+        _ => None,
+    }
+}
+
+/// The bounds an operation really has, in a width nothing here can overflow.
+fn exact(op: BinaryOp, left: Range, right: Range) -> Option<(i128, i128)> {
+    let (a_low, a_high) = left.bounds()?;
+    let (b_low, b_high) = right.bounds()?;
+    let (a_low, a_high) = (i128::from(a_low), i128::from(a_high));
+    let (b_low, b_high) = (i128::from(b_low), i128::from(b_high));
+
+    Some(match op {
+        BinaryOp::Add => (a_low + b_low, a_high + b_high),
+        BinaryOp::Sub => (a_low - b_high, a_high - b_low),
+        BinaryOp::Mul => {
+            let corners = [
+                a_low * b_low,
+                a_low * b_high,
+                a_high * b_low,
+                a_high * b_high,
+            ];
+            let low = corners.iter().min().copied()?;
+            let high = corners.iter().max().copied()?;
+            (low, high)
+        }
+        _ => return None,
+    })
 }
 
 /// What the difference facts add to an expression, when it is a difference.

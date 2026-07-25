@@ -289,7 +289,9 @@ Every one of these is `Guarded`, with a warning, never a wrong answer.
 - **Arithmetic that could overflow.** `n + 1` where `n` is `Positive` is not provably
   positive, because `n` could be the largest integer there is. That is the reasoning working
   rather than a gap in it, and the runtime agrees: the sum has no answer. The same rule is
-  why `low < high` alone does not settle `high - low`.
+  why `low < high` alone does not settle `high - low`. The warning points at the operation
+  and says so, because a proof the arithmetic defeated looks exactly like weak reasoning and
+  is not the same thing.
 - **The payload of a call that can fail, until it is taken out.** The expression is the
   `Result` and the promise is about the number inside it, so the two meet at a `?`, at an
   `ok(..)` pattern, and where a `Result` is assigned into one with a refined success type,

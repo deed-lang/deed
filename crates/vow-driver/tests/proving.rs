@@ -580,6 +580,45 @@ fn an_or_says_nothing_about_either_side() {
     );
 }
 
+// -- why a proof failed ----------------------------------------------------
+
+#[test]
+fn a_proof_the_arithmetic_defeated_says_which_operation() {
+    // `n + 1` where `n` is positive is not provably positive, and a reader
+    // looking at that has every right to think the reasoning is weak. It is
+    // not, and the difference has to be printed or it has to be guessed.
+    let (sources, checked) = check("fn f(n: Positive) -> Positive { n + 1 }\n");
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("this can have no answer"), "{text}");
+    assert!(text.contains("bounding what goes into it"), "{text}");
+}
+
+#[test]
+fn dividing_by_something_that_could_be_zero_is_named_too() {
+    let (sources, checked) = check("fn f(n: Positive, d: Int) -> Positive { n / d }\n");
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("this can have no answer"), "{text}");
+}
+
+#[test]
+fn a_proof_nothing_defeated_does_not_blame_the_arithmetic() {
+    // A refinement nobody said anything about is a different failure from one
+    // the arithmetic ruled out, and printing the note over both would make it
+    // worth nothing.
+    let (sources, checked) = check("fn f(n: Int) -> Positive { n }\n");
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(!text.contains("this can have no answer"), "{text}");
+}
+
+#[test]
+fn arithmetic_that_cannot_overflow_is_not_blamed() {
+    let (sources, checked) = check(
+        "type Percent = Int where value >= 0 && value <= 100\n\nfn f(n: Int) -> Percent\n  where\n    n >= 0,\n    n <= 50,\n{\n    n + 60\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(!text.contains("this can have no answer"), "{text}");
+}
+
 // -- across a module boundary ----------------------------------------------
 
 /// Checks both files together and returns the result for the second.

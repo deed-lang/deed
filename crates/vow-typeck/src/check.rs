@@ -694,7 +694,7 @@ impl<'a> Checker<'a> {
                     Some(expr) => Some(self.range_of(expr)),
                     None => carried.range,
                 };
-                self.discharge(*def, subject, span, carried.inside_ok);
+                self.discharge(*def, subject, expr, span, carried.inside_ok);
                 return;
             }
         }
@@ -855,6 +855,16 @@ impl<'a> Checker<'a> {
         facts::ok_range_of(expr, &self.facts, &env)
     }
 
+    /// Where the arithmetic in `expr` can have no answer, if anywhere.
+    fn overflowing(&self, expr: &Expr) -> Option<Span> {
+        let (def_of, call) = self.env();
+        let env = facts::Env {
+            def_of: &def_of,
+            call: &call,
+        };
+        facts::overflowing(expr, &self.facts, &env)
+    }
+
     /// Whether the facts in scope settle a refinement predicate for a value.
     ///
     /// The value is a range rather than an expression, because the interesting
@@ -888,10 +898,15 @@ impl<'a> Checker<'a> {
     /// at `span`, which happens when a `Result` came back from a call and
     /// nothing here names its payload. The runtime has to know, or it runs the
     /// predicate against the `Result`.
+    ///
+    /// `expr` is only for the diagnostic. A proof that failed because the
+    /// arithmetic in it has no answer looks like weak reasoning, and saying
+    /// which operation is what tells the two apart.
     fn discharge(
         &mut self,
         refinement: DefId,
         subject: Option<Range>,
+        expr: Option<&Expr>,
         span: Span,
         inside_ok: bool,
     ) {
@@ -950,6 +965,20 @@ impl<'a> Checker<'a> {
                     diagnostic =
                         diagnostic.with_secondary(predicate, "the predicate it has to satisfy");
                 }
+
+                // A proof that failed because the arithmetic has no answer
+                // looks exactly like weak reasoning, and it is not the same
+                // thing at all. `n + 1` where `n` is positive is not provably
+                // positive because there is no sum to prove anything about
+                // when `n` is the largest integer there is.
+                if let Some(at) = expr.and_then(|expr| self.overflowing(expr)) {
+                    diagnostic = diagnostic
+                        .with_secondary(at, "this can have no answer")
+                        .with_note(
+                            "an operation with no answer produces no value, so nothing about the result follows; bounding what goes into it is what settles this",
+                        );
+                }
+
                 self.emit(diagnostic);
                 self.types.push_obligation(Obligation {
                     span,
