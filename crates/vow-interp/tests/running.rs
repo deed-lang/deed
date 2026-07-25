@@ -8,9 +8,13 @@ use vow_diagnostics::{SourceMap, render_human};
 use vow_interp::{TestOutcome, codes, run_tests};
 use vow_lexer::tokenize;
 use vow_parser::parse;
-use vow_resolve::resolve;
+use vow_resolve::{Universe, resolve};
 
 fn run(src: &str) -> (SourceMap, Vec<TestOutcome>) {
+    run_in(src, &Universe::new())
+}
+
+fn run_in(src: &str, universe: &Universe) -> (SourceMap, Vec<TestOutcome>) {
     let mut sources = SourceMap::new();
     let file = sources.add("test.vow", src);
 
@@ -18,11 +22,27 @@ fn run(src: &str) -> (SourceMap, Vec<TestOutcome>) {
     assert!(!lexed.has_errors(), "test source should lex cleanly");
     let parsed = parse(file, &lexed.tokens);
     assert!(!parsed.has_errors(), "test source should parse cleanly");
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, universe);
     assert!(!resolved.has_errors(), "test source should resolve cleanly");
 
     let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
     (sources, outcomes)
+}
+
+/// A universe holding each of `modules`, parsed from source.
+///
+/// An import with nothing behind it is an error now, so a test about calling
+/// across modules needs a real one on the other side.
+fn universe_of(modules: &[&str]) -> Universe {
+    let mut universe = Universe::new();
+    let mut sources = SourceMap::new();
+    for (index, source) in modules.iter().enumerate() {
+        let file = sources.add(format!("dep{index}.vow"), *source);
+        let lexed = tokenize(file, sources.file(file).text());
+        let parsed = parse(file, &lexed.tokens);
+        universe.add(&parsed.module);
+    }
+    universe
 }
 
 fn expect_pass(src: &str) {
@@ -41,7 +61,11 @@ fn expect_pass(src: &str) {
 
 /// The single failure from a source with exactly one test.
 fn expect_failure(src: &str) -> (SourceMap, vow_diagnostics::Diagnostic) {
-    let (sources, mut outcomes) = run(src);
+    expect_failure_in(src, &Universe::new())
+}
+
+fn expect_failure_in(src: &str, universe: &Universe) -> (SourceMap, vow_diagnostics::Diagnostic) {
+    let (sources, mut outcomes) = run_in(src, universe);
     assert_eq!(outcomes.len(), 1, "expected exactly one test");
     let failure = outcomes
         .remove(0)
@@ -94,7 +118,7 @@ fn the_examples_pass_their_own_tests() {
         let file = sources.add(format!("examples/{name}"), source);
         let lexed = tokenize(file, sources.file(file).text());
         let parsed = parse(file, &lexed.tokens);
-        let resolved = resolve(file, &parsed.module);
+        let resolved = resolve(file, &parsed.module, &Universe::new());
         assert!(!resolved.has_errors(), "examples/{name} should resolve");
 
         let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
@@ -451,9 +475,13 @@ fn overflow_is_a_diagnostic_not_a_wrap() {
 // -- gaps ------------------------------------------------------------------
 
 #[test]
-fn calling_into_an_unloaded_module_says_so_plainly() {
-    let (sources, failure) = expect_failure(
+fn calling_into_another_module_is_not_runnable() {
+    // The name resolves, so this is not about a missing module. The
+    // interpreter only holds the code of the file it was handed, so a call
+    // that leaves it has no body to evaluate.
+    let (sources, failure) = expect_failure_in(
         "module a\n\nuse std/result.{ok}\n\ntest \"cannot run\" {\n  assert ok(1) == ok(1)\n}\n",
+        &universe_of(&["module std/result\n\nfn ok(n: Int) -> Int { n }\n"]),
     );
     assert_eq!(failure.code, codes::NOT_RUNNABLE);
     let text = render_human(&sources, &failure);

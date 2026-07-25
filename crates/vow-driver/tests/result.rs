@@ -5,11 +5,25 @@
 //! import, so most of these are about failing.
 
 use vow_diagnostics::{Diagnostic, SourceMap, render_human};
-use vow_driver::check_text;
+use vow_driver::{check_all, check_text};
 
 fn check(src: &str) -> (SourceMap, vow_driver::Checked) {
     let mut sources = SourceMap::new();
     let checked = check_text(&mut sources, "test.vow", src);
+    (sources, checked)
+}
+
+/// Checks `src` with `deps` compiled alongside it.
+///
+/// An import with nothing behind it is an error now, so any test that touches
+/// one needs a real module on the other side of it.
+fn check_with(src: &str, deps: &[&str]) -> (SourceMap, vow_driver::Checked) {
+    let mut sources = SourceMap::new();
+    let mut files = vec![sources.add("test.vow", src)];
+    for (index, dep) in deps.iter().enumerate() {
+        files.push(sources.add(format!("dep{index}.vow"), *dep));
+    }
+    let checked = check_all(&sources, &files).remove(0);
     (sources, checked)
 }
 
@@ -171,8 +185,10 @@ fn the_error_types_have_to_line_up() {
 fn importing_a_name_the_language_provides_warns() {
     // Silently shadowing the builtin would put everything that depends on it
     // quietly back to being unchecked.
-    let (sources, checked) =
-        check("module a\n\nuse std/result.{Result}\n\nfn f() -> Result<Int, Int> { ok(1) }\n");
+    let (sources, checked) = check_with(
+        "module a\n\nuse std/result.{Result}\n\nfn f() -> Result<Int, Int> { ok(1) }\n",
+        &["module std/result\n\nrecord Result { n: Int }\n"],
+    );
     assert!(
         codes_of(&checked.diagnostics).contains(&vow_resolve::codes::SHADOWED_DECLARATION),
         "{}",

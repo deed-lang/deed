@@ -19,6 +19,7 @@ use vow_diagnostics::{Applicability, Diagnostic, FileId, Span};
 
 use crate::codes;
 use crate::defs::{DefData, DefId, DefKind, Dot, Resolutions};
+use crate::exports::{ExportKind, Universe};
 
 /// Names the language provides without anyone importing them.
 ///
@@ -56,9 +57,14 @@ impl Resolved {
 }
 
 /// Resolves one module. Always succeeds, possibly with diagnostics.
-pub fn resolve(file: FileId, module: &Module) -> Resolved {
+///
+/// `universe` is every other module being compiled alongside this one. An
+/// empty universe means a single file on its own, and any `use` in it has
+/// nowhere to point, which is now reported rather than assumed away.
+pub fn resolve(file: FileId, module: &Module, universe: &Universe) -> Resolved {
     let mut resolver = Resolver {
         file,
+        universe,
         resolutions: Resolutions::default(),
         scopes: Vec::new(),
         diagnostics: Vec::new(),
@@ -126,15 +132,16 @@ struct Scope {
     names: HashMap<String, DefId>,
 }
 
-struct Resolver {
+struct Resolver<'a> {
     file: FileId,
+    universe: &'a Universe,
     resolutions: Resolutions,
     scopes: Vec<Scope>,
     diagnostics: Vec<Diagnostic>,
     used: HashSet<DefId>,
 }
 
-impl Resolver {
+impl Resolver<'_> {
     // -- scopes ------------------------------------------------------------
 
     fn push_scope(&mut self, kind: ScopeKind) {
@@ -322,10 +329,42 @@ impl Resolver {
     /// Resolves `container.name`, classifying the `.` on the way.
     fn resolve_member(&mut self, container: DefId, ident: &Ident) -> Option<DefId> {
         match self.resolutions.def(container).kind {
-            // The name lives in a module that has not been loaded. Nothing can
-            // be said about it, and saying nothing is the honest answer.
+            // The name lives in another module. What can be said about it
+            // depends on what that module declared, which is now known for
+            // anything with members: an effect's operations and a choice's
+            // variants. Everything else still waits on cross module types.
             DefKind::Import => {
                 self.resolutions.record_dot(ident.span, Dot::Foreign);
+
+                let export = self.resolutions.import(container)?;
+                if !matches!(export.kind, ExportKind::Effect | ExportKind::Choice) {
+                    return None;
+                }
+                if export.members.contains(&ident.name) {
+                    return None;
+                }
+
+                let suggestion = closest(&ident.name, export.members.iter().map(String::as_str));
+                let container_data = self.resolutions.def(container);
+                let container_name = container_data.name.clone();
+                let what = export.kind.describe();
+
+                let mut diagnostic = Diagnostic::error(
+                    codes::UNKNOWN_MEMBER,
+                    self.file,
+                    ident.span,
+                    format!("`{container_name}` is {what} with no `{}`", ident.name),
+                )
+                .with_primary_label("no such member");
+                if let Some(candidate) = suggestion {
+                    diagnostic = diagnostic.with_fix(
+                        format!("there is a `{candidate}`"),
+                        ident.span,
+                        candidate,
+                        Applicability::MaybeIncorrect,
+                    );
+                }
+                self.diagnostics.push(diagnostic);
                 None
             }
             DefKind::Choice | DefKind::Effect => match self.member_of(container, &ident.name) {
@@ -364,30 +403,11 @@ impl Resolver {
     }
 
     fn suggest(&self, name: &str) -> Option<String> {
-        let mut best: Option<(usize, String)> = None;
-        let mut ambiguous = false;
-
+        let mut candidates = Vec::new();
         for scope in &self.scopes {
-            for candidate in scope.names.keys() {
-                let distance = levenshtein(name, candidate);
-                match &best {
-                    Some((best_distance, _)) if distance < *best_distance => {
-                        best = Some((distance, candidate.clone()));
-                        ambiguous = false;
-                    }
-                    Some((best_distance, _)) if distance == *best_distance => ambiguous = true,
-                    None => best = Some((distance, candidate.clone())),
-                    _ => {}
-                }
-            }
+            candidates.extend(scope.names.keys().map(String::as_str));
         }
-
-        let (distance, candidate) = best?;
-        // One edit for short names, proportionally more for long ones. A
-        // suggestion that is not obviously right is worse than none, because a
-        // machine-applicable fix gets applied.
-        let threshold = (name.chars().count() / 3).max(1);
-        (distance <= threshold && !ambiguous).then_some(candidate)
+        closest(name, candidates.into_iter())
     }
 
     fn report_unused_imports(&mut self) {
@@ -418,8 +438,64 @@ impl Resolver {
     /// declaration order does not matter.
     fn collect(&mut self, module: &Module) {
         for import in &module.uses {
+            let path = import.path.to_string_path();
+            let exports = self.universe.get(&path);
+
+            if exports.is_none() {
+                let suggestion = closest(&path, self.universe.paths());
+                let mut diagnostic = Diagnostic::error(
+                    codes::UNKNOWN_MODULE,
+                    self.file,
+                    import.path.span,
+                    format!("no module `{path}` among the files being compiled"),
+                )
+                .with_primary_label("not found")
+                .with_note(
+                    "a module is named by its own `module` line, and only the files handed \
+                     to the compiler are looked at",
+                );
+                if let Some(candidate) = suggestion {
+                    diagnostic = diagnostic.with_fix(
+                        format!("there is a module `{candidate}`"),
+                        import.path.span,
+                        candidate,
+                        Applicability::MaybeIncorrect,
+                    );
+                }
+                self.diagnostics.push(diagnostic);
+            }
+
             for name in &import.names {
-                self.declare_item(name, DefKind::Import, None);
+                // Declared whatever happened above, so one missing module
+                // produces one diagnostic rather than one per name plus a
+                // cascade of unresolved uses further down the file.
+                let def = self.declare_item(name, DefKind::Import, None);
+
+                let Some(exports) = exports else { continue };
+                match exports.get(&name.name) {
+                    Some(export) => {
+                        self.resolutions.record_export(def, export.clone());
+                    }
+                    None => {
+                        let suggestion = closest(&name.name, exports.names());
+                        let mut diagnostic = Diagnostic::error(
+                            codes::UNKNOWN_EXPORT,
+                            self.file,
+                            name.span,
+                            format!("`{path}` declares no `{}`", name.name),
+                        )
+                        .with_primary_label("not declared there");
+                        if let Some(candidate) = suggestion {
+                            diagnostic = diagnostic.with_fix(
+                                format!("`{path}` declares a `{candidate}`"),
+                                name.span,
+                                candidate,
+                                Applicability::MaybeIncorrect,
+                            );
+                        }
+                        self.diagnostics.push(diagnostic);
+                    }
+                }
             }
         }
 
@@ -814,6 +890,32 @@ impl Resolver {
 
 fn starts_upper(name: &str) -> bool {
     name.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// The nearest candidate to `name`, when there is an unambiguous one.
+fn closest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut best: Option<(usize, &str)> = None;
+    let mut ambiguous = false;
+
+    for candidate in candidates {
+        let distance = levenshtein(name, candidate);
+        match best {
+            Some((best_distance, _)) if distance < best_distance => {
+                best = Some((distance, candidate));
+                ambiguous = false;
+            }
+            Some((best_distance, _)) if distance == best_distance => ambiguous = true,
+            None => best = Some((distance, candidate)),
+            _ => {}
+        }
+    }
+
+    let (distance, candidate) = best?;
+    // One edit for short names, proportionally more for long ones. A
+    // suggestion that is not obviously right is worse than none, because a
+    // machine-applicable fix gets applied.
+    let threshold = (name.chars().count() / 3).max(1);
+    (distance <= threshold && !ambiguous).then(|| candidate.to_string())
 }
 
 /// Edit distance, used only for suggestions.

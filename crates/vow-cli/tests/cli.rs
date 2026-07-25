@@ -161,14 +161,36 @@ fn every_pass_runs_even_after_an_earlier_one_fails() {
 #[test]
 fn warnings_alone_do_not_fail_the_check() {
     let scratch = Scratch::new("warnings");
-    let file = scratch.write(
+    scratch.write(
+        "other.vow",
+        "module other\n\nrecord Used { n: Int }\n\nrecord Spare { n: Int }\n",
+    );
+    scratch.write(
         "warn.vow",
         "module a\n\nuse other.{Used, Spare}\n\nfn f() -> Used { }\n",
     );
 
-    let output = run(&["check", file.to_str().unwrap()]);
-    assert_eq!(code(&output), 0, "warnings should not fail the build");
+    let output = run(&["check", scratch.path().to_str().unwrap()]);
+    assert_eq!(
+        code(&output),
+        0,
+        "warnings should not fail the build:\n{}",
+        stdout(&output)
+    );
     assert!(stdout(&output).contains("0 errors, 1 warning"));
+}
+
+#[test]
+fn an_import_of_a_module_that_is_not_there_is_an_error() {
+    let scratch = Scratch::new("no-module");
+    let file = scratch.write(
+        "lonely.vow",
+        "module a\n\nuse other.{Thing}\n\nfn f() -> Thing {}\n",
+    );
+
+    let output = run(&["check", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    assert!(stdout(&output).contains("VOW3007"), "{}", stdout(&output));
 }
 
 // -- output formats --------------------------------------------------------
@@ -430,9 +452,14 @@ fn running_something_with_no_main_is_a_usage_error() {
 #[test]
 fn two_mains_is_a_question_not_a_choice() {
     let scratch = Scratch::new("two-mains");
-    let body = "module a\n\nfn main(sys: System) -> Int { 0 }\n";
-    scratch.write("one.vow", body);
-    scratch.write("two.vow", body);
+    scratch.write(
+        "one.vow",
+        "module one\n\nfn main(sys: System) -> Int { 0 }\n",
+    );
+    scratch.write(
+        "two.vow",
+        "module two\n\nfn main(sys: System) -> Int { 0 }\n",
+    );
 
     let output = run(&["run", scratch.path().to_str().unwrap()]);
     assert_eq!(code(&output), 2);

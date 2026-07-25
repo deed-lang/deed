@@ -8,10 +8,22 @@ use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_effects::{Analysis, EffectItem, analyse, codes};
 use vow_lexer::tokenize;
 use vow_parser::parse;
-use vow_resolve::resolve;
+use vow_resolve::{Universe, resolve};
 
 fn analyse_source(
     src: &str,
+) -> (
+    SourceMap,
+    vow_ast::Module,
+    vow_resolve::Resolutions,
+    Analysis,
+) {
+    analyse_source_in(src, &Universe::new())
+}
+
+fn analyse_source_in(
+    src: &str,
+    universe: &Universe,
 ) -> (
     SourceMap,
     vow_ast::Module,
@@ -25,12 +37,36 @@ fn analyse_source(
     assert!(!lexed.has_errors(), "test source should lex cleanly");
     let parsed = parse(file, &lexed.tokens);
     assert!(!parsed.has_errors(), "test source should parse cleanly");
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, universe);
     assert!(!resolved.has_errors(), "test source should resolve cleanly");
 
     let analysis = analyse(file, &parsed.module, &resolved.resolutions);
     (sources, parsed.module, resolved.resolutions, analysis)
 }
+
+/// A universe holding each of `modules`, parsed from source.
+///
+/// An import with nothing behind it is an error now, so a test about an
+/// imported effect needs the effect and every operation it names to exist on
+/// the other side.
+fn universe_of(modules: &[&str]) -> Universe {
+    let mut universe = Universe::new();
+    let mut sources = SourceMap::new();
+    for (index, source) in modules.iter().enumerate() {
+        let file = sources.add(format!("dep{index}.vow"), *source);
+        let lexed = tokenize(file, sources.file(file).text());
+        let parsed = parse(file, &lexed.tokens);
+        universe.add(&parsed.module);
+    }
+    universe
+}
+
+/// A module declaring the `Ledger` effect the import tests reach for.
+const LEDGER_MODULE: &str = "module ledger\n\n\
+     effect Ledger {\n\
+     \x20 fn balance(id: Int) -> Int\n\
+     \x20 fn post(amount: Int) -> ()\n\
+     }\n";
 
 fn analyse_ok(src: &str) {
     let (sources, _, _, analysis) = analyse_source(src);
@@ -80,7 +116,7 @@ fn the_worked_example_passes_effect_checking() {
     let file = sources.add("examples/transfer.vow", source);
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     assert!(!resolved.has_errors());
 
     let analysis = analyse(file, &parsed.module, &resolved.resolutions);
@@ -101,7 +137,7 @@ fn the_worked_example_row_is_exactly_what_the_body_does() {
     let file = sources.add("transfer.vow", source);
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     let analysis = analyse(file, &parsed.module, &resolved.resolutions);
 
     let transfer = parsed
@@ -346,8 +382,9 @@ fn a_test_performing_an_effect_with_no_with_block_is_an_error() {
 
 #[test]
 fn an_imported_effect_makes_the_row_unverifiable_and_says_so() {
-    let (sources, _, _, analysis) = analyse_source(
+    let (sources, _, _, analysis) = analyse_source_in(
         "module a\n\nuse ledger.{Ledger}\n\nfn f() -> Int\n  uses Ledger.post,\n{ 0 }\n",
+        &universe_of(&[LEDGER_MODULE]),
     );
     assert_eq!(
         codes_of(&analysis.diagnostics),
@@ -384,8 +421,9 @@ fn granting_everything_a_capability_carries_is_reported() {
 fn an_unverifiable_row_suppresses_both_checks() {
     // Otherwise every entry would be reported as unused, which is noise about
     // something the compiler already admitted it cannot see.
-    let (_, _, _, analysis) = analyse_source(
+    let (_, _, _, analysis) = analyse_source_in(
         "module a\n\nuse ledger.{Ledger}\n\nfn f() -> Int\n  uses Ledger.post, Ledger.balance,\n{ 0 }\n",
+        &universe_of(&[LEDGER_MODULE]),
     );
     assert_eq!(
         codes_of(&analysis.diagnostics)
@@ -416,7 +454,7 @@ fn broken_input_does_not_panic() {
     );
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     let analysis = analyse(file, &parsed.module, &resolved.resolutions);
 
     // `Nope` never resolved, so there is nothing to say that has not already

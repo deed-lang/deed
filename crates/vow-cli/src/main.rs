@@ -62,7 +62,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     let mut sources = SourceMap::new();
-    let mut checks = Vec::new();
+    let mut ids = Vec::new();
 
     for path in &files {
         let text = match std::fs::read_to_string(path) {
@@ -72,9 +72,13 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 return ExitCode::from(EXIT_USAGE);
             }
         };
-        let file = sources.add(display_path(path), text);
-        checks.push(vow_driver::check(&sources, file));
+        ids.push(sources.add(display_path(path), text));
     }
+
+    // Every file at once, so a `use` has something to point at. Checking them
+    // one at a time would mean an import could never resolve, which is how it
+    // used to work and why nothing crossing a module boundary was checked.
+    let checks = vow_driver::check_all(&sources, &ids);
 
     let stdout = io::stdout();
     let mut out = stdout.lock();

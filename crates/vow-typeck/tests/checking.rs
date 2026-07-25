@@ -9,10 +9,14 @@
 use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_lexer::tokenize;
 use vow_parser::parse;
-use vow_resolve::resolve;
+use vow_resolve::{Universe, resolve};
 use vow_typeck::{Checked, Tier, Ty, Types, check, codes};
 
 fn check_source(src: &str) -> (SourceMap, Checked) {
+    check_source_in(src, &Universe::new())
+}
+
+fn check_source_in(src: &str, universe: &Universe) -> (SourceMap, Checked) {
     let mut sources = SourceMap::new();
     let file = sources.add("test.vow", src);
 
@@ -20,7 +24,7 @@ fn check_source(src: &str) -> (SourceMap, Checked) {
     assert!(!lexed.has_errors(), "test source should lex cleanly");
     let parsed = parse(file, &lexed.tokens);
     assert!(!parsed.has_errors(), "test source should parse cleanly");
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, universe);
     assert!(
         !resolved.has_errors(),
         "test source should resolve cleanly: {:?}",
@@ -35,8 +39,28 @@ fn check_source(src: &str) -> (SourceMap, Checked) {
     (sources, checked)
 }
 
+/// A universe holding each of `modules`, parsed from source.
+///
+/// An import with nothing behind it is an error now, so a test about a name
+/// from elsewhere needs a real module declaring it.
+fn universe_of(modules: &[&str]) -> Universe {
+    let mut universe = Universe::new();
+    let mut sources = SourceMap::new();
+    for (index, source) in modules.iter().enumerate() {
+        let file = sources.add(format!("dep{index}.vow"), *source);
+        let lexed = tokenize(file, sources.file(file).text());
+        let parsed = parse(file, &lexed.tokens);
+        universe.add(&parsed.module);
+    }
+    universe
+}
+
 fn check_ok(src: &str) -> Types {
-    let (sources, checked) = check_source(src);
+    check_ok_in(src, &Universe::new())
+}
+
+fn check_ok_in(src: &str, universe: &Universe) -> Types {
+    let (sources, checked) = check_source_in(src, universe);
     if !checked.diagnostics.is_empty() {
         let rendered: Vec<String> = checked
             .diagnostics
@@ -71,7 +95,7 @@ fn the_worked_example_type_checks() {
     let file = sources.add("examples/transfer.vow", source);
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     assert!(!resolved.has_errors());
 
     let checked = check(file, &parsed.module, &resolved.resolutions);
@@ -92,7 +116,7 @@ fn the_worked_example_proves_its_refinements() {
     let file = sources.add("transfer.vow", source);
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     let checked = check(file, &parsed.module, &resolved.resolutions);
 
     assert!(
@@ -109,26 +133,31 @@ fn the_worked_example_proves_its_refinements() {
 // -- what the checker refuses to guess -------------------------------------
 
 #[test]
-fn a_name_from_an_unloaded_module_types_as_unknown() {
-    // Almost everything interesting still comes from modules the compiler
-    // cannot see, so this has to be silent rather than wrong.
-    check_ok(
+fn a_name_from_another_module_types_as_unknown() {
+    // Cross-module types are not lowered yet, issue #37, so a name that came
+    // from an import has no type here. That has to be silent rather than
+    // wrong, since a false positive costs more than a missing check.
+    check_ok_in(
         "module a\n\n\
          use other.{Thing, make}\n\n\
          record R { field: Thing }\n\n\
          fn f() -> Thing { make(1, 2, 3) }\n\n\
          fn g(r: R) -> Int { r.field }\n",
+        &universe_of(&[
+            "module other\n\nrecord Thing { n: Int }\n\nfn make(n: Int) -> Thing { Thing { n: n } }\n",
+        ]),
     );
 }
 
 #[test]
 fn an_operator_with_one_unknown_side_says_nothing() {
-    check_ok(
+    check_ok_in(
         "module a\n\n\
          use other.{balance}\n\n\
          record Money { units: Int }\n\n\
          fn f(m: Money) -> Bool { balance() < m }\n\n\
          fn g(m: Money) -> Bool { balance() - m == balance() }\n",
+        &universe_of(&["module other\n\nfn balance() -> Int { 0 }\n"]),
     );
 }
 
@@ -146,8 +175,12 @@ fn an_operator_with_two_known_sides_is_checked() {
 
 #[test]
 fn the_question_mark_is_not_checked_yet() {
-    // `Result` lives in another module, so there is nothing to check against.
-    check_ok("module a\n\nuse std/result.{Result}\n\nfn f(r: Result) -> Int { r? }\n");
+    // The `Result` in scope is the imported one, and cross-module types are
+    // not lowered yet, issue #37, so there is nothing to check against.
+    check_ok_in(
+        "module a\n\nuse std/result.{Result}\n\nfn f(r: Result) -> Int { r? }\n",
+        &universe_of(&["module std/result\n\nrecord Result { n: Int }\n"]),
+    );
 }
 
 // -- refinements -----------------------------------------------------------
@@ -456,7 +489,10 @@ fn a_local_type_takes_no_type_arguments() {
 
 #[test]
 fn an_imported_type_may_take_type_arguments() {
-    check_ok("module a\n\nuse std/result.{Result}\n\nfn f() -> Result<Int, Int> { 0 }\n");
+    check_ok_in(
+        "module a\n\nuse std/result.{Result}\n\nfn f() -> Result<Int, Int> { 0 }\n",
+        &universe_of(&["module std/result\n\nrecord Result { n: Int }\n"]),
+    );
 }
 
 #[test]
@@ -475,7 +511,7 @@ fn broken_input_does_not_panic_and_does_not_pile_on() {
     );
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     let checked = check(file, &parsed.module, &resolved.resolutions);
 
     // Names that failed to resolve become Unknown, and Unknown agrees with

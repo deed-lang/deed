@@ -121,7 +121,7 @@ Read them in order. Each one leans on the one before it.
 | `vow-lexer` | Source text to tokens |
 | `vow-ast` | The syntax tree |
 | `vow-parser` | Tokens to a tree, with recovery |
-| `vow-resolve` | Every name bound to a declaration |
+| `vow-resolve` | Every name bound to a declaration, including across module boundaries |
 | `vow-typeck` | Every expression given a type |
 | `vow-effects` | Every effect row checked against what the body does |
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
@@ -148,6 +148,15 @@ decorative for about an hour. That is now `VOW4019`.
 is not configurable long before anything enforced it, which meant the files were formatted
 the way they happened to have been typed. A test now asserts that every `.vow` file in the
 repository is already canonical, so the principle either holds or the build fails.
+
+`names.vow` and `greeting.vow` are two modules that see each other. A module is named by its
+own `module` line, and the unit of compilation is the set of files you handed the compiler,
+so `vow check examples/` resolves the `use` in one against the declarations in the other. A
+`use` of a module that is not there, or of a name that module does not declare, is now an
+error. What still does not cross is the types: an imported name has no type behind it, so
+the type checker treats it as unknown and unknown agrees with everything. That is
+[issue #37](https://github.com/onatozmenn/vow/issues/37) and the example says so in a
+comment rather than pretending otherwise.
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.

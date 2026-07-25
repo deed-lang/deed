@@ -1,0 +1,39 @@
+// An import that is actually checked.
+//
+// Everything named in the `use` line below is verified against what
+// `examples/names.vow` declares. Asking for a name that file does not have is
+// VOW3008, and asking for a module that is not among the files handed to the
+// compiler is VOW3007. Both used to be accepted in silence, which meant a typo
+// in an import produced a working build and a mystery later.
+//
+// What is still missing is the second half. `Tone` and `Greeting` cross the
+// module boundary as names, not as types, so the type checker treats them as
+// unknown and an unknown type agrees with everything. That is why `describe`
+// below can take a `Greeting` and do nothing useful with it.
+
+module examples/greeting
+
+use examples/names.{Greeting, Loud, Tone}
+
+// The variants come across as names of their own, so importing one is written
+// down like anything else. What is not there yet is the type behind them, so a
+// `match` on `Tone` cannot be checked for exhaustiveness and writing this as an
+// `if` is the honest shape until that lands.
+fn describe(tone: Tone) -> String {
+    if tone == Loud {
+        return "shouting"
+    }
+    "speaking"
+}
+
+// `greeting` is a `Greeting` as far as the reader is concerned and `Unknown` as
+// far as the type checker is concerned, so nothing here is verified against
+// what `Greeting` actually holds. That gap is the second half of the work.
+fn render(greeting: Greeting) -> String {
+    "hello"
+}
+
+// There is no `test` in this file, and that is the third gap. The interpreter
+// holds the code of one module at a time, so `describe(Plain)` has nothing to
+// evaluate `Plain` to and reports VOW6006. Checking crosses the boundary now;
+// running does not.
