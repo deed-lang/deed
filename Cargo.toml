@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/vow-diagnostics",
+    "crates/vow-lexer",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/onatozmenn/vow"
+rust-version = "1.85"
+
+[workspace.lints.clippy]
+all = "warn"
