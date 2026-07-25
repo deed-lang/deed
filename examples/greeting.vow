@@ -15,6 +15,19 @@ module examples/greeting
 
 use examples/names.{Greeting, Loud, Plain, Tone, louder}
 
+use examples/sink.{Collect, Discard, Sink}
+
+// The effect comes from `sink.vow` and the row is checked against the
+// declaration there. Dropping `Sink.emit` from this clause is VOW5001, adding
+// `Sink.count` to it is VOW5002, and neither depends on the effect being
+// declared in this file.
+fn announce(greeting: Greeting) -> ()
+  uses
+    Sink.emit,
+{
+    Sink.emit(render(greeting))
+}
+
 // Exhaustive over a choice declared somewhere else. Adding a third `Tone` to
 // `names.vow` breaks this function, which is the point of exhaustiveness and
 // the reason a catch-all arm is refused here the same as anywhere.
@@ -52,4 +65,28 @@ test "a record from another module is read here" {
 test "a call goes into the other module and comes back" {
     assert louder(Plain) == Loud
     assert describe(louder(Plain)) == "shouting"
+}
+
+// The handler is installed here and its operations run in `sink.vow`, reading
+// that module's names. Which handler is a decision this block makes, and
+// `announce` cannot tell the difference, which is the point of an effect.
+test "a handler from another module collects what was emitted" {
+    let greeting = Greeting { who: "world", tone: Loud }
+
+    with Collect { seen: 0 } {
+        announce(greeting)
+        announce(greeting)
+
+        assert Sink.count() == 2
+    }
+}
+
+test "a different handler makes the same call mean something else" {
+    let greeting = Greeting { who: "world", tone: Loud }
+
+    with Discard { seen: 0 } {
+        announce(greeting)
+
+        assert Sink.count() == 0
+    }
 }

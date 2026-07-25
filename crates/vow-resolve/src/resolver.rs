@@ -329,21 +329,43 @@ impl Resolver<'_> {
     /// Resolves `container.name`, classifying the `.` on the way.
     fn resolve_member(&mut self, container: DefId, ident: &Ident) -> Option<DefId> {
         match self.resolutions.def(container).kind {
-            // The name lives in another module. What can be said about it
-            // depends on what that module declared, which is now known for
-            // anything with members: an effect's operations and a choice's
-            // variants. Everything else still waits on cross module types.
+            // The name lives in another module. An effect's operations and a
+            // choice's variants are part of its declaration, so those cross a
+            // file boundary as syntax and get definitions of their own here.
+            // Anything else stays foreign, because a record's fields are the
+            // type checker's business and it reads them from that module's
+            // surface rather than from a name.
             DefKind::Import => {
-                self.resolutions.record_dot(ident.span, Dot::Foreign);
-
-                let export = self.resolutions.import(container)?;
+                let Some(export) = self.resolutions.import(container).cloned() else {
+                    self.resolutions.record_dot(ident.span, Dot::Foreign);
+                    return None;
+                };
                 if !matches!(export.kind, ExportKind::Effect | ExportKind::Choice) {
-                    return None;
-                }
-                if export.members.contains(&ident.name) {
+                    self.resolutions.record_dot(ident.span, Dot::Foreign);
                     return None;
                 }
 
+                if export.members.contains(&ident.name) {
+                    let kind = match export.kind {
+                        ExportKind::Effect => DefKind::EffectOp,
+                        _ => DefKind::Variant,
+                    };
+                    let member = self.member_of(container, &ident.name).unwrap_or_else(|| {
+                        // Created on demand, once per name, so two mentions of
+                        // the same operation are the same definition.
+                        self.resolutions.add_def(DefData {
+                            kind,
+                            name: ident.name.clone(),
+                            span: ident.span,
+                            parent: Some(container),
+                        })
+                    });
+                    self.used.insert(member);
+                    self.resolutions.record_name(ident.span, member);
+                    return Some(member);
+                }
+
+                self.resolutions.record_dot(ident.span, Dot::Foreign);
                 let suggestion = closest(&ident.name, export.members.iter().map(String::as_str));
                 let container_data = self.resolutions.def(container);
                 let container_name = container_data.name.clone();
