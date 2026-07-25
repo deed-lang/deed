@@ -342,6 +342,27 @@ fn a_payload_bound_by_an_ok_pattern_is_guarded() {
     ));
 }
 
+#[test]
+fn a_bound_on_a_multiple_that_does_not_prove_it_is_guarded() {
+    // `n * 3 >= -3` puts `n` at minus one or above, which is not enough for
+    // `NonNegative`. Rounding that bound the wrong way would have proven it,
+    // and minus one would have gone through with no check at all.
+    let (sources, failure) = expect_refused(
+        "module a\n\n\
+         type NonNegative = Int where value >= 0\n\n\
+         fn f(n: Int) -> NonNegative\n\
+         \x20 where\n\
+         \x20   n * 3 >= -3,\n\
+         {\n\
+         \x20 n\n\
+         }\n\n\
+         test \"minus one is not a non negative number\" {\n\
+         \x20 assert f(-1) == -1\n\
+         }\n",
+    );
+    assert!(render_human(&sources, &failure).contains("-1 does not satisfy `NonNegative`"));
+}
+
 // -- a promise that is not kept ---------------------------------------------
 
 #[test]

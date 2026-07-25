@@ -223,6 +223,11 @@ needed it still counts, and two differences sharing a name make a third, so `a <
 settle `a < c`. That last one is a fixpoint, and it is run for a fixed small number of rounds
 rather than to exhaustion, because P9 is a budget and not a preference.
 
+A name multiplied by a number is still a name, counted more than once, so `n + n` and `n * 2`
+read as two of one name. `n * 3 > 0` puts `n` at one or above, which needs dividing a bound by
+three, and that rounds inwards: `3 * n <= -2` admits `n <= -1` and not `n <= 0`. A name
+multiplied by a name is not linear and that is where this stops.
+
 The other two clauses in that example are not there for the relationship. They are there so
 `high - low` has an answer: without a bound on either name the difference can be larger than an
 integer, and an expression that cannot be computed proves nothing about what it computes.
@@ -278,10 +283,9 @@ and comparing at the end. That is local bidirectional checking and it exists for
 
 Every one of these is `Guarded`, with a warning, never a wrong answer.
 
-- **A relationship that is not a difference.** `a < b * b` relates two names through a
-  product, and a pair of bounds has nowhere to put that. The same limit applies to a promise:
-  `ensures ok => result == n * n` says something true and useful and there is nowhere to put
-  it.
+- **Two names multiplied together.** `a < b * b` is not linear, and a pair of bounds has
+  nowhere to put it. The same limit applies to a promise: `ensures ok => result == n * n`
+  says something true and useful and there is nowhere to put it.
 - **Arithmetic that could overflow.** `n + 1` where `n` is `Positive` is not provably
   positive, because `n` could be the largest integer there is. That is the reasoning working
   rather than a gap in it, and the runtime agrees: the sum has no answer. The same rule is
