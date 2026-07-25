@@ -288,6 +288,10 @@ impl Lowerer<'_> {
         match ty {
             Type::Unit(_) => Ty::Unit,
             Type::Error(_) => Ty::Unknown,
+            Type::Fn { params, ret, .. } => Ty::Fn {
+                params: params.iter().map(|param| self.ty(param)).collect(),
+                ret: Box::new(self.ty(ret)),
+            },
             Type::Named { name, args, .. } => {
                 let lowered: Vec<Ty> = args.iter().map(|arg| self.ty(arg)).collect();
                 let Some(def) = self.resolutions.resolution(name.span) else {

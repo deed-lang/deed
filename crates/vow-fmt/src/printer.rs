@@ -867,6 +867,10 @@ impl Printer<'_> {
                     format!("{}<{}>", name.name, rendered.join(", "))
                 }
             }
+            Type::Fn { params, ret, .. } => {
+                let rendered: Vec<String> = params.iter().map(|param| self.ty(param)).collect();
+                format!("Fn({}) -> {}", rendered.join(", "), self.ty(ret))
+            }
             Type::Unit(_) => "()".to_string(),
             Type::Error(_) => String::new(),
         }

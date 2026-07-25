@@ -465,6 +465,11 @@ impl<'a> Checker<'a> {
 
                 base
             }
+
+            Type::Fn { params, ret, .. } => Ty::Fn {
+                params: params.iter().map(|param| self.lower_type(param)).collect(),
+                ret: Box::new(self.lower_type(ret)),
+            },
         }
     }
 
@@ -589,6 +594,28 @@ impl<'a> Checker<'a> {
             (Ty::Result(a_ok, a_err), Ty::Result(e_ok, e_err)) => {
                 self.compatible(a_ok, e_ok) && self.compatible(a_err, e_err)
             }
+            // Componentwise, for the same reason `Result` is: a closure with a
+            // parameter the checker gave up on should not be a second error on
+            // top of the first. Exactly matching otherwise, so a refined
+            // parameter is a different function type from an unrefined one and
+            // says so, rather than being quietly accepted in one direction.
+            (
+                Ty::Fn {
+                    params: a_params,
+                    ret: a_ret,
+                },
+                Ty::Fn {
+                    params: e_params,
+                    ret: e_ret,
+                },
+            ) => {
+                a_params.len() == e_params.len()
+                    && a_params
+                        .iter()
+                        .zip(e_params)
+                        .all(|(a, e)| self.compatible(a, e))
+                    && self.compatible(a_ret, e_ret)
+            }
             _ => actual == expected,
         }
     }
@@ -652,6 +679,15 @@ impl<'a> Checker<'a> {
         span: Span,
         because: Option<(Span, String)>,
     ) {
+        // A function type promises no effects, and whether a value keeps that
+        // promise is a question for the pass that knows about rows. Which
+        // values have to keep it is this pass's question, so it answers it
+        // here, before anything short circuits.
+        if matches!(expected, Ty::Fn { .. }) {
+            self.types
+                .require_pure(expr.map(Expr::span).unwrap_or(span));
+        }
+
         if self.compatible(actual, expected) {
             return;
         }

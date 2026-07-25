@@ -793,6 +793,15 @@ impl<'a> Interp<'a> {
 
         match self.frames.last().and_then(|frame| frame.get(&def)) {
             Some(value) => Ok(value.clone()),
+            // A declared function named where a value belongs. It is not in
+            // any frame, because it is not a binding, and it is a value all
+            // the same: `apply(double, 3)` has to hand `double` over somehow.
+            None if matches!(self.kind_of(def), DefKind::Function | DefKind::Import) => {
+                Ok(Value::Function {
+                    module: self.current,
+                    def,
+                })
+            }
             None => Err(self.not_runnable(
                 ident.span,
                 &format!("`{}`, which has no value here", ident.name),
@@ -958,9 +967,18 @@ impl<'a> Interp<'a> {
         // at what the callee evaluates to rather than at what it resolves to.
         if let Expr::Ident(ident) = callee
             && let Some(def) = self.def_of(ident)
-            && let Some(Value::Closure(closure)) = self.lookup(def)
+            && let Some(bound) = self.lookup(def)
         {
-            return self.call_closure(&closure, values, span);
+            match bound {
+                Value::Closure(closure) => return self.call_closure(&closure, values, span),
+                // A function handed over as a value. Called through the same
+                // path a written-out call takes, so its contract is checked
+                // rather than skipped by having been passed rather than named.
+                Value::Function { module, def } => {
+                    return self.call_declared(module, def, values, span, callee.span());
+                }
+                _ => {}
+            }
         }
 
         let Some(def) = def else {
@@ -1010,6 +1028,44 @@ impl<'a> Interp<'a> {
             },
             _ => Err(self.not_runnable(callee.span(), "this call")),
         }
+    }
+
+    /// Calls a function that was handed over as a value.
+    ///
+    /// The module is part of what was handed over, because a definition is an
+    /// index into one module's table and reading the callee's names out of the
+    /// caller's scope is a class of bug that does not announce itself.
+    fn call_declared(
+        &mut self,
+        module: usize,
+        def: DefId,
+        args: Vec<(Value, Span)>,
+        span: Span,
+        callee_span: Span,
+    ) -> Eval<Value> {
+        let caller = self.current;
+        self.current = module;
+
+        let result = match self.kind_of(def) {
+            DefKind::Function => match self.function(def) {
+                Some(function) => self.call(function, args, span, None),
+                None => Err(self.not_runnable(callee_span, "this call")),
+            },
+            DefKind::Import => match self.imported_function(def) {
+                Some((module, function)) => {
+                    self.current = module;
+                    self.call(function, args, span, None)
+                }
+                None => Err(self.not_runnable(
+                    callee_span,
+                    "a call into a module whose code was not handed to the interpreter",
+                )),
+            },
+            _ => Err(self.not_runnable(callee_span, "this call")),
+        };
+
+        self.current = caller;
+        result
     }
 
     fn dispatch(&mut self, operation: DefId, args: Vec<(Value, Span)>, span: Span) -> Eval<Value> {

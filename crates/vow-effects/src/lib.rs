@@ -1,6 +1,8 @@
 //! Checks what a Vow function is allowed to touch.
 //!
 //! ```
+//! use std::collections::HashSet;
+//!
 //! use vow_diagnostics::SourceMap;
 //! use vow_effects::analyse;
 //! use vow_lexer::tokenize;
@@ -26,7 +28,10 @@
 //! let lexed = tokenize(file, sources.file(file).text());
 //! let parsed = parse(file, &lexed.tokens);
 //! let resolved = resolve(file, &parsed.module, &Universe::new());
-//! let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+//!
+//! // Nothing here hands a function around, so no value has to promise
+//! // anything. The type checker is what works that set out.
+//! let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashSet::new());
 //!
 //! assert!(!analysis.has_errors());
 //! ```

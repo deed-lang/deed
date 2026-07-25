@@ -272,7 +272,12 @@ fn check_parsed(
     timings.typeck = start.elapsed();
 
     let start = Instant::now();
-    let analysed = vow_effects::analyse(file, &module, &resolved.resolutions);
+    let analysed = vow_effects::analyse(
+        file,
+        &module,
+        &resolved.resolutions,
+        checked.types.pure_required(),
+    );
     timings.effects = start.elapsed();
 
     let mut diagnostics = Vec::new();

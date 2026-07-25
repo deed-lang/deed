@@ -942,6 +942,13 @@ impl<'a> Parser<'a> {
             return Type::Error(self.span());
         };
 
+        // `Fn(Int) -> Int`. Spelled like a type because it is one, and the
+        // name is reserved for it: there is one function type in the language
+        // and a second thing called `Fn` would be read as this one.
+        if name.name == "Fn" && self.at(&TokenKind::LParen) {
+            return self.parse_fn_type(name);
+        }
+
         let mut end = name.span;
         let mut args = Vec::new();
         if self.eat(&TokenKind::Lt) {
@@ -965,6 +972,36 @@ impl<'a> Parser<'a> {
             span: name.span.to(end),
             name,
             args,
+        }
+    }
+
+    /// The rest of `Fn(Int, Int) -> Int`, with the name already read.
+    fn parse_fn_type(&mut self, name: Ident) -> Type {
+        self.expect(TokenKind::LParen, "a function type");
+
+        let mut params = Vec::new();
+        while !self.at(&TokenKind::RParen) && !self.at_eof() {
+            let before = self.pos;
+            params.push(self.parse_type());
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+            if self.pos == before {
+                break;
+            }
+        }
+        self.expect(TokenKind::RParen, "a function type");
+
+        // The return type is written out even when it is `()`. One way to
+        // write a thing, and a function type with no arrow reads like an
+        // unfinished one.
+        self.expect(TokenKind::Arrow, "a function type");
+        let ret = self.parse_type();
+
+        Type::Fn {
+            span: name.span.to(ret.span()),
+            params,
+            ret: Box::new(ret),
         }
     }
 

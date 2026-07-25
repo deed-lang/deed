@@ -3,6 +3,8 @@
 //! The "too wide" rule gets as much attention as "too narrow", because it is
 //! the one that decides whether an effect row means anything.
 
+use std::collections::HashSet;
+
 use vow_ast::Item;
 use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_effects::{Analysis, EffectItem, analyse, codes};
@@ -40,7 +42,7 @@ fn analyse_source_in(
     let resolved = resolve(file, &parsed.module, universe);
     assert!(!resolved.has_errors(), "test source should resolve cleanly");
 
-    let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+    let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashSet::new());
     (sources, parsed.module, resolved.resolutions, analysis)
 }
 
@@ -129,7 +131,7 @@ fn the_worked_example_passes_effect_checking() {
     let resolved = resolve(file, &parsed.module, &Universe::new());
     assert!(!resolved.has_errors());
 
-    let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+    let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashSet::new());
     if !analysis.diagnostics.is_empty() {
         panic!(
             "the worked example should pass effect checking:\n{}",
@@ -148,7 +150,7 @@ fn the_worked_example_row_is_exactly_what_the_body_does() {
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
     let resolved = resolve(file, &parsed.module, &Universe::new());
-    let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+    let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashSet::new());
 
     let transfer = parsed
         .module
@@ -765,7 +767,7 @@ fn broken_input_does_not_panic() {
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
     let resolved = resolve(file, &parsed.module, &Universe::new());
-    let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+    let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashSet::new());
 
     // `Nope` never resolved, so there is nothing to say that has not already
     // been said by an earlier pass.

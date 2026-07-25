@@ -208,25 +208,53 @@ way.
 The rule now is that a closure's effects are charged to the function that wrote it. That is
 conservative rather than correct: the correct place is the call site, because that is where
 the effect actually happens. What makes the conservative rule sound rather than a guess is
-that a closure cannot leave the function that wrote it. There is no syntax for a closure
-type, so a closure cannot be a parameter, a return type or a record field, and a parameter
-with no type is now an error. There is nowhere else the charge could land.
+that a closure carrying an effect cannot leave the function that wrote it.
 
 It over-approximates in one direction only. A closure that is written and never called still
 charges its author, because deciding otherwise means deciding whether a function value
 escapes, and not having to answer that is the point.
 
-Closure parameters still need no types. They are not a boundary anyone reviews, since the
-closure cannot cross one.
+Closure parameters still need types, for the same reason every other parameter does.
 
-What this buys is time. The unsolved case is now unwritable instead of silently wrong, which
-is P6, and the day rows go into closure types is the day closures can be passed around.
+### Function values
+
+A function value can cross a boundary as long as it promises nothing:
+
+```vow
+fn apply(f: Fn(Int) -> Int, n: Int) -> Int {
+    f(n)
+}
+
+fn adder() -> Fn(Int) -> Int {
+    |x: Int| x + 1
+}
+```
+
+`Fn(Int) -> Int` says two things. It takes an `Int` and hands back an `Int`, and it performs
+no effects. The second is not decoration and it is not a default that could be relaxed later
+without breaking anything: there is no syntax for a row on a function type, and leaving one
+off cannot mean "any row". A value carrying an unstated effect through a signature would undo
+the point of having rows at all, which is that a signature is complete.
+
+So a closure that performs an effect is refused where a function type is wanted, and so is a
+declared function whose `uses` is not empty. That check needs both passes: which values have
+to keep the promise is a question about types, and whether they do is a question about rows,
+so the type checker records the places and the effect checker settles them.
+
+A declared function named where a value belongs is a value too. It is not a closure: a
+closure carries no contract and a function does, so calling one that arrived as a value goes
+through the same path a written out call takes, and its `where`, its `ensures` and every
+refinement on it still run.
+
+What is still unwritable is a function type that allows something. That is the row
+polymorphism question above, and until it is answered the way to pass a callback that logs is
+to not pass a callback.
 
 ## Open questions
 
-- Rows in closure types, so a closure could be passed to a function that says what it will
-  allow. This is the same row polymorphism question as above, and until it is answered a
-  closure is local to the function that wrote it.
+- Rows in function types, so a callback could be allowed to do something rather than nothing.
+  This is the same row polymorphism question as above, and until it is answered a function
+  value crosses a boundary only when it performs no effects.
 - Can rows be inferred well enough that most functions carry none, and does that then
   undermine the review argument, which depends on the signature being complete?
 - How do effects interact with data structures. Does a `Map` holding closures need a row?

@@ -178,6 +178,24 @@ fn closures() {
 }
 
 #[test]
+fn function_values() {
+    // A function type is the one place a value's type is written out as a
+    // shape rather than a name, so it is the natural place for a hole. Every
+    // way one can be made or used is here.
+    expect_all_known(
+        "function_values.vow",
+        "module a\n\n\
+         fn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\n\
+         fn double(n: Int) -> Int { n + n }\n\n\
+         fn adder() -> Fn(Int) -> Int { |x: Int| x + 1 }\n\n\
+         fn f(n: Int) -> Int {\n\
+         \x20 let step: Fn(Int) -> Int = |x: Int| x - 1\n\
+         \x20 apply(double, n) + apply(step, n) + apply(adder(), n)\n\
+         }\n",
+    );
+}
+
+#[test]
 fn effects_and_handlers() {
     expect_all_known(
         "effects.vow",
