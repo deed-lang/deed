@@ -1,14 +1,17 @@
 // The running example. Every design document refers back to this file.
 //
-// Nothing here compiles yet. There is no compiler. This is what we are aiming
-// at, kept in one place so that changes to the design have to change something
-// concrete instead of only changing prose.
+// Nothing here executes yet. It lexes, parses, and every name in it resolves to
+// a declaration, which is as far as the compiler currently goes. The modules it
+// imports from do not exist, and names reached through an import are
+// deliberately left unchecked, because nothing can honestly be said about the
+// inside of a module that has not been loaded.
 
 module payments/transfer
 
 use std/result.{Result, ok, err}
-use ledger.{Ledger, Entry}
-use audit.{Audit, Event}
+use accounts.{AccountId, Currency}
+use ledger.{Ledger, Entry, InMemoryLedger, balance, total}
+use audit.{Audit, Event, NullAudit}
 
 // A refinement, so nothing downstream has to re-validate.
 type Positive = Int where value > 0
@@ -66,6 +69,10 @@ fn transfer(from: AccountId, to: AccountId, amount: Money)
     ok(Receipt { from, to, amount })
 }
 
+fn money(units: Positive) -> Money {
+    Money { units, currency: Currency.TRY }
+}
+
 // Note what is absent, since that is the point.
 //
 //   - `amount.units > 0` is not a precondition, because `Positive` already
@@ -78,25 +85,31 @@ fn transfer(from: AccountId, to: AccountId, amount: Money)
 //     not created. Stating it once here replaces a category of test.
 
 test "moves the money and conserves the total" {
-    with InMemoryLedger { alice: 100.try, bob: 0.try },
+    let alice = AccountId.sample(1)
+    let bob = AccountId.sample(2)
+
+    with InMemoryLedger { opening: 100 },
          NullAudit
     {
-        let receipt = transfer(alice, bob, 40.try).unwrap()
+        let receipt = transfer(alice, bob, money(40)).unwrap()
 
-        assert receipt.amount == 40.try
-        assert Ledger.balance(alice) == 60.try
-        assert Ledger.balance(bob) == 40.try
+        assert receipt.amount == money(40)
+        assert balance(alice) == money(60)
+        assert balance(bob) == money(40)
     }
 }
 
 test "refuses to overdraw and leaves the ledger alone" {
-    with InMemoryLedger { alice: 10.try, bob: 0.try },
+    let alice = AccountId.sample(1)
+    let bob = AccountId.sample(2)
+
+    with InMemoryLedger { opening: 10 },
          NullAudit
     {
-        let result = transfer(alice, bob, 40.try)
+        let outcome = transfer(alice, bob, money(40))
 
-        assert result == err(InsufficientFunds { available: 10.try })
-        assert Ledger.balance(alice) == 10.try
-        assert Ledger.balance(bob) == 0.try
+        assert outcome == err(InsufficientFunds { available: money(10) })
+        assert balance(alice) == money(10)
+        assert balance(bob) == money(0)
     }
 }
