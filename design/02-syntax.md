@@ -137,9 +137,15 @@ always visible:
 runtime check would be the single most dishonest thing this language could do, so it does
 not happen quietly.
 
-Today the Proven tier holds constant expressions and nothing else, which is a thin slice of
-what it should eventually cover. Everything it cannot discharge becomes Guarded and says so
-as a warning at the point of use. Thin is fine. Silent would not be.
+All three tiers exist. `Proven` holds constant expressions and nothing else, which is a thin
+slice of what it should eventually cover. `Tested` covers pure functions whose parameters
+can be generated: `vow test` runs a hundred generated inputs against the contract and shrinks
+any counterexample it finds. Everything else is `Guarded`, checked on every call.
+
+Generation discards inputs that violate a `where` clause rather than reporting them, since a
+bad input makes the generator a bad caller and the runtime already says so. If too many get
+discarded, that is reported: a property that only tested a handful of inputs is worse than no
+property, because it looks like one.
 
 ## Errors
 
@@ -365,6 +371,11 @@ yet, so that bill has not arrived.
 
 ## Open questions
 
+- Property tests only cover pure functions. Running an effectful one needs a handler, and
+  inventing a handler means inventing the behaviour the property would then check against
+  itself. A module declaring exactly one handler per effect might be a defensible default.
+- Shrinking handles integers by binary search and record fields greedily. Nothing else
+  shrinks, so a counterexample built from strings or nested choices comes out as generated.
 - Ordering operators accept any two operands of the same type, including ones where ordering
   is meaningless. This needs a trait, or a fixed set of orderable types, and has neither.
 - Refinements have no conversion form, so the only values that can enter a refined type are

@@ -37,7 +37,15 @@ pub fn tokenize(file: FileId, src: &str) -> Lexed {
     Lexer {
         src,
         file,
-        pos: 0,
+        // A byte order mark is not part of the program. Plenty of editors write
+        // one and none of them mention it, so rejecting it would be a first
+        // impression of "unexpected character" on a file the user did not type
+        // a single wrong thing into.
+        pos: if src.starts_with('\u{FEFF}') {
+            '\u{FEFF}'.len_utf8()
+        } else {
+            0
+        },
         tokens: Vec::new(),
         diagnostics: Vec::new(),
     }

@@ -11,13 +11,13 @@ rust-version.workspace = true
 vow-ast = { path = "../vow-ast" }
 vow-diagnostics = { path = "../vow-diagnostics" }
 vow-effects = { path = "../vow-effects" }
+vow-interp = { path = "../vow-interp" }
 vow-lexer = { path = "../vow-lexer" }
 vow-parser = { path = "../vow-parser" }
 vow-resolve = { path = "../vow-resolve" }
 vow-typeck = { path = "../vow-typeck" }
 
 [dev-dependencies]
-vow-interp = { path = "../vow-interp" }
 
 [lints]
 workspace = true

@@ -8,6 +8,7 @@ use std::process::ExitCode;
 
 use vow_diagnostics::{SourceMap, render_human, render_json};
 use vow_driver::{Checked, ObligationReport};
+use vow_interp::PropertyConfig;
 use vow_typeck::Tier;
 
 use crate::args::{CheckArgs, Command, Format, Mode, USAGE};
@@ -111,7 +112,13 @@ fn run_tests(out: &mut impl Write, sources: &SourceMap, checks: &[Checked]) -> i
 
     for checked in checks {
         let outcomes = vow_interp::run_tests(checked.file, &checked.module, &checked.resolutions);
-        if outcomes.is_empty() {
+        let properties = vow_interp::run_properties(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            PropertyConfig::default(),
+        );
+        if outcomes.is_empty() && properties.is_empty() {
             continue;
         }
 
@@ -125,6 +132,23 @@ fn run_tests(out: &mut impl Write, sources: &SourceMap, checks: &[Checked]) -> i
                 Some(diagnostic) => {
                     writeln!(out, "  FAIL  {}", outcome.name)?;
                     failed.push((outcome.name, diagnostic));
+                }
+            }
+        }
+
+        // Generated from the contract rather than written by hand, so they are
+        // labelled that way. Nobody should have to wonder where a failing test
+        // they never wrote came from.
+        for property in properties {
+            let label = format!("property {} ({} cases)", property.function, property.cases);
+            match property.failure {
+                None => {
+                    passed += 1;
+                    writeln!(out, "  ok    {label}")?;
+                }
+                Some(diagnostic) => {
+                    writeln!(out, "  FAIL  {label}")?;
+                    failed.push((label, diagnostic));
                 }
             }
         }
@@ -180,17 +204,12 @@ fn report_obligations(
     checks: &[Checked],
 ) -> io::Result<()> {
     let proven: usize = checks.iter().map(|c| c.obligations_at(Tier::Proven)).sum();
+    let tested: usize = checks.iter().map(|c| c.obligations_at(Tier::Tested)).sum();
     let guarded: usize = checks.iter().map(|c| c.obligations_at(Tier::Guarded)).sum();
 
     writeln!(
         out,
-        "obligations: {proven} proven, 0 tested, {guarded} guarded"
-    )?;
-    // Saying "0 tested" without saying why would imply the tier is empty by
-    // choice rather than unbuilt.
-    writeln!(
-        out,
-        "  the tested tier needs property test generation, which does not exist yet"
+        "obligations: {proven} proven, {tested} tested, {guarded} guarded"
     )?;
 
     for checked in checks {
@@ -198,13 +217,13 @@ fn report_obligations(
         for ObligationReport {
             tier,
             span,
-            refinement,
+            subject,
         } in &checked.obligations
         {
             let location = sources.file(checked.file).location(span.start);
             writeln!(
                 out,
-                "  {:<8} {name}:{}:{}  {refinement}",
+                "  {:<8} {name}:{}:{}  {subject}",
                 tier_name(*tier),
                 location.line,
                 location.column
@@ -237,18 +256,18 @@ fn report_json(
             for ObligationReport {
                 tier,
                 span,
-                refinement,
+                subject,
             } in &checked.obligations
             {
                 let location = file.location(span.start);
                 writeln!(
                     out,
-                    "{{\"kind\":\"obligation\",\"tier\":\"{}\",\"file\":\"{}\",\"line\":{},\"column\":{},\"refinement\":\"{}\"}}",
+                    "{{\"kind\":\"obligation\",\"tier\":\"{}\",\"file\":\"{}\",\"line\":{},\"column\":{},\"subject\":\"{}\"}}",
                     tier_name(*tier),
                     file.name(),
                     location.line,
                     location.column,
-                    refinement
+                    subject
                 )?;
             }
         }
@@ -260,6 +279,7 @@ fn report_json(
 fn tier_name(tier: Tier) -> &'static str {
     match tier {
         Tier::Proven => "proven",
+        Tier::Tested => "tested",
         Tier::Guarded => "guarded",
     }
 }
