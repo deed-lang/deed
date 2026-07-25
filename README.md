@@ -8,6 +8,17 @@ Built for code that machines write and humans review.
 > there is no code generation. Criticism of the design is still the most useful contribution.
 > See [issue #1](https://github.com/onatozmenn/vow/issues/1) for where this is going.
 
+```
+cargo run -p vow-cli -- check examples/transfer.vow --obligations
+```
+
+```
+obligations: 6 proven, 0 tested, 0 guarded
+  the tested tier needs property test generation, which does not exist yet
+  proven   examples/transfer.vow:126:50  Positive
+  ...
+```
+
 ## The idea
 
 Most of the code being written today is not typed out by a person. That changes which
@@ -90,9 +101,17 @@ Read them in order. Each one leans on the one before it.
 | `vow-resolve` | Every name bound to a declaration |
 | `vow-typeck` | Every expression given a type |
 | `vow-effects` | Every effect row checked against what the body does |
+| `vow-driver` | Runs all of the above, in one place, so nothing drifts |
+| `vow-cli` | The `vow` binary |
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.
+
+`vow check` runs every pass even when an earlier one failed. Stopping at the first failure
+would cost a round trip for everything the later passes would have found, and the design
+makes running on safe: parse errors become error nodes, unresolved names become unknown
+types, and unknown agrees with everything. Diagnostics come out in source order rather than
+pass order, because a reader works down the file and which pass noticed is not their problem.
 
 ## What Vow is deliberately not doing
 
