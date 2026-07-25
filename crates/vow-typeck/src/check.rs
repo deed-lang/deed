@@ -1546,7 +1546,6 @@ impl<'a> Checker<'a> {
             Stmt::Expr(expr) => {
                 self.infer(expr);
             }
-            Stmt::Error(_) => {}
         }
     }
 

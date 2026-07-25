@@ -215,7 +215,7 @@ impl Exports {
                 }
                 // A `test` is not part of the surface, and an error node is
                 // not part of anything.
-                Item::Test(_) | Item::Error(_) => continue,
+                Item::Test(_) => continue,
             };
 
             names.insert(
@@ -238,10 +238,6 @@ impl Exports {
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.names.keys().map(String::as_str)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
     }
 }
 
@@ -281,9 +277,5 @@ impl Universe {
 
     pub fn paths(&self) -> impl Iterator<Item = &str> {
         self.modules.keys().map(String::as_str)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.modules.is_empty()
     }
 }

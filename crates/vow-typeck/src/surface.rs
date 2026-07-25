@@ -117,10 +117,6 @@ impl World {
     pub fn get(&self, module: &str, name: &str) -> Option<&SurfaceItem> {
         self.modules.get(module)?.get(name)
     }
-
-    pub fn module(&self, path: &str) -> Option<&Surface> {
-        self.modules.get(path)
-    }
 }
 
 /// Lowers one module's declarations into something other modules can read.
@@ -264,7 +260,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                     },
                 );
             }
-            Item::Test(_) | Item::Error(_) => {}
+            Item::Test(_) => {}
         }
     }
 

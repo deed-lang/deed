@@ -1,6 +1,6 @@
 //! What names resolve to, and the table that records it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use vow_diagnostics::Span;
 
@@ -15,10 +15,15 @@ impl DefId {
         self.0 as usize
     }
 
-    /// Fabricates an id without a resolution behind it.
+    /// Fabricates an id with no declaration behind it.
     ///
-    /// For tests and tooling only. An id made this way must not be handed to
-    /// [`Resolutions::def`], which will panic or answer about the wrong thing.
+    /// For a table of facts about names that have none. `facts::promised_by`
+    /// reads an `ensures` clause by inventing an id for `result` and one per
+    /// parameter, so the narrowing a body gets can be run over a contract.
+    ///
+    /// An id made this way must not be handed to [`Resolutions::def`], which
+    /// will panic or answer about the wrong thing. Nothing that holds one has
+    /// a `Resolutions` to hand it to.
     pub fn from_raw(raw: u32) -> Self {
         Self(raw)
     }
@@ -38,7 +43,6 @@ pub enum DefKind {
     EffectOp,
     Handler,
     Function,
-    Test,
     Param,
     /// A `state` field of a handler. The only mutable thing in the language.
     State,
@@ -61,18 +65,11 @@ impl DefKind {
             DefKind::EffectOp => "effect operation",
             DefKind::Handler => "handler",
             DefKind::Function => "function",
-            DefKind::Test => "test",
             DefKind::Param => "parameter",
             DefKind::State => "handler state",
             DefKind::Local => "binding",
             DefKind::Import => "import",
         }
-    }
-
-    /// Whether a name of this kind lives at module level rather than inside a
-    /// function body.
-    pub fn is_declaration(self) -> bool {
-        !matches!(self, DefKind::Param | DefKind::Local | DefKind::State)
     }
 }
 
@@ -107,7 +104,6 @@ pub struct Resolutions {
     defs: Vec<DefData>,
     names: HashMap<Span, DefId>,
     dots: HashMap<Span, Dot>,
-    unresolved: HashSet<Span>,
     builtins: HashMap<String, DefId>,
     /// What each `use`d name turned out to be in the module it came from.
     ///
@@ -135,10 +131,6 @@ impl Resolutions {
 
     pub(crate) fn record_dot(&mut self, span: Span, dot: Dot) {
         self.dots.insert(span, dot);
-    }
-
-    pub(crate) fn record_unresolved(&mut self, span: Span) {
-        self.unresolved.insert(span);
     }
 
     pub(crate) fn record_builtin(&mut self, name: &str, def: DefId) {
@@ -197,16 +189,5 @@ impl Resolutions {
 
     pub fn dot(&self, span: Span) -> Option<Dot> {
         self.dots.get(&span).copied()
-    }
-
-    /// Whether the `.name` at `span` was classified as a runtime field access.
-    pub fn is_field_access(&self, span: Span) -> bool {
-        self.dot(span) == Some(Dot::Field)
-    }
-
-    /// Names that were reported as unknown. Useful for tests and for later
-    /// passes that should not try to make sense of them.
-    pub fn is_unresolved(&self, span: Span) -> bool {
-        self.unresolved.contains(&span)
     }
 }

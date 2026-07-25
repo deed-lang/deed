@@ -234,8 +234,6 @@ impl Printer<'_> {
             Item::Handler(decl) => self.handler(decl),
             Item::Function(decl) => self.function(decl),
             Item::Test(decl) => self.test(decl),
-            // Unreachable: formatting refuses a file that did not parse.
-            Item::Error(_) => {}
         }
     }
 
@@ -816,7 +814,6 @@ impl Printer<'_> {
                 format!("assert {}", self.with_prefix(7, condition))
             }
             Stmt::Expr(expr) => self.expr(expr),
-            Stmt::Error(_) => String::new(),
         }
     }
 

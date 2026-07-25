@@ -371,7 +371,6 @@ impl Resolver<'_> {
         }
 
         self.diagnostics.push(diagnostic);
-        self.resolutions.record_unresolved(ident.span);
         None
     }
 
@@ -460,7 +459,6 @@ impl Resolver<'_> {
                         )
                         .with_primary_label("no such member"),
                     );
-                    self.resolutions.record_unresolved(ident.span);
                     None
                 }
             },
@@ -621,7 +619,7 @@ impl Resolver<'_> {
                 Item::Function(function) => {
                     self.declare_item(&function.sig.name, DefKind::Function, None);
                 }
-                Item::Test(_) | Item::Error(_) => {}
+                Item::Test(_) => {}
             }
         }
     }
@@ -636,7 +634,6 @@ impl Resolver<'_> {
                 Item::Handler(handler) => self.resolve_handler(handler),
                 Item::Function(function) => self.resolve_fn(function),
                 Item::Test(test) => self.resolve_block(&test.body),
-                Item::Error(_) => {}
             }
         }
     }
@@ -805,7 +802,6 @@ impl Resolver<'_> {
             }
             Stmt::Assert { condition, .. } => self.resolve_expr(condition),
             Stmt::Expr(expr) => self.resolve_expr(expr),
-            Stmt::Error(_) => {}
         }
     }
 

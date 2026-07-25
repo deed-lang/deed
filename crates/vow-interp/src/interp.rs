@@ -1673,8 +1673,6 @@ impl<'a> Interp<'a> {
                 self.eval(expr)?;
                 Ok(())
             }
-
-            Stmt::Error(span) => Err(self.not_runnable(*span, "code that did not compile")),
         }
     }
 

@@ -21,10 +21,6 @@ impl Token {
     pub fn new(kind: TokenKind, span: Span) -> Self {
         Self { kind, span }
     }
-
-    pub fn is(&self, kind: &TokenKind) -> bool {
-        &self.kind == kind
-    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

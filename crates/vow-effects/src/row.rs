@@ -75,18 +75,9 @@ impl Row {
         self.items.is_empty()
     }
 
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
     /// Whether some entry in this row permits `item`.
     pub fn covers(&self, item: &EffectItem) -> bool {
         self.items.iter().any(|granted| granted.covers(item))
-    }
-
-    /// Whether any entry mentions `effect`.
-    pub fn touches(&self, effect: DefId) -> bool {
-        self.items.iter().any(|item| item.effect == effect)
     }
 }
 
@@ -141,6 +132,5 @@ mod tests {
         assert!(row.covers(&EffectItem::operation(ledger, "post")));
         assert!(row.covers(&EffectItem::operation(audit, "append")));
         assert!(!row.covers(&EffectItem::operation(ledger, "balance")));
-        assert!(row.touches(ledger));
     }
 }
