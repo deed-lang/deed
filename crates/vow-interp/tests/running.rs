@@ -658,6 +658,78 @@ fn a_failed_comparison_shows_both_sides() {
     assert!(text.contains("left is 6, right is 7"), "{text}");
 }
 
+// -- strings ---------------------------------------------------------------
+
+#[test]
+fn strings_join_and_measure() {
+    expect_pass(
+        "module a\n\n\
+         fn greet(name: String) -> String { \"hello, \" + name }\n\n\
+         test \"joining\" {\n\
+         \x20 assert greet(\"onat\") == \"hello, onat\"\n\
+         \x20 assert \"\" + \"a\" == \"a\"\n\
+         \x20 assert length(\"hello\") == 5\n\
+         \x20 assert length(\"\") == 0\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_length_counts_characters_and_not_bytes() {
+    // Otherwise a refinement written against it means something different
+    // depending on which letters happened to turn up.
+    expect_pass(
+        "module a\n\n\
+         test \"characters\" {\n\
+         \x20 assert length(\"é\") == 1\n\
+         \x20 assert length(\"gün\") == 3\n\
+         }\n",
+    );
+}
+
+#[test]
+fn strings_compare_in_order() {
+    expect_pass(
+        "module a\n\n\
+         test \"ordering\" {\n\
+         \x20 assert \"a\" < \"b\"\n\
+         \x20 assert \"abc\" < \"abd\"\n\
+         \x20 assert \"ab\" < \"abc\"\n\
+         \x20 assert !(\"b\" <= \"a\")\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_refinement_over_a_string_is_guarded_at_runtime() {
+    // Nothing here proves anything about a length, so the check is real. It
+    // also needs `length(value)` to be runnable inside a predicate, which it
+    // was not: predicates used to be walked by a small interpreter of their own
+    // that understood comparisons and nothing else.
+    let (sources, failure) = expect_failure(
+        "module a\n\n\
+         type NonEmpty = String where length(value) > 0\n\n\
+         fn shout(s: NonEmpty) -> String { s + \"!\" }\n\n\
+         test \"empty is refused\" {\n\
+         \x20 assert shout(\"\") == \"!\"\n\
+         }\n",
+    );
+    assert_eq!(failure.code, codes::REFINEMENT_FAILED);
+    assert!(render_human(&sources, &failure).contains("NonEmpty"));
+}
+
+#[test]
+fn a_string_that_satisfies_its_refinement_passes() {
+    expect_pass(
+        "module a\n\n\
+         type NonEmpty = String where length(value) > 0\n\n\
+         fn shout(s: NonEmpty) -> String { s + \"!\" }\n\n\
+         test \"a real name\" {\n\
+         \x20 assert shout(\"hey\") == \"hey!\"\n\
+         }\n",
+    );
+}
+
 // -- arithmetic ------------------------------------------------------------
 
 #[test]

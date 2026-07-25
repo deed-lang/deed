@@ -231,6 +231,103 @@ fn the_question_mark_rejects_a_type_that_is_only_named_like_a_result() {
     assert!(rendered(&sources, &checked.diagnostics).contains("`?` needs a `Result`"));
 }
 
+// -- operators -------------------------------------------------------------
+
+#[test]
+fn plus_joins_two_strings() {
+    check_ok("module a\n\nfn greet(name: String) -> String { \"hello, \" + name }\n");
+}
+
+#[test]
+fn plus_will_not_join_a_number_to_a_string() {
+    // There is no conversion between them, so guessing which one the author
+    // meant would be guessing.
+    let (sources, checked) =
+        check_source("module a\n\nfn f(n: Int) -> String { \"count: \" + n }\n");
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    assert!(rendered(&sources, &checked.diagnostics).contains("joined with this"));
+}
+
+#[test]
+fn plus_still_adds_two_numbers() {
+    check_ok("module a\n\nfn f(n: Int) -> Int { n + 1 }\n");
+}
+
+#[test]
+fn strings_are_ordered() {
+    check_ok("module a\n\nfn f(a: String, b: String) -> Bool { a < b }\n");
+}
+
+#[test]
+fn a_record_is_not_ordered() {
+    // This used to pass here and fail at runtime, with a message blaming the
+    // interpreter for not implementing something that has nothing to implement.
+    let (sources, checked) = check_source(
+        "module a\n\nrecord Point { x: Int }\n\nfn f(a: Point, b: Point) -> Bool { a < b }\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_ORDERED]);
+    assert!(rendered(&sources, &checked.diagnostics).contains("there is none on `Point`"));
+}
+
+#[test]
+fn a_choice_is_not_ordered_either() {
+    let (_, checked) = check_source(
+        "module a\n\nchoice Tone { Plain, Loud }\n\nfn f(a: Tone, b: Tone) -> Bool { a >= b }\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_ORDERED]);
+}
+
+#[test]
+fn two_types_that_do_not_match_are_one_mistake_not_two() {
+    // Saying the sides disagree and then that the type they do not share has
+    // no ordering is two diagnostics for one edit.
+    let (_, checked) = check_source(
+        "module a\n\nrecord Point { x: Int }\n\nfn f(a: Point, b: Int) -> Bool { a < b }\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+}
+
+#[test]
+fn anything_can_still_be_compared_for_equality() {
+    // Equality is structural and total. Wanting to know whether two records
+    // are the same is reasonable; wanting to know which one is larger is not.
+    check_ok(
+        "module a\n\nrecord Point { x: Int }\n\nfn f(a: Point, b: Point) -> Bool { a == b }\n",
+    );
+}
+
+#[test]
+fn a_refinement_over_a_string_is_ordered_through_its_base() {
+    check_ok(
+        "module a\n\n\
+         type Name = String where length(value) > 0\n\n\
+         fn f(a: Name, b: Name) -> Bool { a < b }\n",
+    );
+}
+
+#[test]
+fn length_takes_a_string_and_gives_a_number() {
+    check_ok("module a\n\nfn f(s: String) -> Int { length(s) }\n");
+}
+
+#[test]
+fn length_will_not_measure_a_number() {
+    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int { length(n) }\n");
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+}
+
+#[test]
+fn a_length_is_never_negative() {
+    // The prelude says so, so a refinement that only needs that much is
+    // Proven rather than checked again at runtime.
+    let types = check_ok(
+        "module a\n\n\
+         type Counted = Int where value >= 0\n\n\
+         fn f(s: String) -> Counted { length(s) }\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+}
+
 // -- refinements -----------------------------------------------------------
 
 #[test]

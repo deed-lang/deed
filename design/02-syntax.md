@@ -50,6 +50,43 @@ type Email = String where matches(value, EMAIL_PATTERN)
 A `Positive` cannot be constructed without the check passing, so no function taking one
 needs to re-check it. This is P6.
 
+## Operators
+
+There are fewer than it looks, because none of them are overloadable and there is no trait
+system for them to hang off.
+
+| | |
+| --- | --- |
+| `+ - * / %` | `Int`, and nothing else. Overflow and division by zero are errors, not wraps |
+| `+` | also joins two `String`s |
+| `< <= > >=` | `Int` and `String`, and nothing else |
+| `== !=` | anything, structurally |
+| `&& \|\|` | `Bool`, and they short circuit |
+
+`+` is the one operator with two meanings. There is no conversion between `Int` and
+`String`, so no expression is ambiguous about which one it wanted, and spelling
+concatenation any other way would be a tax on the most ordinary thing a program does.
+
+Ordering is deliberately narrow. Comparing two records used to pass the type checker and
+fail at runtime, and the runtime message blamed the interpreter for not implementing
+something that has nothing to implement: there is no order on a record that anyone could
+define, because there is no trait to define it in. Refusing the comparison is the honest
+answer until there is one. Equality is different, because structural equality is total and
+wanting to know whether two records are the same is reasonable.
+
+Strings order by character. For text in one script that is the order anyone expects, and for
+text that mixes them it is a decision that needs a locale, which is not something an operator
+should be guessing at.
+
+The prelude carries one function, `length`, which measures a `String` in characters rather
+than bytes. Otherwise a refinement written against it would mean something different
+depending on which letters turned up. It is in the prelude because a `String` you cannot
+measure is a `String` you cannot check, and the prelude stays small enough that every entry
+can be argued for.
+
+What is deliberately absent: slicing, searching, splitting, case, and turning a number into a
+string. All of those want a standard library, and Vow does not have a story for one yet.
+
 ## Functions and the contract block
 
 The centre of the language. Everything between the return type and the opening brace is the

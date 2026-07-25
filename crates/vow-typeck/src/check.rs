@@ -158,6 +158,25 @@ impl<'a> Checker<'a> {
             );
         }
 
+        // The one prelude function that is not a constructor. A length is never
+        // negative, and saying so here is what lets `where length(name) > 0`
+        // land in the Proven tier instead of becoming a runtime check.
+        if let Some(def) = self.resolutions.builtin("length") {
+            self.types.set_name(def, "length".to_string());
+            self.signatures.insert(
+                def,
+                Signature {
+                    params: vec![ParamTy {
+                        ty: Ty::Str,
+                        span: Span::at(0),
+                    }],
+                    ret: Ty::Int,
+                    span: Span::at(0),
+                    guarantee: Range::between(0, i64::MAX),
+                },
+            );
+        }
+
         for item in &module.items {
             match item {
                 Item::TypeAlias(alias) => {
@@ -1313,12 +1332,14 @@ impl<'a> Checker<'a> {
                 }
             }
 
-            Expr::Binary { op, lhs, rhs, .. } => {
+            Expr::Binary {
+                op, lhs, rhs, span, ..
+            } => {
                 let left = self.infer(lhs);
                 let right = self.infer(rhs);
                 let left = self.widen(&left);
                 let right = self.widen(&right);
-                self.binary_ty(*op, &left, &right, lhs, rhs)
+                self.binary_ty(*op, &left, &right, lhs, rhs, *span)
             }
 
             // `?` unwraps the success case and propagates the failure one, so
@@ -1446,10 +1467,20 @@ impl<'a> Checker<'a> {
                 self.not_a_value(ident, "an effect");
                 Ty::Unknown
             }
-            DefKind::Builtin if !matches!(ident.name.as_str(), "ok" | "err") => {
-                self.not_a_value(ident, "a type");
-                Ty::Unknown
-            }
+            // A builtin with a signature is a function, so it has a type like
+            // any other. The rest of the prelude is type names, and naming one
+            // where a value belongs is the mistake `VOW4019` exists for.
+            DefKind::Builtin => match self.signatures.get(&def) {
+                Some(signature) => Ty::Fn {
+                    params: signature.params.iter().map(|p| p.ty.clone()).collect(),
+                    ret: Box::new(signature.ret.clone()),
+                },
+                None if matches!(ident.name.as_str(), "ok" | "err") => Ty::Unknown,
+                None => {
+                    self.not_a_value(ident, "a type");
+                    Ty::Unknown
+                }
+            },
             _ => Ty::Unknown,
         }
     }
@@ -2314,7 +2345,15 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn binary_ty(&mut self, op: BinaryOp, left: &Ty, right: &Ty, lhs: &Expr, rhs: &Expr) -> Ty {
+    fn binary_ty(
+        &mut self,
+        op: BinaryOp,
+        left: &Ty,
+        right: &Ty,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+    ) -> Ty {
         use BinaryOp::*;
 
         // If either side is unknown, the operator cannot say anything useful
@@ -2322,6 +2361,28 @@ impl<'a> Checker<'a> {
         let unknown = left.absorbs() || right.absorbs();
 
         match op {
+            // `+` is the one operator with two meanings. Joining strings is
+            // common enough that spelling it any other way would be a tax on
+            // the most ordinary thing a program does, and the two meanings
+            // never overlap: a `String` is not an `Int` and there is no
+            // conversion between them, so no expression is ambiguous.
+            Add if !unknown && (left == &Ty::Str || right == &Ty::Str) => {
+                self.assign(
+                    right,
+                    &Ty::Str,
+                    Some(rhs),
+                    rhs.span(),
+                    Some((lhs.span(), "joined with this".to_string())),
+                );
+                self.assign(
+                    left,
+                    &Ty::Str,
+                    Some(lhs),
+                    lhs.span(),
+                    Some((rhs.span(), "joined with this".to_string())),
+                );
+                Ty::Str
+            }
             Add | Sub | Mul | Div | Rem => {
                 if unknown {
                     return Ty::Unknown;
@@ -2332,8 +2393,12 @@ impl<'a> Checker<'a> {
             }
             Lt | Le | Gt | Ge => {
                 if !unknown {
-                    // Ordering is not tied to a trait yet, so this only insists
-                    // the two sides agree. See the open questions in 02-syntax.
+                    // Both sides have to agree, and then the thing they agree
+                    // on has to be something with an order. Without the second
+                    // half, comparing two records passed here and failed at
+                    // runtime, which put the blame on the interpreter for
+                    // something the type checker let through.
+                    let before = self.diagnostics.len();
                     self.assign(
                         right,
                         left,
@@ -2341,6 +2406,12 @@ impl<'a> Checker<'a> {
                         rhs.span(),
                         Some((lhs.span(), "compared with this".to_string())),
                     );
+                    // Only when the sides agreed. Telling someone their two
+                    // types do not match and then that the type they do not
+                    // have has no ordering is two diagnostics for one mistake.
+                    if self.diagnostics.len() == before {
+                        self.require_order(left, span, op);
+                    }
                 }
                 Ty::Bool
             }
@@ -2364,6 +2435,33 @@ impl<'a> Checker<'a> {
                 Ty::Bool
             }
         }
+    }
+
+    /// Insists that `ty` is something `<` could mean anything about.
+    ///
+    /// `Int` and `String` and nothing else. There is no trait system, so a
+    /// record has no ordering anyone could define, and accepting the comparison
+    /// on the grounds that it might mean something one day is how a type
+    /// checker ends up not checking.
+    fn require_order(&mut self, ty: &Ty, at: Span, op: BinaryOp) {
+        if matches!(self.widen(ty), Ty::Int | Ty::Str | Ty::Never) {
+            return;
+        }
+
+        let described = self.types.describe(ty);
+        let operator = op.as_str();
+        self.emit(
+            Diagnostic::error(
+                codes::NOT_ORDERED,
+                self.file,
+                at,
+                format!("`{operator}` needs an order, and there is none on {described}"),
+            )
+            .with_primary_label(format!("cannot be compared with `{operator}`"))
+            .with_note(
+                "`Int` and `String` are ordered; everything else can be compared with `==` but not ranked",
+            ),
+        );
     }
 }
 

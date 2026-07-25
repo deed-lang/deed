@@ -73,3 +73,11 @@ pub const PATTERN_MISMATCH: &str = "VOW4018";
 /// everything, so `Io.write(Console, "hi")` would type check and a program
 /// could conjure authority by naming it.
 pub const NOT_A_VALUE: &str = "VOW4019";
+
+/// `<`, `<=`, `>` or `>=` on a type that has no order.
+///
+/// Ordering used to be accepted for anything, as long as both sides agreed, so
+/// comparing two records passed the type checker and failed at runtime with a
+/// message about the interpreter being incomplete. It was not incomplete: there
+/// is nothing to implement, because there is nothing the comparison could mean.
+pub const NOT_ORDERED: &str = "VOW4020";

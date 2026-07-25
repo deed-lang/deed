@@ -204,6 +204,7 @@ fn index_module<'a>(entry: &Entry<'a>) -> Code<'a> {
         functions: HashMap::new(),
         handler_decls: HashMap::new(),
         refinements: HashMap::new(),
+        subjects: HashMap::new(),
         state_names: HashMap::new(),
         variant_names: HashMap::new(),
     };
@@ -237,6 +238,17 @@ fn index_module<'a>(entry: &Entry<'a>) -> Code<'a> {
                     (def_of(&alias.name), alias.refinement.as_ref())
                 {
                     code.refinements.insert(def, predicate);
+                    // `value` is the only name the language introduces on its
+                    // own. Resolution gives it a definition whose span is the
+                    // alias name, which is what makes it findable from here
+                    // without matching on the word.
+                    if let Some((subject, _)) = resolutions.defs().find(|(_, data)| {
+                        data.kind == DefKind::Local
+                            && data.name == "value"
+                            && data.span == alias.name.span
+                    }) {
+                        code.subjects.insert(def, subject);
+                    }
                 }
             }
             _ => {}
@@ -277,6 +289,8 @@ struct Code<'a> {
     handler_decls: HashMap<DefId, &'a HandlerDecl>,
     /// Type alias definition to the predicate it refines by.
     refinements: HashMap<DefId, &'a Expr>,
+    /// Type alias definition to the `value` its predicate talks about.
+    subjects: HashMap<DefId, DefId>,
     /// Handler state definition to the field name it stands for.
     state_names: HashMap<DefId, String>,
     variant_names: HashMap<DefId, String>,
@@ -380,6 +394,10 @@ impl<'a> Interp<'a> {
 
     fn refinement(&self, def: DefId) -> Option<&'a Expr> {
         self.code().refinements.get(&def).copied()
+    }
+
+    fn subject(&self, def: DefId) -> Option<DefId> {
+        self.code().subjects.get(&def).copied()
     }
 
     fn state_name(&self, def: DefId) -> String {
@@ -490,9 +508,10 @@ impl<'a> Interp<'a> {
         }
     }
 
-    /// Whether a value satisfies a refinement predicate.
-    pub(crate) fn satisfies(&mut self, predicate: &'a Expr, value: &Value) -> bool {
-        self.eval_predicate(predicate, value).unwrap_or(false)
+    /// Whether a value satisfies the refinement `alias` declares.
+    pub(crate) fn satisfies(&mut self, alias: DefId, predicate: &'a Expr, value: &Value) -> bool {
+        self.eval_predicate(alias, predicate, value)
+            .unwrap_or(false)
     }
 
     pub(crate) fn make(program: &Program<'a>, file: FileId) -> Self {
@@ -809,6 +828,20 @@ impl<'a> Interp<'a> {
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
         }
 
+        // Strings join and compare. Ordering is by bytes, which for text that
+        // is all one script is the order anybody expects, and for text that is
+        // not is a decision nobody should be making without a locale.
+        if let (Value::Str(a), Value::Str(b)) = (&left, &right) {
+            return match op {
+                Add => Ok(Value::str(format!("{a}{b}"))),
+                Lt => Ok(Value::Bool(a < b)),
+                Le => Ok(Value::Bool(a <= b)),
+                Gt => Ok(Value::Bool(a > b)),
+                Ge => Ok(Value::Bool(a >= b)),
+                _ => Err(self.not_runnable(span, &format!("`{}` on two Strings", op.as_str()))),
+            };
+        }
+
         let (Some(a), Some(b)) = (left.as_int(), right.as_int()) else {
             return Err(self.not_runnable(
                 span,
@@ -891,6 +924,13 @@ impl<'a> Interp<'a> {
                 match (name.as_str(), carried) {
                     ("ok", Some(value)) => Ok(Value::ok(value)),
                     ("err", Some(value)) => Ok(Value::err(value)),
+                    // Characters, not bytes. A length that counted bytes would
+                    // make `length("é")` two, and a refinement written against
+                    // it would mean something different depending on which
+                    // letters happened to be in the string.
+                    ("length", Some(Value::Str(text))) => {
+                        Ok(Value::Int(text.chars().count() as i64))
+                    }
                     _ => Err(self.not_runnable(callee.span(), "this call")),
                 }
             }
@@ -1284,9 +1324,9 @@ impl<'a> Interp<'a> {
             return Ok(());
         };
 
-        // The predicate talks about `value`, which is not a name resolution
-        // knows about outside the alias, so it is supplied directly.
-        let holds = self.eval_predicate(predicate, value)?;
+        // The predicate talks about `value`, which is not in scope anywhere
+        // else, so it is bound here.
+        let holds = self.eval_predicate(def, predicate, value)?;
         if holds {
             return Ok(());
         }
@@ -1305,34 +1345,24 @@ impl<'a> Interp<'a> {
         ))
     }
 
-    fn eval_predicate(&mut self, predicate: &'a Expr, value: &Value) -> Eval<bool> {
-        match predicate {
-            Expr::Ident(ident) if ident.name == "value" => value
-                .as_bool()
-                .ok_or_else(|| self.not_runnable(ident.span, "a refinement over a non Bool")),
-            Expr::Binary {
-                op, lhs, rhs, span, ..
-            } => {
-                let left = self.predicate_operand(lhs, value)?;
-                let right = self.predicate_operand(rhs, value)?;
-                compare(*op, &left, &right)
-                    .ok_or_else(|| self.not_runnable(*span, "this operator inside a refinement"))
-            }
-            Expr::Unary {
-                op: UnaryOp::Not,
-                operand,
-                ..
-            } => Ok(!self.eval_predicate(operand, value)?),
-            Expr::Bool { value: literal, .. } => Ok(*literal),
-            other => Err(self.not_runnable(other.span(), "this refinement predicate")),
+    /// Evaluates a refinement predicate with `value` standing for the thing
+    /// being checked.
+    ///
+    /// The predicate is an ordinary expression and is evaluated as one, in a
+    /// frame of its own holding nothing but `value`. It used to be walked by a
+    /// small interpreter with its own idea of which operators exist, so
+    /// `length(value) > 0` was unrunnable while `value > 0` was fine, for no
+    /// reason anybody could have predicted from the language.
+    fn eval_predicate(&mut self, alias: DefId, predicate: &'a Expr, value: &Value) -> Eval<bool> {
+        let mut frame = HashMap::new();
+        if let Some(subject) = self.subject(alias) {
+            frame.insert(subject, value.clone());
         }
-    }
 
-    fn predicate_operand(&mut self, expr: &'a Expr, value: &Value) -> Eval<Value> {
-        match expr {
-            Expr::Ident(ident) if ident.name == "value" => Ok(value.clone()),
-            other => self.eval(other),
-        }
+        self.frames.push(frame);
+        let held = self.condition(predicate);
+        self.frames.pop();
+        held
     }
 
     // -- construction ------------------------------------------------------
@@ -1709,23 +1739,5 @@ fn collect_olds<'a>(expr: &'a Expr, out: &mut Vec<(Span, &'a Expr)>) {
         }
         Expr::Try { operand, .. } => collect_olds(operand, out),
         _ => {}
-    }
-}
-
-fn compare(op: BinaryOp, left: &Value, right: &Value) -> Option<bool> {
-    use BinaryOp::*;
-    match op {
-        Eq => Some(left == right),
-        Ne => Some(left != right),
-        _ => {
-            let (a, b) = (left.as_int()?, right.as_int()?);
-            match op {
-                Lt => Some(a < b),
-                Le => Some(a <= b),
-                Gt => Some(a > b),
-                Ge => Some(a >= b),
-                _ => None,
-            }
-        }
     }
 }

@@ -559,7 +559,7 @@ impl<'a> TypeIndex<'a> {
                                 for _ in 0..64 {
                                     let candidate =
                                         self.generate(&alias.ty, rng, interp, depth + 1)?;
-                                    if interp.satisfies(predicate, &candidate) {
+                                    if interp.satisfies(def, predicate, &candidate) {
                                         return Some(candidate);
                                     }
                                 }
