@@ -19,6 +19,7 @@ Usage:
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
   --obligations           Report which tier each refinement obligation landed in.
+  --timings               Report how long each pass took.
   --dir <path>            What `sys.files` reaches when running. Default: the
                           current directory. A program cannot get outside it.
   --check                 With `fmt` or `fix`, change nothing and report what
@@ -60,6 +61,8 @@ pub struct CheckArgs {
     pub paths: Vec<PathBuf>,
     pub format: Format,
     pub obligations: bool,
+    /// Report how long each pass took.
+    pub timings: bool,
     /// What `sys.files` is rooted at. `None` means the current directory.
     ///
     /// Granting the whole working directory by default is what every other
@@ -100,6 +103,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut paths = Vec::new();
     let mut format = Format::Human;
     let mut obligations = false;
+    let mut timings = false;
     let mut dir = None;
     let mut check_only = false;
 
@@ -107,6 +111,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         match arg.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "--obligations" => obligations = true,
+            "--timings" => timings = true,
             "--check" => check_only = true,
             "--format" => {
                 let value = args
@@ -151,6 +156,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         paths,
         format,
         obligations,
+        timings,
         dir,
         check_only,
     }))

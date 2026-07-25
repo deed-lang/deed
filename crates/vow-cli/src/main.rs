@@ -86,7 +86,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let result = match args.format {
-        Format::Human => report_human(&mut out, &sources, &checks, args.obligations),
+        Format::Human => report_human(&mut out, &sources, &checks, args.obligations, args.timings),
         Format::Json => report_json(&mut out, &sources, &checks, args.obligations),
     };
 
@@ -398,6 +398,7 @@ fn report_human(
     sources: &SourceMap,
     checks: &[Checked],
     obligations: bool,
+    timings: bool,
 ) -> io::Result<()> {
     for checked in checks {
         for diagnostic in &checked.diagnostics {
@@ -408,6 +409,9 @@ fn report_human(
     if obligations {
         report_obligations(out, sources, checks)?;
     }
+    if timings {
+        report_timings(out, checks)?;
+    }
 
     let errors: usize = checks.iter().map(Checked::error_count).sum();
     let warnings: usize = checks.iter().map(Checked::warning_count).sum();
@@ -417,6 +421,44 @@ fn report_human(
             "{}, {}",
             plural(errors, "error"),
             plural(warnings, "warning")
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Wall time per pass, summed over every file.
+///
+/// P9 says check latency is budgeted. A budget nobody measures is a wish, so
+/// this is here to make the claim something a reader can check rather than
+/// take on faith. It is wall time on one machine and it says so.
+fn report_timings(out: &mut impl Write, checks: &[Checked]) -> io::Result<()> {
+    let mut total = vow_driver::Timings::default();
+    for checked in checks {
+        total.lex += checked.timings.lex;
+        total.parse += checked.timings.parse;
+        total.resolve += checked.timings.resolve;
+        total.typeck += checked.timings.typeck;
+        total.effects += checked.timings.effects;
+    }
+
+    let whole = total.total();
+    writeln!(
+        out,
+        "timings: {:.2}ms over {}",
+        whole.as_secs_f64() * 1000.0,
+        plural(checks.len(), "file")
+    )?;
+    for (name, elapsed) in total.passes() {
+        let share = if whole.is_zero() {
+            0.0
+        } else {
+            elapsed.as_secs_f64() / whole.as_secs_f64() * 100.0
+        };
+        writeln!(
+            out,
+            "  {name:<8} {:>8.2}ms  {share:>4.0}%",
+            elapsed.as_secs_f64() * 1000.0
         )?;
     }
 
