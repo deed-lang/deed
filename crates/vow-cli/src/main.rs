@@ -60,6 +60,9 @@ fn run_check(args: CheckArgs) -> ExitCode {
     if args.mode == Mode::Fmt {
         return run_fmt(&files, args.check_only);
     }
+    if args.mode == Mode::Fix {
+        return run_fix(&files, args.check_only);
+    }
 
     let mut sources = SourceMap::new();
     let mut ids = Vec::new();
@@ -190,6 +193,88 @@ fn program_of(checks: &[Checked]) -> Program<'_> {
         program.add(checked.file, &checked.module, &checked.resolutions);
     }
     program
+}
+
+/// Applies the fixes that are certain and leaves the guesses alone.
+///
+/// One file at a time, because a fix is a rewrite of the file the diagnostic
+/// points at and re-checking the whole set between rounds would multiply the
+/// work by the number of files for no gain. The cost is that a fix which only
+/// becomes available once another file is fixed needs a second run, which is
+/// worth saying rather than hiding.
+fn run_fix(files: &[PathBuf], check_only: bool) -> ExitCode {
+    let mut changed = Vec::new();
+    let mut gave_up = Vec::new();
+
+    for path in files {
+        let original = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("error: {}: {error}", path.display());
+                return ExitCode::from(EXIT_USAGE);
+            }
+        };
+
+        let name = display_path(path);
+        let before = diagnose(&name, &original);
+        let fixed = vow_driver::fix::fix(&original, |text| diagnose(&name, text));
+
+        if !fixed.changed() {
+            continue;
+        }
+
+        // A fix that leaves more errors than it found is a wrong fix, not a
+        // partial one, so the file is left alone and the run says so.
+        let after = diagnose(&name, &fixed.source);
+        if vow_driver::fix::error_count(&after) > vow_driver::fix::error_count(&before) {
+            eprintln!(
+                "error: {name}: fixing made it worse, so nothing was written. \
+                 This is a compiler bug, please report it."
+            );
+            return ExitCode::FAILURE;
+        }
+
+        if fixed.gave_up {
+            gave_up.push(name.clone());
+        }
+        changed.push((name, fixed));
+    }
+
+    if changed.is_empty() {
+        return ExitCode::SUCCESS;
+    }
+
+    for (name, fixed) in &changed {
+        let plural = if fixed.applied == 1 { "" } else { "es" };
+        println!("{name}: {} fix{plural}", fixed.applied);
+    }
+    for name in &gave_up {
+        println!("{name}: still changing after several rounds, run `vow fix` again");
+    }
+
+    if check_only {
+        return ExitCode::FAILURE;
+    }
+
+    for (name, fixed) in &changed {
+        let path = files
+            .iter()
+            .find(|path| display_path(path) == *name)
+            .expect("the name came from this list");
+        if let Err(error) = std::fs::write(path, &fixed.source) {
+            eprintln!("error: {}: {error}", path.display());
+            return ExitCode::from(EXIT_USAGE);
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Checks one file on its own, which is what a fix round needs.
+fn diagnose(name: &str, text: &str) -> Vec<vow_diagnostics::Diagnostic> {
+    let mut sources = SourceMap::new();
+    let file = sources.add(name.to_string(), text.to_string());
+    vow_driver::check(&sources, file).diagnostics
 }
 
 /// Calls `main`, handing it the one `System` there is.

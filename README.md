@@ -127,7 +127,7 @@ Read them in order. Each one leans on the one before it.
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `vow-fmt` | The one canonical form, with no options for the output |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
-| `vow-cli` | The `vow` binary: `check`, `test`, `run` and `fmt` |
+| `vow-cli` | The `vow` binary: `check`, `test`, `run`, `fmt` and `fix` |
 
 The examples are [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),
@@ -150,6 +150,11 @@ decorative for about an hour. That is now `VOW4019`.
 is not configurable long before anything enforced it, which meant the files were formatted
 the way they happened to have been typed. A test now asserts that every `.vow` file in the
 repository is already canonical, so the principle either holds or the build fails.
+
+`vow fix` is the same move for P7. Every diagnostic already carried a patch and a note about
+whether that patch is certain or a guess, and nothing applied them, so what P7 described was
+a data structure. `vow fix` applies the certain ones and refuses the guesses, with no flag to
+override that.
 
 `names.vow` and `greeting.vow` are two modules that see each other. A module is named by its
 own `module` line, and the unit of compilation is the set of files you handed the compiler,

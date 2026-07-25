@@ -598,3 +598,71 @@ fn fmt_has_no_options_for_the_output() {
     assert_eq!(code(&output), 2);
     assert!(stderr(&output).contains("unknown option"));
 }
+
+// -- fixing ----------------------------------------------------------------
+
+#[test]
+fn fix_applies_a_certain_fix() {
+    let scratch = Scratch::new("fix");
+    let file = scratch.write(
+        "typo.vow",
+        "module a\n\nfn balance() -> Int { 0 }\n\nfn f() -> Int { balanse() }\n",
+    );
+
+    let output = run(&["fix", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("1 fix"), "{}", stdout(&output));
+
+    let after = std::fs::read_to_string(&file).unwrap();
+    assert!(after.contains("balance()"), "{after}");
+
+    // And the file checks now, which is the only reason to have done it.
+    let output = run(&["check", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+}
+
+#[test]
+fn fix_leaves_a_guess_alone() {
+    let scratch = Scratch::new("fix-guess");
+    let source = "module a\n\nfn f() -> Int {\n    let s = \"a\\qb\"\n    0\n}\n";
+    let file = scratch.write("guess.vow", source);
+
+    let output = run(&["fix", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0);
+    assert_eq!(stdout(&output), "", "it reported a change it did not make");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), source);
+}
+
+#[test]
+fn fix_check_reports_without_writing() {
+    let scratch = Scratch::new("fix-check");
+    let source = "module a\n\nfn balance() -> Int { 0 }\n\nfn f() -> Int { balanse() }\n";
+    let file = scratch.write("typo.vow", source);
+
+    let output = run(&["fix", "--check", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    assert!(stdout(&output).contains("typo.vow"));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        source,
+        "`--check` wrote to the file"
+    );
+}
+
+#[test]
+fn fix_is_quiet_when_there_is_nothing_to_do() {
+    let scratch = Scratch::new("fix-noop");
+    let source = "module a\n\nfn f() -> Int { 0 }\n";
+    let file = scratch.write("fine.vow", source);
+
+    let output = run(&["fix", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0);
+    assert_eq!(stdout(&output), "");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), source);
+}
+
+#[test]
+fn the_examples_have_nothing_left_to_fix() {
+    let output = run(&["fix", "--check", EXAMPLES]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+}
