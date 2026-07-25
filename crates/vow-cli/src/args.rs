@@ -14,14 +14,15 @@ Usage:
   vow test  [options] <path>...
   vow run   [options] <path>...
   vow fmt   [--check] <path>...
+  vow fix   [--check] <path>...
 
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
   --obligations           Report which tier each refinement obligation landed in.
   --dir <path>            What `sys.files` reaches when running. Default: the
                           current directory. A program cannot get outside it.
-  --check                 With `fmt`, change nothing and name the files that
-                          are not in canonical form.
+  --check                 With `fmt` or `fix`, change nothing and report what
+                          would have changed.
   -h, --help              Print this.
   -V, --version           Print the version.
 
@@ -30,6 +31,7 @@ Paths may be files or directories. A directory is searched for `.vow` files.
 `vow test` refuses to run anything that does not check.
 `vow run` calls `main`, handing it the one `System` capability there is.
 `vow fmt` has no options for the output. There is one canonical form.
+`vow fix` applies the fixes that are certain and leaves the guesses alone.
 
 Exit codes:
   0   no errors, though there may be warnings
@@ -49,6 +51,7 @@ pub enum Mode {
     Test,
     Run,
     Fmt,
+    Fix,
 }
 
 #[derive(Debug)]
@@ -86,9 +89,10 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "test" => Mode::Test,
         "run" => Mode::Run,
         "fmt" => Mode::Fmt,
+        "fix" => Mode::Fix,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `check`, `test`, `run` and `fmt`"
+                "unknown command `{other}`, the choices are `check`, `test`, `run`, `fmt` and `fix`"
             ));
         }
     };
@@ -137,6 +141,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 Mode::Test => "test",
                 Mode::Run => "run",
                 Mode::Fmt => "fmt",
+                Mode::Fix => "fix",
             }
         ));
     }

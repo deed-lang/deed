@@ -116,6 +116,17 @@ text as the only machine-readable surface.
 Every diagnostic has a stable code, a machine-readable form, and a human-readable rendering
 built from the same data. The human rendering is a view, not the source of truth.
 
+`vow fix` is what this means in practice, the same way `vow fmt` is for P4. It applies every
+fix marked machine-applicable, re-checks, and repeats until nothing changes. It never
+applies a fix marked maybe-incorrect, and there is no flag to make it, because a flag for
+applying guesses is a flag someone turns on once and then forgets about.
+
+Two of its rules are about declining. Fixes whose spans overlap are both dropped, since
+applying either would leave the other pointing at text that moved and no order makes both
+right. And a fix that leaves more errors than it found is treated as a compiler bug and
+nothing is written, which is the version of the check that catches a fix that was wrong
+rather than merely unhelpful.
+
 ---
 
 ## P8. The default is deterministic

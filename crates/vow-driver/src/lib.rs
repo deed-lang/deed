@@ -17,6 +17,8 @@
 //! nothing to a mess they did not make, and there are tests in `vow-resolve`
 //! and `vow-typeck` asserting exactly that.
 
+pub mod fix;
+
 use vow_ast::{Item, Module, Outcome};
 use vow_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use vow_effects::Effects;
