@@ -38,3 +38,14 @@ dependencies = [
  "vow-lexer",
  "vow-parser",
 ]
+
+[[package]]
+name = "vow-typeck"
+version = "0.0.0"
+dependencies = [
+ "vow-ast",
+ "vow-diagnostics",
+ "vow-lexer",
+ "vow-parser",
+ "vow-resolve",
+]
