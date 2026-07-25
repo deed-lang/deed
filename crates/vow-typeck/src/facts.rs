@@ -31,9 +31,11 @@
 //!   about the answer.
 //! - **Anything that is not an integer.** No `String`, no record field, no
 //!   variant.
-//! - **The payload of a `Result`.** A call that can fail is a `Result` at the
-//!   call site, and the range of a `Result` means nothing, so an `ensures` on
-//!   a fallible function is not read here.
+//! - **The payload of a call that can fail, until it is taken out.** A call
+//!   that can fail promises things about the number inside the `ok`, and the
+//!   expression is the `Result` around it. The two only meet where the payload
+//!   comes out: at a `?`, at an `ok(..)` pattern, and where a `Result` is
+//!   assigned into one with a refined success type.
 //! - **Division and remainder.** The sign rules around zero and around
 //!   `i64::MIN` are fiddly enough that getting them wrong is worse than not
 //!   trying.
@@ -495,6 +497,49 @@ impl Guarantee {
     }
 }
 
+/// What a call promises, and which value it is about.
+///
+/// A function that can fail promises things about the number inside the `ok`,
+/// and the call site is holding the `Result` around it. Those are two different
+/// values and treating them as one was a quiet mistake: a `Result` was picking
+/// up the range of a number it contained.
+///
+/// Which of these is the useful one is decided by what the caller does next.
+/// Nothing, for `f()`, and everything, for `f()?`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Promise {
+    /// What the expression is worth, when the call cannot fail.
+    pub value: Guarantee,
+    /// What is inside the `ok`, when it can.
+    pub ok: Guarantee,
+}
+
+impl Promise {
+    /// Promises nothing either way.
+    pub fn any() -> Promise {
+        Promise {
+            value: Guarantee::any(),
+            ok: Guarantee::any(),
+        }
+    }
+
+    /// A promise about the value a call hands back.
+    pub fn value(guarantee: Guarantee) -> Promise {
+        Promise {
+            value: guarantee,
+            ok: Guarantee::any(),
+        }
+    }
+
+    /// A promise about the number inside the `ok` of a call that can fail.
+    pub fn ok(guarantee: Guarantee) -> Promise {
+        Promise {
+            value: Guarantee::any(),
+            ok: guarantee,
+        }
+    }
+}
+
 /// What an `ensures` clause promises, read as a range and a set of differences.
 ///
 /// `subject` is the name standing for the thing being described, which has no
@@ -523,7 +568,7 @@ pub fn promised_by(condition: &Expr, subject: &str, names: &[&str]) -> Guarantee
     };
     let env = Env {
         def_of: &def_of,
-        call: &|_| Guarantee::any(),
+        call: &|_| Promise::any(),
     };
 
     let mut facts = Facts::new();
@@ -550,7 +595,7 @@ pub struct Env<'a> {
     /// its `ensures` clause. Whoever answers this is responsible for only
     /// answering for contracts that are themselves checked, since a promise
     /// nobody keeps is not a fact.
-    pub call: &'a dyn Fn(&Expr) -> Guarantee,
+    pub call: &'a dyn Fn(&Expr) -> Promise,
 }
 
 impl Env<'_> {
@@ -558,7 +603,7 @@ impl Env<'_> {
     pub fn blind() -> Env<'static> {
         Env {
             def_of: &|_| None,
-            call: &|_| Guarantee::any(),
+            call: &|_| Promise::any(),
         }
     }
 }
@@ -702,6 +747,20 @@ pub fn range_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
     }
 }
 
+/// The range the value inside the `ok` of `expr` lands in.
+///
+/// A call that can fail promises things about the number inside the `ok`, and
+/// the expression is the `Result` around it, so the promise is only readable
+/// where the payload is actually taken out: at a `?`, at an `ok(..)` pattern,
+/// and where a `Result` is assigned into one with a refined success type.
+/// Nothing names that value in the source, which is why this exists at all.
+pub fn ok_range_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
+    match expr {
+        Expr::Call { callee, args, .. } => (env.call)(callee).ok.applied(args, facts, env),
+        _ => Range::ANY,
+    }
+}
+
 /// What the difference facts add to an expression, when it is a difference.
 ///
 /// Only worth the walk for a sum, since nothing else can reduce to one. The
@@ -734,7 +793,10 @@ fn interval_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
         // The contract of whatever is being called. This is the one place the
         // reasoning leaves the function it is looking at, and it is why a
         // proof inside one function is worth anything to its callers.
-        Expr::Call { callee, args, .. } => (env.call)(callee).applied(args, facts, env),
+        Expr::Call { callee, args, .. } => (env.call)(callee).value.applied(args, facts, env),
+        // `f()?` is the number inside the `ok`, which is what the promise on a
+        // fallible function was about all along.
+        Expr::Try { operand, .. } => ok_range_of(operand, facts, env),
         Expr::Unary {
             op: UnaryOp::Neg,
             operand,

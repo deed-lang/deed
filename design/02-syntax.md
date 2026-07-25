@@ -286,8 +286,10 @@ Every one of these is `Guarded`, with a warning, never a wrong answer.
   positive, because `n` could be the largest integer there is. That is the reasoning working
   rather than a gap in it, and the runtime agrees: the sum has no answer. The same rule is
   why `low < high` alone does not settle `high - low`.
-- **The payload of a call that can fail.** The call site holds a `Result`, not the value
-  inside it, so an `ensures` on a fallible function is not read.
+- **The payload of a call that can fail, until it is taken out.** The expression is the
+  `Result` and the promise is about the number inside it, so the two meet at a `?`, at an
+  `ok(..)` pattern, and where a `Result` is assigned into one with a refined success type,
+  and nowhere else.
 - **Anything that is not an integer.** No `String`, no record field, no variant.
 - **Division and remainder.** The sign rules around zero and around the smallest integer are
   fiddly enough that getting them wrong is worse than not trying.

@@ -47,7 +47,7 @@ pub mod property;
 pub mod sandbox;
 pub mod value;
 
-pub use interp::{Guards, Program, Run, TestOutcome, run_main, run_tests};
+pub use interp::{Guard, Guards, Program, Run, TestOutcome, run_main, run_tests};
 pub use property::{PropertyConfig, PropertyOutcome, is_testable, run_properties};
 pub use sandbox::Refused;
 pub use value::{Capability, Fields, Value, VariantValue};

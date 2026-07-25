@@ -76,12 +76,28 @@ struct Entry<'a> {
 
 /// Where the type checker gave up, and on what.
 ///
-/// The key is the expression that has to satisfy the refinement and the value
-/// is the refinement it has to satisfy. It comes from the checker rather than
-/// being worked out again here, because the two passes disagreeing about what
-/// `Guarded` means is exactly how a tier turns into a lie: the checker used to
-/// say "so it becomes a runtime check" at places the interpreter never checked.
-pub type Guards = HashMap<Span, DefId>;
+/// The key is the expression that has to satisfy the refinement. It comes from
+/// the checker rather than being worked out again here, because the two passes
+/// disagreeing about what `Guarded` means is exactly how a tier turns into a
+/// lie: the checker used to say "so it becomes a runtime check" at places the
+/// interpreter never checked.
+pub type Guards = HashMap<Span, Guard>;
+
+/// What has to be checked at one span.
+#[derive(Clone, Copy, Debug)]
+pub struct Guard {
+    /// The refinement the value has to satisfy.
+    pub refinement: DefId,
+    /// Whether the value is the number inside the `ok` rather than the
+    /// expression itself.
+    ///
+    /// A `Result` that came back from a call has nothing naming its payload,
+    /// so the obligation lands on the whole expression. Running the predicate
+    /// against the `Result` fails whatever is inside it, which turned a check
+    /// that should have passed into "the interpreter cannot run `>` on a
+    /// Result and an Int".
+    pub inside_ok: bool,
+}
 
 impl<'a> Program<'a> {
     pub fn new() -> Self {
@@ -582,8 +598,8 @@ impl<'a> Interp<'a> {
     /// passes cannot drift apart.
     fn eval(&mut self, expr: &'a Expr) -> Eval<Value> {
         let value = self.eval_inner(expr)?;
-        if let Some(refinement) = self.code().guards.get(&expr.span()).copied() {
-            self.guard(refinement, &value, expr.span())?;
+        if let Some(guard) = self.code().guards.get(&expr.span()).copied() {
+            self.guard(guard, &value, expr.span())?;
         }
         Ok(value)
     }
@@ -1357,14 +1373,27 @@ impl<'a> Interp<'a> {
     /// existence goes through there, which is the point. The old arrangement
     /// checked arguments and annotated `let`s and nothing else, so a return
     /// value carried a warning and no check.
-    fn guard(&mut self, refinement: DefId, value: &Value, span: Span) -> Eval<()> {
+    fn guard(&mut self, guard: Guard, value: &Value, span: Span) -> Eval<()> {
+        let refinement = guard.refinement;
         let Some(predicate) = self.refinement(refinement) else {
             return Ok(());
         };
 
+        // The obligation is about the number inside the `ok`, so that is what
+        // has to satisfy the predicate. An `err` carries no such number and
+        // there is nothing to check.
+        let value = if guard.inside_ok {
+            match value.ok_payload() {
+                Some(payload) => payload,
+                None => return Ok(()),
+            }
+        } else {
+            value.clone()
+        };
+
         // The predicate talks about `value`, which is not in scope anywhere
         // else, so it is bound here.
-        if self.eval_predicate(refinement, predicate, value)? {
+        if self.eval_predicate(refinement, predicate, &value)? {
             return Ok(());
         }
 

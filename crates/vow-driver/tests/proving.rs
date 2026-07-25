@@ -418,9 +418,10 @@ fn a_promise_about_the_failure_case_says_nothing_about_the_value() {
 }
 
 #[test]
-fn a_call_that_can_fail_promises_nothing_at_the_call_site() {
-    // The call site holds a `Result`, not the payload, so the range of the
-    // success case is not the range of the expression.
+fn a_promise_on_a_call_that_can_fail_reaches_the_payload() {
+    // The call site holds a `Result` and the promise was about the number
+    // inside it, so the two only meet where the payload comes out. Passing a
+    // whole `Result` into one with a refined success type is one such place.
     let (sources, checked) = check(
         "fn one() -> Result<Int, String>\n  ensures\n    ok  => result == 1,\n{\n    ok(1)\n}\n\nfn f() -> Result<Positive, String> { one() }\n",
     );
@@ -429,6 +430,51 @@ fn a_call_that_can_fail_promises_nothing_at_the_call_site() {
         "{}",
         rendered(&sources, &checked.diagnostics)
     );
+    assert_eq!(checked.obligations_at(Tier::Proven), 1);
+}
+
+#[test]
+fn a_promise_reaches_through_a_question_mark() {
+    // The ordinary way of using a function that can fail, and it used to throw
+    // the contract away.
+    expect(
+        Tier::Proven,
+        "fn one() -> Result<Int, String>\n  ensures\n    ok  => result == 1,\n{\n    ok(1)\n}\n\nfn f() -> Result<Positive, String> {\n    let n = one()?\n    ok(n)\n}\n",
+    );
+}
+
+#[test]
+fn a_promise_reaches_the_name_an_ok_pattern_binds() {
+    expect(
+        Tier::Proven,
+        "fn one() -> Result<Int, String>\n  ensures\n    ok  => result == 1,\n{\n    ok(1)\n}\n\nfn f() -> Result<Positive, String> {\n    match one() {\n        ok(n) => ok(n),\n        err(e) => err(e),\n    }\n}\n",
+    );
+}
+
+#[test]
+fn a_call_that_can_fail_and_promises_nothing_still_promises_nothing() {
+    let (sources, checked) = check(
+        "fn one() -> Result<Int, String> { ok(1) }\n\nfn f() -> Result<Positive, String> { one() }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(checked.obligations_at(Tier::Guarded), 1);
+}
+
+#[test]
+fn a_promise_about_the_success_case_says_nothing_about_the_failure_one() {
+    let (sources, checked) = check(
+        "fn one() -> Result<Int, Int>\n  ensures\n    ok  => result == 1,\n{\n    ok(1)\n}\n\nfn f() -> Result<Int, Positive> { one() }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(checked.obligations_at(Tier::Guarded), 1);
     assert_eq!(checked.obligations_at(Tier::Proven), 0);
 }
 
@@ -607,8 +653,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Twelve proven and three guarded, and the file explains each of the three.
-    // If either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 12);
+    // Fourteen proven and three guarded, and the file explains each of the
+    // three. If either number moves, the comments in the example are wrong.
+    assert_eq!(checked.obligations_at(Tier::Proven), 14);
     assert_eq!(checked.obligations_at(Tier::Guarded), 3);
 }

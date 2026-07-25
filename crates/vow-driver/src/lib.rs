@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use vow_ast::{Item, Module, Outcome};
 use vow_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use vow_effects::Effects;
-use vow_interp::Guards;
+use vow_interp::{Guard, Guards};
 use vow_resolve::{Resolutions, Universe};
 use vow_typeck::{Tier, Types, World};
 
@@ -116,7 +116,15 @@ impl Checked {
             .obligations()
             .iter()
             .filter(|obligation| obligation.tier == Tier::Guarded)
-            .map(|obligation| (obligation.span, obligation.refinement))
+            .map(|obligation| {
+                (
+                    obligation.span,
+                    Guard {
+                        refinement: obligation.refinement,
+                        inside_ok: obligation.inside_ok,
+                    },
+                )
+            })
             .collect()
     }
 }

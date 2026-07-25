@@ -139,6 +139,17 @@ impl Value {
         Value::Str(Rc::from(text.as_ref()))
     }
 
+    /// The value inside, when this is an `ok`.
+    ///
+    /// An `err` carries something too, and it is not this, which is why the
+    /// two are not one accessor.
+    pub fn ok_payload(&self) -> Option<Value> {
+        match self {
+            Value::Result { ok: true, value } => Some((**value).clone()),
+            _ => None,
+        }
+    }
+
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Value::Int(value) => Some(*value),
