@@ -1139,18 +1139,19 @@ impl<'a> Checker<'a> {
                 Pattern::Wildcard(span) => {
                     catch_all.get_or_insert(*span);
                 }
-                Pattern::Path { segments, .. } => match segments.last() {
-                    Some(last) => match self.resolutions.resolution(last.span) {
-                        Some(def) if self.resolutions.def(def).kind == DefKind::Variant => {
-                            covered.insert(def);
+                Pattern::Path { segments, .. } => {
+                    if let Some(last) = segments.last() {
+                        match self.resolutions.resolution(last.span) {
+                            Some(def) if self.resolutions.def(def).kind == DefKind::Variant => {
+                                covered.insert(def);
+                            }
+                            // A bare binding matches every variant.
+                            _ => {
+                                catch_all.get_or_insert(arm.pattern.span());
+                            }
                         }
-                        // A bare binding matches every variant.
-                        _ => {
-                            catch_all.get_or_insert(arm.pattern.span());
-                        }
-                    },
-                    None => {}
-                },
+                    }
+                }
                 Pattern::Tuple { path, .. } | Pattern::Record { path, .. } => {
                     if let Some(last) = path.last()
                         && let Some(def) = self.resolutions.resolution(last.span)

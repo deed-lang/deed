@@ -326,9 +326,7 @@ fn a_bare_binding_arm_on_a_choice_is_rejected_too() {
 #[test]
 fn a_wildcard_is_fine_where_the_cases_cannot_be_listed() {
     // The rule is about choices. An `Int` has no variants to enumerate.
-    check_ok(
-        "module a\n\nfn f(n: Int) -> Int {\n  match n {\n    0 => 1,\n    _ => 2,\n  }\n}\n",
-    );
+    check_ok("module a\n\nfn f(n: Int) -> Int {\n  match n {\n    0 => 1,\n    _ => 2,\n  }\n}\n");
 }
 
 #[test]
