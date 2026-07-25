@@ -12,6 +12,14 @@ impl DefId {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// Fabricates an id without a resolution behind it.
+    ///
+    /// For tests and tooling only. An id made this way must not be handed to
+    /// [`Resolutions::def`], which will panic or answer about the wrong thing.
+    pub fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

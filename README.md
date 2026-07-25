@@ -3,10 +3,10 @@
 A contract-first language where a function signature is a promise the compiler checks.
 Built for code that machines write and humans review.
 
-> **Status: design phase.** There is no compiler yet. This repository is the
-> specification and the reasoning behind it. Criticism of the design is the most
-> useful contribution right now. See [issue #1](https://github.com/onatozmenn/vow/issues/1)
-> for where this is going.
+> **Status: front end only.** There is a compiler, and it stops after checking. It lexes,
+> parses, resolves names, type checks, and checks effect rows. It does not run anything and
+> there is no code generation. Criticism of the design is still the most useful contribution.
+> See [issue #1](https://github.com/onatozmenn/vow/issues/1) for where this is going.
 
 ## The idea
 
@@ -26,20 +26,23 @@ admits to.
 fn transfer(from: AccountId, to: AccountId, amount: Money)
     -> Result<Receipt, TransferError>
   where
-    amount.units > 0,
     from != to,
   uses
-    Ledger.read,
-    Ledger.write,
+    Ledger.balance,
+    Ledger.post,
     Audit.append,
   ensures
-    ok  => balance(from) == old(balance(from)) - amount,
-    ok  => balance(to)   == old(balance(to))   + amount,
+    ok  => Ledger.balance(from).units == old(Ledger.balance(from).units) - amount.units,
+    ok  => Ledger.balance(to).units   == old(Ledger.balance(to).units)   + amount.units,
+    ok  => Ledger.total() == old(Ledger.total()),
     err => unchanged(Ledger),
 {
     ...
 }
 ```
+
+This is not an illustration. It is the top of [examples/transfer.vow](examples/transfer.vow),
+which the compiler lexes, parses, resolves, type checks and effect checks on every commit.
 
 Three things follow from that block, and they are the whole pitch:
 
@@ -75,6 +78,21 @@ The longer version, including the cost model this is all based on, is in
 | [04-capabilities.md](design/04-capabilities.md) | Authority, how it enters a program, and why |
 
 Read them in order. Each one leans on the one before it.
+
+## What is built
+
+| Crate | Does |
+| --- | --- |
+| `vow-diagnostics` | Spans, source maps, and structured diagnostics with machine-applicable fixes |
+| `vow-lexer` | Source text to tokens |
+| `vow-ast` | The syntax tree |
+| `vow-parser` | Tokens to a tree, with recovery |
+| `vow-resolve` | Every name bound to a declaration |
+| `vow-typeck` | Every expression given a type |
+| `vow-effects` | Every effect row checked against what the body does |
+
+No dependencies. `cargo test` runs the whole thing, and one of the tests is that
+`examples/transfer.vow` survives every pass.
 
 ## What Vow is deliberately not doing
 

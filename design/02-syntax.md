@@ -59,24 +59,23 @@ contract.
 fn transfer(from: AccountId, to: AccountId, amount: Money)
     -> Result<Receipt, TransferError>
   where
-    amount.units > 0,
     from != to,
   uses
-    Ledger.read,
-    Ledger.write,
+    Ledger.balance,
+    Ledger.post,
     Audit.append,
   ensures
-    ok  => balance(from) == old(balance(from)) - amount,
-    ok  => balance(to)   == old(balance(to))   + amount,
+    ok  => Ledger.balance(from).units == old(Ledger.balance(from).units) - amount.units,
+    ok  => Ledger.balance(to).units   == old(Ledger.balance(to).units)   + amount.units,
     err => unchanged(Ledger),
 {
     let available = Ledger.balance(from)
-    if available < amount {
+    if available.units < amount.units {
         return err(InsufficientFunds { available })
     }
 
-    Ledger.post(Entry.debit(from, amount))
-    Ledger.post(Entry.credit(to, amount))
+    Ledger.post(Entry { account: from, amount })
+    Ledger.post(Entry { account: to, amount })
     Audit.append(TransferRecorded { from, to, amount })
 
     ok(Receipt { from, to, amount })
