@@ -1,6 +1,7 @@
 //! Types, and the table the checker fills in.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use vow_diagnostics::Span;
 use vow_resolve::DefId;
@@ -29,6 +30,16 @@ pub enum Ty {
     Bool,
     /// A record, a choice, or a refinement declared in this module.
     Named(DefId),
+    /// The same, declared in another module.
+    ///
+    /// A `DefId` is an index into one module's resolution table, so it cannot
+    /// name anything outside it. Identity here is the module path and the name
+    /// together, which needs no shared numbering and so does not make one
+    /// module's types depend on how another module happened to be resolved.
+    External {
+        module: Rc<str>,
+        name: Rc<str>,
+    },
     /// `Result<T, E>`, which the language provides.
     ///
     /// Not a `Named` type over a builtin definition, because the arguments have
@@ -169,6 +180,15 @@ impl Types {
                 Some(name) => format!("`{name}`"),
                 None => "an unnamed type".to_string(),
             },
+            Ty::External { module, name } => {
+                // A capability is not "from" anywhere a reader could go and
+                // look, so saying so would be noise in every message about one.
+                if &**module == "<prelude>" {
+                    format!("`{name}`")
+                } else {
+                    format!("`{name}` from `{module}`")
+                }
+            }
             Ty::Result(ok, err) => format!("`Result<{}, {}>`", self.bare(ok), self.bare(err)),
             Ty::Fn { params, ret } => {
                 let params: Vec<String> = params.iter().map(|p| self.describe(p)).collect();
@@ -195,6 +215,7 @@ impl Types {
             Ty::Str => "String".to_string(),
             Ty::Bool => "Bool".to_string(),
             Ty::Named(def) => self.name_of(*def).to_string(),
+            Ty::External { name, .. } => name.to_string(),
             Ty::Result(ok, err) => format!("Result<{}, {}>", self.bare(ok), self.bare(err)),
             Ty::Fn { params, ret } => {
                 format!("Fn({}) -> {}", params.len(), self.bare(ret))

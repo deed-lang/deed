@@ -318,10 +318,17 @@ their choice, since a `use` that quietly brought in six more names would be exac
 wildcard import that does not exist. A `test` is not exported: it is not part of what a
 module offers.
 
-**What crosses an import is still only a name.** An imported type does not yet have a type
-behind it, so the type checker treats it as unknown and unknown agrees with everything. An
-imported function's arity is not checked either. That is the half that needs a type identity
-which survives crossing a file boundary, and it is not built.
+**What crosses an import is a name and the type behind it.** An imported record's fields, an
+imported function's signature and an imported choice's variants are all checked, and a
+`match` on a choice from another module has to be exhaustive over that module's variants.
+Identity for those types is the module path and the name together, rather than an index into
+one module's table, so nothing about how one module was resolved leaks into another.
+
+**A refinement crossing a module boundary becomes opaque.** `type Positive = Int where value
+> 0` exported and then imported is a distinct type that an `Int` does not fit, and the
+predicate does not come with it, so nothing is proven on the far side. Carrying the
+predicate means carrying the expression it is written in, which means carrying that module's
+scope, and that is a much larger thing.
 
 ## Rules type checking had to pin down
 

@@ -122,7 +122,7 @@ Read them in order. Each one leans on the one before it.
 | `vow-ast` | The syntax tree |
 | `vow-parser` | Tokens to a tree, with recovery |
 | `vow-resolve` | Every name bound to a declaration, including across module boundaries |
-| `vow-typeck` | Every expression given a type |
+| `vow-typeck` | Every expression given a type, including types from other modules |
 | `vow-effects` | Every effect row checked against what the body does |
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `vow-fmt` | The one canonical form, with no options for the output |
@@ -152,11 +152,13 @@ repository is already canonical, so the principle either holds or the build fail
 `names.vow` and `greeting.vow` are two modules that see each other. A module is named by its
 own `module` line, and the unit of compilation is the set of files you handed the compiler,
 so `vow check examples/` resolves the `use` in one against the declarations in the other. A
-`use` of a module that is not there, or of a name that module does not declare, is now an
-error. What still does not cross is the types: an imported name has no type behind it, so
-the type checker treats it as unknown and unknown agrees with everything. That is
-[issue #37](https://github.com/onatozmenn/vow/issues/37) and the example says so in a
-comment rather than pretending otherwise.
+`use` of a module that is not there is an error, so is a name it does not declare, so is a
+field an imported record does not have, so is a `match` on an imported choice that forgets a
+variant. None of that was checked before: an imported name had no type, and a name with no
+type agrees with everything, so a module boundary was a place where checking stopped.
+
+What still does not cross is running. The interpreter holds the code of one module at a
+time, which is why `greeting.vow` has no `test` block and says so in a comment.
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.

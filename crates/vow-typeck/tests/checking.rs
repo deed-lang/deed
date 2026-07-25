@@ -10,13 +10,20 @@ use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_lexer::tokenize;
 use vow_parser::parse;
 use vow_resolve::{Universe, resolve};
-use vow_typeck::{Checked, Tier, Ty, Types, check, codes};
+use vow_typeck::{Checked, Tier, Ty, Types, World, check, codes, surface};
 
-fn check_source(src: &str) -> (SourceMap, Checked) {
-    check_source_in(src, &Universe::new())
+/// The other modules a test source can see.
+#[derive(Default)]
+struct Deps {
+    universe: Universe,
+    world: World,
 }
 
-fn check_source_in(src: &str, universe: &Universe) -> (SourceMap, Checked) {
+fn check_source(src: &str) -> (SourceMap, Checked) {
+    check_source_in(src, &Deps::default())
+}
+
+fn check_source_in(src: &str, deps: &Deps) -> (SourceMap, Checked) {
     let mut sources = SourceMap::new();
     let file = sources.add("test.vow", src);
 
@@ -24,7 +31,7 @@ fn check_source_in(src: &str, universe: &Universe) -> (SourceMap, Checked) {
     assert!(!lexed.has_errors(), "test source should lex cleanly");
     let parsed = parse(file, &lexed.tokens);
     assert!(!parsed.has_errors(), "test source should parse cleanly");
-    let resolved = resolve(file, &parsed.module, universe);
+    let resolved = resolve(file, &parsed.module, &deps.universe);
     assert!(
         !resolved.has_errors(),
         "test source should resolve cleanly: {:?}",
@@ -35,32 +42,49 @@ fn check_source_in(src: &str, universe: &Universe) -> (SourceMap, Checked) {
             .collect::<Vec<_>>()
     );
 
-    let checked = check(file, &parsed.module, &resolved.resolutions);
+    let checked = check(file, &parsed.module, &resolved.resolutions, &deps.world);
     (sources, checked)
 }
 
-/// A universe holding each of `modules`, parsed from source.
+/// The other modules, parsed and lowered.
 ///
-/// An import with nothing behind it is an error now, so a test about a name
-/// from elsewhere needs a real module declaring it.
-fn universe_of(modules: &[&str]) -> Universe {
-    let mut universe = Universe::new();
+/// An import with nothing behind it is an error now, and a name from elsewhere
+/// has a type now, so a test about one needs a real module declaring it.
+fn universe_of(modules: &[&str]) -> Deps {
+    let mut deps = Deps::default();
     let mut sources = SourceMap::new();
     for (index, source) in modules.iter().enumerate() {
         let file = sources.add(format!("dep{index}.vow"), *source);
         let lexed = tokenize(file, sources.file(file).text());
         let parsed = parse(file, &lexed.tokens);
-        universe.add(&parsed.module);
+        deps.universe.add(&parsed.module);
     }
-    universe
+
+    // A second pass, because a module's surface needs its own names resolved
+    // and that needs every module already registered.
+    let mut sources = SourceMap::new();
+    for (index, source) in modules.iter().enumerate() {
+        let file = sources.add(format!("dep{index}.vow"), *source);
+        let lexed = tokenize(file, sources.file(file).text());
+        let parsed = parse(file, &lexed.tokens);
+        let resolved = resolve(file, &parsed.module, &deps.universe);
+        if let Some(name) = &parsed.module.name {
+            deps.world.insert(
+                name.to_string_path(),
+                surface(&parsed.module, &resolved.resolutions),
+            );
+        }
+    }
+
+    deps
 }
 
 fn check_ok(src: &str) -> Types {
-    check_ok_in(src, &Universe::new())
+    check_ok_in(src, &Deps::default())
 }
 
-fn check_ok_in(src: &str, universe: &Universe) -> Types {
-    let (sources, checked) = check_source_in(src, universe);
+fn check_ok_in(src: &str, deps: &Deps) -> Types {
+    let (sources, checked) = check_source_in(src, deps);
     if !checked.diagnostics.is_empty() {
         let rendered: Vec<String> = checked
             .diagnostics
@@ -98,7 +122,7 @@ fn the_worked_example_type_checks() {
     let resolved = resolve(file, &parsed.module, &Universe::new());
     assert!(!resolved.has_errors());
 
-    let checked = check(file, &parsed.module, &resolved.resolutions);
+    let checked = check(file, &parsed.module, &resolved.resolutions, &World::new());
     if !checked.diagnostics.is_empty() {
         panic!(
             "the worked example should type check:\n{}",
@@ -117,7 +141,7 @@ fn the_worked_example_proves_its_refinements() {
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
     let resolved = resolve(file, &parsed.module, &Universe::new());
-    let checked = check(file, &parsed.module, &resolved.resolutions);
+    let checked = check(file, &parsed.module, &resolved.resolutions, &World::new());
 
     assert!(
         checked.types.obligations_at(Tier::Proven) > 0,
@@ -133,31 +157,52 @@ fn the_worked_example_proves_its_refinements() {
 // -- what the checker refuses to guess -------------------------------------
 
 #[test]
-fn a_name_from_another_module_types_as_unknown() {
-    // Cross-module types are not lowered yet, issue #37, so a name that came
-    // from an import has no type here. That has to be silent rather than
-    // wrong, since a false positive costs more than a missing check.
-    check_ok_in(
-        "module a\n\n\
-         use other.{Thing, make}\n\n\
-         record R { field: Thing }\n\n\
-         fn f() -> Thing { make(1, 2, 3) }\n\n\
-         fn g(r: R) -> Int { r.field }\n",
-        &universe_of(&[
-            "module other\n\nrecord Thing { n: Int }\n\nfn make(n: Int) -> Thing { Thing { n: n } }\n",
-        ]),
+fn a_name_from_another_module_has_a_type() {
+    // A name that came from an import used to have no type at all, so nothing
+    // done with it was ever checked. It is now identified by the module it
+    // came from together with the name it was declared under, which needs no
+    // numbering shared between modules.
+    let src = "module a\n\n\
+               use other.{Thing}\n\n\
+               record R { field: Thing }\n\n\
+               fn g(r: R) -> Thing { r.field }\n";
+    let types = check_ok_in(
+        src,
+        &universe_of(&["module other\n\nrecord Thing { n: Int }\n"]),
+    );
+
+    let start = src.find("r.field").unwrap() as u32;
+    let span = vow_diagnostics::Span::new(start, start + "r.field".len() as u32);
+    assert_eq!(
+        types.type_of(span),
+        Some(&Ty::External {
+            module: "other".into(),
+            name: "Thing".into(),
+        })
     );
 }
 
 #[test]
 fn an_operator_with_one_unknown_side_says_nothing() {
-    check_ok_in(
+    // `balanse` does not resolve, so it has no type, and a type that agrees
+    // with everything is what keeps one mistake from being reported twice.
+    // The resolver has already said the name is missing.
+    let mut sources = SourceMap::new();
+    let file = sources.add(
+        "test.vow",
         "module a\n\n\
-         use other.{balance}\n\n\
          record Money { units: Int }\n\n\
-         fn f(m: Money) -> Bool { balance() < m }\n\n\
-         fn g(m: Money) -> Bool { balance() - m == balance() }\n",
-        &universe_of(&["module other\n\nfn balance() -> Int { 0 }\n"]),
+         fn f(m: Money) -> Bool { balanse() < m }\n\n\
+         fn g(m: Money) -> Bool { balanse() - m == balanse() }\n",
+    );
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
+    let checked = check(file, &parsed.module, &resolved.resolutions, &World::new());
+    assert!(
+        checked.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
     );
 }
 
@@ -174,13 +219,16 @@ fn an_operator_with_two_known_sides_is_checked() {
 }
 
 #[test]
-fn the_question_mark_is_not_checked_yet() {
-    // The `Result` in scope is the imported one, and cross-module types are
-    // not lowered yet, issue #37, so there is nothing to check against.
-    check_ok_in(
+fn the_question_mark_rejects_a_type_that_is_only_named_like_a_result() {
+    // `?` went unchecked here while the `Result` in scope came from an import
+    // and so had no type. It has one now, and a record another module happens
+    // to have called `Result` is not the one the language provides.
+    let (sources, checked) = check_source_in(
         "module a\n\nuse std/result.{Result}\n\nfn f(r: Result) -> Int { r? }\n",
         &universe_of(&["module std/result\n\nrecord Result { n: Int }\n"]),
     );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_RESULT]);
+    assert!(rendered(&sources, &checked.diagnostics).contains("`?` needs a `Result`"));
 }
 
 // -- refinements -----------------------------------------------------------
@@ -488,11 +536,17 @@ fn a_local_type_takes_no_type_arguments() {
 }
 
 #[test]
-fn an_imported_type_may_take_type_arguments() {
-    check_ok_in(
-        "module a\n\nuse std/result.{Result}\n\nfn f() -> Result<Int, Int> { 0 }\n",
-        &universe_of(&["module std/result\n\nrecord Result { n: Int }\n"]),
+fn an_imported_type_cannot_take_type_arguments_either() {
+    // This used to be accepted, and only because an imported name had no type,
+    // so there was nothing for the arguments to be applied to. Vow has no
+    // generic declarations, and which module a type was declared in does not
+    // change that.
+    let (sources, checked) = check_source_in(
+        "module a\n\nuse other.{Thing}\n\nfn f(x: Thing<Int>) -> Int { 0 }\n",
+        &universe_of(&["module other\n\nrecord Thing { n: Int }\n"]),
     );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_GENERIC]);
+    assert!(rendered(&sources, &checked.diagnostics).contains("does not take type arguments"));
 }
 
 #[test]
@@ -512,7 +566,7 @@ fn broken_input_does_not_panic_and_does_not_pile_on() {
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
     let resolved = resolve(file, &parsed.module, &Universe::new());
-    let checked = check(file, &parsed.module, &resolved.resolutions);
+    let checked = check(file, &parsed.module, &resolved.resolutions, &World::new());
 
     // Names that failed to resolve become Unknown, and Unknown agrees with
     // everything, so the type checker adds nothing to a mess it did not make.
