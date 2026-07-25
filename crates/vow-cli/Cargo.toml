@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 vow-diagnostics = { path = "../vow-diagnostics" }
 vow-driver = { path = "../vow-driver" }
+vow-fmt = { path = "../vow-fmt" }
 vow-interp = { path = "../vow-interp" }
 vow-typeck = { path = "../vow-typeck" }
 

@@ -6,6 +6,7 @@ members = [
     "crates/vow-diagnostics",
     "crates/vow-driver",
     "crates/vow-effects",
+    "crates/vow-fmt",
     "crates/vow-interp",
     "crates/vow-lexer",
     "crates/vow-parser",

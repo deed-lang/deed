@@ -13,12 +13,15 @@ Usage:
   vow check [options] <path>...
   vow test  [options] <path>...
   vow run   [options] <path>...
+  vow fmt   [--check] <path>...
 
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
   --obligations           Report which tier each refinement obligation landed in.
   --dir <path>            What `sys.files` reaches when running. Default: the
                           current directory. A program cannot get outside it.
+  --check                 With `fmt`, change nothing and name the files that
+                          are not in canonical form.
   -h, --help              Print this.
   -V, --version           Print the version.
 
@@ -26,6 +29,7 @@ Paths may be files or directories. A directory is searched for `.vow` files.
 
 `vow test` refuses to run anything that does not check.
 `vow run` calls `main`, handing it the one `System` capability there is.
+`vow fmt` has no options for the output. There is one canonical form.
 
 Exit codes:
   0   no errors, though there may be warnings
@@ -44,6 +48,7 @@ pub enum Mode {
     Check,
     Test,
     Run,
+    Fmt,
 }
 
 #[derive(Debug)]
@@ -58,6 +63,8 @@ pub struct CheckArgs {
     /// tool does and it is not obviously right, but making people spell it out
     /// every time would just teach them to type it without reading it.
     pub dir: Option<PathBuf>,
+    /// With `fmt`, report rather than rewrite.
+    pub check_only: bool,
 }
 
 #[derive(Debug)]
@@ -78,9 +85,10 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "check" => Mode::Check,
         "test" => Mode::Test,
         "run" => Mode::Run,
+        "fmt" => Mode::Fmt,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `check`, `test` and `run`"
+                "unknown command `{other}`, the choices are `check`, `test`, `run` and `fmt`"
             ));
         }
     };
@@ -89,11 +97,13 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut format = Format::Human;
     let mut obligations = false;
     let mut dir = None;
+    let mut check_only = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "--obligations" => obligations = true,
+            "--check" => check_only = true,
             "--format" => {
                 let value = args
                     .next()
@@ -126,6 +136,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 Mode::Check => "check",
                 Mode::Test => "test",
                 Mode::Run => "run",
+                Mode::Fmt => "fmt",
             }
         ));
     }
@@ -136,6 +147,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         format,
         obligations,
         dir,
+        check_only,
     }))
 }
 

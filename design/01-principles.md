@@ -69,6 +69,17 @@ user-defined precedence, macros.
 Ambiguity costs more than verbosity. Consistent form means diffs carry signal, review gets
 cheaper the more code you have seen, and generated output stops varying for no reason.
 
+`vow fmt` is what this means in practice. It has no options for the output, not "none yet",
+and there is a test asserting that every `.vow` file in the repository is already in
+canonical form. Until that test existed, P4 described how the files happened to have been
+typed.
+
+Two decisions in there are worth arguing with. Parentheses are reconstructed from
+precedence, because the tree does not record where they were written, so `(a - b) - c`
+comes back as `a - b - c` and the source loses a hint the author may have meant. And
+manual alignment goes: `a.units   == b.units` becomes `a.units == b.units`, which is the
+trade P4 asks for made visible in a file someone will be annoyed about.
+
 ---
 
 ## P5. Nothing implicit crosses a boundary

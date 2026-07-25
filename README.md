@@ -125,8 +125,9 @@ Read them in order. Each one leans on the one before it.
 | `vow-typeck` | Every expression given a type |
 | `vow-effects` | Every effect row checked against what the body does |
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
+| `vow-fmt` | The one canonical form, with no options for the output |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
-| `vow-cli` | The `vow` binary: `check`, `test` and `run` |
+| `vow-cli` | The `vow` binary: `check`, `test`, `run` and `fmt` |
 
 There are four examples, [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow) and
@@ -142,6 +143,11 @@ the language is supposed to force and did.
 write to one failed, because `Io.write(Console, "hi")` type checked: a type name in
 expression position had no type, and no type agrees with everything. Capability safety was
 decorative for about an hour. That is now `VOW4019`.
+
+`vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
+is not configurable long before anything enforced it, which meant the files were formatted
+the way they happened to have been typed. A test now asserts that every `.vow` file in the
+repository is already canonical, so the principle either holds or the build fails.
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.
