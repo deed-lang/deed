@@ -31,15 +31,15 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-12 passed, 0 failed
+37 passed, 0 failed
 ```
 
 ```
 $ cargo run -p vow-cli -- check examples/transfer.vow --obligations
-obligations: 6 proven, 0 tested, 0 guarded
-  the tested tier needs property test generation, which does not exist yet
-  proven   examples/transfer.vow:126:50  Positive
+obligations: 4 proven, 0 tested, 6 guarded
+  guarded  examples/transfer.vow:94:5  transfer ensures ok
   ...
+  proven   examples/transfer.vow:202:76  Positive
 ```
 
 ## The idea
@@ -57,7 +57,7 @@ against it, and nothing in the language lets a function reach outside what its s
 admits to.
 
 ```vow
-fn transfer(from: AccountId, to: AccountId, amount: Money)
+fn transfer(from: AccountId, to: AccountId, amount: Amount)
     -> Result<Receipt, TransferError>
   where
     from != to,
@@ -66,8 +66,10 @@ fn transfer(from: AccountId, to: AccountId, amount: Money)
     Ledger.post,
     Audit.append,
   ensures
+    ok  => result.from == from,
+    ok  => result.amount == amount,
     ok  => Ledger.balance(from).units == old(Ledger.balance(from).units) - amount.units,
-    ok  => Ledger.balance(to).units   == old(Ledger.balance(to).units)   + amount.units,
+    ok  => Ledger.balance(to).units == old(Ledger.balance(to).units) + amount.units,
     ok  => Ledger.total() == old(Ledger.total()),
     err => unchanged(Ledger),
 {
@@ -142,11 +144,13 @@ The examples are [transfer.vow](examples/transfer.vow),
 postcondition or explains, in a comment, why the checker cannot, and the file is written so
 that the two halves sit next to each other. The `Proven` tier used to hold constant
 expressions and nothing else, which made a refinement in real code a runtime check with
-ceremony around it. It now reasons about intervals, so a `where` clause, a refined parameter
-type, an `if` condition, a guard that returns and the contract of a function being called are
-all facts the rest of the body can use. What it still cannot do is a relationship between two
-names, so `high - low` where `low < high` stays `Guarded`.
-[design/02-syntax.md](design/02-syntax.md) lists the rest.
+ceremony around it. It now reasons about intervals, about the difference between two names,
+and about what a callee promised: a `where` clause, a refined parameter type, an `if`
+condition, a guard that returns, `low < high`, and `ensures ok => result == n` at a call site
+are all facts the rest of the body can use. What it still cannot do is relate two names
+through a product, so `result == n * n` says nothing, and it will not prove anything about
+arithmetic that could overflow, which is why `n + 1` on a `Positive` stays `Guarded` and says
+so. [design/02-syntax.md](design/02-syntax.md) lists the rest.
 
 `transfer.vow` used to model something that could not exist. `Money.units` was `Positive`,
 which made a zero balance and a debit unwritable, and the type checker said so. The fix was
@@ -162,8 +166,11 @@ decorative for about an hour. That is now `VOW4019`.
 written with no type, which made it the unknown type, and a closure's effects were charged to
 nobody. Either alone is arguable. Together they meant a closure could carry any effect into
 any function with the row staying empty the whole way. A parameter now needs a type, and a
-closure's effects are charged to whoever wrote it, which is sound because a closure cannot
-leave the function that wrote it.
+closure's effects are charged to whoever wrote it. That is sound because the only closure
+that can leave the function that wrote it is one that performs nothing: `Fn(Int) -> Int` is a
+type, and the second thing it says is that this performs no effects. There is no syntax for a
+row on a function type, and leaving one off cannot mean any row, or a value could carry an
+unstated effect through a signature.
 
 `diverge.vow` is what a design document claiming something the compiler did not do looks
 like when it gets fixed. "Non-termination is an effect" had a section of its own and

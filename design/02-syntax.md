@@ -3,6 +3,20 @@
 A sketch, not a grammar. Nothing here is settled. The goal is to have something concrete
 enough to argue with, and concrete enough to write a lexer against.
 
+Most of what follows is now built, and the rest is not, and a reader cannot tell the two
+apart by looking. So: every rule stated as a rule, and every diagnostic code named, describes
+what the compiler does today. Four constructs appear in the illustrations and do not parse at
+all, because the sections around them would be thin without something to name:
+
+- generic application, as in `Id<Account>`. Writing it is `VOW4013`.
+- traits, which have no keyword and no node
+- `matches(value, EMAIL_PATTERN)`, which is not in the prelude
+- `Int.parse(input)`, since a builtin type has no members
+
+The reason to be exact about this is that a document once described `Diverge` as an effect
+the compiler tracked, and the word did not resolve anywhere in the repository. Sketching is
+fine. Sketching in a voice that cannot be told apart from a specification is not.
+
 Where there is no reason to differ, syntax follows Rust and TypeScript. Familiarity is free
 recognition and novelty buys nothing (see P2 in [01-principles.md](01-principles.md)).
 
@@ -500,12 +514,12 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is ten names and one effect:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `System`, `Console`, `Clock`, `Dir`, and the `Io` effect with its `write`, `now`,
-`open` and `read` operations. Everything else is imported. Each prelude entry is a name that
-cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
-is short on purpose. The four capability types are there because a capability that could be
-imported would not be a capability.
+**The prelude is eleven names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `length`, `System`, `Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`,
+`now`, `open` and `read` operations, and `Diverge`. Everything else is imported. Each prelude
+entry is a name that cannot be looked up in any file, which is the kind of thing P2 is a
+budget for, so the list is short on purpose. The four capability types are there because a
+capability that could be imported would not be a capability.
 **A module is named by its own `module` line, not by where it sits on disk.** `use
 payments/ledger` is answered by looking for the file that says `module payments/ledger`
 among the files handed to the compiler. The unit of compilation is that set of files, so
@@ -602,10 +616,9 @@ and the error types must line up.
 be. That is what makes them work with no unification anywhere, and it is the whole reason the
 unknown type absorbs rather than unifies.
 
-**The prelude is eleven names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `length`, `System`, `Console`, `Clock`, `Dir`, and the effects `Io` and `Diverge`.
-Importing or declaring a name the language already provides is a warning, because silently
-shadowing a builtin would put everything that depends on it quietly back to being unchecked.
+**Importing or declaring a prelude name is a warning.** The list is above, under the naming
+rules. Silently shadowing a builtin would put everything that depends on it quietly back to
+being unchecked.
 
 **A type name is not a value.** Writing `Console` where an expression is expected is
 `VOW4019` rather than something with no type. This looks like a footnote and is not: an
@@ -646,11 +659,9 @@ yet, so that bill has not arrived.
   itself. A module declaring exactly one handler per effect might be a defensible default.
 - Shrinking handles integers by binary search and record fields greedily. Nothing else
   shrinks, so a counterexample built from strings or nested choices comes out as generated.
-- Ordering operators accept any two operands of the same type, including ones where ordering
-  is meaningless. This needs a trait, or a fixed set of orderable types, and has neither.
-- Refinements have no conversion form, so the only values that can enter a refined type are
-  ones the compiler can evaluate. Real code will need `Positive.try(n)` or something like it,
-  returning a `Result`.
+- Refinements have no conversion form. Real code will need `Positive.try(n)` or something
+  like it, returning a `Result`, rather than relying on the runtime check a `Guarded`
+  obligation leaves behind.
 - Banning shadowing outright may turn out to be more annoying than it is worth. It is easy
   to relax later and hard to tighten, which is the only reason it starts strict.
 - Capitalisation carrying meaning in patterns is a wart, even though it earns its place.
@@ -666,7 +677,5 @@ yet, so that bill has not arrived.
 - Generics: how much is needed before P2 breaks. Higher-kinded types are almost certainly out.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.
-- `unchanged(E)` needs a definition. Handler state being the only mutable thing makes one
-  possible, comparing that state before and after, but nothing implements it yet.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
 - Concrete syntax for effect handlers, currently only sketched in 03.

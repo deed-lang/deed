@@ -122,6 +122,11 @@ Most code is pure and does not currently get to say so.
 An effect is performed by the body and interpreted by a handler further out. This is what
 makes testing mechanical instead of ceremonial.
 
+The block below does not parse. `Map`, list literals, datetime literals, method calls and
+`Money.zero` are all invented for it, because a handler is worth showing with something in
+its state and there is nothing to put there yet. `examples/counter.vow` and
+`examples/transfer.vow` are the versions that run.
+
 ```vow
 handler InMemoryLedger implements Ledger {
     state accounts: Map<AccountId, Money>

@@ -6,6 +6,11 @@ resource* it is allowed to do it to.
 `uses Net.send` means a function can send over the network. It does not say where. A
 capability is the value that answers that, and it can only be obtained by being handed one.
 
+That sentence, and the `Fs` and `Net` effects in the illustrations further down, are the
+shape of the argument rather than the state of the compiler. What exists is one built-in
+effect, `Io`, with `write`, `now`, `open` and `read`, and a `System` carrying `console`,
+`clock` and `files`. The next section is the part that runs.
+
 ## What actually exists
 
 Enough to run a program, and not much more. `vow run` calls `main`, hands it the one
