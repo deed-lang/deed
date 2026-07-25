@@ -18,7 +18,12 @@ fn nowhere() -> &'static Path {
 /// The one checked module, as something the interpreter can run.
 fn program_of(checked: &Checked) -> Program<'_> {
     let mut program = Program::new();
-    program.add(checked.file, &checked.module, &checked.resolutions);
+    program.add(
+        checked.file,
+        &checked.module,
+        &checked.resolutions,
+        checked.guards(),
+    );
     program
 }
 

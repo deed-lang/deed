@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use vow_ast::{
     BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item, Module, Outcome,
-    Param, Pattern, Stmt, Type, UnaryOp,
+    Param, Pattern, Stmt, UnaryOp,
 };
 use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, ExportKind, Resolutions};
@@ -71,7 +71,17 @@ struct Entry<'a> {
     file: FileId,
     module: &'a Module,
     resolutions: &'a Resolutions,
+    guards: Guards,
 }
+
+/// Where the type checker gave up, and on what.
+///
+/// The key is the expression that has to satisfy the refinement and the value
+/// is the refinement it has to satisfy. It comes from the checker rather than
+/// being worked out again here, because the two passes disagreeing about what
+/// `Guarded` means is exactly how a tier turns into a lie: the checker used to
+/// say "so it becomes a runtime check" at places the interpreter never checked.
+pub type Guards = HashMap<Span, DefId>;
 
 impl<'a> Program<'a> {
     pub fn new() -> Self {
@@ -80,7 +90,17 @@ impl<'a> Program<'a> {
 
     /// Adds a module. A file with no `module` line cannot be imported, so it
     /// is registered under its own file name and nothing can reach it.
-    pub fn add(&mut self, file: FileId, module: &'a Module, resolutions: &'a Resolutions) {
+    ///
+    /// `guards` is not optional on purpose. A caller that could leave it out
+    /// would be a caller that could turn every runtime check off by forgetting
+    /// something, silently, and the warning would still be printed.
+    pub fn add(
+        &mut self,
+        file: FileId,
+        module: &'a Module,
+        resolutions: &'a Resolutions,
+        guards: Guards,
+    ) {
         let path = match &module.name {
             Some(name) => name.to_string_path(),
             None => format!("<file {}>", file.index()),
@@ -90,6 +110,7 @@ impl<'a> Program<'a> {
             file,
             module,
             resolutions,
+            guards,
         });
     }
 
@@ -205,6 +226,7 @@ fn index_module<'a>(entry: &Entry<'a>) -> Code<'a> {
         handler_decls: HashMap::new(),
         refinements: HashMap::new(),
         subjects: HashMap::new(),
+        guards: entry.guards.clone(),
         state_names: HashMap::new(),
         variant_names: HashMap::new(),
     };
@@ -291,6 +313,8 @@ struct Code<'a> {
     refinements: HashMap<DefId, &'a Expr>,
     /// Type alias definition to the `value` its predicate talks about.
     subjects: HashMap<DefId, DefId>,
+    /// Expressions the checker could not settle, and what they have to satisfy.
+    guards: Guards,
     /// Handler state definition to the field name it stands for.
     state_names: HashMap<DefId, String>,
     variant_names: HashMap<DefId, String>,
@@ -547,7 +571,24 @@ impl<'a> Interp<'a> {
 
     // -- expressions -------------------------------------------------------
 
+    /// Evaluates an expression, then makes good on whatever the checker said
+    /// about it.
+    ///
+    /// The guard is here rather than at the handful of places that happened to
+    /// need one, because the handful was wrong. A refined argument was checked
+    /// and a refined return value was not, so the compiler printed "so it
+    /// becomes a runtime check" over a check that did not exist. Hanging it off
+    /// the span the checker recorded means the tier says one thing and the two
+    /// passes cannot drift apart.
     fn eval(&mut self, expr: &'a Expr) -> Eval<Value> {
+        let value = self.eval_inner(expr)?;
+        if let Some(refinement) = self.code().guards.get(&expr.span()).copied() {
+            self.guard(refinement, &value, expr.span())?;
+        }
+        Ok(value)
+    }
+
+    fn eval_inner(&mut self, expr: &'a Expr) -> Eval<Value> {
         match expr {
             Expr::Int { value, .. } => Ok(Value::Int(*value)),
             Expr::Str { value, .. } => Ok(Value::Str(value.as_str().into())),
@@ -1144,12 +1185,9 @@ impl<'a> Interp<'a> {
         handler: Option<usize>,
     ) -> Eval<Value> {
         let mut frame = HashMap::new();
-        for (param, (value, arg_span)) in function.sig.params.iter().zip(&args) {
+        for (param, (value, _)) in function.sig.params.iter().zip(&args) {
             if let Some(def) = self.def_of(&param.name) {
                 frame.insert(def, value.clone());
-            }
-            if let Some(ty) = &param.ty {
-                self.check_refinement(ty, value, *arg_span)?;
             }
         }
 
@@ -1313,36 +1351,39 @@ impl<'a> Interp<'a> {
     }
 
     /// The `Guarded` tier, actually guarding something.
-    fn check_refinement(&mut self, ty: &Type, value: &Value, span: Span) -> Eval<()> {
-        let Type::Named { name, .. } = ty else {
-            return Ok(());
-        };
-        let Some(def) = self.def_of(name) else {
-            return Ok(());
-        };
-        let Some(predicate) = self.refinement(def) else {
+    ///
+    /// Reached from one place: after evaluating an expression the checker
+    /// recorded an obligation for. Every way a refined value can come into
+    /// existence goes through there, which is the point. The old arrangement
+    /// checked arguments and annotated `let`s and nothing else, so a return
+    /// value carried a warning and no check.
+    fn guard(&mut self, refinement: DefId, value: &Value, span: Span) -> Eval<()> {
+        let Some(predicate) = self.refinement(refinement) else {
             return Ok(());
         };
 
         // The predicate talks about `value`, which is not in scope anywhere
         // else, so it is bound here.
-        let holds = self.eval_predicate(def, predicate, value)?;
-        if holds {
+        if self.eval_predicate(refinement, predicate, value)? {
             return Ok(());
         }
 
-        let refinement = name.name.clone();
+        let name = self.refinement_name(refinement);
         Err(self.fail(
             Diagnostic::error(
                 codes::REFINEMENT_FAILED,
                 self.file(),
                 span,
-                format!("{value} does not satisfy `{refinement}`"),
+                format!("{value} does not satisfy `{name}`"),
             )
             .with_primary_label("violates the refinement")
             .with_secondary(predicate.span(), "the predicate it has to satisfy")
             .with_note("the compiler could not prove this statically, so it is checked here"),
         ))
+    }
+
+    fn refinement_name(&self, def: DefId) -> String {
+        self.resolutions().def(def).name.clone()
     }
 
     /// Evaluates a refinement predicate with `value` standing for the thing
@@ -1505,12 +1546,12 @@ impl<'a> Interp<'a> {
     fn exec(&mut self, stmt: &'a Stmt) -> Eval<()> {
         match stmt {
             Stmt::Let {
-                pattern, ty, init, ..
+                pattern,
+                ty: _,
+                init,
+                ..
             } => {
                 let value = self.eval(init)?;
-                if let Some(ty) = ty {
-                    self.check_refinement(ty, &value, init.span())?;
-                }
                 self.bind(&value, pattern);
                 Ok(())
             }

@@ -6,7 +6,7 @@
 //!
 //! ```
 //! use vow_diagnostics::SourceMap;
-//! use vow_interp::{Program, run_tests};
+//! use vow_interp::{Guards, Program, run_tests};
 //! use vow_lexer::tokenize;
 //! use vow_parser::parse;
 //! use vow_resolve::{Universe, resolve};
@@ -30,8 +30,11 @@
 //! // Every module that should be able to see the others goes in the program.
 //! // A call that leaves one of them runs with that module's own names in
 //! // scope, which is why the interpreter needs all of them at once.
+//! //
+//! // `Guards` is what the type checker could not settle. Nothing here is
+//! // refined, so there is nothing to check at runtime.
 //! let mut program = Program::new();
-//! program.add(file, &parsed.module, &resolved.resolutions);
+//! program.add(file, &parsed.module, &resolved.resolutions, Guards::new());
 //!
 //! let outcomes = run_tests(&program, file);
 //! assert_eq!(outcomes.len(), 1);
@@ -44,7 +47,7 @@ pub mod property;
 pub mod sandbox;
 pub mod value;
 
-pub use interp::{Program, Run, TestOutcome, run_main, run_tests};
+pub use interp::{Guards, Program, Run, TestOutcome, run_main, run_tests};
 pub use property::{PropertyConfig, PropertyOutcome, is_testable, run_properties};
 pub use sandbox::Refused;
 pub use value::{Capability, Fields, Value, VariantValue};

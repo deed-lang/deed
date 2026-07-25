@@ -124,6 +124,17 @@ test "the proven ones still hold at runtime" {
     assert order_from_either(0) == err("a quantity has to be positive")
 }
 
+// A test that only feeds a guard values it accepts proves nothing. This one
+// used to do exactly that, and it passed through a period where the Guarded
+// tier did not check return values at all: the compiler printed "so it becomes
+// a runtime check" over a check that did not exist, and this test agreed with
+// it.
+//
+// It still only feeds valid values, because a Vow test has no way to say "this
+// must fail" and a file of examples has to pass. The tests that hand a guard
+// something it should refuse are in crates/vow-driver/tests/guards.rs, one for
+// every place a refined value can come into existence. Not being able to write
+// them here is a gap in the test syntax, and worth naming.
 test "the guarded ones are checked when they run" {
     assert one_more(1) == 2
     assert span(2, 5) == 3

@@ -401,7 +401,12 @@ fn run_together(files: &[&str]) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
 
     let mut program = vow_interp::Program::new();
     for checked in &checks {
-        program.add(checked.file, &checked.module, &checked.resolutions);
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+        );
     }
     let outcomes = vow_interp::run_tests(&program, ids[0]);
     (sources, outcomes)
@@ -554,7 +559,12 @@ fn the_multi_module_example_runs_its_tests() {
 
     let mut program = vow_interp::Program::new();
     for checked in &checks {
-        program.add(checked.file, &checked.module, &checked.resolutions);
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+        );
     }
 
     let outcomes = vow_interp::run_tests(&program, ids[2]);
