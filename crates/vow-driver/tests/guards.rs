@@ -223,6 +223,57 @@ fn a_handler_operation_parameter_is_guarded() {
 }
 
 #[test]
+fn a_fact_does_not_outlive_the_state_it_was_about() {
+    // Handler state is the only thing that can be assigned twice, so it is the
+    // only place a fact can survive the value it described. It did: after
+    // `count = to` the checker still believed the `count > 0` above, proved
+    // `seen` from it, and the guard that would have caught the zero was never
+    // emitted.
+    expect_refused(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         effect Counter {\n    fn set(to: Int) -> ()\n}\n\n\
+         handler InMemory implements Counter {\n\
+         \x20 state count: Int\n\n\
+         \x20 state seen: Positive\n\n\
+         \x20 fn set(to) -> () {\n\
+         \x20   if count > 0 {\n\
+         \x20     count = to\n\
+         \x20     seen = count\n\
+         \x20   }\n\
+         \x20 }\n\
+         }\n\n\
+         test \"the fact is stale by the second assignment\" {\n\
+         \x20 with InMemory { count: 1, seen: 1 } {\n\
+         \x20   Counter.set(0)\n\
+         \x20 }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_relationship_that_does_not_prove_it_is_guarded() {
+    // `low <= high` leaves the difference reaching zero, so the checker records
+    // a guard rather than a proof, and the guard has to be real. The pair that
+    // does prove it is in proving.rs; this is the one next door to it.
+    let (sources, failure) = expect_refused(&format!(
+        "{POSITIVE}\
+         fn span(low: Int, high: Int) -> Positive\n\
+         \x20 where\n\
+         \x20   low >= 0,\n\
+         \x20   high <= 100,\n\
+         \x20   low <= high,\n\
+         {{\n\
+         \x20 high - low\n\
+         }}\n\n\
+         test \"an empty span is not positive\" {{\n\
+         \x20 assert span(3, 3) == 0\n\
+         }}\n"
+    ));
+    assert!(render_human(&sources, &failure).contains("0 does not satisfy `Positive`"));
+}
+
+#[test]
 fn a_refinement_over_a_string_is_guarded() {
     // Nothing proves anything about a length, so this check is real. It also
     // needs `length(value)` to be runnable inside a predicate, which it was

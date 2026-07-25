@@ -804,11 +804,13 @@ impl<'a> Checker<'a> {
     /// Records the tier an obligation landed in, and says so when it is not
     /// the one the author probably wanted.
     ///
-    /// The Proven tier is interval reasoning: what is known about the integers
-    /// in scope, from the contract, from the types, and from the conditions
-    /// above this point. It cannot relate two variables to each other and it
-    /// cannot see through a call, which is written down in `facts.rs` and in
-    /// `design/02-syntax.md` rather than left to be discovered.
+    /// The Proven tier is interval reasoning with a range for the difference
+    /// between two names next to it: what is known about the integers in scope,
+    /// from the contract, from the types, and from the conditions above this
+    /// point. It cannot relate two names through anything but adding and
+    /// subtracting, and it cannot see through a call, which is written down in
+    /// `facts.rs` and in `design/02-syntax.md` rather than left to be
+    /// discovered.
     fn discharge(&mut self, refinement: DefId, expr: Option<&Expr>, span: Span) {
         let predicate = self
             .aliases
@@ -1358,6 +1360,15 @@ impl<'a> Checker<'a> {
                     value.span(),
                     Some((field_span, "the state it is assigned to".to_string())),
                 );
+
+                // What was known about the old value is not known about the new
+                // one. Handler state is the only thing in the language that can
+                // be assigned twice, so this is the only place a fact can
+                // outlive what it was about, and it did: after
+                // `if count > 0 { count = 0 }` the checker still believed
+                // `count` was positive and proved refinements with it.
+                let range = self.range_of(value).meet(self.declared_range(def));
+                self.facts.set(def, range);
             }
             Stmt::Return { value, span } => {
                 let (ret, ret_span) = self.returns.last().cloned().unwrap_or((Ty::Unknown, *span));

@@ -199,7 +199,113 @@ fn a_negated_condition_narrows_too() {
     );
 }
 
+#[test]
+fn a_relationship_between_two_names_is_a_fact() {
+    // What `low < high` says is nothing about either name and everything about
+    // the difference, so there is a range for the difference next to the range
+    // for each name. The bounds are there because the subtraction has to have
+    // an answer, not because the relationship needs them.
+    expect(
+        Tier::Proven,
+        "fn f(low: Int, high: Int) -> Positive\n  where\n    low >= 0,\n    high <= 100,\n    low < high,\n{\n    high - low\n}\n",
+    );
+}
+
+#[test]
+fn the_relationship_reads_the_same_written_backwards() {
+    expect(
+        Tier::Proven,
+        "fn f(low: Int, high: Int) -> Positive\n  where\n    low >= 0,\n    high <= 100,\n    high > low,\n{\n    high - low\n}\n",
+    );
+}
+
+#[test]
+fn a_relationship_with_an_offset_counts_too() {
+    // `low + 1 < high` is `low - high < -1`, so the difference is at least two.
+    expect(
+        Tier::Proven,
+        "type Percent = Int where value >= 0 && value <= 100\n\nfn f(low: Int, high: Int) -> Percent\n  where\n    low >= 0,\n    high <= 100,\n    low + 1 < high,\n{\n    high - low - 2\n}\n",
+    );
+}
+
+#[test]
+fn two_relationships_that_share_a_name_make_a_third() {
+    expect(
+        Tier::Proven,
+        "fn f(a: Int, b: Int, c: Int) -> Positive\n  where\n    a >= 0,\n    c <= 100,\n    a < b,\n    b < c,\n{\n    c - a\n}\n",
+    );
+}
+
+#[test]
+fn a_relationship_tightens_what_is_known_about_a_name() {
+    // The bound on `limit` arrives after the comparison that needs it, so
+    // narrowing `n` against `limit` where it stands cannot see it. The
+    // difference can: once `limit` is settled, `n` follows from `n - limit`.
+    expect(
+        Tier::Proven,
+        "type Percent = Int where value >= 0 && value <= 100\n\nfn f(n: Int, limit: Int) -> Percent\n  where\n    n < limit,\n    limit <= 101,\n    n >= 0,\n{\n    n\n}\n",
+    );
+}
+
+#[test]
+fn an_equality_carries_a_bound_from_one_name_to_the_other() {
+    // The clause that bounds `a` comes after the one that ties it to `b`, so
+    // nothing is in scope to narrow `b` with at the point it is written. The
+    // difference is what carries it, once there is something to carry.
+    expect(
+        Tier::Proven,
+        "fn f(a: Int, b: Int) -> Positive\n  where\n    a == b,\n    a > 0,\n{\n    b\n}\n",
+    );
+}
+
 // -- what it refuses to prove ----------------------------------------------
+
+#[test]
+fn a_difference_too_large_to_be_an_integer_is_not_proven() {
+    // `low < high` is held, and it is still not enough: with no bound on
+    // either name the subtraction can overflow, and an expression with no
+    // answer proves nothing about the answer. Same rule as `n + 1` above.
+    expect(
+        Tier::Guarded,
+        "fn f(low: Int, high: Int) -> Positive\n  where\n    low < high,\n{\n    high - low\n}\n",
+    );
+}
+
+#[test]
+fn a_relationship_that_does_not_imply_it_stays_guarded() {
+    // `<=` leaves the two names free to be equal, so the difference reaches
+    // zero and `Positive` does not follow.
+    expect(
+        Tier::Guarded,
+        "fn f(low: Int, high: Int) -> Positive\n  where\n    low >= 0,\n    high <= 100,\n    low <= high,\n{\n    high - low\n}\n",
+    );
+}
+
+#[test]
+fn a_relationship_does_not_survive_the_branch_that_established_it() {
+    expect(
+        Tier::Guarded,
+        "fn f(low: Int, high: Int) -> Positive\n  where\n    low >= 0,\n    high <= 100,\n{\n    if low < high {\n        0\n    } else {\n        0\n    }\n    high - low\n}\n",
+    );
+}
+
+#[test]
+fn a_relationship_through_a_product_is_not_a_difference() {
+    // Two names related by anything other than adding and subtracting is a
+    // solver's job, and P9 has a budget against having one at check time.
+    expect(
+        Tier::Guarded,
+        "fn f(a: Int, b: Int) -> Positive\n  where\n    a >= 0,\n    a <= 100,\n    b >= 0,\n    b <= 100,\n    a < b * b,\n{\n    b * b - a\n}\n",
+    );
+}
+
+#[test]
+fn an_or_says_nothing_about_a_relationship_either() {
+    expect(
+        Tier::Guarded,
+        "fn f(low: Int, high: Int) -> Positive\n  where\n    low >= 0,\n    high <= 100,\n    low < high || low > high,\n{\n    high - low\n}\n",
+    );
+}
 
 #[test]
 fn nothing_known_stays_guarded() {
@@ -222,15 +328,6 @@ fn arithmetic_that_could_overflow_stays_guarded() {
 }
 
 #[test]
-fn a_relationship_between_two_names_is_not_a_fact_an_interval_can_hold() {
-    // The largest limitation, and the first one anyone will hit.
-    expect(
-        Tier::Guarded,
-        "fn f(low: Int, high: Int) -> Positive\n  where\n    low < high,\n{\n    high - low\n}\n",
-    );
-}
-
-#[test]
 fn an_ensures_clause_is_a_fact_at_the_call_site() {
     expect(
         Tier::Proven,
@@ -249,8 +346,9 @@ fn a_return_type_is_a_fact_at_the_call_site_too() {
 
 #[test]
 fn an_ensures_clause_that_relates_the_result_to_an_argument_says_nothing() {
-    // True, useful, and not something an interval can hold. The tier says so
-    // instead of pretending.
+    // True, useful, and not something that crosses a call. What travels from a
+    // callee is a pair of bounds, and `result == n` is a fact about a name the
+    // caller cannot see.
     expect(
         Tier::Guarded,
         "fn same(n: Int) -> Int\n  ensures\n    ok  => result == n,\n{\n    n\n}\n\nfn f(n: Positive) -> Positive { same(n) }\n",
@@ -425,8 +523,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Nine proven and three guarded, and the file explains each of the three.
+    // Ten proven and three guarded, and the file explains each of the three.
     // If either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 9);
+    assert_eq!(checked.obligations_at(Tier::Proven), 10);
     assert_eq!(checked.obligations_at(Tier::Guarded), 3);
 }
