@@ -124,6 +124,16 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                Item::Effect(effect) => {
+                    if let Some(def) = self.def_of(&effect.name) {
+                        self.types.set_name(def, effect.name.name.clone());
+                    }
+                    for operation in &effect.operations {
+                        if let Some(def) = self.def_of(&operation.name) {
+                            self.types.set_name(def, operation.name.name.clone());
+                        }
+                    }
+                }
                 Item::Function(function) => {
                     if let Some(def) = self.def_of(&function.sig.name) {
                         self.types.set_name(def, function.sig.name.name.clone());
@@ -192,11 +202,22 @@ impl<'a> Checker<'a> {
                         Nominal::Choice { variants },
                     );
                 }
+                Item::Effect(effect) => {
+                    // An operation is called like a function and should be
+                    // checked like one, so it gets the same signature entry.
+                    for operation in &effect.operations {
+                        let Some(def) = self.def_of(&operation.name) else {
+                            continue;
+                        };
+                        let signature = self.lower_signature(operation);
+                        self.signatures.insert(def, signature);
+                    }
+                }
                 Item::Function(function) => {
                     let Some(def) = self.def_of(&function.sig.name) else {
                         continue;
                     };
-                    let signature = self.lower_signature(function);
+                    let signature = self.lower_signature(&function.sig);
                     self.signatures.insert(def, signature);
                 }
                 _ => {}
@@ -215,30 +236,27 @@ impl<'a> Checker<'a> {
             .collect()
     }
 
-    fn lower_signature(&mut self, function: &FnDecl) -> Signature {
-        let params = function
-            .sig
-            .params
-            .iter()
-            .map(|param| ParamTy {
-                ty: param
-                    .ty
-                    .as_ref()
-                    .map(|ty| self.lower_type(ty))
-                    .unwrap_or(Ty::Unknown),
+    fn lower_signature(&mut self, sig: &vow_ast::FnSig) -> Signature {
+        let mut params = Vec::new();
+        for param in &sig.params {
+            params.push(ParamTy {
+                ty: match &param.ty {
+                    Some(ty) => self.lower_type(ty),
+                    None => Ty::Unknown,
+                },
                 span: param.span,
-            })
-            .collect();
+            });
+        }
 
-        let (ret, _) = match &function.sig.ret {
-            Some(ty) => (self.lower_type(ty), ty.span()),
-            None => (Ty::Unit, function.sig.name.span),
+        let ret = match &sig.ret {
+            Some(ty) => self.lower_type(ty),
+            None => Ty::Unit,
         };
 
         Signature {
             params,
             ret,
-            span: function.sig.span,
+            span: sig.span,
         }
     }
 
