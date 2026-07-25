@@ -37,7 +37,12 @@ fn expect(tier: Tier, body: &str) {
     let refinements: Vec<Tier> = checked
         .obligations
         .iter()
-        .filter(|obligation| obligation.subject == "Positive" || obligation.subject == "Percent")
+        .filter(|obligation| {
+            matches!(
+                obligation.subject.as_str(),
+                "Positive" | "Percent" | "Negative"
+            )
+        })
         .map(|obligation| obligation.tier)
         .collect();
 
@@ -300,6 +305,63 @@ fn two_clauses_bound_the_result_from_both_sides() {
     expect(
         Tier::Proven,
         "type Percent = Int where value >= 0 && value <= 100\n\nfn near(n: Int) -> Int\n  ensures\n    ok  => result >= n,\n    ok  => result <= n + 50,\n{\n    n\n}\n\nfn f(n: Int) -> Percent\n  where\n    n >= 0,\n    n <= 50,\n{\n    near(n)\n}\n",
+    );
+}
+
+#[test]
+fn a_name_counted_twice_is_still_a_name() {
+    // `result == n + n` is two of one name, which is not a difference and is
+    // not a product either. Refusing it would be refusing the clause over how
+    // it happened to be written.
+    expect(
+        Tier::Proven,
+        "fn doubled(n: Int) -> Int\n  ensures\n    ok  => result == n + n,\n{\n    n + n\n}\n\nfn f(n: Positive) -> Positive { doubled(n) }\n",
+    );
+}
+
+#[test]
+fn a_name_multiplied_by_a_number_is_still_a_name() {
+    expect(
+        Tier::Proven,
+        "fn doubled(n: Int) -> Int\n  ensures\n    ok  => result == n * 2,\n{\n    n * 2\n}\n\nfn f(n: Positive) -> Positive { doubled(n) }\n",
+    );
+}
+
+#[test]
+fn a_clause_can_count_a_name_on_either_side() {
+    expect(
+        Tier::Proven,
+        "fn doubled(n: Int) -> Int\n  ensures\n    ok  => 2 * n == result,\n{\n    n + n\n}\n\nfn f(n: Positive) -> Positive { doubled(n) }\n",
+    );
+}
+
+#[test]
+fn a_bound_on_a_multiple_is_a_bound_on_the_name() {
+    // `n * 3 > 0` and `n * 3 < 100` put `n` between one and thirty three, and
+    // neither has a bare name on one side for the interval to narrow.
+    expect(
+        Tier::Proven,
+        "fn f(n: Int) -> Positive\n  where\n    n * 3 > 0,\n    n * 3 < 100,\n{\n    n\n}\n",
+    );
+}
+
+#[test]
+fn dividing_a_bound_rounds_towards_the_smaller_range() {
+    // `3 * n <= -2` admits `n <= -1`, not `n <= 0`: rounding towards zero here
+    // would admit a value that does not satisfy the constraint at all.
+    expect(
+        Tier::Proven,
+        "type Negative = Int where value < 0\n\nfn f(n: Int) -> Negative\n  where\n    n * 3 <= -2,\n{\n    n\n}\n",
+    );
+}
+
+#[test]
+fn a_bound_on_a_multiple_that_does_not_divide_evenly_is_still_exact() {
+    // `2 * n > 0` means `2 * n >= 1`, and the smallest integer `n` with
+    // `2 * n >= 1` is one, not zero.
+    expect(
+        Tier::Proven,
+        "fn f(n: Int) -> Positive\n  where\n    n * 2 > 0,\n{\n    n\n}\n",
     );
 }
 
@@ -653,8 +715,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Fourteen proven and three guarded, and the file explains each of the
+    // Sixteen proven and three guarded, and the file explains each of the
     // three. If either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 14);
+    assert_eq!(checked.obligations_at(Tier::Proven), 16);
     assert_eq!(checked.obligations_at(Tier::Guarded), 3);
 }

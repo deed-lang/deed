@@ -18,13 +18,17 @@
 //! per pair of names holds exactly the orderings, which is what comparisons
 //! produce and nothing more.
 //!
+//! A name multiplied by a number is still a name, counted more than once, so
+//! `n + n` and `n * 2` are read as two of one name rather than as a shape with
+//! nowhere to go. A name multiplied by a name is not, and that is where this
+//! stops and a solver would start.
+//!
 //! # What this cannot do
 //!
 //! A great deal, and the answer is always "not proven", never a wrong answer.
 //!
-//! - **Relationships that are not a difference.** `a < b * c` relates three
-//!   names through a product, and a pair of bounds has nowhere to put that.
-//!   Deciding it is a solver's job.
+//! - **Two names multiplied together.** `a < b * c` is not linear, and a pair
+//!   of bounds has nowhere to put it. Deciding it is a solver's job.
 //! - **A difference larger than an integer.** `low < high` on its own does not
 //!   settle `high - low`, because with nothing bounding either name the
 //!   subtraction overflows, and an expression with no answer proves nothing
@@ -198,6 +202,17 @@ impl Range {
             }
             _ => Range::Empty,
         }
+    }
+
+    /// Every value multiplied, clamped for the same reason [`Range::shift`] is.
+    ///
+    /// A negative factor swaps the ends, which is the trap here.
+    fn times(self, factor: i64) -> Range {
+        let Some((low, high)) = self.bounds() else {
+            return Range::Empty;
+        };
+        let (one, other) = (low.saturating_mul(factor), high.saturating_mul(factor));
+        Range::between(one.min(other), one.max(other))
     }
 
     /// Everything at or below `bound`, and everything above it.
@@ -435,6 +450,19 @@ impl Facts {
     }
 }
 
+/// What a promise says about the result next to one of the arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scaled {
+    /// How many of the argument the result is measured against.
+    ///
+    /// One, nearly always. `ensures ok => result == n + n` is where the rest
+    /// comes from: a name counted twice is still a name, and refusing to count
+    /// it would be refusing the clause over a detail of how it was written.
+    pub factor: i64,
+    /// The range of `result - factor * argument`.
+    pub range: Range,
+}
+
 /// What a call promises about the value it hands back.
 ///
 /// A range on its own is what a callee can say without mentioning its
@@ -450,8 +478,8 @@ impl Facts {
 pub struct Guarantee {
     /// Where the result lands, whatever it was called with.
     pub range: Range,
-    /// The range of `result - argument`, by the argument's position.
-    pub offsets: BTreeMap<usize, Range>,
+    /// What the result is worth next to each argument, by its position.
+    pub offsets: BTreeMap<usize, Scaled>,
 }
 
 impl Guarantee {
@@ -471,12 +499,8 @@ impl Guarantee {
     /// Everything both promises say, for a function with more than one clause.
     pub fn meet(mut self, other: Guarantee) -> Guarantee {
         self.range = self.range.meet(other.range);
-        for (index, range) in other.offsets {
-            let combined = match self.offsets.get(&index) {
-                Some(existing) => existing.meet(range),
-                None => range,
-            };
-            self.offsets.insert(index, combined);
+        for (index, scaled) in other.offsets {
+            record_scaled(&mut self.offsets, index, scaled);
         }
         self
     }
@@ -484,16 +508,38 @@ impl Guarantee {
     /// Where the result lands, given what the arguments were.
     fn applied(&self, args: &[Expr], facts: &Facts, env: &Env<'_>) -> Range {
         let mut range = self.range;
-        for (index, offset) in &self.offsets {
+        for (index, scaled) in &self.offsets {
             let Some(arg) = args.get(*index) else {
                 continue;
             };
-            // Clamped, because the result is an integer whatever the promise
-            // adds up to, so `i64::MIN` and `i64::MAX` are bounds it already
-            // satisfies rather than ones this could get wrong.
-            range = range.meet(range_of(arg, facts, env).shift(*offset));
+            // Clamped at every step, because the result is an integer whatever
+            // the promise adds up to, so `i64::MIN` and `i64::MAX` are bounds
+            // it already satisfies rather than ones this could get wrong.
+            let counted = range_of(arg, facts, env).times(scaled.factor);
+            range = range.meet(counted.shift(scaled.range));
         }
         range
+    }
+}
+
+/// Keeps the tighter of two things a promise says about one argument.
+///
+/// Two clauses counting the same argument a different number of times cannot
+/// be merged into one entry, and the one counting it once composes with
+/// everything else, so that is the one kept.
+fn record_scaled(offsets: &mut BTreeMap<usize, Scaled>, index: usize, scaled: Scaled) {
+    match offsets.get(&index) {
+        None => {
+            offsets.insert(index, scaled);
+        }
+        Some(existing) if existing.factor == scaled.factor => {
+            let range = existing.range.meet(scaled.range);
+            offsets.insert(index, Scaled { range, ..scaled });
+        }
+        Some(existing) if existing.factor != 1 && scaled.factor == 1 => {
+            offsets.insert(index, scaled);
+        }
+        Some(_) => {}
     }
 }
 
@@ -574,14 +620,108 @@ pub fn promised_by(condition: &Expr, subject: &str, names: &[&str]) -> Guarantee
     let mut facts = Facts::new();
     apply_narrowing(condition, &mut facts, &env, true);
 
+    let mut offsets = BTreeMap::new();
+    collect_scaled(condition, &facts, &env, result, &params, &mut offsets, true);
+
     Guarantee {
         range: facts.get(result),
-        offsets: params
-            .into_iter()
-            .map(|(index, def)| (index, facts.difference(result, def)))
-            .filter(|(_, range)| !range.is_any())
-            .collect(),
+        offsets,
     }
+}
+
+/// What a clause says about `result` next to each of the arguments.
+///
+/// The same walk [`apply_narrowing`] does, reading `result - factor * argument`
+/// out of every comparison rather than narrowing anything. It is separate
+/// because a difference between two names is not the only useful shape here:
+/// `result == n + n` counts `n` twice and there is nowhere in the facts to put
+/// that, while there is somewhere in a promise.
+#[allow(clippy::too_many_arguments)]
+fn collect_scaled(
+    condition: &Expr,
+    facts: &Facts,
+    env: &Env<'_>,
+    subject: DefId,
+    params: &[(usize, DefId)],
+    offsets: &mut BTreeMap<usize, Scaled>,
+    when_true: bool,
+) {
+    match condition {
+        Expr::Unary {
+            op: UnaryOp::Not,
+            operand,
+            ..
+        } => collect_scaled(operand, facts, env, subject, params, offsets, !when_true),
+
+        Expr::Binary {
+            op: BinaryOp::And,
+            lhs,
+            rhs,
+            ..
+        } if when_true => {
+            collect_scaled(lhs, facts, env, subject, params, offsets, true);
+            collect_scaled(rhs, facts, env, subject, params, offsets, true);
+        }
+
+        Expr::Binary {
+            op: BinaryOp::Or,
+            lhs,
+            rhs,
+            ..
+        } if !when_true => {
+            collect_scaled(lhs, facts, env, subject, params, offsets, false);
+            collect_scaled(rhs, facts, env, subject, params, offsets, false);
+        }
+
+        Expr::Binary { op, lhs, rhs, .. } => {
+            let Some(op) = (if when_true { Some(*op) } else { negated(*op) }) else {
+                return;
+            };
+
+            // Both ways round, since `result` has to come out counted once and
+            // `n == result` puts it on the wrong side.
+            let form = linear(lhs, facts, env).add(linear(rhs, facts, env).negate());
+            scaled_from(op, form, subject, params, offsets);
+            if let Some(flipped) = flipped(op) {
+                let form = linear(rhs, facts, env).add(linear(lhs, facts, env).negate());
+                scaled_from(flipped, form, subject, params, offsets);
+            }
+        }
+
+        _ => {}
+    }
+}
+
+/// Reads one comparison as a bound on `result - factor * argument`.
+fn scaled_from(
+    op: BinaryOp,
+    form: Linear,
+    subject: DefId,
+    params: &[(usize, DefId)],
+    offsets: &mut BTreeMap<usize, Scaled>,
+) {
+    let mut terms = form.terms.clone();
+    // One `result`, no more and no less. Two of it is a shape with nowhere to
+    // go, and none of it is a clause about something else.
+    if terms.remove(&subject) != Some(1) {
+        return;
+    }
+
+    let [(def, count)] = terms.into_iter().collect::<Vec<_>>()[..] else {
+        return;
+    };
+    let Some(factor) = count.checked_neg() else {
+        return;
+    };
+    let Some((index, _)) = params.iter().find(|(_, param)| *param == def) else {
+        return;
+    };
+    // The constraint is `(result - factor * argument) + offset op 0`.
+    let Some(range) = bound_from(op, form.offset) else {
+        return;
+    };
+
+    record_scaled(offsets, *index, Scaled { factor, range });
 }
 
 /// What the fact machinery needs to know that it cannot read off the syntax.
@@ -623,66 +763,98 @@ fn def_of(expr: &Expr, env: &Env<'_>) -> Option<DefId> {
 /// the interval reasoning answers it as it always did.
 #[derive(Clone, Debug)]
 struct Linear {
-    positive: Vec<DefId>,
-    negative: Vec<DefId>,
+    /// How many of each name, with a zero coefficient dropped rather than kept.
+    terms: BTreeMap<DefId, i64>,
     offset: Range,
 }
 
 impl Linear {
     fn constant(offset: Range) -> Linear {
         Linear {
-            positive: Vec::new(),
-            negative: Vec::new(),
+            terms: BTreeMap::new(),
             offset,
         }
     }
 
     fn name(def: DefId) -> Linear {
         Linear {
-            positive: vec![def],
-            negative: Vec::new(),
+            terms: BTreeMap::from([(def, 1)]),
             offset: Range::exactly(0),
         }
     }
 
     fn negate(self) -> Linear {
-        Linear {
-            positive: self.negative,
-            negative: self.positive,
-            offset: self.offset.negate(),
+        // Negating cannot lose a coefficient unless one reached `i64::MIN`,
+        // which takes more names than a body has. Nothing known is the answer
+        // if it ever happens, and nothing known is never wrong.
+        self.scale(-1)
+            .unwrap_or_else(|| Linear::constant(Range::ANY))
+    }
+
+    /// The same form with every coefficient multiplied, when that is a number.
+    fn scale(self, factor: i64) -> Option<Linear> {
+        let mut terms = BTreeMap::new();
+        for (def, count) in self.terms {
+            let scaled = count.checked_mul(factor)?;
+            if scaled != 0 {
+                terms.insert(def, scaled);
+            }
+        }
+        Some(Linear {
+            terms,
+            offset: self.offset.mul(Range::exactly(factor)),
+        })
+    }
+
+    /// The single number this is, when it is one.
+    fn constant_value(&self) -> Option<i64> {
+        if !self.terms.is_empty() {
+            return None;
+        }
+        match self.offset {
+            Range::Bounded { low, high } if low == high => Some(low),
+            _ => None,
         }
     }
 
     fn add(self, other: Linear) -> Linear {
-        let mut positive = self.positive;
-        positive.extend(other.positive);
-        let mut negative = self.negative;
-        negative.extend(other.negative);
-        let offset = self.offset.add(other.offset);
-
-        // A name on both sides cancels, so `n - n` is zero rather than a
-        // difference nobody recorded.
-        let mut kept = Vec::with_capacity(positive.len());
-        for def in positive {
-            match negative.iter().position(|other| *other == def) {
-                Some(at) => {
-                    negative.remove(at);
-                }
-                None => kept.push(def),
+        let mut terms = self.terms;
+        for (def, count) in other.terms {
+            // A name on both sides cancels, so `n - n` is zero rather than a
+            // difference nobody recorded, and `n + n` is two of one name rather
+            // than a shape with nowhere to go.
+            let total = terms.get(&def).copied().unwrap_or(0).saturating_add(count);
+            if total == 0 {
+                terms.remove(&def);
+            } else {
+                terms.insert(def, total);
             }
         }
 
         Linear {
-            positive: kept,
-            negative,
-            offset,
+            terms,
+            offset: self.offset.add(other.offset),
         }
     }
 
     /// The pair this is the difference of, when it is the difference of a pair.
     fn pair(&self) -> Option<(DefId, DefId)> {
-        match (self.positive.as_slice(), self.negative.as_slice()) {
-            ([a], [b]) => Some((*a, *b)),
+        let mut positive = None;
+        let mut negative = None;
+        for (def, count) in &self.terms {
+            match count {
+                1 if positive.is_none() => positive = Some(*def),
+                -1 if negative.is_none() => negative = Some(*def),
+                _ => return None,
+            }
+        }
+        Some((positive?, negative?))
+    }
+
+    /// The one name in this, and how many of it, when there is exactly one.
+    fn scaled_name(&self) -> Option<(DefId, i64)> {
+        match self.terms.iter().next() {
+            Some((def, count)) if self.terms.len() == 1 => Some((*def, *count)),
             _ => None,
         }
     }
@@ -717,6 +889,26 @@ fn linear(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Linear {
             rhs,
             ..
         } => linear(lhs, facts, env).add(linear(rhs, facts, env).negate()),
+        // A name multiplied by a number is still a name, counted more than
+        // once. A name multiplied by a name is not, and that is where linear
+        // arithmetic stops and a solver would start.
+        Expr::Binary {
+            op: BinaryOp::Mul,
+            lhs,
+            rhs,
+            ..
+        } => {
+            let left = linear(lhs, facts, env);
+            let right = linear(rhs, facts, env);
+            let scaled = match (left.constant_value(), right.constant_value()) {
+                (Some(factor), None) => right.scale(factor),
+                (None, Some(factor)) => left.scale(factor),
+                // Two constants, which the interval already multiplies, and
+                // two names, which nothing here can.
+                _ => None,
+            };
+            scaled.unwrap_or_else(|| Linear::constant(interval_of(expr, facts, env)))
+        }
         // Not a sum of names. Whatever it is, the interval answers it, and
         // asking for the interval rather than the range avoids going round
         // again through the same expression.
@@ -956,6 +1148,7 @@ fn apply_narrowing(condition: &Expr, facts: &mut Facts, env: &Env<'_>, when_true
                 narrow_side(flipped, rhs, lhs, facts, env);
             }
 
+            narrow_scaled(effective, lhs, rhs, facts, env);
             narrow_relation(effective, lhs, rhs, facts, env);
         }
 
@@ -963,29 +1156,19 @@ fn apply_narrowing(condition: &Expr, facts: &mut Facts, env: &Env<'_>, when_true
     }
 }
 
-/// Records what `left op right` says about the difference of two names.
+/// The range `x` is pinned to by `x + offset op 0`.
 ///
-/// This is the half an interval cannot hold. `low < high` says nothing about
-/// either name on its own, and everything about `low - high`.
-fn narrow_relation(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
-    let form = linear(left, facts, env).add(linear(right, facts, env).negate());
-    let Some((a, b)) = form.pair() else {
-        return;
-    };
-    let Some((low, high)) = form.offset.bounds() else {
-        return;
-    };
+/// The offset is only known to be somewhere in its own range, so a bound has to
+/// hold for the whole of it: the upper one comes from the smallest offset and
+/// the lower one from the largest. An offset at the edge of what an `i64` holds
+/// is not worth a special case, so nothing is learned there rather than
+/// something wrong.
+fn bound_from(op: BinaryOp, offset: Range) -> Option<Range> {
+    let (low, high) = offset.bounds()?;
+    let least = high.checked_neg()?;
+    let most = low.checked_neg()?;
 
-    // The constraint is `(a - b) + offset op 0`, and the offset is only known
-    // to be somewhere in its own range, so a bound has to hold for the whole of
-    // it: the upper one comes from the smallest offset and the lower one from
-    // the largest. An offset at the edge of what an `i64` holds is not worth a
-    // special case, so nothing is learned there rather than something wrong.
-    let (Some(least), Some(most)) = (high.checked_neg(), low.checked_neg()) else {
-        return;
-    };
-
-    let bound = match op {
+    Some(match op {
         BinaryOp::Lt => match most.checked_sub(1) {
             Some(bound) => Range::between(i64::MIN, bound),
             None => Range::Empty,
@@ -997,10 +1180,93 @@ fn narrow_relation(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, e
         },
         BinaryOp::Ge => Range::between(least, i64::MAX),
         BinaryOp::Eq => Range::between(least, most),
-        _ => return,
+        // `!=` only says something when the other side is a single value at
+        // the edge of what is known, and that is rare enough to skip.
+        _ => return None,
+    })
+}
+
+/// Records what `left op right` says about the difference of two names.
+///
+/// This is the half an interval cannot hold. `low < high` says nothing about
+/// either name on its own, and everything about `low - high`.
+fn narrow_relation(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
+    let form = linear(left, facts, env).add(linear(right, facts, env).negate());
+    let Some((a, b)) = form.pair() else {
+        return;
+    };
+    // The constraint is `(a - b) + offset op 0`.
+    let Some(bound) = bound_from(op, form.offset) else {
+        return;
+    };
+    facts.narrow_difference(a, b, bound);
+}
+
+/// Narrows a name a comparison counts more than once, or not on its own.
+///
+/// `n * 2 <= 100` says `n <= 50` and `n - 5 > 0` says `n > 5`. Neither is a
+/// shape [`narrow_side`] can see, because neither has a bare name on one side
+/// of the comparison.
+fn narrow_scaled(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
+    let form = linear(left, facts, env).add(linear(right, facts, env).negate());
+    let Some((def, count)) = form.scaled_name() else {
+        return;
+    };
+    // The constraint is `(count * def) + offset op 0`.
+    let Some(bound) = bound_from(op, form.offset) else {
+        return;
+    };
+    let Some(narrowed) = divided(bound, count) else {
+        return;
+    };
+    facts.narrow(def, narrowed);
+}
+
+/// The range of `d`, given the range of `count * d`.
+///
+/// Rounded inwards, which is the only direction that is not a lie: `2 * d <= 5`
+/// admits `d <= 2` and nothing between two and three is an integer. Dividing by
+/// a negative swaps the ends, which is the trap here and the reason this is not
+/// written inline.
+fn divided(bound: Range, count: i64) -> Option<Range> {
+    if count == 0 {
+        return None;
+    }
+    let Some((low, high)) = bound.bounds() else {
+        return Some(Range::Empty);
     };
 
-    facts.narrow_difference(a, b, bound);
+    let (low, high) = if count > 0 {
+        (round_up(low, count)?, round_down(high, count)?)
+    } else {
+        (round_up(high, count)?, round_down(low, count)?)
+    };
+    Some(Range::between(low, high))
+}
+
+/// The largest integer `d` with `d * by <= value`, when `by` is positive, and
+/// the mirror of that when it is negative. Plain floor division, which Rust
+/// does not have.
+fn round_down(value: i64, by: i64) -> Option<i64> {
+    let quotient = value.checked_div(by)?;
+    let exact = value % by == 0;
+    if exact || (value < 0) == (by < 0) {
+        Some(quotient)
+    } else {
+        quotient.checked_sub(1)
+    }
+}
+
+/// The smallest integer `d` with `d * by >= value`, and the mirror of that for
+/// a negative `by`.
+fn round_up(value: i64, by: i64) -> Option<i64> {
+    let quotient = value.checked_div(by)?;
+    let exact = value % by == 0;
+    if exact || (value < 0) != (by < 0) {
+        Some(quotient)
+    } else {
+        quotient.checked_add(1)
+    }
 }
 
 /// Narrows the left side of `left op right`.
@@ -1265,5 +1531,26 @@ mod tests {
 
         assert_eq!(left.join(&right).difference(a, b), Range::between(-10, 8));
         assert_eq!(left.join(&Facts::new()).difference(a, b), Range::ANY);
+    }
+
+    #[test]
+    fn dividing_a_bound_rounds_inwards() {
+        // `3 * d` somewhere in `[-2, 7]` puts `d` in `[0, 2]`. Rounding either
+        // end outwards would admit a `d` the constraint does not, which is the
+        // whole risk in doing this at all.
+        assert_eq!(
+            divided(Range::between(-2, 7), 3),
+            Some(Range::between(0, 2))
+        );
+
+        // A negative multiplier swaps the ends, which is the other trap.
+        assert_eq!(
+            divided(Range::between(-2, 7), -3),
+            Some(Range::between(-2, 0))
+        );
+
+        assert_eq!(divided(Range::between(4, 4), 2), Some(Range::exactly(2)));
+        assert_eq!(divided(Range::between(1, 1), 2), Some(Range::Empty));
+        assert_eq!(divided(Range::ANY, 0), None);
     }
 }

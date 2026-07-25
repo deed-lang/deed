@@ -148,10 +148,28 @@ fn maybe_one() -> Result<Int, String>
     ok(1)
 }
 
-// Guarded. A promise that ties the result to an argument through anything but
-// adding and subtracting is not a difference, and there is nowhere to put it
-// short of a solver. A `Percent` squared is between nothing and ten thousand,
-// and the tier says it did not work that out rather than pretending it did.
+// Proven from a promise that counts its argument twice. A name multiplied by a
+// number is still a name, so `result == n + n` is a difference like any other
+// once the counting is done. A name multiplied by a name is not, which is the
+// case below.
+fn twice_over(n: Percent) -> Positive
+  where
+    n > 0,
+{
+    doubled(n)
+}
+
+fn doubled(n: Percent) -> Int
+  ensures
+    ok  => result == n + n,
+{
+    n + n
+}
+
+// Guarded. A promise that ties the result to an argument through a product of
+// two names is not linear, and there is nowhere to put it short of a solver. A
+// `Percent` squared is between nothing and ten thousand, and the tier says it
+// did not work that out rather than pretending it did.
 fn squared(n: Percent) -> Positive {
     square(n)
 }
@@ -170,6 +188,7 @@ test "the proven ones still hold at runtime" {
     assert span(2, 5) == 3
     assert from_a_call() == 1
     assert echoed(7) == 7
+    assert twice_over(3) == 6
     assert unwrapped() == ok(1)
     assert order_from_either(0) == err("a quantity has to be positive")
 }
