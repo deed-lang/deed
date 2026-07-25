@@ -1,7 +1,7 @@
 //! Property tests generated from contracts.
 
 use vow_diagnostics::{SourceMap, render_human};
-use vow_interp::{PropertyConfig, PropertyOutcome, codes, run_properties};
+use vow_interp::{Program, PropertyConfig, PropertyOutcome, codes, run_properties};
 use vow_lexer::tokenize;
 use vow_parser::parse;
 use vow_resolve::{Universe, resolve};
@@ -25,7 +25,15 @@ fn properties_in(
     let resolved = resolve(file, &parsed.module, universe);
     assert!(!resolved.has_errors(), "source should resolve cleanly");
 
-    let outcomes = run_properties(file, &parsed.module, &resolved.resolutions, config);
+    let mut program = Program::new();
+    program.add(file, &parsed.module, &resolved.resolutions);
+    let outcomes = run_properties(
+        &program,
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        config,
+    );
     (sources, outcomes)
 }
 
@@ -333,6 +341,11 @@ fn the_counter_example_has_a_property_and_it_passes() {
     let resolved = resolve(file, &parsed.module, &Universe::new());
 
     let outcomes = run_properties(
+        &{
+            let mut program = Program::new();
+            program.add(file, &parsed.module, &resolved.resolutions);
+            program
+        },
         file,
         &parsed.module,
         &resolved.resolutions,

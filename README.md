@@ -157,8 +157,11 @@ field an imported record does not have, so is a `match` on an imported choice th
 variant. None of that was checked before: an imported name had no type, and a name with no
 type agrees with everything, so a module boundary was a place where checking stopped.
 
-What still does not cross is running. The interpreter holds the code of one module at a
-time, which is why `greeting.vow` has no `test` block and says so in a comment.
+Running crosses it too. A call through an import walks into the other module's body with
+that module's own names in scope, and a variant carries the module that declared it, so the
+same variant reached two ways is one value. What is still not there is effects: an operation
+of an imported effect does not resolve to anything to dispatch on, and an imported handler
+cannot be installed.
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.

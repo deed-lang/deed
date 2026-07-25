@@ -19,6 +19,16 @@ record Greeting {
     tone: Tone,
 }
 
+// Called from `greeting.vow`. The body runs with this module's names in scope,
+// not the caller's, which matters because a call across a boundary that read
+// the caller's scope would be a bug that does not announce itself.
+fn louder(tone: Tone) -> Tone {
+    match tone {
+        Plain => Loud,
+        Loud => Loud,
+    }
+}
+
 // A `test` is not part of what a module offers. Nothing outside this file can
 // name it, which is why `use examples/names.{the_tone_survives}` is an error.
 test "the tone survives" {

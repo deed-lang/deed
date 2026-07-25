@@ -31,7 +31,9 @@ fn run(src: &str) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
     let parsed = parse(file, &lexed.tokens);
     let resolved = resolve(file, &parsed.module, &Universe::new());
     assert!(!resolved.has_errors(), "source should resolve cleanly");
-    let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
+    let mut program = vow_interp::Program::new();
+    program.add(file, &parsed.module, &resolved.resolutions);
+    let outcomes = run_tests(&program, file);
     (sources, outcomes)
 }
 

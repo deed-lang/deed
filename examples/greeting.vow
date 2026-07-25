@@ -13,7 +13,7 @@
 
 module examples/greeting
 
-use examples/names.{Greeting, Loud, Plain, Tone}
+use examples/names.{Greeting, Loud, Plain, Tone, louder}
 
 // Exhaustive over a choice declared somewhere else. Adding a third `Tone` to
 // `names.vow` breaks this function, which is the point of exhaustiveness and
@@ -32,7 +32,24 @@ fn render(greeting: Greeting) -> String {
     describe(greeting.tone)
 }
 
-// There is no `test` in this file, and that is the gap that is left. The
-// interpreter holds the code of one module at a time, so a call in here has
-// nothing to evaluate the other module's declarations to and reports VOW6006.
-// Checking crosses the boundary now, running does not.
+// These run. The interpreter holds the code of every module it was handed, so
+// `describe` walks into the arms built from `names.vow`, and `Loud` here is the
+// same value as the `Loud` built there. That last part is not free: a variant
+// carries the module that declared it, because a `DefId` is an index into one
+// module's table and the same variant reached two ways would otherwise compare
+// unequal to itself.
+test "a plain tone is not a loud one" {
+    assert describe(Plain) != describe(Loud)
+}
+
+test "a record from another module is read here" {
+    let greeting = Greeting { who: "world", tone: Loud }
+
+    assert render(greeting) == "shouting"
+    assert greeting.who == "world"
+}
+
+test "a call goes into the other module and comes back" {
+    assert louder(Plain) == Loud
+    assert describe(louder(Plain)) == "shouting"
+}

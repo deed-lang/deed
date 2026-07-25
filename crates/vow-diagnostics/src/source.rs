@@ -10,6 +10,13 @@ use crate::span::Span;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct FileId(u32);
 
+impl FileId {
+    /// The file's position in the [`SourceMap`] that handed it out.
+    pub fn index(&self) -> u32 {
+        self.0
+    }
+}
+
 /// A one based line and column pair, suitable for showing to a person.
 ///
 /// The column counts characters rather than bytes, so an underline lines up

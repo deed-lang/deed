@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use vow_diagnostics::{SourceMap, render_human, render_json};
 use vow_driver::{Checked, ObligationReport};
-use vow_interp::PropertyConfig;
+use vow_interp::{Program, PropertyConfig};
 use vow_typeck::Tier;
 
 use crate::args::{CheckArgs, Command, Format, Mode, USAGE};
@@ -183,6 +183,15 @@ fn run_fmt(files: &[PathBuf], check_only: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Every checked module, so the interpreter can follow a call out of one.
+fn program_of(checks: &[Checked]) -> Program<'_> {
+    let mut program = Program::new();
+    for checked in checks {
+        program.add(checked.file, &checked.module, &checked.resolutions);
+    }
+    program
+}
+
 /// Calls `main`, handing it the one `System` there is.
 ///
 /// Exactly one is required. Two entry points in one invocation is not a
@@ -199,11 +208,14 @@ fn run_main(
         None => std::env::current_dir()?,
     };
 
+    // Every checked module, so a call that goes through an import has a body
+    // to walk into. The interpreter used to be handed one module and stopped
+    // at the first call that left it.
+    let program = program_of(checks);
+
     let mut runs = Vec::new();
     for checked in checks {
-        if let Some(run) =
-            vow_interp::run_main(checked.file, &checked.module, &checked.resolutions, &root)
-        {
+        if let Some(run) = vow_interp::run_main(&program, checked.file, &root) {
             runs.push((sources.file(checked.file).name().to_string(), run));
         }
     }
@@ -235,10 +247,12 @@ fn run_main(
 fn run_tests(out: &mut impl Write, sources: &SourceMap, checks: &[Checked]) -> io::Result<bool> {
     let mut passed = 0usize;
     let mut failed = Vec::new();
+    let program = program_of(checks);
 
     for checked in checks {
-        let outcomes = vow_interp::run_tests(checked.file, &checked.module, &checked.resolutions);
+        let outcomes = vow_interp::run_tests(&program, checked.file);
         let properties = vow_interp::run_properties(
+            &program,
             checked.file,
             &checked.module,
             &checked.resolutions,

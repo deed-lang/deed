@@ -24,6 +24,9 @@ pub const REFINEMENT_FAILED: &str = "VOW6004";
 pub const NO_HANDLER: &str = "VOW6005";
 
 /// Something the interpreter cannot run yet.
+///
+/// Also covers a call into a module whose code was never handed over, which is
+/// not a gap in the interpreter but a gap in what it was given.
 pub const NOT_RUNNABLE: &str = "VOW6006";
 
 /// Arithmetic that has no answer, such as overflow or division by zero.

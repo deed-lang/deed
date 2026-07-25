@@ -324,6 +324,12 @@ imported function's signature and an imported choice's variants are all checked,
 Identity for those types is the module path and the name together, rather than an index into
 one module's table, so nothing about how one module was resolved leaks into another.
 
+**Running crosses it too, and identity has to hold at runtime as well.** A variant value
+carries the module that declared it, so a `Loud` built where it was declared and a `Loud`
+named through an import are one value, and two modules that each declare a `Loud` are two.
+An effect is identified the same way, since a `DefId` comparison would have made a handler
+in one module answer an operation in another whenever the numbers happened to line up.
+
 **A refinement crossing a module boundary becomes opaque.** `type Positive = Int where value
 > 0` exported and then imported is a distinct type that an `Int` does not fit, and the
 predicate does not come with it, so nothing is proven on the far side. Carrying the
