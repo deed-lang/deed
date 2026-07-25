@@ -352,9 +352,10 @@ fn a_type_from_a_third_module_keeps_its_own_identity() {
 #[test]
 fn a_capability_is_the_same_capability_in_every_module() {
     // `Console` comes from the prelude, so it is not named after whichever
-    // module happened to mention it first.
+    // module happened to mention it first. `Io` is in the prelude too, which
+    // is why `a` declares it without importing anything.
     let (sources, checked) = check(&[
-        "module a\n\nuse b.{shout}\n\nfn f(out: Console) -> () { shout(out) }\n",
+        "module a\n\nuse b.{shout}\n\nfn f(out: Console) -> ()\n  uses Io.write,\n{ shout(out) }\n",
         "module b\n\nfn shout(out: Console) -> ()\n  uses Io.write,\n{\n  Io.write(out, \"hi\")\n}\n",
     ]);
     assert!(

@@ -72,6 +72,30 @@ The second one matters more than it looks. If over-declaring were allowed, every
 would drift toward listing everything, and the annotation would stop carrying information.
 An effect row is only worth reading if it is tight.
 
+### Across a module boundary
+
+A call into another module is not free. A function's declared row travels with it, so calling
+something that logs means declaring that you log, wherever the callee is.
+
+It did not, for a long time. The row stopped at the file boundary, so anything calling into
+another module looked pure, and in a program with more than one file that is most calls. The
+effect checker was doing its work on the ones that mattered least.
+
+A row entry cannot travel as a definition, for the same reason a type could not: a definition
+is an index into one module's table. It travels as the module the effect was declared in, its
+name there, and the operation, which is the same identity the interpreter already uses for an
+effect at runtime. The declaring module knows the path from its own syntax, either because the
+effect is declared in it or because it is on a `use` line, which is what keeps exports
+computable with nothing else resolved first.
+
+**A caller has to be able to name what it inherits.** If it calls something that uses `Log`
+and has not imported `Log`, that is an error, and the message says which module to import it
+from. This is a real constraint rather than an implementation detail: a row that could not
+name what it grants would not be a row. Declaring an effect means having a word for it.
+
+Effects the language provides are the exception, and only because they need no word. `Io` and
+`Diverge` are in the prelude, so every module can already name them.
+
 ## Specification is not action
 
 A `where` or `ensures` clause may mention any effect operation and contributes nothing to

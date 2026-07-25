@@ -33,10 +33,10 @@ use crate::ty::Ty;
 
 /// The module path builtin types are named under.
 ///
-/// Not a real module and not writable in source, so nothing can collide with
-/// it. There is exactly one `Console` and every module has to agree about that,
-/// which it would not if each one named it after itself.
-pub const PRELUDE_MODULE: &str = "<prelude>";
+/// Defined by the resolver, which is where the prelude is, and re-exported
+/// here because this is the file that explains why a module path is the
+/// identity of a type at all.
+pub use vow_resolve::PRELUDE_MODULE;
 
 /// One exported declaration, with its types readable from outside.
 #[derive(Clone, Debug)]

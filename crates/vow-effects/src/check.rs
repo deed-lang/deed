@@ -68,6 +68,11 @@ pub fn analyse(file: FileId, module: &Module, resolutions: &Resolutions) -> Anal
     let mut checker = Checker {
         file,
         resolutions,
+        here: module
+            .name
+            .as_ref()
+            .map(|name| name.to_string_path())
+            .unwrap_or_default(),
         effects: Effects::default(),
         diagnostics: Vec::new(),
         handler_effects: HashMap::new(),
@@ -88,6 +93,12 @@ pub fn analyse(file: FileId, module: &Module, resolutions: &Resolutions) -> Anal
 struct Checker<'a> {
     file: FileId,
     resolutions: &'a Resolutions,
+    /// What this module calls itself.
+    ///
+    /// A row entry arriving from another module names the module the effect
+    /// was declared in. When that is this one, the effect is local and no
+    /// import is needed to name it.
+    here: String,
     effects: Effects,
     diagnostics: Vec<Diagnostic>,
     /// Local handler definition to the effect it implements.
@@ -666,8 +677,109 @@ impl<'a> Checker<'a> {
             // rather than the inferred row keeps this modular and means
             // recursion needs no fixpoint.
             DefKind::Function => Some(self.effects.declared.get(&def).cloned().unwrap_or_default()),
+            // A function from another module. Its row is its contract too, and
+            // it is in the export, so a call into another file is no longer
+            // free. It used to be, which meant the effect system stopped at
+            // the module boundary and therefore stopped where most calls are.
+            DefKind::Import => {
+                let export = self.resolutions.import(def)?;
+                if export.kind != vow_resolve::ExportKind::Function {
+                    return None;
+                }
+                let entries = export.row.clone();
+                let complete = export.row_complete;
+                let span = callee.span();
+
+                // The callee's own row is not checked, so nothing built on it
+                // is either. Inheriting an empty row here would move the
+                // loophole rather than close it: the caller would look pure.
+                if !complete {
+                    let name = self.name_of(def);
+                    self.emit(
+                        Diagnostic::warning(
+                            codes::UNVERIFIABLE_ROW,
+                            self.file,
+                            span,
+                            format!("`{name}` has a row that is not checked, so this call is not either"),
+                        )
+                        .with_primary_label("not checked")
+                        .with_note(
+                            "granting everything is the same as promising nothing; see the open questions in design/04-capabilities.md",
+                        ),
+                    );
+                }
+
+                Some(self.translate(&entries, span))
+            }
             _ => None,
         }
+    }
+
+    /// Turns a row from another module into one this module can talk about.
+    ///
+    /// Each entry names the module its effect was declared in, so the match is
+    /// against a local declaration or an import of the same effect from the
+    /// same place. When neither exists the caller performs something it has no
+    /// word for, and a row it cannot write is a row it cannot promise.
+    fn translate(&mut self, entries: &[vow_resolve::RowEntry], span: Span) -> Row {
+        let mut row = Row::new();
+        for entry in entries {
+            match self.name_for(entry) {
+                Some(effect) => {
+                    row.insert(match &entry.operation {
+                        Some(operation) => EffectItem::operation(effect, operation.clone()),
+                        None => EffectItem::whole(effect),
+                    });
+                }
+                None => {
+                    let what = match &entry.operation {
+                        Some(operation) => format!("`{}.{operation}`", entry.effect),
+                        None => format!("`{}`", entry.effect),
+                    };
+                    let module = &entry.module;
+                    let effect = &entry.effect;
+                    self.emit(
+                        Diagnostic::error(
+                            codes::EFFECT_NOT_IMPORTED,
+                            self.file,
+                            span,
+                            format!("this performs {what}, and `{effect}` is not in scope here"),
+                        )
+                        .with_primary_label(format!("add `use {module}.{{{effect}}}`"))
+                        .with_note(
+                            "a function cannot declare an effect it has no name for, and a row it cannot declare is one it cannot keep",
+                        ),
+                    );
+                }
+            }
+        }
+        row
+    }
+
+    /// This module's own handle on an effect declared somewhere.
+    fn name_for(&self, entry: &vow_resolve::RowEntry) -> Option<DefId> {
+        // The language provides it, so it is in scope everywhere and there is
+        // nothing to import.
+        if entry.module == vow_resolve::PRELUDE_MODULE {
+            return self.resolutions.builtin(&entry.effect);
+        }
+
+        self.resolutions.defs().find_map(|(def, data)| {
+            if data.name != entry.effect {
+                return None;
+            }
+            match data.kind {
+                // Declared right here, so no import is involved.
+                DefKind::Effect if entry.module == self.here => Some(def),
+                DefKind::Import
+                    if self.is_imported_effect(def)
+                        && self.resolutions.import_module(def) == Some(entry.module.as_str()) =>
+                {
+                    Some(def)
+                }
+                _ => None,
+            }
+        })
     }
 
     /// The effect a handler expression implements, or `None` when that cannot

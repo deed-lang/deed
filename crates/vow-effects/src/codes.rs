@@ -25,3 +25,10 @@ pub const UNVERIFIABLE_ROW: &str = "VOW5004";
 
 /// A test performs an effect with no handler in scope.
 pub const UNHANDLED_EFFECT: &str = "VOW5005";
+
+/// An effect that arrived through an imported call and cannot be named here.
+///
+/// A function cannot promise something it has no word for. Calling something
+/// that logs means importing `Log`, which follows from the row being the review
+/// surface: a row that could not name what it grants would not be one.
+pub const EFFECT_NOT_IMPORTED: &str = "VOW5006";

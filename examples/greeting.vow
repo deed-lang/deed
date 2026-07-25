@@ -15,7 +15,7 @@ module examples/greeting
 
 use examples/names.{Greeting, Loud, Plain, Tone, louder}
 
-use examples/sink.{Collect, Discard, Sink}
+use examples/sink.{Collect, Discard, Sink, emit_twice}
 
 // The effect comes from `sink.vow` and the row is checked against the
 // declaration there. Dropping `Sink.emit` from this clause is VOW5001, adding
@@ -26,6 +26,19 @@ fn announce(greeting: Greeting) -> ()
     Sink.emit,
 {
     Sink.emit(render(greeting))
+}
+
+// Nothing here performs an effect directly. `emit_twice` does, in another
+// file, and its row arrives with it. A call into another module used to be
+// free, so this function could have declared nothing and been believed.
+//
+// The row is also why `Sink` is imported at all. Declaring an effect means
+// naming it, and a row that could not name what it grants would not be one.
+fn announce_loudly(greeting: Greeting) -> ()
+  uses
+    Sink.emit,
+{
+    emit_twice(render(greeting))
 }
 
 // Exhaustive over a choice declared somewhere else. Adding a third `Tone` to
@@ -88,5 +101,17 @@ test "a different handler makes the same call mean something else" {
         announce(greeting)
 
         assert Sink.count() == 0
+    }
+}
+
+// The effects of a function in another module reach this one, so the handler
+// installed here still decides what they mean.
+test "an effect performed a module away still lands here" {
+    let greeting = Greeting { who: "world", tone: Loud }
+
+    with Collect { seen: 0 } {
+        announce_loudly(greeting)
+
+        assert Sink.count() == 2
     }
 }
