@@ -167,7 +167,7 @@ fn warnings_alone_do_not_fail_the_check() {
     );
     scratch.write(
         "warn.vow",
-        "module a\n\nuse other.{Used, Spare}\n\nfn f() -> Used { }\n",
+        "module a\n\nuse other.{Used, Spare}\n\nfn f() -> Used { Used { n: 0 } }\n",
     );
 
     let output = run(&["check", scratch.path().to_str().unwrap()]);

@@ -115,6 +115,11 @@ pub struct Resolutions {
     /// is already an error, so the rest of the pipeline treats it the way it
     /// used to treat every import.
     imports: HashMap<DefId, Export>,
+    /// Which module each `use`d name came from.
+    ///
+    /// Recorded even when the module was missing, because a diagnostic about
+    /// the name reads better with the module in it either way.
+    import_modules: HashMap<DefId, String>,
 }
 
 impl Resolutions {
@@ -144,9 +149,18 @@ impl Resolutions {
         self.imports.insert(def, export);
     }
 
+    pub(crate) fn record_import_module(&mut self, def: DefId, module: &str) {
+        self.import_modules.insert(def, module.to_string());
+    }
+
     /// What an imported name is, on the other side of the import.
     pub fn import(&self, def: DefId) -> Option<&Export> {
         self.imports.get(&def)
+    }
+
+    /// Which module an imported name came from.
+    pub fn import_module(&self, def: DefId) -> Option<&str> {
+        self.import_modules.get(&def).map(String::as_str)
     }
 
     /// A name the language provides, such as `Console` or the `Io` effect.

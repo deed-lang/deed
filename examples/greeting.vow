@@ -1,39 +1,38 @@
-// An import that is actually checked.
+// An import that is actually checked, in both halves.
 //
-// Everything named in the `use` line below is verified against what
-// `examples/names.vow` declares. Asking for a name that file does not have is
-// VOW3008, and asking for a module that is not among the files handed to the
-// compiler is VOW3007. Both used to be accepted in silence, which meant a typo
-// in an import produced a working build and a mystery later.
+// Everything in the `use` line is verified against what `examples/names.vow`
+// declares, and so is everything done with it afterwards. Asking for a name
+// that file does not have is VOW3008. Asking for a field a record does not
+// have, calling a function with the wrong number of arguments, or forgetting a
+// variant in a `match` are all errors here for the same reasons they would be
+// if the declarations were written in this file.
 //
-// What is still missing is the second half. `Tone` and `Greeting` cross the
-// module boundary as names, not as types, so the type checker treats them as
-// unknown and an unknown type agrees with everything. That is why `describe`
-// below can take a `Greeting` and do nothing useful with it.
+// None of that was true two commits ago. An imported name had no type, and a
+// name with no type agrees with everything, so a module boundary was a place
+// where checking stopped.
 
 module examples/greeting
 
-use examples/names.{Greeting, Loud, Tone}
+use examples/names.{Greeting, Loud, Plain, Tone}
 
-// The variants come across as names of their own, so importing one is written
-// down like anything else. What is not there yet is the type behind them, so a
-// `match` on `Tone` cannot be checked for exhaustiveness and writing this as an
-// `if` is the honest shape until that lands.
+// Exhaustive over a choice declared somewhere else. Adding a third `Tone` to
+// `names.vow` breaks this function, which is the point of exhaustiveness and
+// the reason a catch-all arm is refused here the same as anywhere.
 fn describe(tone: Tone) -> String {
-    if tone == Loud {
-        return "shouting"
+    match tone {
+        Plain => "speaking",
+        Loud => "shouting",
     }
-    "speaking"
 }
 
-// `greeting` is a `Greeting` as far as the reader is concerned and `Unknown` as
-// far as the type checker is concerned, so nothing here is verified against
-// what `Greeting` actually holds. That gap is the second half of the work.
+// `greeting.tone` is a `Tone` because that is what `names.vow` says it is.
+// Writing `greeting.tune` is VOW4004 and the message says which record it is
+// and which module the record came from.
 fn render(greeting: Greeting) -> String {
-    "hello"
+    describe(greeting.tone)
 }
 
-// There is no `test` in this file, and that is the third gap. The interpreter
-// holds the code of one module at a time, so `describe(Plain)` has nothing to
-// evaluate `Plain` to and reports VOW6006. Checking crosses the boundary now;
-// running does not.
+// There is no `test` in this file, and that is the gap that is left. The
+// interpreter holds the code of one module at a time, so a call in here has
+// nothing to evaluate the other module's declarations to and reports VOW6006.
+// Checking crosses the boundary now, running does not.

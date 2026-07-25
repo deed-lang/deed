@@ -184,9 +184,11 @@ fn the_error_types_have_to_line_up() {
 #[test]
 fn importing_a_name_the_language_provides_warns() {
     // Silently shadowing the builtin would put everything that depends on it
-    // quietly back to being unchecked.
+    // quietly back to being unchecked. The body uses the imported record on
+    // its own terms, since `Result` here is that record and not the language's
+    // `Result` any more, and the warning is about exactly that swap.
     let (sources, checked) = check_with(
-        "module a\n\nuse std/result.{Result}\n\nfn f() -> Result<Int, Int> { ok(1) }\n",
+        "module a\n\nuse std/result.{Result}\n\nfn f(r: Result) -> Int { r.n }\n",
         &["module std/result\n\nrecord Result { n: Int }\n"],
     );
     assert!(

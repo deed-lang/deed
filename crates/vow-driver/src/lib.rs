@@ -21,7 +21,7 @@ use vow_ast::{Item, Module, Outcome};
 use vow_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use vow_effects::Effects;
 use vow_resolve::{Resolutions, Universe};
-use vow_typeck::{Tier, Types};
+use vow_typeck::{Tier, Types, World};
 
 /// One obligation and how it was discharged.
 #[derive(Clone, Debug)]
@@ -81,16 +81,16 @@ pub fn check(sources: &SourceMap, file: FileId) -> Checked {
 
 /// Runs the whole pipeline over a set of files that see each other.
 ///
-/// Two passes over the list: parse everything, then check everything. A module
-/// is named by its own `module` line, so building the universe needs the trees
-/// and nothing else, and nothing here has to decide what order to visit them
-/// in.
+/// Three passes over the list: parse everything, work out what each module
+/// offers, then check everything. A module is named by its own `module` line,
+/// so building the universe needs the trees and nothing else, and nothing here
+/// has to decide what order to visit them in.
 ///
-/// Import cycles are not detected, because there is nothing to detect. What a
-/// module exports is a function of its syntax alone, so `a` importing `b`
-/// importing `a` resolves the same way whichever one is looked at first. That
-/// stops being true the moment an exported type has to be lowered, which is
-/// the next issue and where a cycle check will actually have to live.
+/// Import cycles are still not detected, and still do not need to be. Lowering
+/// an exported type looks like it should need the other module resolved first,
+/// and does not: a type from elsewhere lowers to its module path and its name,
+/// which are both in the syntax. `a` and `b` importing each other terminates
+/// because neither lowering recurses into the other.
 pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
     let parsed: Vec<Parsed> = files
         .iter()
@@ -122,10 +122,29 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
         }
     }
 
+    // Names first, then types. Resolving is what tells the surface pass which
+    // of a module's own names are local and which came from somewhere else, so
+    // every module has to be resolved before any surface can be lowered.
+    let resolutions: Vec<_> = parsed
+        .iter()
+        .map(|entry| vow_resolve::resolve(entry.file, &entry.module, &universe))
+        .collect();
+
+    let mut world = World::new();
+    for (entry, resolved) in parsed.iter().zip(&resolutions) {
+        if let Some(name) = &entry.module.name {
+            world.insert(
+                name.to_string_path(),
+                vow_typeck::surface(&entry.module, &resolved.resolutions),
+            );
+        }
+    }
+
     parsed
         .into_iter()
-        .map(|entry| {
-            let mut checked = check_parsed(entry, &universe);
+        .zip(resolutions)
+        .map(|(entry, resolved)| {
+            let mut checked = check_parsed(entry, resolved, &world);
             for (file, span, path) in &duplicates {
                 if *file == checked.file {
                     checked.diagnostics.push(
@@ -157,15 +176,14 @@ struct Parsed {
     diagnostics: Vec<Diagnostic>,
 }
 
-fn check_parsed(parsed: Parsed, universe: &Universe) -> Checked {
+fn check_parsed(parsed: Parsed, resolved: vow_resolve::Resolved, world: &World) -> Checked {
     let Parsed {
         file,
         module,
         diagnostics: mut collected,
     } = parsed;
 
-    let resolved = vow_resolve::resolve(file, &module, universe);
-    let checked = vow_typeck::check(file, &module, &resolved.resolutions);
+    let checked = vow_typeck::check(file, &module, &resolved.resolutions, world);
     let analysed = vow_effects::analyse(file, &module, &resolved.resolutions);
 
     let mut diagnostics = Vec::new();

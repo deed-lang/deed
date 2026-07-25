@@ -15,6 +15,7 @@
 //! type. Inside a body, `let` still infers from its initialiser.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use vow_ast::{
     BinaryOp, Block, Expr, FieldInit, FnDecl, Ident, Item, MatchArm, Module, Outcome, Pattern,
@@ -24,6 +25,7 @@ use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
 use crate::codes;
+use crate::surface::{PRELUDE_MODULE, SurfaceItem, World};
 use crate::ty::{FieldTy, Nominal, Obligation, Tier, Ty, Types, VariantTy};
 
 pub struct Checked {
@@ -38,10 +40,11 @@ impl Checked {
 }
 
 /// Checks one resolved module. Always succeeds, possibly with diagnostics.
-pub fn check(file: FileId, module: &Module, resolutions: &Resolutions) -> Checked {
+pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &World) -> Checked {
     let mut checker = Checker {
         file,
         resolutions,
+        world,
         types: Types::default(),
         diagnostics: Vec::new(),
         def_types: HashMap::new(),
@@ -77,6 +80,8 @@ struct Signature {
 struct Checker<'a> {
     file: FileId,
     resolutions: &'a Resolutions,
+    /// The lowered declarations of every other module being compiled.
+    world: &'a World,
     types: Types,
     diagnostics: Vec<Diagnostic>,
     /// Types of parameters, locals and handler state.
@@ -101,27 +106,12 @@ impl<'a> Checker<'a> {
     // -- collecting --------------------------------------------------------
 
     fn collect(&mut self, module: &'a Module) {
-        // The capability types the language provides. They have to be named
-        // here or a diagnostic about one would say "an unnamed type".
-        for name in ["System", "Console", "Clock", "Dir"] {
-            if let Some(def) = self.resolutions.builtin(name) {
-                self.types.set_name(def, name.to_string());
-            }
-        }
-
         // Every `Io` operation takes the capability it acts on as its first
         // argument. The row says what kind of thing is happening, the argument
         // says which resource it happens to, and neither is enough alone.
-        let capability = |checker: &Self, name: &str| {
-            checker
-                .resolutions
-                .builtin(name)
-                .map(Ty::Named)
-                .unwrap_or(Ty::Unknown)
-        };
-        let console = capability(self, "Console");
-        let clock = capability(self, "Clock");
-        let dir = capability(self, "Dir");
+        let console = capability("Console");
+        let clock = capability("Clock");
+        let dir = capability("Dir");
 
         // `open` hands back a narrower `Dir` and `read` hands back the file's
         // contents. Both can fail, because a path that is not there is not a
@@ -336,8 +326,10 @@ impl<'a> Checker<'a> {
                         "String" => Ty::Str,
                         "Bool" => Ty::Bool,
                         // Capabilities are opaque. There is nothing to know
-                        // about one except that you were handed it.
-                        "System" | "Console" | "Clock" | "Dir" => Ty::Named(def),
+                        // about one except that you were handed it, and there
+                        // is exactly one `Console`, so it is named under the
+                        // prelude rather than under this module.
+                        "System" | "Console" | "Clock" | "Dir" => capability(&name.name),
                         "Result" => {
                             if lowered_args.len() == 2 {
                                 return Ty::Result(
@@ -363,7 +355,11 @@ impl<'a> Checker<'a> {
                         }
                         _ => Ty::Unknown,
                     },
-                    DefKind::Import => Ty::Unknown,
+                    // A name from another module. It has a type now, and the
+                    // identity is the module path and the name rather than a
+                    // `DefId`, which cannot mean anything outside the table it
+                    // came from.
+                    DefKind::Import => self.imported_ty(def, name),
                     DefKind::Record | DefKind::Choice => Ty::Named(def),
                     DefKind::Type => self.alias_ty(def),
                     other => {
@@ -397,6 +393,64 @@ impl<'a> Checker<'a> {
                 base
             }
         }
+    }
+
+    /// The type an imported name denotes when used in type position.
+    ///
+    /// A transparent alias is expanded, because it was not a distinct type
+    /// where it was declared and crossing a module boundary does not make it
+    /// one. A refinement stays nominal for the same reason it does at home.
+    fn imported_ty(&mut self, def: DefId, name: &Ident) -> Ty {
+        let Some(module) = self.resolutions.import_module(def) else {
+            return Ty::Unknown;
+        };
+        let external = Ty::External {
+            module: Rc::from(module),
+            name: Rc::from(name.name.as_str()),
+        };
+
+        match self.world.get(module, &name.name) {
+            Some(SurfaceItem::Alias { target }) => target.clone(),
+            Some(
+                SurfaceItem::Record { .. }
+                | SurfaceItem::Choice { .. }
+                | SurfaceItem::Refinement { .. },
+            ) => external,
+            // A function or a handler is not a type, and the resolver already
+            // said the name exists, so this is the only place to say what is
+            // wrong with using it here.
+            Some(other) => {
+                let what = match other {
+                    SurfaceItem::Function { .. } => "a function",
+                    SurfaceItem::Effect { .. } => "an effect",
+                    SurfaceItem::Handler => "a handler",
+                    SurfaceItem::Variant { .. } => "a variant",
+                    _ => "not a type",
+                };
+                self.emit(
+                    Diagnostic::error(
+                        codes::NOT_A_TYPE,
+                        self.file,
+                        name.span,
+                        format!("`{}` is {what}, not a type", name.name),
+                    )
+                    .with_primary_label("not a type")
+                    .with_secondary(name.span, format!("declared in `{module}`")),
+                );
+                Ty::Unknown
+            }
+            // The module was not among the files being compiled, which the
+            // resolver already reported. Nothing more to add.
+            None => Ty::Unknown,
+        }
+    }
+
+    /// The declaration behind an external type, if it can be found.
+    fn external_item(&self, ty: &Ty) -> Option<&'a SurfaceItem> {
+        let Ty::External { module, name } = ty else {
+            return None;
+        };
+        self.world.get(module, name)
     }
 
     /// Expands a type alias. Refinements are nominal and stop here.
@@ -441,6 +495,9 @@ impl<'a> Checker<'a> {
         if let Ty::Named(def) = ty
             && let Some(Nominal::Refinement { base, .. }) = self.types.nominal(*def)
         {
+            return base.clone();
+        }
+        if let Some(SurfaceItem::Refinement { base }) = self.external_item(ty) {
             return base.clone();
         }
         ty.clone()
@@ -1038,6 +1095,7 @@ impl<'a> Checker<'a> {
                 None => Ty::Unknown,
             },
             DefKind::Variant => self.variant_ty(def),
+            DefKind::Import => self.imported_value_ty(def, ident),
             // A type name is not a value. Leaving this as `Unknown` would be
             // worse than wrong: `Unknown` absorbs, so `Io.write(Console, "hi")`
             // would sail through and the capability system would be decorative.
@@ -1054,6 +1112,41 @@ impl<'a> Checker<'a> {
                 Ty::Unknown
             }
             _ => Ty::Unknown,
+        }
+    }
+
+    /// The type an imported name denotes when used as a value.
+    fn imported_value_ty(&mut self, def: DefId, ident: &Ident) -> Ty {
+        let Some(module) = self.resolutions.import_module(def) else {
+            return Ty::Unknown;
+        };
+        match self.world.get(module, &ident.name) {
+            Some(SurfaceItem::Function { params, ret }) => Ty::Fn {
+                params: params.clone(),
+                ret: Box::new(ret.clone()),
+            },
+            // A variant is a value of its choice. One with a payload written
+            // bare is still that type; the struct literal path is what checks
+            // the payload, and it is reached from somewhere else.
+            Some(SurfaceItem::Variant { choice, .. }) => Ty::External {
+                module: Rc::from(module),
+                name: Rc::clone(choice),
+            },
+            Some(SurfaceItem::Record { .. } | SurfaceItem::Choice { .. }) => {
+                self.not_a_value(ident, "a type");
+                Ty::Unknown
+            }
+            Some(SurfaceItem::Refinement { .. } | SurfaceItem::Alias { .. }) => {
+                self.not_a_value(ident, "a type");
+                Ty::Unknown
+            }
+            Some(SurfaceItem::Effect { .. }) => {
+                self.not_a_value(ident, "an effect");
+                Ty::Unknown
+            }
+            // A handler names itself in a `with` block, which goes through
+            // here, so it is not an error the way the others are.
+            Some(SurfaceItem::Handler) | None => Ty::Unknown,
         }
     }
 
@@ -1093,17 +1186,15 @@ impl<'a> Checker<'a> {
         // `System` is the root of all authority, and its fields are the
         // narrower capabilities it carries. Handing one of them to a function
         // gives that function exactly that and nothing else.
-        if let Ty::Named(def) = receiver
-            && self.resolutions.builtin("System") == Some(*def)
-        {
+        if receiver == &capability("System") {
             let narrower = match name.name.as_str() {
                 "console" => Some("Console"),
                 "clock" => Some("Clock"),
                 "files" => Some("Dir"),
                 _ => None,
             };
-            return match narrower.and_then(|name| self.resolutions.builtin(name)) {
-                Some(def) => Ty::Named(def),
+            return match narrower {
+                Some(narrower) => capability(narrower),
                 None => {
                     self.emit(
                         Diagnostic::error(
@@ -1127,6 +1218,11 @@ impl<'a> Checker<'a> {
         {
             return field.ty.clone();
         }
+        if let Some(SurfaceItem::Record { fields }) = self.external_item(&looked_through)
+            && let Some((_, ty)) = fields.iter().find(|(field, _)| *field == name.name)
+        {
+            return ty.clone();
+        }
 
         let described = self.types.describe(receiver);
         let mut diagnostic = Diagnostic::error(
@@ -1141,6 +1237,10 @@ impl<'a> Checker<'a> {
             && let Some(Nominal::Record { fields }) = self.types.nominal(def)
         {
             let available: Vec<&str> = fields.iter().map(|field| field.name.as_str()).collect();
+            diagnostic = diagnostic.with_note(format!("it has {}", list(&available)));
+        }
+        if let Some(SurfaceItem::Record { fields }) = self.external_item(&looked_through) {
+            let available: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
             diagnostic = diagnostic.with_note(format!("it has {}", list(&available)));
         }
 
@@ -1319,6 +1419,16 @@ impl<'a> Checker<'a> {
                     }
                     return self.variant_ty(def);
                 }
+                // A record or a variant from another module is built the same
+                // way. The field types came across in that module's surface,
+                // so the check is the same one, only the blame span for the
+                // declaration is missing because it is in a file this pass is
+                // not looking at.
+                DefKind::Import => {
+                    if let Some(ty) = self.imported_literal(def, fields, span) {
+                        return ty;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1347,6 +1457,38 @@ impl<'a> Checker<'a> {
             }
         }
         Ty::Unknown
+    }
+
+    /// A literal of a record or variant declared in another module.
+    fn imported_literal(&mut self, def: DefId, fields: &[FieldInit], span: Span) -> Option<Ty> {
+        let module: Rc<str> = Rc::from(self.resolutions.import_module(def)?);
+        let name = self.resolutions.def(def).name.clone();
+
+        match self.world.get(&module, &name)? {
+            SurfaceItem::Record { fields: declared } => {
+                let declared = external_fields(declared);
+                self.check_literal_fields(&declared, fields, span, &name);
+                Some(Ty::External {
+                    module,
+                    name: Rc::from(name.as_str()),
+                })
+            }
+            SurfaceItem::Variant {
+                choice,
+                fields: declared,
+            } => {
+                let choice = Rc::clone(choice);
+                let declared = declared.as_deref().map(external_fields).unwrap_or_default();
+                self.check_literal_fields(&declared, fields, span, &name);
+                Some(Ty::External {
+                    module,
+                    name: choice,
+                })
+            }
+            // Not a constructor, which the fallthrough below reports the same
+            // way it does for a local name.
+            _ => None,
+        }
     }
 
     fn check_literal_fields(
@@ -1381,7 +1523,10 @@ impl<'a> Checker<'a> {
                         &field.ty,
                         init.value.as_ref(),
                         value_span,
-                        Some((field.span, "the field it is assigned to".to_string())),
+                        // An empty span means the declaration is in another
+                        // file, so there is nothing here to point at.
+                        (field.span != Span::at(0))
+                            .then(|| (field.span, "the field it is assigned to".to_string())),
                     );
                 }
                 None => {
@@ -1463,7 +1608,15 @@ impl<'a> Checker<'a> {
             return;
         }
 
-        let Ty::Named(def) = self.widen(scrutinee) else {
+        let widened = self.widen(scrutinee);
+        if let Some(SurfaceItem::Choice { variants }) = self.external_item(&widened) {
+            let names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+            let choice = self.types.describe(&widened);
+            self.check_named_exhaustive(&names, &choice, arms, span);
+            return;
+        }
+
+        let Ty::Named(def) = widened else {
             return;
         };
         let Some(Nominal::Choice { variants }) = self.types.nominal(def).cloned() else {
@@ -1543,7 +1696,87 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Exhaustiveness for a choice declared in another module.
+    ///
+    /// The same two rules, matched by name rather than by `DefId`, because a
+    /// variant from elsewhere has a local import def that says nothing about
+    /// which variant of which choice it is.
+    fn check_named_exhaustive(
+        &mut self,
+        variants: &[String],
+        choice: &str,
+        arms: &[MatchArm],
+        span: Span,
+    ) {
+        let mut covered: HashSet<String> = HashSet::new();
+        let mut catch_all: Option<Span> = None;
+
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Wildcard(span) => {
+                    catch_all.get_or_insert(*span);
+                }
+                Pattern::Path { segments, .. } => match segments.last() {
+                    Some(last) if variants.contains(&last.name) => {
+                        covered.insert(last.name.clone());
+                    }
+                    // A bare binding matches every variant.
+                    _ => {
+                        catch_all.get_or_insert(arm.pattern.span());
+                    }
+                },
+                Pattern::Tuple { path, .. } | Pattern::Record { path, .. } => {
+                    if let Some(last) = path.last() {
+                        covered.insert(last.name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(catch_all) = catch_all {
+            self.emit(
+                Diagnostic::error(
+                    codes::CATCH_ALL_ON_CHOICE,
+                    self.file,
+                    catch_all,
+                    format!("this arm matches every variant of {choice}"),
+                )
+                .with_primary_label("catches everything")
+                .with_secondary(span, "in this match")
+                .with_note(
+                    "list the variants instead: adding one to a choice should break every \
+                     match that has to care, and that is as true across a module boundary \
+                     as inside one",
+                ),
+            );
+            return;
+        }
+
+        let missing: Vec<&str> = variants
+            .iter()
+            .filter(|name| !covered.contains(*name))
+            .map(String::as_str)
+            .collect();
+
+        if !missing.is_empty() {
+            self.emit(
+                Diagnostic::error(
+                    codes::NON_EXHAUSTIVE_MATCH,
+                    self.file,
+                    span,
+                    format!("this match does not cover {}", list(&missing)),
+                )
+                .with_primary_label("not exhaustive")
+                .with_note(format!(
+                    "every variant of {choice} needs an arm, and there is no wildcard to fall back on"
+                )),
+            );
+        }
+    }
+
     /// A `Result` has two cases and the same rules apply: both have to be
+    /// handled, and neither can be swallowed by a catch-all.
     /// handled, and neither can be swallowed by a catch-all.
     fn check_result_exhaustive(&mut self, arms: &[MatchArm], span: Span) {
         let mut covered: HashSet<&'static str> = HashSet::new();
@@ -1792,6 +2025,35 @@ impl<'a> Checker<'a> {
 }
 
 /// `a`, `a` and `b`, `a`, `b` and `c`.
+/// A builtin capability type.
+///
+/// Named under the prelude rather than under whichever module mentioned it,
+/// because there is exactly one `Console` and every module has to agree about
+/// that. Naming it after the module would make the same capability compare
+/// unequal to itself across a file boundary, which a test caught.
+fn capability(name: &str) -> Ty {
+    Ty::External {
+        module: Rc::from(PRELUDE_MODULE),
+        name: Rc::from(name),
+    }
+}
+
+/// Fields from another module's surface, as the checker's own field type.
+///
+/// The span is empty because the declaration is in a file this pass is not
+/// looking at. Diagnostics that would point at it fall back to saying nothing
+/// rather than pointing at the wrong place.
+fn external_fields(fields: &[(String, Ty)]) -> Vec<FieldTy> {
+    fields
+        .iter()
+        .map(|(name, ty)| FieldTy {
+            name: name.clone(),
+            ty: ty.clone(),
+            span: Span::at(0),
+        })
+        .collect()
+}
+
 fn list(items: &[&str]) -> String {
     match items {
         [] => String::new(),

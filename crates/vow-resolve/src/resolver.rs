@@ -470,6 +470,7 @@ impl Resolver<'_> {
                 // produces one diagnostic rather than one per name plus a
                 // cascade of unresolved uses further down the file.
                 let def = self.declare_item(name, DefKind::Import, None);
+                self.resolutions.record_import_module(def, &path);
 
                 let Some(exports) = exports else { continue };
                 match exports.get(&name.name) {
