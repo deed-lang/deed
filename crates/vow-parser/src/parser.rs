@@ -1017,6 +1017,21 @@ impl<'a> Parser<'a> {
             };
         }
 
+        // `name = value`. One token of lookahead is enough, and `==` is a
+        // different token so there is nothing to disambiguate.
+        if matches!(self.kind(), TokenKind::Ident(_)) && self.nth_kind(1) == &TokenKind::Eq {
+            let target = self
+                .expect_ident("an assignment")
+                .expect("guarded by the lookahead above");
+            self.bump();
+            let value = self.parse_expr();
+            return Stmt::Assign {
+                span: target.span.to(value.span()),
+                target,
+                value,
+            };
+        }
+
         Stmt::Expr(self.parse_expr())
     }
 

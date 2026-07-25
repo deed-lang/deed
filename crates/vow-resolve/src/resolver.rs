@@ -468,7 +468,7 @@ impl Resolver {
         self.push_scope(ScopeKind::Local);
         for field in &handler.state {
             self.resolve_type(&field.ty);
-            self.declare_local(&field.name, DefKind::Local);
+            self.declare_local(&field.name, DefKind::State);
         }
         for operation in &handler.operations {
             self.resolve_fn(operation);
@@ -552,6 +552,10 @@ impl Resolver {
                 if let Some(value) = value {
                     self.resolve_expr(value);
                 }
+            }
+            Stmt::Assign { target, value, .. } => {
+                self.resolve_expr(value);
+                self.use_name(target);
             }
             Stmt::Assert { condition, .. } => self.resolve_expr(condition),
             Stmt::Expr(expr) => self.resolve_expr(expr),

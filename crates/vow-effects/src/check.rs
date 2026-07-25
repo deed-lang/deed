@@ -346,6 +346,7 @@ impl<'a> Checker<'a> {
     fn infer_stmt(&mut self, stmt: &Stmt) -> Row {
         match stmt {
             Stmt::Let { init, .. } => self.infer_expr(init),
+            Stmt::Assign { value, .. } => self.infer_expr(value),
             Stmt::Return { value, .. } => match value {
                 Some(value) => self.infer_expr(value),
                 None => Row::new(),
