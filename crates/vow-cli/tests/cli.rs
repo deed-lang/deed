@@ -10,6 +10,8 @@ const VOW: &str = env!("CARGO_BIN_EXE_vow");
 const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/transfer.vow");
 const RUNNABLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/counter.vow");
 const HELLO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/hello.vow");
+const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/config.vow");
+const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 
 fn run(args: &[&str]) -> Output {
     Command::new(VOW)
@@ -287,6 +289,16 @@ fn no_arguments_at_all_explains_itself() {
 // -- running tests ---------------------------------------------------------
 
 #[test]
+fn every_example_passes_its_own_tests() {
+    // The whole directory, not one file. Adding an example with a property
+    // that fails used to be invisible here, and it happened: `hello.vow` had a
+    // `twice` whose postcondition the generator broke by overflowing.
+    let output = run(&["test", EXAMPLES]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+    assert!(stdout(&output).contains("0 failed"), "{}", stdout(&output));
+}
+
+#[test]
 fn the_runnable_example_passes() {
     let output = run(&["test", RUNNABLE]);
     assert_eq!(code(&output), 0, "{}", stdout(&output));
@@ -440,4 +452,44 @@ fn a_program_cannot_write_without_being_handed_a_console() {
     let text = stdout(&output);
     assert!(text.contains("VOW4019"), "{text}");
     assert!(text.contains("only received"), "{text}");
+}
+
+#[test]
+fn dir_decides_what_the_program_can_reach() {
+    let scratch = Scratch::new("dir");
+    scratch.write("secret.txt", "the outer one");
+    let inner = scratch.path().join("inner");
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(inner.join("fine.txt"), "the inner one").unwrap();
+
+    let program = scratch.write(
+        "reader.vow",
+        "module a\n\nfn main(sys: System) -> Int\n  uses\n    Io.write,\n    Io.read,\n{\n  match Io.read(sys.files, \"fine.txt\") {\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }\n  match Io.read(sys.files, \"secret.txt\") {\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }\n  0\n}\n",
+    );
+
+    // Rooted at `inner`, the same program reads one file and cannot see the
+    // other, and nothing about the program changed.
+    let output = run(&[
+        "run",
+        program.to_str().unwrap(),
+        "--dir",
+        inner.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("the inner one"), "{text}");
+    assert!(!text.contains("the outer one"), "escaped the root:\n{text}");
+}
+
+#[test]
+fn the_config_example_runs_and_reaches_nothing_it_was_not_given() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+    let output = run(&["run", CONFIG, "--dir", dir]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("found it"), "{text}");
+    assert!(text.contains("no way out of a `Dir`"), "{text}");
+    assert!(text.contains("used the fallback"), "{text}");
 }

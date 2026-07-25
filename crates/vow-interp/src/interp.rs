@@ -12,6 +12,8 @@
 //! compiler finished.
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::rc::Rc;
 
 use vow_ast::{
     BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item, Module, Outcome,
@@ -21,6 +23,7 @@ use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
 use crate::codes;
+use crate::sandbox;
 use crate::value::{Capability, Fields, Value};
 
 /// How one `test` block went.
@@ -73,13 +76,25 @@ pub struct Run {
 ///
 /// There is no other way to obtain one, which is what makes reading `main`
 /// enough to know the whole attack surface of a program.
-pub fn run_main(file: FileId, module: &Module, resolutions: &Resolutions) -> Option<Run> {
+///
+/// `root` is the directory `sys.files` is rooted at, and the program can reach
+/// nothing outside it. The caller supplies it rather than the runtime picking
+/// one, because how much of the filesystem a program gets is a decision and
+/// decisions belong at the call site.
+pub fn run_main(
+    file: FileId,
+    module: &Module,
+    resolutions: &Resolutions,
+    root: &Path,
+) -> Option<Run> {
     let main = module.items.iter().find_map(|item| match item {
         Item::Function(function) if function.sig.name.name == "main" => Some(function),
         _ => None,
     })?;
 
     let mut interp = Interp::new(file, module, resolutions);
+    interp.root = sandbox::root(root).ok().map(Rc::from);
+
     let span = main.sig.name.span;
     let args = main
         .sig
@@ -143,6 +158,10 @@ pub(crate) struct Interp<'a> {
     /// A monotonic clock. Wall clock time would make every run different, and
     /// P8 says the default is deterministic.
     ticks: i64,
+    /// Where `sys.files` is rooted. `None` when nothing granted one, which is
+    /// the case for `test` blocks: a test that could reach the filesystem
+    /// would be a test of the filesystem.
+    root: Option<Rc<Path>>,
 }
 
 impl<'a> Interp<'a> {
@@ -162,6 +181,7 @@ impl<'a> Interp<'a> {
             entry_states: Vec::new(),
             output: Vec::new(),
             ticks: 0,
+            root: None,
         };
 
         for item in &module.items {
@@ -460,6 +480,16 @@ impl<'a> Interp<'a> {
             return match name.name.as_str() {
                 "console" => Ok(Value::Capability(Capability::Console)),
                 "clock" => Ok(Value::Capability(Capability::Clock)),
+                "files" => match &self.root {
+                    Some(root) => Ok(Value::Capability(Capability::Dir(Rc::clone(root)))),
+                    // Nothing granted a directory, so there is not one to hand
+                    // out. Inventing the working directory here would be the
+                    // ambient authority the whole design is against.
+                    None => Err(self.not_runnable(
+                        name.span,
+                        "`sys.files`, because this program was not given a directory",
+                    )),
+                },
                 other => Err(self.not_runnable(
                     name.span,
                     &format!("`System.{other}`, which does not exist"),
@@ -655,7 +685,7 @@ impl<'a> Interp<'a> {
     /// mechanism, and it is smaller than the sentence describing it.
     fn perform_io(&mut self, name: &str, args: &[(Value, Span)], span: Span) -> Eval<Value> {
         let capability = match args.first() {
-            Some((Value::Capability(capability), _)) => *capability,
+            Some((Value::Capability(capability), _)) => capability.clone(),
             _ => {
                 return Err(self.not_runnable(span, "an `Io` operation with no capability"));
             }
@@ -677,6 +707,29 @@ impl<'a> Interp<'a> {
                 self.ticks += 1;
                 Ok(Value::Int(self.ticks))
             }
+            // Narrowing. The `Dir` that comes back reaches strictly less than
+            // the one that went in, and there is no operation that goes the
+            // other way, so authority only ever shrinks on the way down.
+            ("open", Capability::Dir(root)) => {
+                let name_arg = self.io_name(args.get(1), span)?;
+                Ok(match sandbox::resolve(&root, &name_arg) {
+                    Ok(path) if path.is_dir() => {
+                        Value::ok(Value::Capability(Capability::Dir(Rc::from(path))))
+                    }
+                    Ok(_) => Value::err(Value::str(format!("`{name_arg}` is not a directory"))),
+                    Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
+                })
+            }
+            ("read", Capability::Dir(root)) => {
+                let name_arg = self.io_name(args.get(1), span)?;
+                Ok(match sandbox::resolve(&root, &name_arg) {
+                    Ok(path) => match std::fs::read_to_string(&path) {
+                        Ok(text) => Value::ok(Value::str(text)),
+                        Err(error) => Value::err(Value::str(format!("`{name_arg}`: {error}"))),
+                    },
+                    Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
+                })
+            }
             (_, held) => Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,
@@ -687,6 +740,18 @@ impl<'a> Interp<'a> {
                 .with_primary_label("wrong capability")
                 .with_note("each operation acts on the kind of capability it was given"),
             )),
+        }
+    }
+
+    /// The name argument of a filesystem operation.
+    fn io_name(&self, arg: Option<&(Value, Span)>, span: Span) -> Eval<String> {
+        match arg {
+            Some((Value::Str(text), _)) => Ok(text.to_string()),
+            Some((other, at)) => Err(self.not_runnable(
+                *at,
+                &format!("a filesystem name that is {}", other.describe()),
+            )),
+            None => Err(self.not_runnable(span, "a filesystem operation with no name")),
         }
     }
 

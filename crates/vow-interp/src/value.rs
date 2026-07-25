@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::Path;
 use std::rc::Rc;
 
 use vow_resolve::DefId;
@@ -36,20 +37,27 @@ pub enum Value {
     Capability(Capability),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Capability {
     /// The root. The runtime hands out exactly one, to `main`.
     System,
     Console,
     Clock,
+    /// A directory, and everything under it, and nothing else.
+    ///
+    /// The path is always canonical, because every way of getting one of these
+    /// canonicalizes. A `Dir` that held a path with a `..` still in it would be
+    /// a `Dir` whose reach depended on when you looked.
+    Dir(Rc<Path>),
 }
 
 impl Capability {
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             Capability::System => "System",
             Capability::Console => "Console",
             Capability::Clock => "Clock",
+            Capability::Dir(_) => "Dir",
         }
     }
 }
@@ -90,6 +98,10 @@ impl Value {
             ok: false,
             value: Rc::new(value),
         }
+    }
+
+    pub fn str(text: impl AsRef<str>) -> Self {
+        Value::Str(Rc::from(text.as_ref()))
     }
 
     pub fn as_int(&self) -> Option<i64> {

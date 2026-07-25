@@ -17,6 +17,8 @@ Usage:
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
   --obligations           Report which tier each refinement obligation landed in.
+  --dir <path>            What `sys.files` reaches when running. Default: the
+                          current directory. A program cannot get outside it.
   -h, --help              Print this.
   -V, --version           Print the version.
 
@@ -50,6 +52,12 @@ pub struct CheckArgs {
     pub paths: Vec<PathBuf>,
     pub format: Format,
     pub obligations: bool,
+    /// What `sys.files` is rooted at. `None` means the current directory.
+    ///
+    /// Granting the whole working directory by default is what every other
+    /// tool does and it is not obviously right, but making people spell it out
+    /// every time would just teach them to type it without reading it.
+    pub dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -80,6 +88,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut paths = Vec::new();
     let mut format = Format::Human;
     let mut obligations = false;
+    let mut dir = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -93,6 +102,15 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             }
             other if other.starts_with("--format=") => {
                 format = parse_format(&other["--format=".len()..])?;
+            }
+            "--dir" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "`--dir` needs a directory".to_string())?;
+                dir = Some(PathBuf::from(value));
+            }
+            other if other.starts_with("--dir=") => {
+                dir = Some(PathBuf::from(&other["--dir=".len()..]));
             }
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
@@ -117,6 +135,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         paths,
         format,
         obligations,
+        dir,
     }))
 }
 
