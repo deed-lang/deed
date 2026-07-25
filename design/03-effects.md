@@ -162,11 +162,36 @@ Row polymorphism is the one that worries me, because it is where the type system
 and P2 is watching. If the annotation burden cannot be made to disappear for ordinary code,
 this whole design fails on ergonomics, exactly like its predecessors.
 
+## Closures
+
+A closure holds code without being a declaration, which makes it the obvious place for a row
+to leak, and it did. Effects performed inside a closure were charged to nobody, and a
+parameter written without a type became the unknown type, which agrees with everything. Put
+together, a closure could carry any effect into any function and the row stayed empty all the
+way.
+
+The rule now is that a closure's effects are charged to the function that wrote it. That is
+conservative rather than correct: the correct place is the call site, because that is where
+the effect actually happens. What makes the conservative rule sound rather than a guess is
+that a closure cannot leave the function that wrote it. There is no syntax for a closure
+type, so a closure cannot be a parameter, a return type or a record field, and a parameter
+with no type is now an error. There is nowhere else the charge could land.
+
+It over-approximates in one direction only. A closure that is written and never called still
+charges its author, because deciding otherwise means deciding whether a function value
+escapes, and not having to answer that is the point.
+
+Closure parameters still need no types. They are not a boundary anyone reviews, since the
+closure cannot cross one.
+
+What this buys is time. The unsolved case is now unwritable instead of silently wrong, which
+is P6, and the day rows go into closure types is the day closures can be passed around.
+
 ## Open questions
 
-- Effects performed by a closure are attributed to nobody. They belong at the call site,
-  which needs the row to be part of the closure's type, and that is where the type system
-  starts getting big.
+- Rows in closure types, so a closure could be passed to a function that says what it will
+  allow. This is the same row polymorphism question as above, and until it is answered a
+  closure is local to the function that wrote it.
 - Can rows be inferred well enough that most functions carry none, and does that then
   undermine the review argument, which depends on the signature being complete?
 - How do effects interact with data structures. Does a `Map` holding closures need a row?

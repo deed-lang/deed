@@ -22,3 +22,11 @@ pub const INVALID_ENSURES_OUTCOME: &str = "VOW2005";
 /// P4 says there is one canonical form. Clause order is part of it: a signature
 /// is the review surface, and it should read the same way every time.
 pub const CONTRACT_CLAUSE_ORDER: &str = "VOW2006";
+
+/// A function parameter written without a type.
+///
+/// P5 says nothing implicit crosses a boundary, and a parameter is the
+/// boundary. An untyped one used to become the unknown type, which agrees with
+/// everything, so every mistake made with it was invisible and a closure could
+/// carry any effect through it into a function that declared none.
+pub const MISSING_PARAMETER_TYPE: &str = "VOW2007";

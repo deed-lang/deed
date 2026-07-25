@@ -72,6 +72,18 @@ fn clause_rank(kw: Keyword) -> u8 {
     }
 }
 
+/// Whether a parameter list is the only place its types could be written.
+///
+/// A free function or an effect operation is such a place: leave the type out
+/// and nobody knows it. A handler operation is not, because the effect it
+/// implements already declared the whole signature, and making the handler
+/// repeat it would be redundancy nothing checks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TypesRequired {
+    Yes,
+    No,
+}
+
 struct Parser<'a> {
     file: FileId,
     tokens: &'a [Token],
@@ -374,7 +386,7 @@ impl<'a> Parser<'a> {
             Keyword::Choice => self.parse_choice().map(Item::Choice),
             Keyword::Effect => self.parse_effect().map(Item::Effect),
             Keyword::Handler => self.parse_handler().map(Item::Handler),
-            Keyword::Fn => self.parse_fn().map(Item::Function),
+            Keyword::Fn => self.parse_fn(TypesRequired::Yes).map(Item::Function),
             Keyword::Test => self.parse_test().map(Item::Test),
             _ => {
                 let span = self.span();
@@ -514,7 +526,7 @@ impl<'a> Parser<'a> {
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
             if self.at_kw(Keyword::Fn) {
-                if let Some(sig) = self.parse_fn_sig() {
+                if let Some(sig) = self.parse_fn_sig(TypesRequired::Yes) {
                     operations.push(sig);
                 }
             } else {
@@ -575,7 +587,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             } else if self.at_kw(Keyword::Fn) {
-                if let Some(function) = self.parse_fn() {
+                if let Some(function) = self.parse_fn(TypesRequired::No) {
                     operations.push(function);
                 }
             } else {
@@ -646,7 +658,7 @@ impl<'a> Parser<'a> {
 
     // -- functions ---------------------------------------------------------
 
-    fn parse_fn_sig(&mut self) -> Option<FnSig> {
+    fn parse_fn_sig(&mut self, types_required: TypesRequired) -> Option<FnSig> {
         let start = self.bump().span;
         let name = self.expect_ident("a function signature")?;
         self.expect(TokenKind::LParen, "a parameter list")?;
@@ -660,6 +672,24 @@ impl<'a> Parser<'a> {
             let ty = if self.eat(&TokenKind::Colon) {
                 Some(self.parse_type())
             } else {
+                // P5: nothing implicit crosses a boundary, and a parameter is
+                // the boundary. Reported rather than refused, so the rest of
+                // the file still parses and the author sees every mistake in
+                // one pass instead of one per run.
+                if types_required == TypesRequired::Yes {
+                    self.emit(
+                        Diagnostic::error(
+                            codes::MISSING_PARAMETER_TYPE,
+                            self.file,
+                            param_name.span,
+                            format!("`{}` has no type", param_name.name),
+                        )
+                        .with_primary_label("a parameter needs a type")
+                        .with_note(
+                            "a signature is what a reviewer is entitled to stop at, so a parameter with no type is a hole in it",
+                        ),
+                    );
+                }
                 None
             };
             params.push(Param {
@@ -696,8 +726,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_fn(&mut self) -> Option<FnDecl> {
-        let sig = self.parse_fn_sig()?;
+    fn parse_fn(&mut self, types_required: TypesRequired) -> Option<FnDecl> {
+        let sig = self.parse_fn_sig(types_required)?;
         let contract = self.parse_contract();
         let body = self.parse_block();
         Some(FnDecl {

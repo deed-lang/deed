@@ -256,6 +256,60 @@ fn nested_generics_need_no_shift_handling() {
     parse_ok("module a\n\nfn f(m: Map<AccountId, Vec<Money>>) -> Int { 0 }\n");
 }
 
+#[test]
+fn a_parameter_without_a_type_is_reported() {
+    // P5: nothing implicit crosses a boundary, and a parameter is the
+    // boundary. Left alone, the type became unknown, unknown agrees with
+    // everything, and a closure could carry any effect through it.
+    let (_, parsed) = parse_source("module a\n\nfn f(n) -> Int { n }\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::MISSING_PARAMETER_TYPE]
+    );
+}
+
+#[test]
+fn the_rest_of_the_file_still_parses_after_one() {
+    // Reported rather than refused. A parser that gave up here would show one
+    // mistake per run when the author wants to see all of them.
+    let (_, parsed) = parse_source("module a\n\nfn f(n) -> Int { n }\n\nfn g(m) -> Int { m }\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::MISSING_PARAMETER_TYPE, codes::MISSING_PARAMETER_TYPE]
+    );
+    assert_eq!(parsed.module.items.len(), 2);
+}
+
+#[test]
+fn an_effect_operation_needs_its_types_too() {
+    // The declaration is the only place they could be written.
+    let (_, parsed) = parse_source("module a\n\neffect E {\n    fn go(n) -> Int\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::MISSING_PARAMETER_TYPE]
+    );
+}
+
+#[test]
+fn a_handler_operation_does_not() {
+    // The effect it implements already said what the types are, and making the
+    // handler repeat them would be redundancy nothing checks.
+    parse_ok(
+        "module a\n\n\
+         effect E {\n    fn go(n: Int) -> Int\n}\n\n\
+         handler H implements E {\n    fn go(n) -> Int { n }\n}\n",
+    );
+}
+
+#[test]
+fn a_closure_parameter_does_not_either() {
+    // A closure cannot leave the function that wrote it, so its parameters are
+    // not a boundary and there is nothing implicit crossing one.
+    parse_ok(
+        "module a\n\nfn f(a: Int, b: Int) -> Int {\n    let add = |x, y| { x + y }\n    add(a, b)\n}\n",
+    );
+}
+
 // -- expressions -----------------------------------------------------------
 
 #[test]

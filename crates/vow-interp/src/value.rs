@@ -10,9 +10,12 @@
 //! values compare structurally.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
+
+use vow_resolve::DefId;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Value {
@@ -33,7 +36,34 @@ pub enum Value {
     /// that you were handed it, and the only way to get one is to be passed
     /// one, which is what makes the absence of an argument mean something.
     Capability(Capability),
+    Closure(Rc<ClosureValue>),
 }
+
+/// A closure, and the names it could see when it was written.
+///
+/// The body is not here. A [`Value`] outlives the borrow of the syntax tree,
+/// so what is stored is an index the interpreter can turn back into a body,
+/// and giving every value a lifetime for the sake of one variant would be
+/// paying everywhere for one thing.
+#[derive(Debug)]
+pub struct ClosureValue {
+    pub code: usize,
+    pub captured: HashMap<DefId, Value>,
+}
+
+/// Two closures are the same closure, not the same code.
+///
+/// There is no useful structural equality here: comparing captured frames
+/// would say two closures over the same values are equal when calling them
+/// could do different things. Identity is reflexive, which is what `Eq` asks
+/// for, and it is the only honest answer.
+impl PartialEq for ClosureValue {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
+impl Eq for ClosureValue {}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Capability {
@@ -134,6 +164,7 @@ impl Value {
             Value::Variant(_) => "a variant",
             Value::Result { .. } => "a Result",
             Value::Capability(_) => "a capability",
+            Value::Closure(_) => "a closure",
         }
     }
 }
@@ -157,6 +188,7 @@ impl fmt::Display for Value {
                 write!(f, "{}({value})", if *ok { "ok" } else { "err" })
             }
             Value::Capability(capability) => write!(f, "<{}>", capability.name()),
+            Value::Closure(_) => write!(f, "<closure>"),
         }
     }
 }

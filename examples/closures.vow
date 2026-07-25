@@ -1,0 +1,92 @@
+// Closures, and the two holes they used to open.
+//
+// A closure is the only thing in the language that holds code without being a
+// declaration, which makes it the natural place for a guarantee to leak. Two
+// leaked here at once.
+//
+// The first was that a parameter could be written without a type. It became
+// the unknown type, unknown agrees with everything, and so every mistake made
+// with that parameter was invisible. P5 says nothing implicit crosses a
+// boundary and a parameter is the boundary, so that was the principle being
+// broken at the one place it exists for.
+//
+// The second was that a closure's effects were charged to nobody. On its own
+// that is a defensible thing to defer. Together with the first it meant a
+// closure could carry any effect into any function and the row stayed empty
+// the whole way.
+
+module examples/closures
+
+effect Log {
+    fn note(message: String) -> ()
+}
+
+// A handler that counts rather than prints, so a test can see what happened.
+handler Counted implements Log {
+    state seen: Int
+
+    fn note(message) -> () {
+        seen = seen + 1
+    }
+}
+
+// A closure is a value with no name in its own right. Its parameters need no
+// types, and that is not an exception to P5: a closure cannot leave the
+// function that wrote it, so its parameters are not a boundary anyone reviews.
+fn combine(a: Int, b: Int) -> Int {
+    let add = |x, y| {
+        x + y
+    }
+
+    add(a, b) + add(b, a)
+}
+
+// It can see what was in scope where it was written.
+fn scaled(n: Int, by: Int) -> Int {
+    let scale = |x| {
+        x * by
+    }
+
+    scale(n)
+}
+
+// And the effects it performs belong to whoever wrote it. Take `Log.note` out
+// of this row and the effect checker says so, which was the whole point.
+fn announced(count: Int) -> Int
+  uses
+    Log.note,
+{
+    let announce = || {
+        Log.note("something happened")
+    }
+
+    announce()
+    count + 1
+}
+
+// The rule over-approximates in one direction: writing a closure is enough to
+// be charged for it, whether or not it is ever called. Deciding otherwise
+// means deciding whether a function value escapes, and the honest way to avoid
+// that question is to answer it conservatively and say so.
+fn never_called() -> Int
+  uses
+    Log.note,
+{
+    let unused = || {
+        Log.note("nobody runs this")
+    }
+
+    0
+}
+
+test "a closure computes" {
+    assert combine(2, 3) == 10
+    assert scaled(6, 7) == 42
+}
+
+test "a closure performs the effect its author declared" {
+    with Counted { seen: 0 } {
+        assert announced(1) == 2
+        assert never_called() == 0
+    }
+}
