@@ -129,6 +129,10 @@ always visible:
 runtime check would be the single most dishonest thing this language could do, so it does
 not happen quietly.
 
+Today the Proven tier holds constant expressions and nothing else, which is a thin slice of
+what it should eventually cover. Everything it cannot discharge becomes Guarded and says so
+as a warning at the point of use. Thin is fine. Silent would not be.
+
 ## Errors
 
 Values, always. No exceptions, no panics in library code.
@@ -154,8 +158,10 @@ match result {
 }
 ```
 
-Exhaustive. No default arm, no fallthrough. If a wildcard were allowed, adding a variant
-would stop being a compile error, which is the entire value of having variants.
+Exhaustive. No fallthrough, and no catch-all arm when the scrutinee is a `choice`. A
+wildcard there would mean adding a variant stops being a compile error, which is the entire
+value of having variants. Where the cases cannot be enumerated, such as matching an `Int`, a
+wildcard is fine and necessary.
 
 ## Non-termination is an effect
 
@@ -252,8 +258,46 @@ kind of thing P2 is a budget for.
 cannot honestly say anything about its contents. When cross module loading exists this
 becomes a real check.
 
+## Rules type checking had to pin down
+
+**Checking is local, and there is no global inference.** Every function annotates its
+parameters and its return type. Inside a body, `let` still infers from its initialiser.
+
+Hindley-Milner would remove some of those annotations and cost a great deal of language to
+do it, which P2 has a budget against. It would also move errors away from the expression
+that caused them and towards wherever unification happened to notice, which is the opposite
+of what P7 is for. And P1 wants a complete signature anyway, so most of what inference would
+save is something the language asks for regardless.
+
+**A type alias with a predicate is a distinct type. One without a predicate is transparent.**
+An alias that adds no information should not add a distinction either. An alias that carries
+a proof obligation has to be distinct, or the obligation attaches to nothing.
+
+**Unknown agrees with everything.** A type that came from a module the compiler has not
+loaded, or from an expression that already produced a diagnostic, is unknown, and an unknown
+type is compatible with every other type in both directions.
+
+That sounds like a hole and it is a deliberate one. While most of a realistic program still
+comes from modules that cannot be loaded, a checker that guesses produces false positives,
+and a false positive is more expensive than a missing check. The number of real checks grows
+as the language lands. The number of wrong ones stays at zero.
+
+The same rule applies to operators: if either side of `+` is unknown, nothing is said about
+the other side either, because there is no basis for it.
+
+**Ordering is not tied to anything yet.** `<` currently insists only that both sides have
+the same type. There are no traits, so there is nothing better to insist on. Listed below.
+
+**`?` is not checked.** It needs `Result` to be a type the compiler knows, which needs cross
+module loading. Until then it produces an unknown type and says nothing.
+
 ## Open questions
 
+- Ordering operators accept any two operands of the same type, including ones where ordering
+  is meaningless. This needs a trait, or a fixed set of orderable types, and has neither.
+- Refinements have no conversion form, so the only values that can enter a refined type are
+  ones the compiler can evaluate. Real code will need `Positive.try(n)` or something like it,
+  returning a `Result`.
 - Banning shadowing outright may turn out to be more annoying than it is worth. It is easy
   to relax later and hard to tighten, which is the only reason it starts strict.
 - Capitalisation carrying meaning in patterns is a wart, even though it earns its place.

@@ -6,6 +6,7 @@ members = [
     "crates/vow-lexer",
     "crates/vow-parser",
     "crates/vow-resolve",
+    "crates/vow-typeck",
 ]
 
 [workspace.package]
