@@ -13,7 +13,6 @@
 
 module payments/transfer
 
-use std/result.{Result, ok, err}
 use accounts.{AccountId, Currency}
 use ledger.{InMemoryLedger}
 use audit.{NullAudit}
@@ -123,9 +122,11 @@ test "moves the money and conserves the total" {
     with InMemoryLedger { opening: 100 },
          NullAudit
     {
-        let receipt = transfer(alice, bob, money(40)).unwrap()
+        // `Result` has no methods, so there is no `unwrap`. Comparing the
+        // whole thing says more anyway: it pins down the error case too.
+        let expected = ok(Receipt { from: alice, to: bob, amount: money(40) })
 
-        assert receipt.amount == money(40)
+        assert transfer(alice, bob, money(40)) == expected
         assert Ledger.balance(alice) == money(60)
     }
 }

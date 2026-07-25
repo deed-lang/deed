@@ -56,3 +56,9 @@ pub const CATCH_ALL_ON_CHOICE: &str = "VOW4014";
 /// value, and a name whose value changes partway through a function is the
 /// same problem that made shadowing an error.
 pub const NOT_ASSIGNABLE: &str = "VOW4015";
+
+/// `?` applied to something that is not a `Result`.
+pub const NOT_A_RESULT: &str = "VOW4016";
+
+/// `?` inside a function that does not return a `Result`.
+pub const TRY_NEEDS_RESULT_RETURN: &str = "VOW4017";

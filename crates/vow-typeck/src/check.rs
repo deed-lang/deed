@@ -280,6 +280,29 @@ impl<'a> Checker<'a> {
                         "Int" => Ty::Int,
                         "String" => Ty::Str,
                         "Bool" => Ty::Bool,
+                        "Result" => {
+                            if lowered_args.len() == 2 {
+                                return Ty::Result(
+                                    Box::new(lowered_args[0].clone()),
+                                    Box::new(lowered_args[1].clone()),
+                                );
+                            }
+                            self.emit(
+                                Diagnostic::error(
+                                    codes::NOT_GENERIC,
+                                    self.file,
+                                    *span,
+                                    format!(
+                                        "`Result` takes exactly two type arguments, and {} {} given",
+                                        lowered_args.len(),
+                                        if lowered_args.len() == 1 { "was" } else { "were" }
+                                    ),
+                                )
+                                .with_primary_label("wrong number of type arguments")
+                                .with_note("it is written `Result<Value, Error>`"),
+                            );
+                            return Ty::Unknown;
+                        }
                         _ => Ty::Unknown,
                     },
                     DefKind::Import => Ty::Unknown,
@@ -365,6 +388,23 @@ impl<'a> Checker<'a> {
         ty.clone()
     }
 
+    /// Whether a value of one type fits where the other was wanted.
+    ///
+    /// Componentwise for `Result`, which is what makes `ok(x)` work without
+    /// unification: it produces `Result<T, unknown>`, and unknown agrees with
+    /// whatever the expected error type turns out to be.
+    fn compatible(&self, actual: &Ty, expected: &Ty) -> bool {
+        if actual.absorbs() || expected.absorbs() {
+            return true;
+        }
+        match (actual, expected) {
+            (Ty::Result(a_ok, a_err), Ty::Result(e_ok, e_err)) => {
+                self.compatible(a_ok, e_ok) && self.compatible(a_err, e_err)
+            }
+            _ => actual == expected,
+        }
+    }
+
     // -- assignment --------------------------------------------------------
 
     /// Checks that `actual` may be used where `expected` was required.
@@ -379,7 +419,7 @@ impl<'a> Checker<'a> {
         span: Span,
         because: Option<(Span, String)>,
     ) {
-        if actual.absorbs() || expected.absorbs() || actual == expected {
+        if self.compatible(actual, expected) {
             return;
         }
 
@@ -756,12 +796,54 @@ impl<'a> Checker<'a> {
                 self.binary_ty(*op, &left, &right, lhs, rhs)
             }
 
-            // `?` cannot be checked until `Result` is a type the compiler
-            // knows, which needs cross module loading. Saying nothing is
-            // better than pretending.
-            Expr::Try { operand, .. } => {
-                self.infer(operand);
-                Ty::Unknown
+            // `?` unwraps the success case and propagates the failure one, so
+            // it only means something inside a function that can fail.
+            Expr::Try { operand, span } => {
+                let ty = self.infer(operand);
+                if ty.absorbs() {
+                    return Ty::Unknown;
+                }
+
+                let Ty::Result(ok_ty, err_ty) = ty else {
+                    let described = self.types.describe(&ty);
+                    self.emit(
+                        Diagnostic::error(
+                            codes::NOT_A_RESULT,
+                            self.file,
+                            *span,
+                            format!("`?` needs a `Result`, and this is {described}"),
+                        )
+                        .with_primary_label("not a Result")
+                        .with_note("`?` returns the error case and unwraps the success case"),
+                    );
+                    return Ty::Unknown;
+                };
+
+                match self.returns.last().cloned() {
+                    Some((Ty::Result(_, expected_err), ret_span)) => self.assign(
+                        &err_ty,
+                        &expected_err,
+                        None,
+                        operand.span(),
+                        Some((ret_span, "the error type this function returns".to_string())),
+                    ),
+                    Some((other, ret_span)) if !other.absorbs() => {
+                        let described = self.types.describe(&other);
+                        self.emit(
+                            Diagnostic::error(
+                                codes::TRY_NEEDS_RESULT_RETURN,
+                                self.file,
+                                *span,
+                                format!("`?` can only be used in a function returning a `Result`, and this one returns {described}"),
+                            )
+                            .with_primary_label("nowhere to propagate the error to")
+                            .with_secondary(ret_span, "the declared return type"),
+                        );
+                    }
+                    _ => {}
+                }
+
+                *ok_ty
             }
 
             Expr::If {
@@ -910,6 +992,39 @@ impl<'a> Checker<'a> {
             Expr::Field { name, .. } => self.resolutions.resolution(name.span),
             _ => None,
         };
+
+        // `ok` and `err` are the two constructors the language provides. Each
+        // says nothing about the other side, which is why the unknown type has
+        // to absorb rather than unify.
+        if let Some(def) = callee_def
+            && self.resolutions.def(def).kind == DefKind::Builtin
+        {
+            let name = self.resolutions.def(def).name.clone();
+            if name == "ok" || name == "err" {
+                let mut types: Vec<Ty> = args.iter().map(|arg| self.infer(arg)).collect();
+                if types.len() != 1 {
+                    self.emit(
+                        Diagnostic::error(
+                            codes::WRONG_ARITY,
+                            self.file,
+                            span,
+                            format!(
+                                "`{name}` takes one argument, but {} were given",
+                                types.len()
+                            ),
+                        )
+                        .with_primary_label("wrong number of arguments"),
+                    );
+                    return Ty::Unknown;
+                }
+                let carried = types.remove(0);
+                return if name == "ok" {
+                    Ty::Result(Box::new(carried), Box::new(Ty::Unknown))
+                } else {
+                    Ty::Result(Box::new(Ty::Unknown), Box::new(carried))
+                };
+            }
+        }
 
         // A direct call to a declared function, where the parameter spans are
         // available and a mismatch can point at the declaration.
