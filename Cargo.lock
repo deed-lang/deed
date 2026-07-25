@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "vow-ast"
+version = "0.0.0"
+dependencies = [
+ "vow-diagnostics",
+]
+
+[[package]]
 name = "vow-diagnostics"
 version = "0.0.0"
 
@@ -11,4 +18,13 @@ name = "vow-lexer"
 version = "0.0.0"
 dependencies = [
  "vow-diagnostics",
+]
+
+[[package]]
+name = "vow-parser"
+version = "0.0.0"
+dependencies = [
+ "vow-ast",
+ "vow-diagnostics",
+ "vow-lexer",
 ]

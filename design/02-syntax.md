@@ -192,8 +192,45 @@ Not configurable. One canonical rendering, and `vow fmt` is not optional in CI.
 The reason is not tidiness. Canonical form means a diff only contains semantic change, and
 that is what makes review scale.
 
+## Rules the parser had to pin down
+
+Writing the parser forced decisions that this document had been leaving vague. They are
+recorded here rather than living only in the implementation.
+
+**Contract clauses have a fixed order:** `where`, then `uses`, then `ensures`. Writing them
+in any other order is an error, not a style preference. A signature is the review surface,
+so it should read the same way every time. This is P4 applied to the part of the language
+where it matters most.
+
+**Handlers name their effect with `implements`,** as in `handler InMemory implements Ledger`.
+
+**There are no float literals.** That is what makes `40.try` unambiguously `40`, `.`, `try`
+with no lookahead. If floats ever arrive, they will need a rule for that, and it is a debt
+worth naming now rather than discovering later.
+
+**Statements need no separator.** A newline is enough and `;` is accepted but never
+required. This works because no statement can begin with a token that continues the
+previous expression, which is a property that has to be maintained deliberately rather than
+one that holds by luck. It is listed as an open question below.
+
+**Type arguments close with single `>` tokens.** There is no shift operator in Vow, so
+`Map<K, Vec<V>>` needs none of the special handling that costs other languages a real
+amount of parser complexity.
+
+**A brace after an expression is a struct literal, except in a condition.** `Point { x: 1 }`
+is a literal, and the brace in `if a < b { ... }` starts a block. This is the standard rule
+and it is the one genuinely ambiguous corner of the grammar. The `with` handler list needs a
+third case, described below.
+
 ## Open questions
 
+- The `with` handler list is disambiguated by a lookahead hack: a brace opens a struct
+  literal only when followed by `name:`, which is what separates `with H { a: 1 }, Other`
+  from the block that follows the handler list. It works for everything written so far and
+  it is not a rule anyone should have to know. Better ideas welcome.
+- Statement separation relies on no statement being able to start with `(`, `-`, `[` or `.`.
+  That holds today and nothing enforces it. Either the grammar should guarantee it or
+  statements need a real terminator.
 - Generics: how much is needed before P2 breaks. Higher-kinded types are almost certainly out.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.

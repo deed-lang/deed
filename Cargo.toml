@@ -1,8 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/vow-ast",
     "crates/vow-diagnostics",
     "crates/vow-lexer",
+    "crates/vow-parser",
 ]
 
 [workspace.package]
