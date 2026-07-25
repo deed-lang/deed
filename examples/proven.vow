@@ -7,9 +7,9 @@
 // and it never claims to have proven something it did not.
 //
 // What does the proving is interval reasoning: what is known about each
-// integer in scope, from the contract, from the types, and from the conditions
-// above the line. It is not a solver, and the last three functions here are
-// what that costs.
+// integer in scope, from the contract, from the types, from the conditions
+// above the line, and from the contracts of the functions being called. It is
+// not a solver, and three of the functions below are what that costs.
 
 module examples/proven
 
@@ -87,8 +87,10 @@ fn span(low: Int, high: Int) -> Positive
     high - low
 }
 
-// Guarded. A function's `ensures` clause is not consulted at the call site, so
-// the result of any call is unknown however carefully it was specified.
+// Proven across a call. `always_one` promises what it returns, the promise is
+// read here, and the proof one function did is worth something to the next.
+// Without this every abstraction boundary would restart the reasoning from
+// nothing, which would make `ensures` decorative outside of tests.
 fn from_a_call() -> Positive {
     always_one()
 }
@@ -100,15 +102,30 @@ fn always_one() -> Int
     1
 }
 
+// Guarded. An `ensures` that ties the result to an argument says something
+// true and useful, and an interval cannot hold it, so the tier admits that
+// rather than pretending.
+fn echoed(n: Positive) -> Positive {
+    same(n)
+}
+
+fn same(n: Int) -> Int
+  ensures
+    ok  => result == n,
+{
+    n
+}
+
 test "the proven ones still hold at runtime" {
     assert order_of(3).quantity == 3
     assert as_count(4) == 4
     assert clamped(10) == 60
+    assert from_a_call() == 1
     assert order_from_either(0) == err("a quantity has to be positive")
 }
 
 test "the guarded ones are checked when they run" {
     assert one_more(1) == 2
     assert span(2, 5) == 3
-    assert from_a_call() == 1
+    assert echoed(7) == 7
 }

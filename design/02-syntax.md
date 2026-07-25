@@ -152,11 +152,25 @@ value. Ranges come from the things that state one:
   repeating the type in prose
 - the condition of an `if`, narrowed one way in the then branch and the other way in the else
 - a guard that leaves, so after `if n <= 0 { return err(..) }` the rest of the body knows
+- the contract of a function being called, so a proof one function did is worth something to
+  the next one
 
 A refined value can also reach a different refinement over the same base. `Positive` widens to
 `Int` and narrows back into `NonNegative`, and the predicate that arrives is usually enough to
 discharge the predicate that is wanted. The narrowing is an obligation like any other, so the
 direction that does not follow is `Guarded` rather than rejected.
+
+Reading a callee's contract is only honest if the contract is kept, and it is: an `ensures`
+clause is evaluated on the way out of every call whatever tier it landed in, and a refined
+return type is checked against its predicate at the same point. The tier says how much was
+settled ahead of time, not whether the check happens. So a caller holding a returned value is
+holding something that already passed, and a broken promise cannot launder itself into a proof
+somewhere else.
+
+What crosses a module boundary is the range, not the predicate. A refinement stays opaque from
+outside, which is the rule modules already had, so an exported `fn one() -> Positive` arrives
+as a pair of bounds. That is the difference between exporting a proof and exporting the
+conclusion of one.
 
 That last group is what made this worth building. Before it, `Proven` held constant
 expressions and nothing else, so a refinement in real code was a runtime check with a
@@ -173,12 +187,13 @@ Every one of these is `Guarded`, with a warning, never a wrong answer.
 
 - **A relationship between two names.** An interval cannot hold `a < b`, so a `where
   low < high` proves nothing about `high - low`. This is the largest limitation and the
-  first one anyone will hit.
+  first one anyone will hit. The same thing stops an `ensures ok => result == n` from
+  saying anything at a call site: it is true, it is useful, and it is not an interval.
 - **Arithmetic that could overflow.** `n + 1` where `n` is `Positive` is not provably
   positive, because `n` could be the largest integer there is. That is the reasoning working
   rather than a gap in it, and the runtime agrees: the sum has no answer.
-- **The result of a call.** A function's `ensures` clause is not consulted at the call site,
-  so a call returns an unknown range however carefully it was specified.
+- **The payload of a call that can fail.** The call site holds a `Result`, not the value
+  inside it, so an `ensures` on a fallible function is not read.
 - **Anything that is not an integer.** No `String`, no record field, no variant.
 - **Division and remainder.** The sign rules around zero and around the smallest integer are
   fiddly enough that getting them wrong is worse than not trying.
