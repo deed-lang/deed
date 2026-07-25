@@ -9,6 +9,7 @@ use std::process::{Command, Output};
 const VOW: &str = env!("CARGO_BIN_EXE_vow");
 const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/transfer.vow");
 const RUNNABLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/counter.vow");
+const HELLO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/hello.vow");
 
 fn run(args: &[&str]) -> Output {
     Command::new(VOW)
@@ -364,4 +365,79 @@ fn check_does_not_run_tests() {
         "checking should not care that it would fail"
     );
     assert_eq!(stdout(&output), "");
+}
+
+// -- running a program -----------------------------------------------------
+
+#[test]
+fn the_hello_example_runs() {
+    let output = run(&["run", HELLO]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("hello, "), "{text}");
+    assert!(text.contains("world"), "{text}");
+}
+
+#[test]
+fn nothing_is_run_when_the_program_does_not_check() {
+    let scratch = Scratch::new("broken-run");
+    let file = scratch.write(
+        "broken.vow",
+        "module a\n\nfn main(sys: System) -> Int\n  uses Io.write,\n{\n  Io.write(sys.console, nope())\n  0\n}\n",
+    );
+
+    let output = run(&["run", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    assert!(stdout(&output).contains("VOW3001"));
+}
+
+#[test]
+fn a_failed_contract_in_main_exits_with_one() {
+    let scratch = Scratch::new("main-contract");
+    let file = scratch.write(
+        "bad.vow",
+        "module a\n\nfn main(sys: System) -> Int\n  ensures\n    ok => result > 100,\n{\n  1\n}\n",
+    );
+
+    let output = run(&["run", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    assert!(stdout(&output).contains("VOW6003"), "{}", stdout(&output));
+}
+
+#[test]
+fn running_something_with_no_main_is_a_usage_error() {
+    let scratch = Scratch::new("no-main");
+    let file = scratch.write("quiet.vow", "module a\n\nfn f() -> Int { 0 }\n");
+
+    let output = run(&["run", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("no `main`"));
+}
+
+#[test]
+fn two_mains_is_a_question_not_a_choice() {
+    let scratch = Scratch::new("two-mains");
+    let body = "module a\n\nfn main(sys: System) -> Int { 0 }\n";
+    scratch.write("one.vow", body);
+    scratch.write("two.vow", body);
+
+    let output = run(&["run", scratch.path().to_str().unwrap()]);
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("more than one `main`"));
+}
+
+#[test]
+fn a_program_cannot_write_without_being_handed_a_console() {
+    let scratch = Scratch::new("no-console");
+    let file = scratch.write(
+        "sneaky.vow",
+        "module a\n\nfn sneaky() -> ()\n  uses Io.write,\n{\n  Io.write(Console, \"hello\")\n}\n\nfn main(sys: System) -> Int { 0 }\n",
+    );
+
+    let output = run(&["run", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    let text = stdout(&output);
+    assert!(text.contains("VOW4019"), "{text}");
+    assert!(text.contains("only received"), "{text}");
 }

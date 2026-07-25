@@ -101,6 +101,62 @@ impl<'a> Checker<'a> {
     // -- collecting --------------------------------------------------------
 
     fn collect(&mut self, module: &'a Module) {
+        // The capability types the language provides. They have to be named
+        // here or a diagnostic about one would say "an unnamed type".
+        for name in ["System", "Console", "Clock"] {
+            if let Some(def) = self.resolutions.builtin(name) {
+                self.types.set_name(def, name.to_string());
+            }
+        }
+
+        // `Io.write(out, line)` and `Io.now(clock)`. Each takes the capability
+        // it acts on, so which console is a question about the value rather
+        // than about the row.
+        let capability = |checker: &Self, name: &str| {
+            checker
+                .resolutions
+                .builtin(name)
+                .map(Ty::Named)
+                .unwrap_or(Ty::Unknown)
+        };
+        let console = capability(self, "Console");
+        let clock = capability(self, "Clock");
+
+        if let Some(def) = self.resolutions.builtin("write") {
+            self.types.set_name(def, "write".to_string());
+            self.signatures.insert(
+                def,
+                Signature {
+                    params: vec![
+                        ParamTy {
+                            ty: console,
+                            span: Span::at(0),
+                        },
+                        ParamTy {
+                            ty: Ty::Str,
+                            span: Span::at(0),
+                        },
+                    ],
+                    ret: Ty::Unit,
+                    span: Span::at(0),
+                },
+            );
+        }
+        if let Some(def) = self.resolutions.builtin("now") {
+            self.types.set_name(def, "now".to_string());
+            self.signatures.insert(
+                def,
+                Signature {
+                    params: vec![ParamTy {
+                        ty: clock,
+                        span: Span::at(0),
+                    }],
+                    ret: Ty::Int,
+                    span: Span::at(0),
+                },
+            );
+        }
+
         for item in &module.items {
             match item {
                 Item::TypeAlias(alias) => {
@@ -280,6 +336,9 @@ impl<'a> Checker<'a> {
                         "Int" => Ty::Int,
                         "String" => Ty::Str,
                         "Bool" => Ty::Bool,
+                        // Capabilities are opaque. There is nothing to know
+                        // about one except that you were handed it.
+                        "System" | "Console" | "Clock" => Ty::Named(def),
                         "Result" => {
                             if lowered_args.len() == 2 {
                                 return Ty::Result(
@@ -980,8 +1039,43 @@ impl<'a> Checker<'a> {
                 None => Ty::Unknown,
             },
             DefKind::Variant => self.variant_ty(def),
+            // A type name is not a value. Leaving this as `Unknown` would be
+            // worse than wrong: `Unknown` absorbs, so `Io.write(Console, "hi")`
+            // would sail through and the capability system would be decorative.
+            DefKind::Type | DefKind::Record | DefKind::Choice => {
+                self.not_a_value(ident, "a type");
+                Ty::Unknown
+            }
+            DefKind::Effect => {
+                self.not_a_value(ident, "an effect");
+                Ty::Unknown
+            }
+            DefKind::Builtin if !matches!(ident.name.as_str(), "ok" | "err") => {
+                self.not_a_value(ident, "a type");
+                Ty::Unknown
+            }
             _ => Ty::Unknown,
         }
+    }
+
+    fn not_a_value(&mut self, ident: &Ident, what: &str) {
+        let name = &ident.name;
+        let mut diagnostic = Diagnostic::error(
+            codes::NOT_A_VALUE,
+            self.file,
+            ident.span,
+            format!("`{name}` is {what}, not a value"),
+        )
+        .with_primary_label(format!("`{name}` cannot be used here"));
+
+        if matches!(name.as_str(), "System" | "Console" | "Clock") {
+            diagnostic = diagnostic.with_note(format!(
+                "a `{name}` cannot be constructed, only received, which is the point: \
+                 a function that was not handed one cannot reach one"
+            ));
+        }
+
+        self.emit(diagnostic);
     }
 
     /// The type a variant produces, which is the choice it belongs to.
@@ -995,6 +1089,35 @@ impl<'a> Checker<'a> {
     fn field_ty(&mut self, receiver: &Ty, name: &Ident) -> Ty {
         if receiver.absorbs() {
             return Ty::Unknown;
+        }
+
+        // `System` is the root of all authority, and its fields are the
+        // narrower capabilities it carries. Handing one of them to a function
+        // gives that function exactly that and nothing else.
+        if let Ty::Named(def) = receiver
+            && self.resolutions.builtin("System") == Some(*def)
+        {
+            let narrower = match name.name.as_str() {
+                "console" => Some("Console"),
+                "clock" => Some("Clock"),
+                _ => None,
+            };
+            return match narrower.and_then(|name| self.resolutions.builtin(name)) {
+                Some(def) => Ty::Named(def),
+                None => {
+                    self.emit(
+                        Diagnostic::error(
+                            codes::NO_SUCH_FIELD,
+                            self.file,
+                            name.span,
+                            format!("`System` carries no `{}`", name.name),
+                        )
+                        .with_primary_label("no such capability")
+                        .with_note("it carries `console` and `clock`"),
+                    );
+                    Ty::Unknown
+                }
+            };
         }
 
         let looked_through = self.widen(receiver);

@@ -102,7 +102,60 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
     }
 
+    if args.mode == Mode::Run {
+        match run_main(&mut out, &sources, &checks) {
+            Ok(Some(true)) => {}
+            Ok(Some(false)) => return ExitCode::FAILURE,
+            Ok(None) => return ExitCode::from(EXIT_USAGE),
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::from(EXIT_USAGE);
+            }
+        }
+    }
+
     ExitCode::SUCCESS
+}
+
+/// Calls `main`, handing it the one `System` there is.
+///
+/// Exactly one is required. Two entry points in one invocation is not a
+/// program with a choice, it is a question about which one was meant, and
+/// guessing is worse than asking.
+fn run_main(
+    out: &mut impl Write,
+    sources: &SourceMap,
+    checks: &[Checked],
+) -> io::Result<Option<bool>> {
+    let mut runs = Vec::new();
+    for checked in checks {
+        if let Some(run) = vow_interp::run_main(checked.file, &checked.module, &checked.resolutions)
+        {
+            runs.push((sources.file(checked.file).name().to_string(), run));
+        }
+    }
+
+    if runs.is_empty() {
+        eprintln!("error: no `main` found, so there is nothing to run");
+        return Ok(None);
+    }
+    if runs.len() > 1 {
+        let names: Vec<&str> = runs.iter().map(|(name, _)| name.as_str()).collect();
+        eprintln!("error: more than one `main`, in {}", names.join(" and "));
+        return Ok(None);
+    }
+
+    let (_, run) = runs.remove(0);
+    for line in &run.output {
+        writeln!(out, "{line}")?;
+    }
+    match run.result {
+        Ok(_) => Ok(Some(true)),
+        Err(failure) => {
+            writeln!(out, "{}", render_human(sources, &failure))?;
+            Ok(Some(false))
+        }
+    }
 }
 
 /// Runs every test in every checked file. Returns whether they all passed.

@@ -102,13 +102,13 @@ fn the_value_is_checked_against_the_declared_state_type() {
 fn an_assignment_carries_the_effects_of_its_right_hand_side() {
     let (sources, checked) = check(&format!(
         "{COUNTER}\n\
-         effect Clock {{\n\
+         effect Ticker {{\n\
          \x20   fn now() -> Int\n\
          }}\n\n\
          handler InMemory implements Counter {{\n\
          \x20   state count: Int\n\n\
          \x20   fn value() -> Int {{ count }}\n\
-         \x20   fn bump(by) -> () {{ count = Clock.now() }}\n\
+         \x20   fn bump(by) -> () {{ count = Ticker.now() }}\n\
          }}\n"
     ));
     assert_eq!(

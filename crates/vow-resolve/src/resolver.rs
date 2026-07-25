@@ -28,7 +28,21 @@ use crate::defs::{DefData, DefId, DefKind, Dot, Resolutions};
 /// `Result`, `ok` and `err` are here rather than in a library because a
 /// language where you cannot write a failing function without an import is not
 /// finished. Errors as values and `?` are core to the design.
-pub const PRELUDE: &[&str] = &["Int", "String", "Bool", "System", "Result", "ok", "err"];
+///
+/// `System`, `Console` and `Clock` are capability types. They have to be built
+/// in for the same reason there is no ambient authority: if a program could
+/// declare its own `Console` and conjure one, none of the rest would mean
+/// anything.
+pub const PRELUDE: &[&str] = &[
+    "Int", "String", "Bool", "Result", "ok", "err", "System", "Console", "Clock",
+];
+
+/// Operations of the built-in `Io` effect.
+///
+/// Each takes the capability it acts on. The row says what kind of operation,
+/// the argument says which resource, which is the split `04-capabilities.md`
+/// describes.
+pub const IO_OPERATIONS: &[&str] = &["write", "now"];
 
 pub struct Resolved {
     pub resolutions: Resolutions,
@@ -60,7 +74,32 @@ pub fn resolve(file: FileId, module: &Module) -> Resolved {
             parent: None,
         });
         resolver.insert(name, def);
+        resolver.resolutions.record_builtin(name, def);
         // Builtins are never "unused".
+        resolver.used.insert(def);
+    }
+
+    // The one effect the language provides. It is an effect rather than a set
+    // of free functions so that writing to a console still has to be declared
+    // in a `uses` clause like anything else.
+    let io = resolver.resolutions.add_def(DefData {
+        kind: DefKind::Effect,
+        name: "Io".to_string(),
+        span: Span::at(0),
+        parent: None,
+    });
+    resolver.insert("Io", io);
+    resolver.resolutions.record_builtin("Io", io);
+    resolver.used.insert(io);
+
+    for operation in IO_OPERATIONS {
+        let def = resolver.resolutions.add_def(DefData {
+            kind: DefKind::EffectOp,
+            name: (*operation).to_string(),
+            span: Span::at(0),
+            parent: Some(io),
+        });
+        resolver.resolutions.record_builtin(operation, def);
         resolver.used.insert(def);
     }
 
@@ -152,7 +191,7 @@ impl Resolver {
                     format!("first declared as a {} here", previous_kind.describe()),
                 ),
             );
-        } else if PRELUDE.contains(&ident.name.as_str()) {
+        } else if PRELUDE.contains(&ident.name.as_str()) || ident.name == "Io" {
             // Silently shadowing a builtin would put everything that depends on
             // it quietly back to being unchecked, which is the worst way for
             // this to go wrong.

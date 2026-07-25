@@ -21,7 +21,7 @@ use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
 use crate::codes;
-use crate::value::{Fields, Value};
+use crate::value::{Capability, Fields, Value};
 
 /// How one `test` block went.
 pub struct TestOutcome {
@@ -59,6 +59,40 @@ pub fn run_tests(file: FileId, module: &Module, resolutions: &Resolutions) -> Ve
             }
         })
         .collect()
+}
+
+/// What running a program produced.
+pub struct Run {
+    /// Lines written through a `Console`, in order.
+    pub output: Vec<String>,
+    /// `Err` when the program failed, which includes a contract it broke.
+    pub result: Result<Value, Box<Diagnostic>>,
+}
+
+/// Runs `main`, handing it the one `System` capability that exists.
+///
+/// There is no other way to obtain one, which is what makes reading `main`
+/// enough to know the whole attack surface of a program.
+pub fn run_main(file: FileId, module: &Module, resolutions: &Resolutions) -> Option<Run> {
+    let main = module.items.iter().find_map(|item| match item {
+        Item::Function(function) if function.sig.name.name == "main" => Some(function),
+        _ => None,
+    })?;
+
+    let mut interp = Interp::new(file, module, resolutions);
+    let span = main.sig.name.span;
+    let args = main
+        .sig
+        .params
+        .iter()
+        .map(|_| (Value::Capability(Capability::System), span))
+        .collect();
+
+    let result = interp.call_from_outside(main, args, span);
+    Some(Run {
+        output: interp.output.clone(),
+        result,
+    })
 }
 
 /// Non-local control flow.
@@ -102,6 +136,13 @@ pub(crate) struct Interp<'a> {
     olds: Vec<HashMap<Span, Value>>,
     /// Handler state captured on entry, for `unchanged(...)`.
     entry_states: Vec<HashMap<DefId, Fields>>,
+
+    /// Lines written through a `Console`. Collected rather than printed so the
+    /// caller decides what to do with them, and so a test can read them.
+    output: Vec<String>,
+    /// A monotonic clock. Wall clock time would make every run different, and
+    /// P8 says the default is deterministic.
+    ticks: i64,
 }
 
 impl<'a> Interp<'a> {
@@ -119,6 +160,8 @@ impl<'a> Interp<'a> {
             inside_handler: Vec::new(),
             olds: Vec::new(),
             entry_states: Vec::new(),
+            output: Vec::new(),
+            ticks: 0,
         };
 
         for item in &module.items {
@@ -411,6 +454,19 @@ impl<'a> Interp<'a> {
     }
 
     fn field(&self, value: &Value, name: &Ident) -> Eval<Value> {
+        // `System` carries narrower capabilities. Taking one out is how
+        // authority gets delegated, and it only ever narrows.
+        if let Value::Capability(Capability::System) = value {
+            return match name.name.as_str() {
+                "console" => Ok(Value::Capability(Capability::Console)),
+                "clock" => Ok(Value::Capability(Capability::Clock)),
+                other => Err(self.not_runnable(
+                    name.span,
+                    &format!("`System.{other}`, which does not exist"),
+                )),
+            };
+        }
+
         let fields = match value {
             Value::Record(fields) => &**fields,
             Value::Variant(variant) => &variant.fields,
@@ -541,6 +597,13 @@ impl<'a> Interp<'a> {
             return Err(self.not_runnable(span, "this effect operation"));
         };
 
+        // The built-in effect has no handler to install, because the handler is
+        // the outside world. Which part of it is decided by the capability that
+        // was passed in, not by anything in scope.
+        if self.resolutions.builtin("Io") == Some(effect) {
+            return self.perform_io(&name, &args, span);
+        }
+
         let Some(index) = self
             .handlers
             .iter()
@@ -582,6 +645,49 @@ impl<'a> Interp<'a> {
         };
 
         self.call(operation_decl, args, span, Some(index))
+    }
+
+    /// Performs a built-in operation.
+    ///
+    /// Every one of these takes the capability it acts on as its first
+    /// argument, and there is no way to make a capability, so a function that
+    /// was not handed one cannot reach the outside world. That is the whole
+    /// mechanism, and it is smaller than the sentence describing it.
+    fn perform_io(&mut self, name: &str, args: &[(Value, Span)], span: Span) -> Eval<Value> {
+        let capability = match args.first() {
+            Some((Value::Capability(capability), _)) => *capability,
+            _ => {
+                return Err(self.not_runnable(span, "an `Io` operation with no capability"));
+            }
+        };
+
+        match (name, capability) {
+            ("write", Capability::Console) => {
+                let line = match args.get(1) {
+                    Some((Value::Str(text), _)) => text.to_string(),
+                    Some((other, _)) => other.to_string(),
+                    None => String::new(),
+                };
+                self.output.push(line);
+                Ok(Value::Unit)
+            }
+            // A monotonic count of milliseconds. Wall clock time would make
+            // every run different, and P8 says the default is deterministic.
+            ("now", Capability::Clock) => {
+                self.ticks += 1;
+                Ok(Value::Int(self.ticks))
+            }
+            (_, held) => Err(self.fail(
+                Diagnostic::error(
+                    codes::NO_HANDLER,
+                    self.file,
+                    span,
+                    format!("`Io.{name}` cannot be performed with a `{}`", held.name()),
+                )
+                .with_primary_label("wrong capability")
+                .with_note("each operation acts on the kind of capability it was given"),
+            )),
+        }
     }
 
     fn call(

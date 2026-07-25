@@ -65,3 +65,11 @@ pub const TRY_NEEDS_RESULT_RETURN: &str = "VOW4017";
 
 /// A pattern that cannot match the thing it is applied to.
 pub const PATTERN_MISMATCH: &str = "VOW4018";
+
+/// A name used in expression position that names a type, not a value.
+///
+/// This matters more than it looks. Without it a type name in expression
+/// position has no type, and a type-less expression is compatible with
+/// everything, so `Io.write(Console, "hi")` would type check and a program
+/// could conjure authority by naming it.
+pub const NOT_A_VALUE: &str = "VOW4019";

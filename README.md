@@ -4,10 +4,19 @@ A contract-first language where a function signature is a promise the compiler c
 Built for code that machines write and humans review.
 
 > **Status: it runs.** The compiler lexes, parses, resolves names, type checks and checks
-> effect rows, and a tree walking interpreter executes `test` blocks with contracts enforced
-> at runtime. There is no `main` and no code generation. Criticism of the design is still the
-> most useful contribution. See [issue #1](https://github.com/onatozmenn/vow/issues/1) for
-> where this is going.
+> effect rows, and a tree walking interpreter executes `test` blocks and `main` with
+> contracts enforced at runtime. Programs get their authority from a `System` capability
+> handed to `main`, and there is no other way to get any. There is no code generation.
+> Criticism of the design is still the most useful contribution. See
+> [issue #1](https://github.com/onatozmenn/vow/issues/1) for where this is going.
+
+```
+$ cargo run -p vow-cli -- run examples/hello.vow
+hello, 
+world
+
+the pure part does not need any of this
+```
 
 ```
 $ cargo run -p vow-cli -- test examples/
@@ -76,8 +85,8 @@ inheritance, no exceptions thrown from four frames down. Everything that can aff
 function is written above the brace.
 
 **The function cannot reach the network.** Not by accident and not on purpose. It did not
-ask for that capability in `uses`, so it does not have it. Sandboxing stops being a
-container and becomes a type.
+ask for that capability in `uses`, so it does not have it, and it holds no value that would
+let it name one. Sandboxing stops being a container and becomes a type.
 
 ## Why this is a language and not a library
 
@@ -112,18 +121,24 @@ Read them in order. Each one leans on the one before it.
 | `vow-resolve` | Every name bound to a declaration |
 | `vow-typeck` | Every expression given a type |
 | `vow-effects` | Every effect row checked against what the body does |
-| `vow-interp` | Runs `test` blocks and generated property tests, with contracts enforced |
+| `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
-| `vow-cli` | The `vow` binary |
+| `vow-cli` | The `vow` binary: `check`, `test` and `run` |
 
-There are two examples, [transfer.vow](examples/transfer.vow) and
-[counter.vow](examples/counter.vow). Both are self contained, both are checked by every pass
-on every commit, and both run their own tests with contracts enforced.
+There are three examples, [transfer.vow](examples/transfer.vow),
+[counter.vow](examples/counter.vow) and [hello.vow](examples/hello.vow). All are self
+contained and checked by every pass on every commit. The first two run their own tests, the
+third has a `main`.
 
 `transfer.vow` used to model something that could not exist. `Money.units` was `Positive`,
 which made a zero balance and a debit unwritable, and the type checker said so. The fix was
 to separate the type that can be zero from the type that cannot, which is the sort of thing
 the language is supposed to force and did.
+
+`hello.vow` was worse. The test written to prove that a function without a `Console` cannot
+write to one failed, because `Io.write(Console, "hi")` type checked: a type name in
+expression position had no type, and no type agrees with everything. Capability safety was
+decorative for about an hour. That is now `VOW4019`.
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.

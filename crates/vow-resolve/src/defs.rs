@@ -106,6 +106,7 @@ pub struct Resolutions {
     names: HashMap<Span, DefId>,
     dots: HashMap<Span, Dot>,
     unresolved: HashSet<Span>,
+    builtins: HashMap<String, DefId>,
 }
 
 impl Resolutions {
@@ -125,6 +126,18 @@ impl Resolutions {
 
     pub(crate) fn record_unresolved(&mut self, span: Span) {
         self.unresolved.insert(span);
+    }
+
+    pub(crate) fn record_builtin(&mut self, name: &str, def: DefId) {
+        self.builtins.insert(name.to_string(), def);
+    }
+
+    /// A name the language provides, such as `Console` or the `Io` effect.
+    ///
+    /// Later passes need these by name, since nothing in the source declares
+    /// them and there is no span to look them up by.
+    pub fn builtin(&self, name: &str) -> Option<DefId> {
+        self.builtins.get(name).copied()
     }
 
     /// # Panics
