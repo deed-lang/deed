@@ -25,7 +25,7 @@ use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
 use crate::codes;
-use crate::facts::{self, Facts, Range, Truth};
+use crate::facts::{self, Facts, Guarantee, Range, Truth};
 use crate::surface::{PRELUDE_MODULE, SurfaceItem, World};
 use crate::ty::{FieldTy, Nominal, Obligation, Tier, Ty, Types, VariantTy};
 
@@ -77,9 +77,9 @@ struct Signature {
     params: Vec<ParamTy>,
     ret: Ty,
     span: Span,
-    /// The range a call to this is known to land in, from the declared return
-    /// type and from the `ensures` clause. `ANY` when nothing is promised.
-    guarantee: Range,
+    /// What a call to this is known to hand back, from the declared return
+    /// type and from the `ensures` clause. Promises nothing when nothing is.
+    guarantee: Guarantee,
 }
 
 struct Checker<'a> {
@@ -153,7 +153,7 @@ impl<'a> Checker<'a> {
                         .collect(),
                     ret,
                     span: Span::at(0),
-                    guarantee: Range::ANY,
+                    guarantee: Guarantee::any(),
                 },
             );
         }
@@ -172,7 +172,7 @@ impl<'a> Checker<'a> {
                     }],
                     ret: Ty::Int,
                     span: Span::at(0),
-                    guarantee: Range::between(0, i64::MAX),
+                    guarantee: Guarantee::of(Range::between(0, i64::MAX)),
                 },
             );
         }
@@ -307,7 +307,7 @@ impl<'a> Checker<'a> {
                     let mut signature = self.lower_signature(&function.sig);
                     signature.guarantee = signature
                         .guarantee
-                        .meet(promised_by(&function.contract.ensures));
+                        .meet(promised_by(&function.contract.ensures, &function.sig));
                     self.signatures.insert(def, signature);
                 }
                 _ => {}
@@ -358,10 +358,10 @@ impl<'a> Checker<'a> {
     /// A `Result` promises nothing usable here: the call site holds the
     /// wrapper, not the payload, and giving a range to a `Result` would be
     /// answering a question nobody asked.
-    fn guarantee_of(&mut self, ret: &Ty) -> Range {
+    fn guarantee_of(&mut self, ret: &Ty) -> Guarantee {
         match ret {
-            Ty::Named(def) => self.refinement_range(*def),
-            _ => Range::ANY,
+            Ty::Named(def) => Guarantee::of(self.refinement_range(*def)),
+            _ => Guarantee::any(),
         }
     }
 
@@ -714,7 +714,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// The range a call to `callee` is promised to land in.
+    /// What a call to `callee` is promised to hand back.
     ///
     /// Reading a promise is only honest if the promise is kept, and both of
     /// these are. An `ensures` clause is evaluated on the way out of every
@@ -728,29 +728,30 @@ impl<'a> Checker<'a> {
     /// so it is also the one place a broken contract could launder itself into
     /// a proof somewhere else. That is why it reads what the callee declared
     /// and never what its body happens to do.
-    fn call_range(&self, callee: &Expr) -> Range {
+    fn call_guarantee(&self, callee: &Expr) -> Guarantee {
         let def = match callee {
             Expr::Ident(ident) => self.def_of(ident),
             Expr::Field { name, .. } => self.resolutions.resolution(name.span),
             _ => None,
         };
         let Some(def) = def else {
-            return Range::ANY;
+            return Guarantee::any();
         };
 
         if let Some(signature) = self.signatures.get(&def) {
-            return signature.guarantee;
+            return signature.guarantee.clone();
         }
 
         // An imported function. Its refinement is opaque out here, which is
-        // why the range travels rather than the predicate: a pair of bounds
-        // says what the caller needs without exporting how it was decided.
+        // why bounds travel rather than the predicate: a range and a set of
+        // differences say what the caller needs without exporting how the
+        // callee decided any of it.
         let Some(module) = self.resolutions.import_module(def) else {
-            return Range::ANY;
+            return Guarantee::any();
         };
         match self.world.get(module, &self.resolutions.def(def).name) {
-            Some(SurfaceItem::Function { guarantee, .. }) => *guarantee,
-            _ => Range::ANY,
+            Some(SurfaceItem::Function { guarantee, .. }) => guarantee.clone(),
+            _ => Guarantee::any(),
         }
     }
 
@@ -759,9 +760,9 @@ impl<'a> Checker<'a> {
         &self,
     ) -> (
         impl Fn(&Expr) -> Option<DefId> + use<'a>,
-        impl Fn(&Expr) -> Range + '_,
+        impl Fn(&Expr) -> Guarantee + '_,
     ) {
-        (self.resolver(), |callee: &Expr| self.call_range(callee))
+        (self.resolver(), |callee: &Expr| self.call_guarantee(callee))
     }
 
     fn narrowed_by(&self, condition: &Expr, when_true: bool) -> Facts {
@@ -2680,17 +2681,23 @@ fn capability(name: &str) -> Ty {
     }
 }
 
-/// The range an `ensures` block pins the returned value to.
+/// What an `ensures` block promises about the returned value.
 ///
-/// Only the `ok` outcome, and only what it says about `result` itself. A clause
-/// that relates `result` to an argument says something true and useful that an
-/// interval cannot hold, so it contributes nothing rather than something wrong.
-fn promised_by(ensures: &[Ensures]) -> Range {
+/// Only the `ok` outcome. A clause about the failure case says nothing about
+/// the value a successful call hands back, which is the only thing a call site
+/// is holding.
+fn promised_by(ensures: &[Ensures], sig: &vow_ast::FnSig) -> Guarantee {
+    let params: Vec<&str> = sig
+        .params
+        .iter()
+        .map(|param| param.name.name.as_str())
+        .collect();
+
     ensures
         .iter()
         .filter(|clause| clause.outcome == Outcome::Ok)
-        .fold(Range::ANY, |range, clause| {
-            range.meet(facts::range_of_subject(&clause.condition, "result"))
+        .fold(Guarantee::any(), |promise, clause| {
+            promise.meet(facts::promised_by(&clause.condition, "result", &params))
         })
 }
 

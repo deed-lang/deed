@@ -289,6 +289,41 @@ fn a_refinement_over_a_string_is_guarded() {
     assert!(render_human(&sources, &failure).contains("NonEmpty"));
 }
 
+// -- a promise that is not kept ---------------------------------------------
+
+#[test]
+fn a_promise_that_is_broken_is_caught_on_the_way_out() {
+    // A caller reads a callee's `ensures` and proves things with it, which is
+    // only honest because the clause is evaluated on every call whatever tier
+    // it landed in. This is that argument, run: `liar` promises to hand back
+    // what it was given, hands back one less, and the proof in `f` is never
+    // reached with a value that would falsify it.
+    let (sources, mut outcomes) = run(&format!(
+        "{POSITIVE}\
+         fn liar(n: Int) -> Int\n\
+         \x20 ensures\n\
+         \x20   ok  => result == n,\n\
+         {{\n\
+         \x20 n - 1\n\
+         }}\n\n\
+         fn f(n: Positive) -> Positive {{ liar(n) }}\n\n\
+         test \"the promise is checked, not assumed\" {{\n\
+         \x20 assert f(1) == 1\n\
+         }}\n"
+    ));
+    assert_eq!(outcomes.len(), 1, "expected exactly one test");
+    let failure = outcomes
+        .remove(0)
+        .failure
+        .expect("the broken promise should have been caught");
+    assert_eq!(
+        failure.code,
+        codes::POSTCONDITION_FAILED,
+        "{}",
+        render_human(&sources, &failure)
+    );
+}
+
 // -- and the values that should get through --------------------------------
 
 #[test]
