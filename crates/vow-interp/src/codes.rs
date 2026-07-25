@@ -28,3 +28,9 @@ pub const NOT_RUNNABLE: &str = "VOW6006";
 
 /// Arithmetic that has no answer, such as overflow or division by zero.
 pub const ARITHMETIC: &str = "VOW6007";
+
+/// A generated property test that could not find enough usable inputs.
+///
+/// A property that only ever tested a handful of inputs is worse than no
+/// property, because it looks like one.
+pub const NOT_ENOUGH_CASES: &str = "VOW6008";

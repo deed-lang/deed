@@ -353,6 +353,28 @@ fn a_single_ampersand_suggests_the_logical_operator() {
 }
 
 #[test]
+fn a_byte_order_mark_is_not_a_problem() {
+    // Windows editors write one without mentioning it. Rejecting it would mean
+    // an "unexpected character" on a file the user typed nothing wrong into.
+    let (_, lexed) = lex("\u{FEFF}module a\n");
+    assert!(!lexed.has_errors());
+    assert_eq!(lexed.tokens[0].kind, TokenKind::Keyword(Keyword::Module));
+}
+
+#[test]
+fn a_byte_order_mark_does_not_shift_the_spans() {
+    let source = "\u{FEFF}let x = 1";
+    let (_, lexed) = lex(source);
+    let slices: Vec<&str> = lexed
+        .tokens
+        .iter()
+        .take(3)
+        .map(|t| &source[t.span.as_range()])
+        .collect();
+    assert_eq!(slices, vec!["let", "x", "="]);
+}
+
+#[test]
 fn empty_input_is_just_eof() {
     let (_, lexed) = lex("");
     assert_eq!(lexed.tokens.len(), 1);

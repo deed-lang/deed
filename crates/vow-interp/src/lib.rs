@@ -33,7 +33,9 @@
 
 pub mod codes;
 pub mod interp;
+pub mod property;
 pub mod value;
 
 pub use interp::{TestOutcome, run_tests};
+pub use property::{PropertyConfig, PropertyOutcome, is_testable, run_properties};
 pub use value::{Fields, Value, VariantValue};

@@ -89,17 +89,19 @@ fn checking_the_worked_example_is_silent_and_succeeds() {
 
 #[test]
 fn obligations_are_reported_with_their_tier() {
-    let output = run(&["check", EXAMPLE, "--obligations"]);
+    let output = run(&["check", RUNNABLE, "--obligations"]);
     assert_eq!(code(&output), 0);
 
     let text = stdout(&output);
     assert!(text.contains("proven"), "{text}");
     assert!(text.contains("Positive"), "{text}");
-    // Saying "0 tested" without saying why would imply the tier is empty by
-    // choice rather than unbuilt.
+    // All three tiers exist now. A `0 tested` line used to need a footnote
+    // explaining that the tier was unbuilt rather than empty.
+    assert!(text.contains("tested"), "{text}");
+    assert!(text.contains("guarded"), "{text}");
     assert!(
-        text.contains("property test generation, which does not exist yet"),
-        "{text}"
+        !text.contains("does not exist yet"),
+        "the footnote should be gone:\n{text}"
     );
 }
 

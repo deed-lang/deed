@@ -94,6 +94,8 @@ pub enum Nominal {
 pub enum Tier {
     /// Discharged statically.
     Proven,
+    /// Exercised by property tests generated from the contract.
+    Tested,
     /// Not provable here, so it becomes a check at the boundary.
     Guarded,
 }

@@ -79,7 +79,7 @@ struct Instance {
     state: Fields,
 }
 
-struct Interp<'a> {
+pub(crate) struct Interp<'a> {
     file: FileId,
     resolutions: &'a Resolutions,
 
@@ -161,6 +161,33 @@ impl<'a> Interp<'a> {
 
     fn def_of(&self, ident: &Ident) -> Option<DefId> {
         self.resolutions.resolution(ident.span)
+    }
+
+    /// Calls a function from outside any running program.
+    ///
+    /// Contract checking happens inside [`Interp::call`], so a caller here gets
+    /// precondition and postcondition failures without doing anything, which
+    /// is what lets the property runner treat a precondition violation as an
+    /// input to discard rather than reimplementing the check.
+    pub(crate) fn call_from_outside(
+        &mut self,
+        function: &'a FnDecl,
+        args: Vec<(Value, Span)>,
+        span: Span,
+    ) -> Result<Value, Box<Diagnostic>> {
+        match self.call(function, args, span, None) {
+            Ok(value) | Err(Signal::Return(value)) => Ok(value),
+            Err(Signal::Fail(diagnostic)) => Err(diagnostic),
+        }
+    }
+
+    /// Whether a value satisfies a refinement predicate.
+    pub(crate) fn satisfies(&mut self, predicate: &'a Expr, value: &Value) -> bool {
+        self.eval_predicate(predicate, value).unwrap_or(false)
+    }
+
+    pub(crate) fn make(file: FileId, module: &'a Module, resolutions: &'a Resolutions) -> Self {
+        Self::new(file, module, resolutions)
     }
 
     fn kind_of(&self, def: DefId) -> DefKind {

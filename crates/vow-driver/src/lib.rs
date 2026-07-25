@@ -17,19 +17,20 @@
 //! nothing to a mess they did not make, and there are tests in `vow-resolve`
 //! and `vow-typeck` asserting exactly that.
 
-use vow_ast::Module;
+use vow_ast::{Item, Module, Outcome};
 use vow_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use vow_effects::Effects;
 use vow_resolve::Resolutions;
 use vow_typeck::{Tier, Types};
 
-/// One refinement obligation and how it was discharged.
+/// One obligation and how it was discharged.
 #[derive(Clone, Debug)]
 pub struct ObligationReport {
     pub tier: Tier,
     pub span: Span,
-    /// The refinement that had to be satisfied, such as `Positive`.
-    pub refinement: String,
+    /// What had to hold, such as a refinement name or which outcome an
+    /// `ensures` clause was about.
+    pub subject: String,
 }
 
 /// Everything the compiler worked out about one file.
@@ -90,16 +91,43 @@ pub fn check(sources: &SourceMap, file: FileId) -> Checked {
     // reassemble in their head.
     diagnostics.sort_by_key(|diagnostic| diagnostic.primary.span.start);
 
-    let obligations = checked
+    let mut obligations: Vec<ObligationReport> = checked
         .types
         .obligations()
         .iter()
         .map(|obligation| ObligationReport {
             tier: obligation.tier,
             span: obligation.span,
-            refinement: checked.types.name_of(obligation.refinement).to_string(),
+            subject: checked.types.name_of(obligation.refinement).to_string(),
         })
         .collect();
+
+    // Contract obligations. Every `ensures` clause is checked at runtime on
+    // every call, so the floor is `Guarded`. A pure function whose parameters
+    // can be generated gets exercised by a property test as well, which is the
+    // `Tested` tier and the only place it comes from.
+    for item in &parsed.module.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        let tested = vow_interp::is_testable(function, &parsed.module, &resolved.resolutions);
+        for obligation in &function.contract.ensures {
+            obligations.push(ObligationReport {
+                tier: if tested { Tier::Tested } else { Tier::Guarded },
+                span: obligation.span,
+                subject: format!(
+                    "{} ensures {}",
+                    function.sig.name.name,
+                    match obligation.outcome {
+                        Outcome::Ok => "ok",
+                        Outcome::Err => "err",
+                    }
+                ),
+            });
+        }
+    }
+
+    obligations.sort_by_key(|obligation| obligation.span.start);
 
     Checked {
         file,

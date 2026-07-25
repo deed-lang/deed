@@ -112,7 +112,7 @@ Read them in order. Each one leans on the one before it.
 | `vow-resolve` | Every name bound to a declaration |
 | `vow-typeck` | Every expression given a type |
 | `vow-effects` | Every effect row checked against what the body does |
-| `vow-interp` | Runs `test` blocks, with contracts enforced |
+| `vow-interp` | Runs `test` blocks and generated property tests, with contracts enforced |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary |
 
