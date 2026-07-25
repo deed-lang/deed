@@ -302,11 +302,24 @@ fn a_handler_operation_does_not() {
 }
 
 #[test]
-fn a_closure_parameter_does_not_either() {
-    // A closure cannot leave the function that wrote it, so its parameters are
-    // not a boundary and there is nothing implicit crossing one.
-    parse_ok(
+fn a_closure_parameter_needs_one_too() {
+    // Briefly exempt, on the grounds that a closure cannot leave the function
+    // that wrote it so its parameters are not a boundary anyone reviews. True,
+    // and a different claim from "may be unchecked": with no type they were
+    // the unknown type and the body was checked against nothing.
+    let (_, parsed) = parse_source(
         "module a\n\nfn f(a: Int, b: Int) -> Int {\n    let add = |x, y| { x + y }\n    add(a, b)\n}\n",
+    );
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::MISSING_PARAMETER_TYPE, codes::MISSING_PARAMETER_TYPE]
+    );
+}
+
+#[test]
+fn a_closure_with_typed_parameters_parses() {
+    parse_ok(
+        "module a\n\nfn f(a: Int, b: Int) -> Int {\n    let add = |x: Int, y: Int| { x + y }\n    add(a, b)\n}\n",
     );
 }
 

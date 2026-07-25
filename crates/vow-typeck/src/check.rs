@@ -289,6 +289,17 @@ impl<'a> Checker<'a> {
                         self.signatures.insert(def, signature);
                     }
                 }
+                Item::Handler(handler) => {
+                    let Some(def) = self.def_of(&handler.name) else {
+                        continue;
+                    };
+                    let state = self.lower_fields(&handler.state);
+                    self.types.set_nominal(
+                        def,
+                        handler.name.name.clone(),
+                        Nominal::Handler { state },
+                    );
+                }
                 Item::Function(function) => {
                     let Some(def) = self.def_of(&function.sig.name) else {
                         continue;
@@ -472,7 +483,7 @@ impl<'a> Checker<'a> {
                 let what = match other {
                     SurfaceItem::Function { .. } => "a function",
                     SurfaceItem::Effect { .. } => "an effect",
-                    SurfaceItem::Handler => "a handler",
+                    SurfaceItem::Handler { .. } => "a handler",
                     SurfaceItem::Variant { .. } => "a variant",
                     _ => "not a type",
                 };
@@ -1575,6 +1586,10 @@ impl<'a> Checker<'a> {
                     Ty::Unknown
                 }
             },
+            // A handler names itself in a `with` block. It is not a value
+            // anybody can do anything with, but it is a name for something,
+            // and a name with no type is a name nothing is checked against.
+            DefKind::Handler => Ty::Named(def),
             _ => Ty::Unknown,
         }
     }
@@ -1613,8 +1628,14 @@ impl<'a> Checker<'a> {
                 Ty::Unknown
             }
             // A handler names itself in a `with` block, which goes through
-            // here, so it is not an error the way the others are.
-            Some(SurfaceItem::Handler) | None => Ty::Unknown,
+            // here. It is not a value, but it is a name for something, and
+            // leaving it as unknown would leave a hole in the one file that
+            // could tell us about it.
+            Some(SurfaceItem::Handler { .. }) => Ty::External {
+                module: Rc::from(module),
+                name: Rc::from(ident.name.as_str()),
+            },
+            None => Ty::Unknown,
         }
     }
 
@@ -1756,6 +1777,44 @@ impl<'a> Checker<'a> {
             }
         }
 
+        // An operation of an effect from another module. Its signature is in
+        // that module's surface, so the call is checked the same way a local
+        // one is. Without this the whole call had no type, so the arguments,
+        // the arity and the result were all unchecked, which is the same hole
+        // an imported name has had three times now.
+        if let Some(def) = callee_def
+            && !self.signatures.contains_key(&def)
+            && let Some(signature) = self.imported_operation_signature(def)
+        {
+            let name = self.resolutions.def(def).name.clone();
+            let (params, ret) = signature;
+            if args.len() != params.len() {
+                self.emit(
+                    Diagnostic::error(
+                        codes::WRONG_ARITY,
+                        self.file,
+                        span,
+                        format!(
+                            "`{name}` takes {} argument{}, but {} {} given",
+                            params.len(),
+                            if params.len() == 1 { "" } else { "s" },
+                            args.len(),
+                            if args.len() == 1 { "was" } else { "were" }
+                        ),
+                    )
+                    .with_primary_label("wrong number of arguments"),
+                );
+            }
+            for (index, arg) in args.iter().enumerate() {
+                let actual = self.infer(arg);
+                if let Some(param) = params.get(index) {
+                    let param = param.clone();
+                    self.assign(&actual, &param, Some(arg), arg.span(), None);
+                }
+            }
+            return ret;
+        }
+
         // A direct call to a declared function, where the parameter spans are
         // available and a mismatch can point at the declaration.
         if let Some(def) = callee_def
@@ -1887,6 +1946,18 @@ impl<'a> Checker<'a> {
                     }
                     return self.variant_ty(def);
                 }
+                // A handler is not a value, but the literal that installs one
+                // is checked like a record's. Without this the whole literal
+                // had no type, so `with InMemory { count: "hello" }` was
+                // accepted and a missing field became a runtime failure.
+                DefKind::Handler => {
+                    if let Some(Nominal::Handler { state }) = self.types.nominal(def) {
+                        let state = state.clone();
+                        let name = self.types.name_of(def).to_string();
+                        self.check_literal_fields(&state, fields, span, &name);
+                        return Ty::Named(def);
+                    }
+                }
                 // A record or a variant from another module is built the same
                 // way. The field types came across in that module's surface,
                 // so the check is the same one, only the blame span for the
@@ -1927,6 +1998,23 @@ impl<'a> Checker<'a> {
         Ty::Unknown
     }
 
+    /// An operation of an effect from another module.
+    ///
+    /// The resolver makes a definition for one on demand when a row or a call
+    /// names it, and its parent is the import the effect came in through. That
+    /// is the only handle this module has on it, so it is what the surface is
+    /// looked up by.
+    fn imported_operation_signature(&self, def: DefId) -> Option<(Vec<Ty>, Ty)> {
+        if self.resolutions.def(def).kind != DefKind::EffectOp {
+            return None;
+        }
+        let effect = self.resolutions.def(def).parent?;
+        if self.resolutions.def(effect).kind != DefKind::Import {
+            return None;
+        }
+        self.imported_operation(effect, &self.resolutions.def(def).name)
+    }
+
     /// A literal of a record or variant declared in another module.
     fn imported_literal(&mut self, def: DefId, fields: &'a [FieldInit], span: Span) -> Option<Ty> {
         let module: Rc<str> = Rc::from(self.resolutions.import_module(def)?);
@@ -1951,6 +2039,14 @@ impl<'a> Checker<'a> {
                 Some(Ty::External {
                     module,
                     name: choice,
+                })
+            }
+            SurfaceItem::Handler { state } => {
+                let declared = external_fields(state);
+                self.check_literal_fields(&declared, fields, span, &name);
+                Some(Ty::External {
+                    module,
+                    name: Rc::from(name.as_str()),
                 })
             }
             // Not a constructor, which the fallthrough below reports the same
