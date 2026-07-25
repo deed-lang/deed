@@ -132,8 +132,8 @@ Read them in order. Each one leans on the one before it.
 The examples are [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),
 [config.vow](examples/config.vow), [proven.vow](examples/proven.vow),
-[closures.vow](examples/closures.vow), and the three that see each other:
-[names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
+[closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow), and the three
+that see each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
 `hello.vow` and `config.vow` have a `main`, and the rest run their own tests.
 
@@ -163,6 +163,15 @@ nobody. Either alone is arguable. Together they meant a closure could carry any 
 any function with the row staying empty the whole way. A parameter now needs a type, and a
 closure's effects are charged to whoever wrote it, which is sound because a closure cannot
 leave the function that wrote it.
+
+`diverge.vow` is what a design document claiming something the compiler did not do looks
+like when it gets fixed. "Non-termination is an effect" had a section of its own and
+`Diverge` appeared nowhere else in the repository, so the word did not even resolve. Running
+an unbounded recursion overflowed the host stack and killed the process, with no diagnostic
+and no exit code anyone could read. Now a function that can reach itself has to declare it,
+mutual recursion included, and the interpreter reports `VOW6009` instead of dying. There is
+still no termination proving, so `factorial` has to declare it too, and the design document
+says that rather than hoping.
 
 `vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
 is not configurable long before anything enforced it, which meant the files were formatted

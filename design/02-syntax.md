@@ -267,16 +267,37 @@ rather than a pattern that can never match.
 ## Non-termination is an effect
 
 ```vow
-fn find_fixpoint(f: Fn(State) -> State, start: State) -> State
-  uses Diverge
+fn factorial(n: Int) -> Int
+  uses
+    Diverge,
 {
-    ...
+    if n <= 1 {
+        1
+    } else {
+        n * factorial(n - 1)
+    }
 }
 ```
 
-Functions are total by default. A loop the compiler cannot show terminates requires
-`Diverge` in the row. This costs almost nothing to write and turns "does this ever return"
-into something visible in the signature.
+Vow has no loop syntax, so a call cycle is the only way a function can fail to return.
+`Diverge` is a built-in effect with no operations, in the prelude next to `Io` and for the
+same reason: a program that could declare its own would be a program that could opt out of
+saying it might not finish. It goes in the row like anything else a function does, so the
+tightness rule applies as well, and declaring it without recursing is `VOW5002`.
+
+**There is no termination proving.** The example above obviously terminates and still has to
+declare it. "A loop the compiler cannot show terminates" currently means "any call cycle at
+all", because the compiler shows nothing. That is over-approximation in the direction of
+noise, and it is written here rather than left for someone to discover.
+
+Mutual recursion counts, worked out from the module's call graph. A cycle that leaves the
+module and comes back does not, because the graph is local, and reading another module's
+bodies is exactly what a module boundary exists to avoid. What crosses is the declared row,
+so a function that admits to `Diverge` still passes it to its callers wherever they are.
+
+Declaring it does not make anything stop. The interpreter refuses to go past a fixed call
+depth and reports `VOW6009`, because a runner that can be taken down by the program it is
+running is a runner nobody can point at a file they have not read.
 
 ## Entry point
 

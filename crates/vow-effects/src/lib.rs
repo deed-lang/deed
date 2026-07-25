@@ -33,6 +33,7 @@
 
 pub mod check;
 pub mod codes;
+pub mod cycles;
 pub mod row;
 
 pub use check::{Analysis, Effects, analyse};

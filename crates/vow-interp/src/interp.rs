@@ -26,6 +26,20 @@ use crate::codes;
 use crate::sandbox;
 use crate::value::{Capability, ClosureValue, Fields, Value, VariantValue};
 
+/// How deep a chain of calls may go before the interpreter gives up.
+///
+/// Not a language rule and not a promise about how much recursion is
+/// reasonable. It is the number that decides whether an unbounded recursion
+/// produces a diagnostic or takes the process down with it, and the second is
+/// not an acceptable answer for a tool people point at code they have not read.
+///
+/// It is low, and deliberately. The interpreter walks the tree by recursion, so
+/// one Vow frame costs several host frames, and this is a library that does not
+/// get to choose the stack it is handed. A limit that only holds when the
+/// caller was generous is not a limit. `vow` itself runs on a thread with far
+/// more room than this needs, which is the margin rather than the budget.
+const MAX_DEPTH: usize = 128;
+
 /// How one `test` block went.
 pub struct TestOutcome {
     pub name: String,
@@ -1076,7 +1090,7 @@ impl<'a> Interp<'a> {
         let caller = self.current;
         self.current = module;
         self.frames.push(frame);
-        let result = self.eval(body);
+        let result = self.too_deep(span).and_then(|()| self.eval(body));
         self.frames.pop();
         self.current = caller;
         result
@@ -1104,13 +1118,39 @@ impl<'a> Interp<'a> {
             self.inside_handler.push(handler);
         }
 
-        let result = self.call_body(function, call_span);
+        let result = self
+            .too_deep(call_span)
+            .and_then(|()| self.call_body(function, call_span));
 
         if handler.is_some() {
             self.inside_handler.pop();
         }
         self.frames.pop();
         result
+    }
+
+    /// Refuses to go any deeper, rather than letting the host stack decide.
+    ///
+    /// `Diverge` in a row says a function may not return. It does not make one
+    /// return, so something has to answer for the case where it does not, and
+    /// a runner that can be taken down by the program it is running is a runner
+    /// nobody can point at an unfamiliar file.
+    fn too_deep(&self, span: Span) -> Eval<()> {
+        if self.frames.len() <= MAX_DEPTH {
+            return Ok(());
+        }
+        Err(self.fail(
+            Diagnostic::error(
+                codes::TOO_DEEP,
+                self.file(),
+                span,
+                format!("this call went more than {MAX_DEPTH} deep"),
+            )
+            .with_primary_label("too deep")
+            .with_note(
+                "a function that can reach itself has to declare `Diverge`, and declaring it does not make it stop",
+            ),
+        ))
     }
 
     /// The part of a call that runs inside the new frame.
