@@ -152,7 +152,7 @@ makes editing one function require re-checking things that did not change.
 ### What is measured, and what is not
 
 `vow check --timings` reports wall time per pass. On one developer machine, an unoptimised
-build checking the seven files in `examples/` takes about 4ms, and a generated module of 800
+build checking the eleven files in `examples/` takes about 7ms, and a generated module of 800
 functions with contracts on half of them takes about 26ms. Those are numbers from one
 machine and a debug build, not a guarantee.
 
