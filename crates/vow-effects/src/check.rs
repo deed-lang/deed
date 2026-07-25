@@ -441,11 +441,19 @@ impl<'a> Checker<'a> {
 
             Expr::Block(block) => row.extend(&self.infer_block(block)),
 
-            // A closure performs its effects when it is called, not when it is
-            // written. Attributing them here would be wrong, and attributing
-            // them at the call site needs the row to be part of the type. That
-            // is not built yet and it is an open question in 03-effects.
-            Expr::Closure { .. } => {}
+            // A closure performs its effects when it is called, and the honest
+            // place to charge them is the call site. That needs the row to be
+            // part of the closure's type, which is the row polymorphism
+            // question 03-effects has been putting off.
+            //
+            // Charging the function that writes the closure is the
+            // conservative answer, and it is sound rather than a guess because
+            // a closure cannot leave the function that wrote it: there is no
+            // syntax for a closure type, so it cannot be a parameter, a return
+            // type or a field, and a parameter without a type is now an error.
+            // It over-approximates in one direction only, so a closure defined
+            // and never called still charges its author.
+            Expr::Closure { body, .. } => row.extend(&self.infer_expr(body)),
 
             // Specification, not action. See the note at the top of this file.
             Expr::Old { .. } | Expr::Unchanged { .. } => {}

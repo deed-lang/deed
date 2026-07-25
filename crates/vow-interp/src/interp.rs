@@ -17,14 +17,14 @@ use std::rc::Rc;
 
 use vow_ast::{
     BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item, Module, Outcome,
-    Pattern, Stmt, Type, UnaryOp,
+    Param, Pattern, Stmt, Type, UnaryOp,
 };
 use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, ExportKind, Resolutions};
 
 use crate::codes;
 use crate::sandbox;
-use crate::value::{Capability, Fields, Value, VariantValue};
+use crate::value::{Capability, ClosureValue, Fields, Value, VariantValue};
 
 /// How one `test` block went.
 pub struct TestOutcome {
@@ -268,6 +268,17 @@ struct Code<'a> {
     variant_names: HashMap<DefId, String>,
 }
 
+/// A closure expression, kept where a [`Value`] can point at it.
+///
+/// Filled in as closures are evaluated rather than by walking every module up
+/// front, because a closure value has to name a body and Vow has no loops, so
+/// this grows once per closure expression actually reached.
+struct Closure<'a> {
+    module: usize,
+    params: &'a [Param],
+    body: &'a Expr,
+}
+
 pub(crate) struct Interp<'a> {
     modules: Vec<Code<'a>>,
     by_path: HashMap<Rc<str>, usize>,
@@ -285,6 +296,9 @@ pub(crate) struct Interp<'a> {
     olds: Vec<HashMap<Span, Value>>,
     /// Handler state captured on entry, for `unchanged(...)`.
     entry_states: Vec<HashMap<Origin, Fields>>,
+
+    /// Bodies of the closures evaluated so far. See [`Closure`].
+    closures: Vec<Closure<'a>>,
 
     /// Lines written through a `Console`. Collected rather than printed so the
     /// caller decides what to do with them, and so a test can read them.
@@ -317,6 +331,7 @@ impl<'a> Interp<'a> {
             inside_handler: Vec::new(),
             olds: Vec::new(),
             entry_states: Vec::new(),
+            closures: Vec::new(),
             output: Vec::new(),
             ticks: 0,
             root: None,
@@ -601,7 +616,21 @@ impl<'a> Interp<'a> {
 
             Expr::Block(block) => self.eval_block(block),
 
-            Expr::Closure { span, .. } => Err(self.not_runnable(*span, "closures")),
+            Expr::Closure { params, body, .. } => {
+                self.closures.push(Closure {
+                    module: self.current,
+                    params,
+                    body,
+                });
+                // Everything visible right now, by value. A closure cannot
+                // leave the function that wrote it, so copying the frame is
+                // never strictly necessary today; doing it anyway means the
+                // answer does not depend on that staying true.
+                Ok(Value::Closure(Rc::new(ClosureValue {
+                    code: self.closures.len() - 1,
+                    captured: self.frames.last().cloned().unwrap_or_default(),
+                })))
+            }
 
             Expr::Old { span, .. } => match self.olds.last().and_then(|olds| olds.get(span)) {
                 Some(value) => Ok(value.clone()),
@@ -650,6 +679,11 @@ impl<'a> Interp<'a> {
         value
             .as_bool()
             .ok_or_else(|| self.not_runnable(expr.span(), "a condition that is not a Bool"))
+    }
+
+    /// What a definition is bound to in the running frame, if anything.
+    fn lookup(&self, def: DefId) -> Option<Value> {
+        self.frames.last()?.get(&def).cloned()
     }
 
     fn read(&mut self, ident: &Ident) -> Eval<Value> {
@@ -814,6 +848,15 @@ impl<'a> Interp<'a> {
         let mut values = Vec::with_capacity(args.len());
         for arg in args {
             values.push((self.eval(arg)?, arg.span()));
+        }
+
+        // A closure is a value, not a declaration, so it is reached by looking
+        // at what the callee evaluates to rather than at what it resolves to.
+        if let Expr::Ident(ident) = callee
+            && let Some(def) = self.def_of(ident)
+            && let Some(Value::Closure(closure)) = self.lookup(def)
+        {
+            return self.call_closure(&closure, values, span);
         }
 
         let Some(def) = def else {
@@ -995,6 +1038,48 @@ impl<'a> Interp<'a> {
             )),
             None => Err(self.not_runnable(span, "a filesystem operation with no name")),
         }
+    }
+
+    /// Calls a closure, in the frame it was written in.
+    ///
+    /// No contract, because a closure cannot carry one, and no effect
+    /// discharge, because the effects were already charged to the function
+    /// that wrote it. That is a conservative rule rather than the right one:
+    /// the right one puts the row in the closure's type and charges the call
+    /// site, and it is still an open question in design/03-effects.md.
+    fn call_closure(
+        &mut self,
+        closure: &ClosureValue,
+        args: Vec<(Value, Span)>,
+        span: Span,
+    ) -> Eval<Value> {
+        let Some(&Closure {
+            module,
+            params,
+            body,
+        }) = self.closures.get(closure.code)
+        else {
+            return Err(self.not_runnable(span, "a closure the interpreter lost track of"));
+        };
+
+        if args.len() != params.len() {
+            return Err(self.not_runnable(span, "a closure called with the wrong arity"));
+        }
+
+        let mut frame = closure.captured.clone();
+        for (param, (value, _)) in params.iter().zip(&args) {
+            if let Some(def) = self.modules[module].resolutions.resolution(param.name.span) {
+                frame.insert(def, value.clone());
+            }
+        }
+
+        let caller = self.current;
+        self.current = module;
+        self.frames.push(frame);
+        let result = self.eval(body);
+        self.frames.pop();
+        self.current = caller;
+        result
     }
 
     fn call(

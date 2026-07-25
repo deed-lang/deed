@@ -308,6 +308,57 @@ fn purity_is_transitive_through_calls() {
     analyse_ok("module a\n\nfn one() -> Int { 1 }\n\nfn two() -> Int { one() + one() }\n");
 }
 
+// -- closures --------------------------------------------------------------
+
+#[test]
+fn a_closure_charges_the_function_that_wrote_it() {
+    // This is the conservative rule, not the right one. The right one puts the
+    // row in the closure's type and charges the call site. What makes the
+    // conservative one sound is that a closure cannot leave the function that
+    // wrote it, so there is nowhere else the charge could land.
+    let (sources, _, _, analysis) = analyse_source(&with_ledger(
+        "fn f() -> Int {\n    let write = || { Ledger.post(1) }\n    write()\n    0\n}\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNDECLARED_EFFECT],
+        "{}",
+        rendered(&sources, &analysis.diagnostics)
+    );
+}
+
+#[test]
+fn declaring_what_the_closure_does_is_enough() {
+    analyse_ok(&with_ledger(
+        "fn f() -> Int\n  uses\n    Ledger.post,\n{\n    let write = || { Ledger.post(1) }\n    write()\n    0\n}\n",
+    ));
+}
+
+#[test]
+fn a_closure_that_is_never_called_still_charges_its_author() {
+    // The over-approximation, stated out loud. Writing a closure is enough,
+    // because deciding whether it is ever called is deciding whether a
+    // function value escapes, and the point of this rule is not having to.
+    let (sources, _, _, analysis) = analyse_source(&with_ledger(
+        "fn f() -> Int {\n    let unused = || { Ledger.post(1) }\n    0\n}\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNDECLARED_EFFECT],
+        "{}",
+        rendered(&sources, &analysis.diagnostics)
+    );
+}
+
+#[test]
+fn a_row_that_only_the_closure_uses_is_not_too_wide() {
+    // The other rule has to agree, or declaring the effect the closure needs
+    // would trade one error for another and there would be nothing to write.
+    analyse_ok(&with_ledger(
+        "fn f() -> Int\n  uses\n    Ledger.post,\n{\n    let write = || { Ledger.post(1) }\n    write()\n    0\n}\n",
+    ));
+}
+
 // -- specification is not action -------------------------------------------
 
 #[test]

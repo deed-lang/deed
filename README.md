@@ -131,8 +131,9 @@ Read them in order. Each one leans on the one before it.
 
 The examples are [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),
-[config.vow](examples/config.vow), [proven.vow](examples/proven.vow), and the three that see
-each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
+[config.vow](examples/config.vow), [proven.vow](examples/proven.vow),
+[closures.vow](examples/closures.vow), and the three that see each other:
+[names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
 `hello.vow` and `config.vow` have a `main`, and the rest run their own tests.
 
@@ -155,6 +156,13 @@ the language is supposed to force and did.
 write to one failed, because `Io.write(Console, "hi")` type checked: a type name in
 expression position had no type, and no type agrees with everything. Capability safety was
 decorative for about an hour. That is now `VOW4019`.
+
+`closures.vow` is the same shape of bug found twice in one place. A parameter could be
+written with no type, which made it the unknown type, and a closure's effects were charged to
+nobody. Either alone is arguable. Together they meant a closure could carry any effect into
+any function with the row staying empty the whole way. A parameter now needs a type, and a
+closure's effects are charged to whoever wrote it, which is sound because a closure cannot
+leave the function that wrote it.
 
 `vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
 is not configurable long before anything enforced it, which meant the files were formatted

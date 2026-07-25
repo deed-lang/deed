@@ -311,6 +311,18 @@ where it matters most.
 
 **Handlers name their effect with `implements`,** as in `handler InMemory implements Ledger`.
 
+**A function parameter needs a type, and a handler operation's does not.** The distinction is
+whether the signature is the only place the type could be written. For a free function or an
+effect operation it is, so leaving it out is an error. A handler implements an effect that
+already declared the whole signature, so repeating it there would be redundancy nothing
+checks. Closure parameters need no types either, for a different reason: a closure cannot
+leave the function that wrote it, so its parameters are not a boundary anyone reviews.
+
+This one was a hole rather than a choice. An untyped parameter became the unknown type,
+unknown agrees with everything, and a closure could carry any effect through it into a
+function that declared none. P5 says nothing implicit crosses a boundary, and a parameter is
+the boundary.
+
 **There are no float literals.** That is what makes `40.try` unambiguously `40`, `.`, `try`
 with no lookahead. If floats ever arrive, they will need a rule for that, and it is a debt
 worth naming now rather than discovering later.

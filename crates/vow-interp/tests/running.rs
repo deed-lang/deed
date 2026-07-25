@@ -287,6 +287,90 @@ fn and_short_circuits_before_touching_the_right_hand_side() {
     ));
 }
 
+// -- closures --------------------------------------------------------------
+
+#[test]
+fn a_closure_can_be_called() {
+    expect_pass(
+        "module a\n\n\
+         fn adds(a: Int, b: Int) -> Int {\n\
+         \x20 let plus = |x, y| { x + y }\n\
+         \x20 plus(a, b)\n\
+         }\n\n\
+         test \"calling one\" {\n\
+         \x20 assert adds(2, 3) == 5\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_closure_sees_the_names_around_it() {
+    expect_pass(
+        "module a\n\n\
+         fn bumped(n: Int) -> Int {\n\
+         \x20 let bump = || { n + 1 }\n\
+         \x20 bump()\n\
+         }\n\n\
+         test \"capture\" {\n\
+         \x20 assert bumped(41) == 42\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_closure_can_hold_another_closure() {
+    expect_pass(
+        "module a\n\n\
+         fn f(n: Int) -> Int {\n\
+         \x20 let outer = |x| {\n\
+         \x20   let inner = |y| { y * 2 }\n\
+         \x20   inner(x) + n\n\
+         \x20 }\n\
+         \x20 outer(5)\n\
+         }\n\n\
+         test \"nesting\" {\n\
+         \x20 assert f(1) == 11\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_closure_can_perform_an_effect_its_author_declared() {
+    expect_pass(&counter(
+        "fn bump_through_a_closure() -> Int\n\
+         \x20 uses\n\
+         \x20   Counter.bump,\n\
+         \x20   Counter.value,\n\
+         {\n\
+         \x20 let bump = || { Counter.bump(1) }\n\
+         \x20 bump()\n\
+         \x20 Counter.value()\n\
+         }\n\n\
+         test \"an effect from inside a closure\" {\n\
+         \x20 with InMemory { count: 0 } {\n\
+         \x20   assert bump_through_a_closure() == 1\n\
+         \x20 }\n\
+         }\n",
+    ));
+}
+
+#[test]
+fn two_closures_are_not_the_same_closure() {
+    // Equality is identity. Comparing captured frames would call two closures
+    // equal when calling them does different things.
+    expect_pass(
+        "module a\n\n\
+         fn f() -> Bool {\n\
+         \x20 let one = || { 1 }\n\
+         \x20 let same = one\n\
+         \x20 same == one\n\
+         }\n\n\
+         test \"identity\" {\n\
+         \x20 assert f()\n\
+         }\n",
+    );
+}
+
 // -- effects and handlers --------------------------------------------------
 
 #[test]
