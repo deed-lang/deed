@@ -1,21 +1,20 @@
 [package]
-name = "vow-cli"
-description = "The vow command line tool"
+name = "vow-interp"
+description = "Runs Vow programs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[[bin]]
-name = "vow"
-path = "src/main.rs"
-
 [dependencies]
+vow-ast = { path = "../vow-ast" }
 vow-diagnostics = { path = "../vow-diagnostics" }
-vow-driver = { path = "../vow-driver" }
-vow-interp = { path = "../vow-interp" }
-vow-typeck = { path = "../vow-typeck" }
+vow-resolve = { path = "../vow-resolve" }
+
+[dev-dependencies]
+vow-lexer = { path = "../vow-lexer" }
+vow-parser = { path = "../vow-parser" }
 
 [lints]
 workspace = true

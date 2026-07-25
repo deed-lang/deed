@@ -331,7 +331,8 @@ yet, so that bill has not arrived.
 - The `with` handler list is disambiguated by a lookahead hack: a brace opens a struct
   literal only when followed by `name:`, which is what separates `with H { a: 1 }, Other`
   from the block that follows the handler list. It works for everything written so far and
-  it is not a rule anyone should have to know. Better ideas welcome.
+  it is not a rule anyone should have to know. One concrete symptom: `with H { } { ... }`,
+  a handler with no state, cannot be parsed at all. Better ideas welcome.
 - Statement separation relies on no statement being able to start with `(`, `-`, `[` or `.`.
   That holds today and nothing enforces it. Either the grammar should guarantee it or
   statements need a real terminator.

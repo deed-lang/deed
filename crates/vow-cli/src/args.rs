@@ -11,6 +11,7 @@ vow, a contract-first language
 
 Usage:
   vow check [options] <path>...
+  vow test  [options] <path>...
 
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
@@ -20,9 +21,11 @@ Options:
 
 Paths may be files or directories. A directory is searched for `.vow` files.
 
+`vow test` refuses to run anything that does not check.
+
 Exit codes:
   0   no errors, though there may be warnings
-  1   errors were found
+  1   errors were found, or a test failed
   2   the invocation itself was wrong
 ";
 
@@ -32,8 +35,15 @@ pub enum Format {
     Json,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    Check,
+    Test,
+}
+
 #[derive(Debug)]
 pub struct CheckArgs {
+    pub mode: Mode,
     pub paths: Vec<PathBuf>,
     pub format: Format,
     pub obligations: bool,
@@ -51,16 +61,17 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         return Err("expected a command, try `vow check <path>`".to_string());
     };
 
-    match first.as_str() {
+    let mode = match first.as_str() {
         "-h" | "--help" | "help" => return Ok(Command::Help),
         "-V" | "--version" | "version" => return Ok(Command::Version),
-        "check" => {}
+        "check" => Mode::Check,
+        "test" => Mode::Test,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the only one so far is `check`"
+                "unknown command `{other}`, the choices are `check` and `test`"
             ));
         }
-    }
+    };
 
     let mut paths = Vec::new();
     let mut format = Format::Human;
@@ -87,10 +98,17 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     }
 
     if paths.is_empty() {
-        return Err("`vow check` needs at least one path".to_string());
+        return Err(format!(
+            "`vow {}` needs at least one path",
+            match mode {
+                Mode::Check => "check",
+                Mode::Test => "test",
+            }
+        ));
     }
 
     Ok(Command::Check(CheckArgs {
+        mode,
         paths,
         format,
         obligations,
@@ -109,7 +127,7 @@ fn parse_format(value: &str) -> Result<Format, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, Format, parse};
+    use super::{Command, Format, Mode, parse};
 
     fn args(items: &[&str]) -> impl Iterator<Item = String> {
         items
@@ -122,6 +140,15 @@ mod tests {
     #[test]
     fn a_bare_check_needs_a_path() {
         assert!(parse(args(&["check"])).is_err());
+        assert!(parse(args(&["test"])).is_err());
+    }
+
+    #[test]
+    fn test_is_a_command() {
+        let Ok(Command::Check(check)) = parse(args(&["test", "a.vow"])) else {
+            panic!("should parse");
+        };
+        assert_eq!(check.mode, Mode::Test);
     }
 
     #[test]
@@ -171,5 +198,6 @@ mod tests {
     fn an_unknown_command_names_the_one_that_exists() {
         let error = parse(args(&["buidl"])).unwrap_err();
         assert!(error.contains("check"), "{error}");
+        assert!(error.contains("test"), "{error}");
     }
 }
