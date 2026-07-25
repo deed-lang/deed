@@ -10,7 +10,7 @@ use vow_diagnostics::{SourceMap, render_human, render_json};
 use vow_driver::{Checked, ObligationReport};
 use vow_typeck::Tier;
 
-use crate::args::{CheckArgs, Command, Format, USAGE};
+use crate::args::{CheckArgs, Command, Format, Mode, USAGE};
 
 /// Something went wrong with the invocation rather than with the code.
 const EXIT_USAGE: u8 = 2;
@@ -85,10 +85,63 @@ fn run_check(args: CheckArgs) -> ExitCode {
 
     let errors: usize = checks.iter().map(Checked::error_count).sum();
     if errors > 0 {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
+        return ExitCode::FAILURE;
     }
+
+    if args.mode == Mode::Test {
+        // Running code that does not check would be answering a question
+        // nobody asked, and the failure would be about the wrong thing.
+        match run_tests(&mut out, &sources, &checks) {
+            Ok(true) => {}
+            Ok(false) => return ExitCode::FAILURE,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::from(EXIT_USAGE);
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Runs every test in every checked file. Returns whether they all passed.
+fn run_tests(out: &mut impl Write, sources: &SourceMap, checks: &[Checked]) -> io::Result<bool> {
+    let mut passed = 0usize;
+    let mut failed = Vec::new();
+
+    for checked in checks {
+        let outcomes = vow_interp::run_tests(checked.file, &checked.module, &checked.resolutions);
+        if outcomes.is_empty() {
+            continue;
+        }
+
+        writeln!(out, "{}", sources.file(checked.file).name())?;
+        for outcome in outcomes {
+            match outcome.failure {
+                None => {
+                    passed += 1;
+                    writeln!(out, "  ok    {}", outcome.name)?;
+                }
+                Some(diagnostic) => {
+                    writeln!(out, "  FAIL  {}", outcome.name)?;
+                    failed.push((outcome.name, diagnostic));
+                }
+            }
+        }
+    }
+
+    if passed == 0 && failed.is_empty() {
+        writeln!(out, "no tests found")?;
+        return Ok(true);
+    }
+
+    for (name, diagnostic) in &failed {
+        writeln!(out, "\n{name}\n{}", render_human(sources, diagnostic))?;
+    }
+
+    writeln!(out, "\n{passed} passed, {} failed", failed.len())?;
+
+    Ok(failed.is_empty())
 }
 
 fn report_human(

@@ -3,16 +3,25 @@
 A contract-first language where a function signature is a promise the compiler checks.
 Built for code that machines write and humans review.
 
-> **Status: front end only.** There is a compiler, and it stops after checking. It lexes,
-> parses, resolves names, type checks, and checks effect rows. It does not run anything and
-> there is no code generation. Criticism of the design is still the most useful contribution.
-> See [issue #1](https://github.com/onatozmenn/vow/issues/1) for where this is going.
+> **Status: it runs.** The compiler lexes, parses, resolves names, type checks and checks
+> effect rows, and a tree walking interpreter executes `test` blocks with contracts enforced
+> at runtime. There is no `main` and no code generation. Criticism of the design is still the
+> most useful contribution. See [issue #1](https://github.com/onatozmenn/vow/issues/1) for
+> where this is going.
 
 ```
-cargo run -p vow-cli -- check examples/transfer.vow --obligations
+$ cargo run -p vow-cli -- test examples/counter.vow
+examples/counter.vow
+  ok    bumping twice adds twice
+  ok    bumping starts from whatever the handler was given
+  ok    reading leaves the counter alone
+  ok    a frozen counter never moves
+
+4 passed, 0 failed
 ```
 
 ```
+$ cargo run -p vow-cli -- check examples/transfer.vow --obligations
 obligations: 6 proven, 0 tested, 0 guarded
   the tested tier needs property test generation, which does not exist yet
   proven   examples/transfer.vow:126:50  Positive
@@ -101,8 +110,13 @@ Read them in order. Each one leans on the one before it.
 | `vow-resolve` | Every name bound to a declaration |
 | `vow-typeck` | Every expression given a type |
 | `vow-effects` | Every effect row checked against what the body does |
+| `vow-interp` | Runs `test` blocks, with contracts enforced |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary |
+
+There are two examples. [transfer.vow](examples/transfer.vow) is checked and cannot run,
+because it returns `ok(...)` and `err(...)` from `std/result` and there is no cross module
+loading. [counter.vow](examples/counter.vow) is self contained and runs.
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.

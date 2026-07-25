@@ -8,6 +8,7 @@ use std::process::{Command, Output};
 
 const VOW: &str = env!("CARGO_BIN_EXE_vow");
 const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/transfer.vow");
+const RUNNABLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/counter.vow");
 
 fn run(args: &[&str]) -> Output {
     Command::new(VOW)
@@ -278,4 +279,82 @@ fn no_arguments_at_all_explains_itself() {
     let output = run(&[]);
     assert_eq!(code(&output), 2);
     assert!(stderr(&output).contains("vow check"));
+}
+
+// -- running tests ---------------------------------------------------------
+
+#[test]
+fn the_runnable_example_passes() {
+    let output = run(&["test", RUNNABLE]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("4 passed, 0 failed"), "{text}");
+    assert!(text.contains("ok    bumping twice adds twice"), "{text}");
+}
+
+#[test]
+fn a_failing_test_exits_with_one_and_shows_why() {
+    let scratch = Scratch::new("failing");
+    let file = scratch.write(
+        "failing.vow",
+        "module a\n\nfn double(n: Int) -> Int { n + n }\n\ntest \"wrong\" {\n  assert double(3) == 7\n}\n",
+    );
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+
+    let text = stdout(&output);
+    assert!(text.contains("FAIL  wrong"), "{text}");
+    assert!(text.contains("VOW6001"), "{text}");
+    assert!(text.contains("left is 6, right is 7"), "{text}");
+    assert!(text.contains("0 passed, 1 failed"), "{text}");
+}
+
+#[test]
+fn nothing_is_run_when_the_file_does_not_check() {
+    // Running code that does not check would answer a question nobody asked,
+    // and the failure would be about the wrong thing.
+    let scratch = Scratch::new("broken-test");
+    let file = scratch.write(
+        "broken.vow",
+        "module a\n\nfn f() -> Int { nope() }\n\ntest \"never runs\" {\n  assert true\n}\n",
+    );
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+
+    let text = stdout(&output);
+    assert!(text.contains("VOW3001"), "{text}");
+    assert!(
+        !text.contains("never runs"),
+        "tests were run anyway:\n{text}"
+    );
+}
+
+#[test]
+fn a_file_with_no_tests_says_so() {
+    let scratch = Scratch::new("no-tests");
+    let file = scratch.write("quiet.vow", "module a\n\nfn f() -> Int { 0 }\n");
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0);
+    assert!(stdout(&output).contains("no tests found"));
+}
+
+#[test]
+fn check_does_not_run_tests() {
+    let scratch = Scratch::new("check-only");
+    let file = scratch.write(
+        "failing.vow",
+        "module a\n\ntest \"would fail\" {\n  assert false\n}\n",
+    );
+
+    let output = run(&["check", file.to_str().unwrap()]);
+    assert_eq!(
+        code(&output),
+        0,
+        "checking should not care that it would fail"
+    );
+    assert_eq!(stdout(&output), "");
 }
