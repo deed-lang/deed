@@ -79,27 +79,34 @@ fn counter(rest: &str) -> String {
 
 // -- the runnable example --------------------------------------------------
 
+// -- the runnable examples -------------------------------------------------
+
+/// Both examples run. This is the guard that stops either of them drifting
+/// into something that only type checks.
 #[test]
-fn the_counter_example_passes() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/counter.vow");
-    let source = std::fs::read_to_string(path).expect("examples/counter.vow should exist");
+fn the_examples_pass_their_own_tests() {
+    for name in ["counter.vow", "transfer.vow"] {
+        let path = format!("{}/../../examples/{name}", env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("examples/{name} should exist"));
 
-    let mut sources = SourceMap::new();
-    let file = sources.add("examples/counter.vow", source);
-    let lexed = tokenize(file, sources.file(file).text());
-    let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
-    assert!(!resolved.has_errors());
+        let mut sources = SourceMap::new();
+        let file = sources.add(format!("examples/{name}"), source);
+        let lexed = tokenize(file, sources.file(file).text());
+        let parsed = parse(file, &lexed.tokens);
+        let resolved = resolve(file, &parsed.module);
+        assert!(!resolved.has_errors(), "examples/{name} should resolve");
 
-    let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
-    assert!(!outcomes.is_empty(), "the example should have tests");
-    for outcome in &outcomes {
-        if let Some(failure) = &outcome.failure {
-            panic!(
-                "`{}` should pass:\n{}",
-                outcome.name,
-                render_human(&sources, failure)
-            );
+        let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
+        assert!(!outcomes.is_empty(), "examples/{name} should have tests");
+        for outcome in &outcomes {
+            if let Some(failure) = &outcome.failure {
+                panic!(
+                    "examples/{name}, `{}` should pass:\n{}",
+                    outcome.name,
+                    render_human(&sources, failure)
+                );
+            }
         }
     }
 }

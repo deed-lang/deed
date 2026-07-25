@@ -10,14 +10,16 @@ Built for code that machines write and humans review.
 > where this is going.
 
 ```
-$ cargo run -p vow-cli -- test examples/counter.vow
+$ cargo run -p vow-cli -- test examples/
 examples/counter.vow
   ok    bumping twice adds twice
-  ok    bumping starts from whatever the handler was given
-  ok    reading leaves the counter alone
-  ok    a frozen counter never moves
+  ...
+examples/transfer.vow
+  ok    moves the money and conserves the total
+  ok    refuses to overdraw and leaves the ledger alone
+  ok    refuses a currency mismatch and leaves the ledger alone
 
-4 passed, 0 failed
+12 passed, 0 failed
 ```
 
 ```
@@ -114,9 +116,14 @@ Read them in order. Each one leans on the one before it.
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary |
 
-There are two examples. [transfer.vow](examples/transfer.vow) is checked and cannot run,
-because it returns `ok(...)` and `err(...)` from `std/result` and there is no cross module
-loading. [counter.vow](examples/counter.vow) is self contained and runs.
+There are two examples, [transfer.vow](examples/transfer.vow) and
+[counter.vow](examples/counter.vow). Both are self contained, both are checked by every pass
+on every commit, and both run their own tests with contracts enforced.
+
+`transfer.vow` used to model something that could not exist. `Money.units` was `Positive`,
+which made a zero balance and a debit unwritable, and the type checker said so. The fix was
+to separate the type that can be zero from the type that cannot, which is the sort of thing
+the language is supposed to force and did.
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.

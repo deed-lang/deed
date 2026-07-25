@@ -1,26 +1,42 @@
 // The running example. Every design document refers back to this file.
 //
-// Nothing here executes yet. It lexes, parses, resolves, type checks, and has
-// its effect row checked against what its body actually performs. Names reached
-// through an import are deliberately left unchecked, because nothing can
-// honestly be said about the inside of a module that has not been loaded.
+// It lexes, parses, resolves, type checks, has its effect row checked against
+// what its body actually performs, and runs. Nothing is imported: everything it
+// needs is declared here, which is the only way the compiler can check any of
+// it.
 //
-// The effects are declared here rather than imported, which is a change from
-// the earlier version of this file. Importing them meant the compiler could not
-// see their operations, and the effect row could not be checked at all. An
-// example that imports away the one thing the language is about is not much of
-// an example.
+// The model changed once, and the reason is worth keeping.
+//
+// `Money.units` used to be `Positive`, which made two things unwritable: a zero
+// balance, and a debit. The type checker rejected `money(0)` and the assertion
+// was dropped rather than fixed, because the fix was a design question.
+//
+// This is the answer. A balance and a transfer amount are different types with
+// different invariants, and calling both of them `Money` was the mistake. The
+// refinement was doing its job the whole time; it was attached to the wrong
+// thing. A language can stop you from writing down a broken model. It cannot
+// tell you where the invariant belonged.
 
 module payments/transfer
 
-use accounts.{AccountId, Currency}
-use ledger.{InMemoryLedger}
-use audit.{NullAudit}
-
-// A refinement, so nothing downstream has to re-validate.
+// Something you move. It cannot be zero, and it cannot be negative.
 type Positive = Int where value > 0
 
+type AccountId = Int
+
+choice Currency {
+    TRY,
+    USD,
+}
+
+// What an account holds. Zero is an ordinary state for it.
 record Money {
+    units: Int,
+    currency: Currency,
+}
+
+// What a transfer carries. Zero is not.
+record Amount {
     units: Positive,
     currency: Currency,
 }
@@ -28,22 +44,27 @@ record Money {
 record Receipt {
     from: AccountId,
     to: AccountId,
-    amount: Money,
+    amount: Amount,
+}
+
+choice Direction {
+    Debit,
+    Credit,
 }
 
 record Entry {
     account: AccountId,
-    amount: Money,
+    direction: Direction,
+    amount: Amount,
 }
 
 choice TransferError {
     InsufficientFunds { available: Money },
-    AccountClosed { account: AccountId },
     CurrencyMismatch { expected: Currency, found: Currency },
 }
 
 choice AuditEvent {
-    TransferRecorded { from: AccountId, to: AccountId, amount: Money },
+    TransferRecorded { from: AccountId, to: AccountId, amount: Amount },
 }
 
 // An effect declares operations and nothing else. A function that does not name
@@ -61,7 +82,7 @@ effect Audit {
 
 // The contract is the review surface. A person reads everything above the
 // opening brace and nothing below it.
-fn transfer(from: AccountId, to: AccountId, amount: Money)
+fn transfer(from: AccountId, to: AccountId, amount: Amount)
     -> Result<Receipt, TransferError>
   where
     from != to,
@@ -88,67 +109,143 @@ fn transfer(from: AccountId, to: AccountId, amount: Money)
         return err(InsufficientFunds { available })
     }
 
-    Ledger.post(Entry { account: from, amount })
-    Ledger.post(Entry { account: to, amount })
+    Ledger.post(Entry { account: from, direction: Debit, amount })
+    Ledger.post(Entry { account: to, direction: Credit, amount })
     Audit.append(TransferRecorded { from, to, amount })
 
     ok(Receipt { from, to, amount })
-}
-
-fn money(units: Positive) -> Money {
-    Money { units, currency: Currency.TRY }
 }
 
 // Note what is absent, since that is the point.
 //
 //   - `amount.units > 0` is not a precondition, because `Positive` already
 //     rules it out. There is no runtime check and no test for it.
-//   - The function cannot open a socket or read a file. It did not ask for
-//     those effects, so it does not have them. It cannot call `Ledger.total`
-//     either, even though `Ledger` is right there, because the row does not
-//     name it.
+//   - `transfer` cannot open a socket or read a file. It did not ask for those
+//     effects, so it does not have them. It cannot call `Ledger.total` either,
+//     even though `Ledger` is right there, because the row does not name it.
 //   - `err => unchanged(Ledger)` states the rollback guarantee without saying
-//     anything about how it is implemented.
+//     anything about how it is implemented, and it is checked on both failing
+//     paths when the tests run.
 //   - `ok => Ledger.total() == old(Ledger.total())` is conservation. Money is
 //     not created. Stating it once here replaces a category of test.
-//   - The obligations talk about `.units` rather than about `Money` directly,
-//     because there is no operator overloading and `Money - Money` means
-//     nothing. That is the trade P4 asks for, visible.
+//   - The balance obligations talk about `.units` rather than about `Money`
+//     directly, because there is no operator overloading and `Money - Money`
+//     means nothing. That is the trade P4 asks for, visible.
+
+fn amount_of(units: Positive) -> Amount {
+    Amount { units, currency: TRY }
+}
+
+fn money_of(units: Int) -> Money {
+    Money { units, currency: TRY }
+}
+
+fn signed(direction: Direction, amount: Amount) -> Int {
+    match direction {
+        Debit => 0 - amount.units,
+        Credit => amount.units,
+    }
+}
+
+// Two accounts is enough to move money between, and the language has no map
+// type yet.
+handler TwoAccounts implements Ledger {
+    state first: AccountId
+    state first_units: Int
+    state second: AccountId
+    state second_units: Int
+    state currency: Currency
+
+    fn balance(account) -> Money {
+        if account == first {
+            return Money { units: first_units, currency }
+        }
+        Money { units: second_units, currency }
+    }
+
+    fn total() -> Money {
+        Money { units: first_units + second_units, currency }
+    }
+
+    fn post(entry) -> () {
+        let delta = signed(entry.direction, entry.amount)
+        if entry.account == first {
+            first_units = first_units + delta
+        } else {
+            second_units = second_units + delta
+        }
+    }
+}
+
+handler CountingAudit implements Audit {
+    state written: Int
+
+    fn append(event) -> () {
+        written = written + 1
+    }
+}
 
 test "moves the money and conserves the total" {
-    let alice = AccountId.sample(1)
-    let bob = AccountId.sample(2)
+    let alice = 1
+    let bob = 2
 
-    with InMemoryLedger { opening: 100 },
-         NullAudit
+    with TwoAccounts {
+             first: alice,
+             first_units: 100,
+             second: bob,
+             second_units: 0,
+             currency: TRY,
+         },
+         CountingAudit { written: 0 }
     {
-        // `Result` has no methods, so there is no `unwrap`. Comparing the
-        // whole thing says more anyway: it pins down the error case too.
-        let expected = ok(Receipt { from: alice, to: bob, amount: money(40) })
+        let receipt = ok(Receipt { from: alice, to: bob, amount: amount_of(40) })
 
-        assert transfer(alice, bob, money(40)) == expected
-        assert Ledger.balance(alice) == money(60)
+        assert transfer(alice, bob, amount_of(40)) == receipt
+        assert Ledger.balance(alice) == money_of(60)
+        assert Ledger.balance(bob) == money_of(40)
+        assert Ledger.total() == money_of(100)
     }
 }
 
 test "refuses to overdraw and leaves the ledger alone" {
-    let alice = AccountId.sample(1)
-    let bob = AccountId.sample(2)
+    let alice = 1
+    let bob = 2
 
-    with InMemoryLedger { opening: 10 },
-         NullAudit
+    with TwoAccounts {
+             first: alice,
+             first_units: 10,
+             second: bob,
+             second_units: 0,
+             currency: TRY,
+         },
+         CountingAudit { written: 0 }
     {
-        let outcome = transfer(alice, bob, money(40))
+        let refusal = err(InsufficientFunds { available: money_of(10) })
 
-        assert outcome == err(InsufficientFunds { available: money(10) })
-        assert Ledger.balance(alice) == money(10)
+        assert transfer(alice, bob, amount_of(40)) == refusal
+        assert Ledger.balance(alice) == money_of(10)
+        // This line is the whole reason the model changed. It could not be
+        // written at all while a balance had to be positive.
+        assert Ledger.balance(bob) == money_of(0)
     }
 }
 
-// An earlier version asserted `Ledger.balance(bob) == money(0)`, and the type
-// checker rejected it: `Money.units` is `Positive`, so a zero balance cannot be
-// written down at all. That is a real modelling mistake and it was sitting in
-// this file the whole time. `Positive` is right for a transfer amount and wrong
-// for a balance, and the two should probably not be the same type. Left as it
-// is for now, with the assertion dropped, because the fix is a design question
-// rather than a typo.
+test "refuses a currency mismatch and leaves the ledger alone" {
+    let alice = 1
+    let bob = 2
+
+    with TwoAccounts {
+             first: alice,
+             first_units: 100,
+             second: bob,
+             second_units: 0,
+             currency: USD,
+         },
+         CountingAudit { written: 0 }
+    {
+        let refusal = err(CurrencyMismatch { expected: USD, found: TRY })
+
+        assert transfer(alice, bob, amount_of(40)) == refusal
+        assert Ledger.balance(alice) == Money { units: 100, currency: USD }
+    }
+}
