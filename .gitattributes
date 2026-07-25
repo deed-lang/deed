@@ -1,0 +1,7 @@
+# Normalise line endings so a Windows checkout does not show every file as
+# changed. Canonical form in the repository is LF.
+* text=auto eol=lf
+
+*.vow text eol=lf
+*.rs  text eol=lf
+*.md  text eol=lf
