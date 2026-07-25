@@ -34,8 +34,13 @@ use crate::exports::{ExportKind, Universe};
 /// built in for the same reason there is no ambient authority: if a program
 /// could declare its own `Console` and conjure one, none of the rest would mean
 /// anything.
+///
+/// `length` is here because a `String` you cannot measure is a `String` you
+/// cannot check. Deliberately the only one of its kind: the prelude is a place
+/// names go to become unavailable to everyone else, so it stays small and every
+/// addition to it is argued for rather than assumed.
 pub const PRELUDE: &[&str] = &[
-    "Int", "String", "Bool", "Result", "ok", "err", "System", "Console", "Clock", "Dir",
+    "Int", "String", "Bool", "Result", "ok", "err", "length", "System", "Console", "Clock", "Dir",
 ];
 
 /// Operations of the built-in `Io` effect.

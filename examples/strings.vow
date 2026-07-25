@@ -1,0 +1,88 @@
+// Strings, which until recently you could hold and not use.
+//
+// There was no way to join two of them. A program could not build a message
+// out of pieces, which meant nobody could write a program, which meant every
+// other decision in this language was untested. Eight passes, a formatter, an
+// autofixer and a proof tier, and you could not say hello to someone by name.
+//
+// The other half of the same bug: `<` was accepted on anything, as long as
+// both sides had the same type. Comparing two records passed the type checker
+// and failed at runtime with a message blaming the interpreter for not
+// implementing something that has nothing to implement.
+
+module examples/strings
+
+type NonEmpty = String where length(value) > 0
+
+record Person {
+    name: NonEmpty,
+    town: String,
+}
+
+// `+` joins two strings. It is the one operator with two meanings, and they
+// never overlap: there is no conversion between `Int` and `String`, so no
+// expression is ambiguous about which one it wanted.
+fn greeting(person: Person) -> String {
+    "hello, " + person.name + " of " + person.town
+}
+
+// A length is never negative, and the prelude says so, so this lands in the
+// Proven tier rather than being checked again at runtime.
+fn width(text: String) -> Counted {
+    length(text)
+}
+
+type Counted = Int where value >= 0
+
+// Nothing here knows anything about the length of `text`, so this one is a
+// real check that really runs. Interval reasoning is about integers, and a
+// string is not one.
+fn shout(text: String) -> String {
+    let loud = announce(text)
+
+    loud + "!"
+}
+
+fn announce(text: NonEmpty) -> String {
+    text
+}
+
+// Strings are ordered, by character. For text in one script that is the order
+// anybody expects, and for text that mixes them it is a decision nobody should
+// be making without knowing the locale, so this is the plain answer rather
+// than a wrong clever one.
+fn earlier(a: String, b: String) -> String {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+// What is deliberately missing: slicing, searching, splitting, case, turning a
+// number into a string. All of those want a standard library and Vow has no
+// story for one yet. This file is the minimum that makes a program writable,
+// not a claim that strings are finished.
+
+test "joining" {
+    assert greeting(Person { name: "onat", town: "istanbul" }) == "hello, onat of istanbul"
+    assert "" + "a" == "a"
+}
+
+test "measuring" {
+    assert width("hello") == 5
+    assert width("") == 0
+    // Characters, not bytes. A length that counted bytes would mean something
+    // different depending on which letters turned up.
+    assert width("gün") == 3
+}
+
+test "ordering" {
+    assert earlier("b", "a") == "a"
+    assert earlier("abc", "abd") == "abc"
+    assert !("b" <= "a")
+}
+
+test "the refinement is real" {
+    assert shout("hey") == "hey!"
+}

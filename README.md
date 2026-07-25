@@ -132,8 +132,9 @@ Read them in order. Each one leans on the one before it.
 The examples are [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),
 [config.vow](examples/config.vow), [proven.vow](examples/proven.vow),
-[closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow), and the three
-that see each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
+[closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow),
+[strings.vow](examples/strings.vow), and the three that see each other:
+[names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
 `hello.vow` and `config.vow` have a `main`, and the rest run their own tests.
 
@@ -172,6 +173,13 @@ and no exit code anyone could read. Now a function that can reach itself has to 
 mutual recursion included, and the interpreter reports `VOW6009` instead of dying. There is
 still no termination proving, so `factorial` has to declare it too, and the design document
 says that rather than hoping.
+
+`strings.vow` exists because until recently there was no way to join two strings. A program
+could not build a message out of pieces, so nobody could write a program, so every other
+decision here was untested. Fixing it turned up the same bug from the other side: `<` was
+accepted on anything as long as both sides had the same type, so comparing two records passed
+the type checker and failed at runtime with a message blaming the interpreter for not
+implementing something that has nothing to implement.
 
 `vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
 is not configurable long before anything enforced it, which meant the files were formatted
