@@ -91,6 +91,8 @@ fn transfer(from: AccountId, to: AccountId, amount: Amount)
     Ledger.post,
     Audit.append,
   ensures
+    ok  => result.from == from,
+    ok  => result.amount == amount,
     ok  => Ledger.balance(from).units == old(Ledger.balance(from).units) - amount.units,
     ok  => Ledger.balance(to).units   == old(Ledger.balance(to).units)   + amount.units,
     ok  => Ledger.total() == old(Ledger.total()),

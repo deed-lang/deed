@@ -105,6 +105,15 @@ Details in [03-effects.md](03-effects.md).
 What the function guarantees. Written per outcome, so `ok =>` and `err =>` are separate
 obligations and neither is optional.
 
+`result` is what the function produced. In an `ok =>` clause it is the success value, in an
+`err =>` clause it is the error, and for a function that does not return a `Result` it is
+whatever was returned. So an obligation never has to unwrap anything, and the two outcomes
+cannot be confused with each other.
+
+Without it a pure function could not have a postcondition at all, since its return value is
+the only thing it produces. That was true from the first draft of this document and nobody
+noticed, because every example was effectful.
+
 `old(expr)` is the value of `expr` on entry. `unchanged(Effect)` says nothing observable
 through that effect was modified, which is how rollback gets stated without describing the
 mechanism.
@@ -273,8 +282,9 @@ nothing in the compiler would ever mention it. It is the only place the language
 meaning to how a name is written, and it buys an entire class of silent bug.
 
 **`value` is in scope inside a refinement and nowhere else.** `type Positive = Int where
-value > 0` has nothing else to talk about. It is the one name the language introduces
-implicitly.
+value > 0` has nothing else to talk about. Along with `result` in an `ensures` clause, it is
+one of only two names the language introduces implicitly, and both exist because the thing
+they name has no other way to be written down.
 
 **The prelude is seven names:** `Int`, `String`, `Bool`, `System`, `Result`, `ok`, `err`.
 Everything else is imported. Each prelude entry is a name that cannot be looked up in any

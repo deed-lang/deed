@@ -60,6 +60,23 @@ fn bump_twice(by: Positive) -> Int
     Counter.value()
 }
 
+// A pure function with a postcondition. `result` is what the function
+// returned, and it is the only name besides `value` that the language
+// introduces on its own.
+//
+// Without it a pure function could not have a postcondition at all, since its
+// return value is the only thing it produces.
+fn clamp(n: Int, limit: Positive) -> Int
+  ensures
+    ok => result <= limit,
+    ok => result == n || result == limit,
+{
+    if n > limit {
+        return limit
+    }
+    n
+}
+
 // Reading changes nothing, and `unchanged` says so. It compares the state of
 // the handler installed for `Counter` before and after the call.
 fn peek() -> Int
@@ -180,4 +197,9 @@ test "and the failing arm gets the error it was given" {
         assert bump_or_limit(5, 100) == 100
         assert Counter.value() == 100
     }
+}
+
+test "clamping keeps its promise both ways" {
+    assert clamp(3, 10) == 3
+    assert clamp(30, 10) == 10
 }

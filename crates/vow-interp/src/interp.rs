@@ -676,6 +676,17 @@ impl<'a> Interp<'a> {
             if obligation.outcome != outcome {
                 continue;
             }
+
+            // `result` is what the function produced: the success value for an
+            // `ok` clause, the error value for an `err` one.
+            if let Some(def) = result_def(&obligation.condition, self.resolutions) {
+                let bound = match (value, outcome) {
+                    (Value::Result { value, .. }, _) => (**value).clone(),
+                    (other, _) => other.clone(),
+                };
+                self.frame().insert(def, bound);
+            }
+
             if !self.condition(&obligation.condition)? {
                 let name = function.sig.name.name.clone();
                 return Err(self.fail(
@@ -1032,6 +1043,28 @@ impl<'a> Interp<'a> {
             }
             _ => {}
         }
+    }
+}
+
+/// The definition `result` refers to inside an obligation, if it is used.
+fn result_def(expr: &Expr, resolutions: &Resolutions) -> Option<DefId> {
+    match expr {
+        Expr::Ident(ident) if ident.name == "result" => resolutions.resolution(ident.span),
+        Expr::Field { receiver, .. } => result_def(receiver, resolutions),
+        Expr::Call { callee, args, .. } => result_def(callee, resolutions)
+            .or_else(|| args.iter().find_map(|arg| result_def(arg, resolutions))),
+        Expr::StructLit { path, fields, .. } => result_def(path, resolutions).or_else(|| {
+            fields
+                .iter()
+                .filter_map(|field| field.value.as_ref())
+                .find_map(|value| result_def(value, resolutions))
+        }),
+        Expr::Unary { operand, .. } | Expr::Try { operand, .. } => result_def(operand, resolutions),
+        Expr::Binary { lhs, rhs, .. } => {
+            result_def(lhs, resolutions).or_else(|| result_def(rhs, resolutions))
+        }
+        Expr::Old { expr, .. } => result_def(expr, resolutions),
+        _ => None,
     }
 }
 
