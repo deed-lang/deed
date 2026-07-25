@@ -84,7 +84,7 @@ fn the_worked_example_parses_cleanly() {
         module.name.as_ref().unwrap().to_string_path(),
         "payments/transfer"
     );
-    assert_eq!(module.uses.len(), 4);
+    assert_eq!(module.uses.len(), 3);
 
     let functions = module
         .items

@@ -136,6 +136,10 @@ as a warning at the point of use. Thin is fine. Silent would not be.
 
 Values, always. No exceptions, no panics in library code.
 
+`Result`, `ok` and `err` are part of the language rather than a library. A language where you
+cannot write a failing function without an import is not finished, and `?` cannot be checked
+against a type the compiler does not know about.
+
 ```vow
 fn parse_amount(input: String) -> Result<Money, ParseError> {
     let units = Int.parse(input)?
@@ -143,8 +147,16 @@ fn parse_amount(input: String) -> Result<Money, ParseError> {
 }
 ```
 
-`?` propagates the error case. Error types are `choice`s, matching is exhaustive, and
-adding a variant breaks every caller that has to care, on purpose.
+`?` unwraps the success case and returns the failure one, so nothing after it runs when the
+call fails. It is an error to use it on something that is not a `Result`, or inside a
+function that does not return one.
+
+`Result` has no methods. There is no `unwrap`, and there is no pattern for matching on it
+yet, so the only thing you can do with one is compare it or propagate it. That is a gap, and
+it is listed below rather than hidden.
+
+Error types are `choice`s, matching is exhaustive, and adding a variant breaks every caller
+that has to care, on purpose.
 
 ## Pattern matching
 
@@ -248,10 +260,9 @@ meaning to how a name is written, and it buys an entire class of silent bug.
 value > 0` has nothing else to talk about. It is the one name the language introduces
 implicitly.
 
-**The prelude is four names:** `Int`, `String`, `Bool`, `System`. Everything else is
-imported. Each prelude entry is a name that cannot be looked up in any file, which is the
-kind of thing P2 is a budget for.
-
+**The prelude is seven names:** `Int`, `String`, `Bool`, `System`, `Result`, `ok`, `err`.
+Everything else is imported. Each prelude entry is a name that cannot be looked up in any
+file, which is the kind of thing P2 is a budget for, so the list is short on purpose.
 **Names reached through an import are not checked.** `Ledger.read` where `Ledger` came from
 `use ledger.{Ledger}` is left alone, because the compiler has not loaded that module and
 cannot honestly say anything about its contents. When cross module loading exists this
@@ -287,8 +298,17 @@ the other side either, because there is no basis for it.
 **Ordering is not tied to anything yet.** `<` currently insists only that both sides have
 the same type. There are no traits, so there is nothing better to insist on. Listed below.
 
-**`?` is not checked.** It needs `Result` to be a type the compiler knows, which needs cross
-module loading. Until then it produces an unknown type and says nothing.
+**`?` is checked.** The operand must be a `Result`, the enclosing function must return one,
+and the error types must line up.
+
+**`ok(x)` and `err(e)` each say nothing about the other side.** `ok(x)` has type
+`Result<T, _>` and the unknown half agrees with whatever the expected error type turns out to
+be. That is what makes them work with no unification anywhere, and it is the whole reason the
+unknown type absorbs rather than unifies.
+
+**The prelude is seven names:** `Int`, `String`, `Bool`, `System`, `Result`, `ok`, `err`.
+Importing a name the language already provides is a warning, because silently shadowing a
+builtin would put everything that depends on it quietly back to being unchecked.
 
 ## Mutation
 
@@ -319,6 +339,9 @@ yet, so that bill has not arrived.
 
 ## Open questions
 
+- There is no way to take a `Result` apart. No `unwrap`, and no `ok(x)` or `err(e)` pattern
+  for `match`. Comparing the whole value works and propagating with `?` works, and that is
+  not enough for real code.
 - Ordering operators accept any two operands of the same type, including ones where ordering
   is meaningless. This needs a trait, or a fixed set of orderable types, and has neither.
 - Refinements have no conversion form, so the only values that can enter a refined type are

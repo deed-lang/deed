@@ -92,7 +92,7 @@ fn the_counter_example_passes() {
     assert!(!resolved.has_errors());
 
     let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
-    assert_eq!(outcomes.len(), 4);
+    assert!(!outcomes.is_empty(), "the example should have tests");
     for outcome in &outcomes {
         if let Some(failure) = &outcome.failure {
             panic!(

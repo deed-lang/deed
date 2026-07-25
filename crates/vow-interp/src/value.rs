@@ -23,6 +23,11 @@ pub enum Value {
     Bool(bool),
     Record(Rc<Fields>),
     Variant(Rc<VariantValue>),
+    /// `ok(v)` or `err(e)`.
+    Result {
+        ok: bool,
+        value: Rc<Value>,
+    },
 }
 
 /// Field values, ordered by name so that two records built in different orders
@@ -49,6 +54,20 @@ impl Value {
         }))
     }
 
+    pub fn ok(value: Value) -> Self {
+        Value::Result {
+            ok: true,
+            value: Rc::new(value),
+        }
+    }
+
+    pub fn err(value: Value) -> Self {
+        Value::Result {
+            ok: false,
+            value: Rc::new(value),
+        }
+    }
+
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Value::Int(value) => Some(*value),
@@ -72,6 +91,7 @@ impl Value {
             Value::Bool(_) => "a Bool",
             Value::Record(_) => "a record",
             Value::Variant(_) => "a variant",
+            Value::Result { .. } => "a Result",
         }
     }
 }
@@ -90,6 +110,9 @@ impl fmt::Display for Value {
                 } else {
                     write_fields(f, &variant.name, &variant.fields)
                 }
+            }
+            Value::Result { ok, value } => {
+                write!(f, "{}({value})", if *ok { "ok" } else { "err" })
             }
         }
     }

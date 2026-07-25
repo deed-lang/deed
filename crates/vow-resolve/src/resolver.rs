@@ -22,10 +22,13 @@ use crate::defs::{DefData, DefId, DefKind, Dot, Resolutions};
 
 /// Names the language provides without anyone importing them.
 ///
-/// Deliberately tiny. Every entry is a name that cannot be shadowed without a
-/// warning and cannot be looked up in any file, which is exactly the kind of
-/// thing P2 is a budget for.
-pub const PRELUDE: &[&str] = &["Int", "String", "Bool", "System"];
+/// Deliberately tiny. Every entry is a name that cannot be looked up in any
+/// file, which is exactly the kind of thing P2 is a budget for.
+///
+/// `Result`, `ok` and `err` are here rather than in a library because a
+/// language where you cannot write a failing function without an import is not
+/// finished. Errors as values and `?` are core to the design.
+pub const PRELUDE: &[&str] = &["Int", "String", "Bool", "System", "Result", "ok", "err"];
 
 pub struct Resolved {
     pub resolutions: Resolutions,
@@ -147,6 +150,22 @@ impl Resolver {
                 .with_secondary(
                     previous_span,
                     format!("first declared as a {} here", previous_kind.describe()),
+                ),
+            );
+        } else if PRELUDE.contains(&ident.name.as_str()) {
+            // Silently shadowing a builtin would put everything that depends on
+            // it quietly back to being unchecked, which is the worst way for
+            // this to go wrong.
+            self.diagnostics.push(
+                Diagnostic::warning(
+                    codes::SHADOWED_DECLARATION,
+                    self.file,
+                    ident.span,
+                    format!("`{}` hides a name the language provides", ident.name),
+                )
+                .with_primary_label("hides a builtin")
+                .with_note(
+                    "the builtin becomes unreachable in this file, and anything that relied on it stops being checked",
                 ),
             );
         }

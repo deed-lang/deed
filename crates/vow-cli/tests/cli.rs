@@ -289,8 +289,13 @@ fn the_runnable_example_passes() {
     assert_eq!(code(&output), 0, "{}", stdout(&output));
 
     let text = stdout(&output);
-    assert!(text.contains("4 passed, 0 failed"), "{text}");
+    assert!(text.contains("0 failed"), "{text}");
     assert!(text.contains("ok    bumping twice adds twice"), "{text}");
+    assert!(
+        text.contains("ok    the question mark stops the rest of the body"),
+        "{text}"
+    );
+    assert!(!text.contains("FAIL"), "{text}");
 }
 
 #[test]

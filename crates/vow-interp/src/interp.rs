@@ -237,10 +237,19 @@ impl<'a> Interp<'a> {
                 op, lhs, rhs, span, ..
             } => self.binary(*op, lhs, rhs, *span),
 
-            Expr::Try { span, .. } => Err(self.not_runnable(
-                *span,
-                "`?`, because `Result` lives in a module that cannot be loaded",
-            )),
+            Expr::Try { operand, span } => {
+                let value = self.eval(operand)?;
+                match value {
+                    Value::Result { ok: true, value } => Ok((*value).clone()),
+                    // The rest of the body does not run. That is the whole
+                    // point of the operator.
+                    failure @ Value::Result { ok: false, .. } => Err(Signal::Return(failure)),
+                    other => Err(self.not_runnable(
+                        *span,
+                        &format!("`?` on {}, which is not a Result", other.describe()),
+                    )),
+                }
+            }
 
             Expr::If {
                 condition,
@@ -483,6 +492,15 @@ impl<'a> Interp<'a> {
                 self.call(function, values, span, None)
             }
             DefKind::EffectOp => self.dispatch(def, values, span),
+            DefKind::Builtin => {
+                let name = self.resolutions.def(def).name.clone();
+                let carried = values.first().map(|(value, _)| value.clone());
+                match (name.as_str(), carried) {
+                    ("ok", Some(value)) => Ok(Value::ok(value)),
+                    ("err", Some(value)) => Ok(Value::err(value)),
+                    _ => Err(self.not_runnable(callee.span(), "this call")),
+                }
+            }
             DefKind::Import => {
                 Err(self.not_runnable(callee.span(), "a call into a module that cannot be loaded"))
             }
@@ -604,7 +622,7 @@ impl<'a> Interp<'a> {
             }
         };
 
-        let obligations = self.check_ensures(function, call_span);
+        let obligations = self.check_ensures(function, &value, call_span);
         self.olds.pop();
         self.entry_states.pop();
         obligations?;
@@ -645,13 +663,17 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
-    fn check_ensures(&mut self, function: &'a FnDecl, call_span: Span) -> Eval<()> {
+    fn check_ensures(&mut self, function: &'a FnDecl, value: &Value, call_span: Span) -> Eval<()> {
+        // The outcome is whatever the function actually produced. A function
+        // that does not return a `Result` cannot fail, so everything it does is
+        // an `ok` outcome.
+        let outcome = match value {
+            Value::Result { ok: false, .. } => Outcome::Err,
+            _ => Outcome::Ok,
+        };
+
         for obligation in &function.contract.ensures {
-            // A function has no way to fail yet, because failure means
-            // `Result` and `Result` lives in a module that cannot be loaded.
-            // Every completed call is therefore an `ok` outcome, and the `err`
-            // obligations are unreachable rather than ignored.
-            if obligation.outcome != Outcome::Ok {
+            if obligation.outcome != outcome {
                 continue;
             }
             if !self.condition(&obligation.condition)? {

@@ -29,6 +29,13 @@ pub enum Ty {
     Bool,
     /// A record, a choice, or a refinement declared in this module.
     Named(DefId),
+    /// `Result<T, E>`, which the language provides.
+    ///
+    /// Not a `Named` type over a builtin definition, because the arguments have
+    /// to be compared componentwise and an unknown on either side has to
+    /// absorb. That is what lets `ok(x)` produce `Result<T, unknown>` and still
+    /// fit where a `Result<T, E>` was wanted, with no unification anywhere.
+    Result(Box<Ty>, Box<Ty>),
     Fn {
         params: Vec<Ty>,
         ret: Box<Ty>,
@@ -160,6 +167,7 @@ impl Types {
                 Some(name) => format!("`{name}`"),
                 None => "an unnamed type".to_string(),
             },
+            Ty::Result(ok, err) => format!("`Result<{}, {}>`", self.bare(ok), self.bare(err)),
             Ty::Fn { params, ret } => {
                 let params: Vec<String> = params.iter().map(|p| self.describe(p)).collect();
                 format!(
@@ -173,5 +181,22 @@ impl Types {
 
     pub fn name_of(&self, def: DefId) -> &str {
         self.names.get(&def).map(String::as_str).unwrap_or("?")
+    }
+
+    /// A type name without the surrounding backticks, for nesting.
+    fn bare(&self, ty: &Ty) -> String {
+        match ty {
+            Ty::Unknown => "_".to_string(),
+            Ty::Never => "!".to_string(),
+            Ty::Unit => "()".to_string(),
+            Ty::Int => "Int".to_string(),
+            Ty::Str => "String".to_string(),
+            Ty::Bool => "Bool".to_string(),
+            Ty::Named(def) => self.name_of(*def).to_string(),
+            Ty::Result(ok, err) => format!("Result<{}, {}>", self.bare(ok), self.bare(err)),
+            Ty::Fn { params, ret } => {
+                format!("Fn({}) -> {}", params.len(), self.bare(ret))
+            }
+        }
     }
 }
