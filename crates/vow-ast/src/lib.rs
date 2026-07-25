@@ -280,6 +280,17 @@ pub enum Stmt {
         init: Expr,
         span: Span,
     },
+    /// `count = count + by`
+    ///
+    /// The target must be a `state` field of the enclosing handler. State is
+    /// the only mutable thing in the language, which is what lets an empty
+    /// effect row mean that a function cannot observe or cause a change to
+    /// anything.
+    Assign {
+        target: Ident,
+        value: Expr,
+        span: Span,
+    },
     Return {
         value: Option<Expr>,
         span: Span,
@@ -296,6 +307,7 @@ impl Stmt {
     pub fn span(&self) -> Span {
         match self {
             Stmt::Let { span, .. }
+            | Stmt::Assign { span, .. }
             | Stmt::Return { span, .. }
             | Stmt::Assert { span, .. }
             | Stmt::Error(span) => *span,

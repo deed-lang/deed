@@ -38,6 +38,8 @@ pub enum DefKind {
     Function,
     Test,
     Param,
+    /// A `state` field of a handler. The only mutable thing in the language.
+    State,
     /// A `let` binding, a pattern binding, or a closure parameter.
     Local,
     /// A name brought in by `use`. What it refers to is in another module,
@@ -59,6 +61,7 @@ impl DefKind {
             DefKind::Function => "function",
             DefKind::Test => "test",
             DefKind::Param => "parameter",
+            DefKind::State => "handler state",
             DefKind::Local => "binding",
             DefKind::Import => "import",
         }
@@ -67,7 +70,7 @@ impl DefKind {
     /// Whether a name of this kind lives at module level rather than inside a
     /// function body.
     pub fn is_declaration(self) -> bool {
-        !matches!(self, DefKind::Param | DefKind::Local)
+        !matches!(self, DefKind::Param | DefKind::Local | DefKind::State)
     }
 }
 

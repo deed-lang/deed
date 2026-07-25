@@ -290,6 +290,33 @@ the same type. There are no traits, so there is nothing better to insist on. Lis
 **`?` is not checked.** It needs `Result` to be a type the compiler knows, which needs cross
 module loading. Until then it produces an unknown type and says nothing.
 
+## Mutation
+
+There is exactly one mutable thing in Vow, and it is a `state` field of a handler.
+
+```vow
+handler InMemory implements Counter {
+    state count: Int
+
+    fn value() -> Int { count }
+    fn bump(by: Positive) -> () { count = count + by }
+}
+```
+
+Assignment is a statement, the target must be state of the enclosing handler, and nothing
+else is assignable. Not a parameter, not a `let` binding, not a field of a record.
+
+This is a rule rather than a limitation. Mutation exists exactly where effects are
+implemented and nowhere else, which is what lets an empty effect row mean that a function
+cannot observe or cause a change to anything. Without the restriction, purity would be a
+claim about IO only, and it is supposed to be a claim about everything.
+
+It also keeps P1 intact. A mutable local would mean a name's value depends on where you are
+in the function, which is the same objection that made shadowing an error.
+
+The cost is that accumulator loops have to be written some other way. There are no loops
+yet, so that bill has not arrived.
+
 ## Open questions
 
 - Ordering operators accept any two operands of the same type, including ones where ordering
@@ -311,7 +338,7 @@ module loading. Until then it produces an unknown type and says nothing.
 - Generics: how much is needed before P2 breaks. Higher-kinded types are almost certainly out.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.
-- Mutation. Everything above dodges it. `old()` and `unchanged()` only mean something once
-  there is a memory model, and there is not one yet.
+- `unchanged(E)` needs a definition. Handler state being the only mutable thing makes one
+  possible, comparing that state before and after, but nothing implements it yet.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
 - Concrete syntax for effect handlers, currently only sketched in 03.

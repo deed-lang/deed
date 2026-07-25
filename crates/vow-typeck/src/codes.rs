@@ -49,3 +49,10 @@ pub const NOT_GENERIC: &str = "VOW4013";
 /// Exhaustiveness is only worth something if adding a variant breaks the code
 /// that has to care. A wildcard arm makes that stop happening quietly.
 pub const CATCH_ALL_ON_CHOICE: &str = "VOW4014";
+
+/// An assignment to something that is not handler state.
+///
+/// State is the only mutable thing in Vow. Everything else is a name for a
+/// value, and a name whose value changes partway through a function is the
+/// same problem that made shadowing an error.
+pub const NOT_ASSIGNABLE: &str = "VOW4015";

@@ -631,6 +631,45 @@ impl<'a> Checker<'a> {
                 };
                 self.bind_pattern(pattern, &bound);
             }
+            Stmt::Assign {
+                target,
+                value,
+                span,
+            } => {
+                let actual = self.infer(value);
+                let Some(def) = self.def_of(target) else {
+                    return;
+                };
+
+                let kind = self.resolutions.def(def).kind;
+                if kind != DefKind::State {
+                    let declared = self.resolutions.def(def).span;
+                    self.emit(
+                        Diagnostic::error(
+                            codes::NOT_ASSIGNABLE,
+                            self.file,
+                            *span,
+                            format!("`{}` is a {}, not handler state", target.name, kind.describe()),
+                        )
+                        .with_primary_label("cannot be assigned to")
+                        .with_secondary(declared, "declared here")
+                        .with_note(
+                            "handler state is the only mutable thing in Vow, which is what lets an empty effect row mean a function cannot change anything",
+                        ),
+                    );
+                    return;
+                }
+
+                let declared = self.def_types.get(&def).cloned().unwrap_or(Ty::Unknown);
+                let field_span = self.resolutions.def(def).span;
+                self.assign(
+                    &actual,
+                    &declared,
+                    Some(value),
+                    value.span(),
+                    Some((field_span, "the state it is assigned to".to_string())),
+                );
+            }
             Stmt::Return { value, span } => {
                 let (ret, ret_span) = self.returns.last().cloned().unwrap_or((Ty::Unknown, *span));
                 let actual = match value {
