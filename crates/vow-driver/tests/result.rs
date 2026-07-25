@@ -94,11 +94,12 @@ fn the_value_type_is_still_checked() {
         codes_of(&checked.diagnostics),
         vec![vow_typeck::codes::TYPE_MISMATCH]
     );
+    // The blame is on the value, not on the `Result` wrapped around it. That
+    // matters more when the success type is refined, since the refinement has
+    // to be discharged against the value to be discharged at all.
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(
-        text.contains("expected `Result<Int, Failure>`, found `Result<Bool, _>`"),
-        "{text}"
-    );
+    assert!(text.contains("expected `Int`, found `Bool`"), "{text}");
+    assert!(text.contains("ok(true)"), "{text}");
 }
 
 #[test]
@@ -108,7 +109,8 @@ fn the_error_type_is_still_checked() {
         codes_of(&checked.diagnostics),
         vec![vow_typeck::codes::TYPE_MISMATCH]
     );
-    assert!(rendered(&sources, &checked.diagnostics).contains("`Result<_, Int>`"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("expected `Failure`, found `Int`"), "{text}");
 }
 
 #[test]

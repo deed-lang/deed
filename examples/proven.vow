@@ -1,0 +1,114 @@
+// The Proven tier, which is the part of this language that is supposed to be
+// interesting.
+//
+// A refinement is only worth having if it replaces a check rather than
+// decorating one. `vow check examples/proven.vow --obligations` says which of
+// these the compiler settled at check time and which became a runtime guard,
+// and it never claims to have proven something it did not.
+//
+// What does the proving is interval reasoning: what is known about each
+// integer in scope, from the contract, from the types, and from the conditions
+// above the line. It is not a solver, and the last three functions here are
+// what that costs.
+
+module examples/proven
+
+type Positive = Int where value > 0
+
+type Percent = Int where value >= 0 && value <= 100
+
+type NonNegative = Int where value >= 0
+
+record Order {
+    quantity: Positive,
+}
+
+// Proven from the precondition. The `where` clause says exactly what the
+// refinement needs, and nothing else has to be written down twice.
+fn order_of(n: Int) -> Order
+  where
+    n > 0,
+{
+    Order { quantity: n }
+}
+
+// Proven from the guard. After an `if` that leaves, the rest of the body knows
+// the condition failed, which is the ordinary way anyone establishes a
+// refinement in real code.
+fn checked_order(n: Int) -> Result<Order, String> {
+    if n <= 0 {
+        return err("a quantity has to be positive")
+    }
+
+    ok(Order { quantity: n })
+}
+
+// Proven in the else branch. The same fact arrived at from the other side: an
+// `if` narrows what is known both ways, not just inside the then.
+fn order_from_either(n: Int) -> Result<Order, String> {
+    if n <= 0 {
+        err("a quantity has to be positive")
+    } else {
+        ok(Order { quantity: n })
+    }
+}
+
+// Proven from the type. A `Positive` is already known to be positive, so it
+// fits where a weaker refinement is wanted without a `where` clause repeating
+// the type in prose. Passing one where a `Positive` is wanted raises no
+// obligation at all, which is why this asks for something else.
+fn as_count(n: Positive) -> NonNegative {
+    n
+}
+
+// Proven from arithmetic. Both bounds are known, so the sum is too.
+fn clamped(raw: Int) -> Percent
+  where
+    raw >= 0,
+    raw <= 50,
+{
+    raw + 50
+}
+
+// Guarded, and correctly so. `n` could be the largest integer there is, and
+// then `n + 1` has no answer at all. Refusing to prove this is not a gap in
+// the reasoning, it is the reasoning working.
+fn one_more(n: Positive) -> Positive {
+    n + 1
+}
+
+// Guarded, and this one is a gap. An interval cannot hold a relationship
+// between two names, so `low < high` tells it nothing about `high - low`. This
+// is the first limitation anyone will hit and the largest one.
+fn span(low: Int, high: Int) -> Positive
+  where
+    low < high,
+{
+    high - low
+}
+
+// Guarded. A function's `ensures` clause is not consulted at the call site, so
+// the result of any call is unknown however carefully it was specified.
+fn from_a_call() -> Positive {
+    always_one()
+}
+
+fn always_one() -> Int
+  ensures
+    ok  => result == 1,
+{
+    1
+}
+
+test "the proven ones still hold at runtime" {
+    assert order_of(3).quantity == 3
+    assert as_count(4) == 4
+    assert clamped(10) == 60
+    assert order_from_either(0) == err("a quantity has to be positive")
+}
+
+test "the guarded ones are checked when they run" {
+    assert one_more(1) == 2
+    assert span(2, 5) == 3
+    assert from_a_call() == 1
+}
