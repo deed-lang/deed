@@ -222,8 +222,42 @@ is a literal, and the brace in `if a < b { ... }` starts a block. This is the st
 and it is the one genuinely ambiguous corner of the grammar. The `with` handler list needs a
 third case, described below.
 
+## Rules name resolution had to pin down
+
+**There is no shadowing.** Binding a name that is already bound is an error, not a style
+warning. Binding a name that hides a module level declaration is a warning.
+
+This is the most aggressive rule in the language and it is on purpose. P1 says you should be
+able to point at a name in a function and know what it refers to. Shadowing means the answer
+depends on which line you are looking at, which is exactly the property P1 exists to remove.
+The cost is real: `let x = parse(x)?` needs a second name. That is the trade.
+
+**In a pattern, capitalisation decides.** An uppercase initial names a variant, a lowercase
+initial introduces a binding.
+
+Without this rule a mistyped variant silently becomes a binding that matches everything, and
+nothing in the compiler would ever mention it. It is the only place the language attaches
+meaning to how a name is written, and it buys an entire class of silent bug.
+
+**`value` is in scope inside a refinement and nowhere else.** `type Positive = Int where
+value > 0` has nothing else to talk about. It is the one name the language introduces
+implicitly.
+
+**The prelude is four names:** `Int`, `String`, `Bool`, `System`. Everything else is
+imported. Each prelude entry is a name that cannot be looked up in any file, which is the
+kind of thing P2 is a budget for.
+
+**Names reached through an import are not checked.** `Ledger.read` where `Ledger` came from
+`use ledger.{Ledger}` is left alone, because the compiler has not loaded that module and
+cannot honestly say anything about its contents. When cross module loading exists this
+becomes a real check.
+
 ## Open questions
 
+- Banning shadowing outright may turn out to be more annoying than it is worth. It is easy
+  to relax later and hard to tighten, which is the only reason it starts strict.
+- Capitalisation carrying meaning in patterns is a wart, even though it earns its place.
+  Explicit variant syntax would avoid it and would cost more to write everywhere else.
 - The `with` handler list is disambiguated by a lookahead hack: a brace opens a struct
   literal only when followed by `name:`, which is what separates `with H { a: 1 }, Other`
   from the block that follows the handler list. It works for everything written so far and
