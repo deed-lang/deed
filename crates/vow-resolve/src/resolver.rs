@@ -760,6 +760,12 @@ impl Resolver<'_> {
                     self.resolve_type(arg);
                 }
             }
+            Type::Fn { params, ret, .. } => {
+                for param in params {
+                    self.resolve_type(param);
+                }
+                self.resolve_type(ret);
+            }
             Type::Unit(_) | Type::Error(_) => {}
         }
     }

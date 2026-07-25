@@ -448,10 +448,17 @@ function that wrote it, so its parameters are not a boundary anyone reviews. Tha
 it is a different claim from "may be unchecked". With no types the parameters were unknown,
 so the closure's body was checked against nothing at all: `|x| { x + "not a number" }` was
 accepted, and so was calling it with a string. Not being a review surface does not make a
-body exempt from type checking.
+body exempt from type checking. It is also no longer true, since a closure that performs no
+effects can now cross a boundary.
 
 Nothing can infer them. A `let f = |x| ..` has no expected type to push down, and Vow does
 not do global inference on purpose.
+
+**A function type is written `Fn(Int, Int) -> Int`,** and it means a function that performs no
+effects. The return type is written out even when it is `()`, because a function type with no
+arrow reads like an unfinished one. There is no syntax for a row on it, and leaving one off
+cannot mean "any row": a value that carried an unstated effect through a signature would undo
+the point of having rows. `design/03-effects.md` has the rest.
 
 **There are no float literals.** That is what makes `40.try` unambiguously `40`, `.`, `try`
 with no lookahead. If floats ever arrive, they will need a rule for that, and it is a debt

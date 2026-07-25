@@ -32,3 +32,11 @@ pub const UNHANDLED_EFFECT: &str = "VOW5005";
 /// that logs means importing `Log`, which follows from the row being the review
 /// surface: a row that could not name what it grants would not be one.
 pub const EFFECT_NOT_IMPORTED: &str = "VOW5006";
+
+/// A function value that performs effects, where a function type was wanted.
+///
+/// `Fn(Int) -> Int` promises no effects, because there is no syntax for a row
+/// on a function type and leaving one off cannot mean "any row". A value that
+/// carried an unstated effect through a signature would undo the point of
+/// having rows at all.
+pub const IMPURE_FUNCTION_VALUE: &str = "VOW5007";

@@ -1,6 +1,6 @@
 //! Types, and the table the checker fills in.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use vow_diagnostics::Span;
@@ -143,6 +143,7 @@ pub struct Types {
     names: HashMap<DefId, String>,
     exprs: HashMap<Span, Ty>,
     obligations: Vec<Obligation>,
+    pure_required: HashSet<Span>,
 }
 
 impl Types {
@@ -161,6 +162,20 @@ impl Types {
 
     pub(crate) fn push_obligation(&mut self, obligation: Obligation) {
         self.obligations.push(obligation);
+    }
+
+    /// Notes that the value at `span` has to perform no effects.
+    ///
+    /// A `Fn(Int) -> Int` promises that, and whether a value keeps the promise
+    /// is a question about rows, which this pass has no answer for. Which
+    /// values have to keep it is a question about types, which it does. So the
+    /// question is recorded here and settled by the pass that can settle it.
+    pub(crate) fn require_pure(&mut self, span: Span) {
+        self.pure_required.insert(span);
+    }
+
+    pub fn pure_required(&self) -> &HashSet<Span> {
+        &self.pure_required
     }
 
     pub fn nominal(&self, def: DefId) -> Option<&Nominal> {

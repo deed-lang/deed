@@ -446,6 +446,10 @@ impl<'a> TypeIndex<'a> {
         match ty {
             Type::Unit(_) => true,
             Type::Error(_) => false,
+            // Nothing sensible to invent. A generated function would be a
+            // constant one, and a property tested against a constant is a
+            // property about nothing.
+            Type::Fn { .. } => false,
             Type::Named { name, args, .. } => {
                 let Some(def) = self.resolutions.resolution(name.span) else {
                     return false;
@@ -498,6 +502,7 @@ impl<'a> TypeIndex<'a> {
         match ty {
             Type::Unit(_) => Some(Value::Unit),
             Type::Error(_) => None,
+            Type::Fn { .. } => None,
             Type::Named { name, args, .. } => {
                 let def = self.resolutions.resolution(name.span)?;
                 match self.resolutions.def(def).kind {

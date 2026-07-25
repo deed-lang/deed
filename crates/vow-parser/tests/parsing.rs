@@ -515,6 +515,37 @@ fn node_spans_land_on_the_right_source_text() {
     );
 }
 
+// -- function types --------------------------------------------------------
+
+#[test]
+fn a_function_type_is_a_type() {
+    let (_, parsed) = parse_source(
+        "module a\n\nfn apply(f: Fn(Int, Int) -> Int, n: Int) -> Fn(Int) -> Int { f }\n",
+    );
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{:?}",
+        codes_of(&parsed.diagnostics)
+    );
+
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    let Some(vow_ast::Type::Fn { params, .. }) = &function.sig.params[0].ty else {
+        panic!("the first parameter should be a function type");
+    };
+    assert_eq!(params.len(), 2);
+    assert!(matches!(function.sig.ret, Some(vow_ast::Type::Fn { .. })));
+}
+
+#[test]
+fn a_function_type_needs_its_return_type() {
+    // One way to write a thing. A function type with no arrow reads like an
+    // unfinished one, so it is refused rather than defaulted to `()`.
+    let (_, parsed) = parse_source("module a\n\nfn f(g: Fn(Int)) -> Int { 0 }\n");
+    assert!(!parsed.diagnostics.is_empty());
+}
+
 // -- contract rules --------------------------------------------------------
 
 #[test]

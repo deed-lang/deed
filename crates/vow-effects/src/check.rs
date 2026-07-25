@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use vow_ast::{Block, EffectRef, Expr, FnDecl, Item, Module, Stmt};
+use vow_ast::{Block, EffectRef, Expr, FnDecl, Item, Module, Pattern, Stmt};
 use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
@@ -64,7 +64,17 @@ impl Effects {
 }
 
 /// Checks one resolved module.
-pub fn analyse(file: FileId, module: &Module, resolutions: &Resolutions) -> Analysis {
+///
+/// `pure_required` is the set of expression spans the type checker decided have
+/// to hand back a function that performs no effects, which is every place a
+/// function value crosses into an `Fn(..) -> ..`. Deciding that needs types and
+/// settling it needs rows, so the two passes each answer the half they can.
+pub fn analyse(
+    file: FileId,
+    module: &Module,
+    resolutions: &Resolutions,
+    pure_required: &HashSet<Span>,
+) -> Analysis {
     let mut checker = Checker {
         file,
         resolutions,
@@ -78,6 +88,8 @@ pub fn analyse(file: FileId, module: &Module, resolutions: &Resolutions) -> Anal
         handler_effects: HashMap::new(),
         declared_sites: HashMap::new(),
         recursive: HashSet::new(),
+        pure_required: pure_required.clone(),
+        closure_rows: HashMap::new(),
     };
 
     checker.collect(module);
@@ -107,6 +119,14 @@ struct Checker<'a> {
     declared_sites: HashMap<DefId, Vec<(EffectItem, Span)>>,
     /// Functions that can reach themselves, so may not return.
     recursive: HashSet<DefId>,
+    /// Expressions the type checker says have to hand back a pure function.
+    pure_required: HashSet<Span>,
+    /// The row of each local bound to a closure, within the body being checked.
+    ///
+    /// A closure is the one value in the language that holds code, and a name
+    /// bound to one is the only thing that can stand for it. Kept per body,
+    /// because a local from one body means nothing in another.
+    closure_rows: HashMap<DefId, Row>,
 }
 
 impl<'a> Checker<'a> {
@@ -534,7 +554,11 @@ impl<'a> Checker<'a> {
 
     fn infer_stmt(&mut self, stmt: &Stmt) -> Row {
         match stmt {
-            Stmt::Let { init, .. } => self.infer_expr(init),
+            Stmt::Let { pattern, init, .. } => {
+                let row = self.infer_expr(init);
+                self.remember_closure(pattern, init);
+                row
+            }
             Stmt::Assign { value, .. } => self.infer_expr(value),
             Stmt::Return { value, .. } => match value {
                 Some(value) => self.infer_expr(value),
@@ -546,7 +570,32 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Notes the row of a closure a `let` gave a name to.
+    ///
+    /// The name is the only thing that can stand for the closure afterwards,
+    /// so without this a closure passed on by name is a function value nobody
+    /// can say anything about.
+    fn remember_closure(&mut self, pattern: &Pattern, init: &Expr) {
+        let Pattern::Path { segments, .. } = pattern else {
+            return;
+        };
+        let [only] = segments.as_slice() else {
+            return;
+        };
+        let Some(def) = self.resolutions.resolution(only.span) else {
+            return;
+        };
+
+        let row = self.function_value_row(init);
+        if matches!(init, Expr::Closure { .. } | Expr::Ident(_)) {
+            self.closure_rows.insert(def, row);
+        }
+    }
+
     fn infer_expr(&mut self, expr: &Expr) -> Row {
+        if self.pure_required.contains(&expr.span()) {
+            self.check_pure(expr);
+        }
         let mut row = Row::new();
 
         match expr {
@@ -653,6 +702,73 @@ impl<'a> Checker<'a> {
         }
 
         row
+    }
+
+    /// The row of a function value.
+    ///
+    /// Two shapes make a function value: a closure written on the spot and a
+    /// function named directly. Everything else is one of those arriving from
+    /// somewhere, and every route one can take was checked where it started. A
+    /// `let` is remembered below, and a parameter, a return type and a field
+    /// are `Fn(..)` themselves, so they were checked at whatever handed them
+    /// over. An expression that is neither shape performs nothing, and that is
+    /// a conclusion rather than a guess.
+    fn function_value_row(&mut self, expr: &Expr) -> Row {
+        match expr {
+            Expr::Closure { body, .. } => self.infer_expr(body),
+            Expr::Ident(ident) => {
+                let Some(def) = self.resolutions.resolution(ident.span) else {
+                    return Row::new();
+                };
+                match self.kind_of(def) {
+                    DefKind::Function => {
+                        self.effects.declared.get(&def).cloned().unwrap_or_default()
+                    }
+                    DefKind::Import => {
+                        let Some(export) = self.resolutions.import(def) else {
+                            return Row::new();
+                        };
+                        if export.kind != vow_resolve::ExportKind::Function {
+                            return Row::new();
+                        }
+                        let entries = export.row.clone();
+                        self.translate(&entries, ident.span)
+                    }
+                    _ => self.closure_rows.get(&def).cloned().unwrap_or_default(),
+                }
+            }
+            _ => Row::new(),
+        }
+    }
+
+    /// Checks that a value crossing into a function type performs no effects.
+    ///
+    /// `Fn(Int) -> Int` promises exactly that, because there is no syntax for a
+    /// row on a function type and leaving one off cannot mean "any row". A
+    /// value carrying an unstated effect through a signature would undo the
+    /// point of having rows.
+    fn check_pure(&mut self, expr: &Expr) {
+        let row = self.function_value_row(expr);
+        if row.is_empty() {
+            return;
+        }
+
+        let performed: Vec<String> = row.iter().map(|item| self.describe(item)).collect();
+        self.emit(
+            Diagnostic::error(
+                codes::IMPURE_FUNCTION_VALUE,
+                self.file,
+                expr.span(),
+                format!(
+                    "this performs {}, and a function type promises nothing",
+                    performed.join(", ")
+                ),
+            )
+            .with_primary_label("performs an effect")
+            .with_note(
+                "there is no syntax for a row on a function type, and leaving one off cannot mean any row: a value carrying an unstated effect through a signature would undo the point of having rows",
+            ),
+        );
     }
 
     /// Effects performed by calling `callee`, when that can be worked out.

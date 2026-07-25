@@ -252,6 +252,17 @@ pub enum Type {
         args: Vec<Type>,
         span: Span,
     },
+    /// `Fn(Int, Int) -> Int`
+    ///
+    /// A function that performs no effects. There is no syntax for a row on a
+    /// function type, and leaving one off cannot mean "any row": a value that
+    /// carried an unstated effect through a signature would undo the whole
+    /// point of having rows.
+    Fn {
+        params: Vec<Type>,
+        ret: Box<Type>,
+        span: Span,
+    },
     Unit(Span),
     Error(Span),
 }
@@ -259,7 +270,10 @@ pub enum Type {
 impl Type {
     pub fn span(&self) -> Span {
         match self {
-            Type::Named { span, .. } | Type::Unit(span) | Type::Error(span) => *span,
+            Type::Named { span, .. }
+            | Type::Fn { span, .. }
+            | Type::Unit(span)
+            | Type::Error(span) => *span,
         }
     }
 }

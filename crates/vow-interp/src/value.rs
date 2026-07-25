@@ -37,6 +37,17 @@ pub enum Value {
     /// one, which is what makes the absence of an argument mean something.
     Capability(Capability),
     Closure(Rc<ClosureValue>),
+    /// A declared function, named where a value belongs.
+    ///
+    /// Not a closure: it has a contract, and calling it has to go through the
+    /// same path a written-out call does or the `where`, the `ensures` and
+    /// every refinement on it would be skipped by writing the name instead of
+    /// the call. The module is part of the identity because a definition is an
+    /// index into one module's table.
+    Function {
+        module: usize,
+        def: DefId,
+    },
 }
 
 /// A closure, and the names it could see when it was written.
@@ -176,6 +187,7 @@ impl Value {
             Value::Result { .. } => "a Result",
             Value::Capability(_) => "a capability",
             Value::Closure(_) => "a closure",
+            Value::Function { .. } => "a function",
         }
     }
 }
@@ -200,6 +212,7 @@ impl fmt::Display for Value {
             }
             Value::Capability(capability) => write!(f, "<{}>", capability.name()),
             Value::Closure(_) => write!(f, "<closure>"),
+            Value::Function { .. } => write!(f, "<function>"),
         }
     }
 }
