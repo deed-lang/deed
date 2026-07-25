@@ -421,32 +421,6 @@ fn expect_pass(files: &[&str]) {
     }
 }
 
-/// The same, for sources that are expected to warn but not to fail checking.
-fn run_together_allowing_warnings(files: &[&str]) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
-    let mut sources = SourceMap::new();
-    let ids: Vec<_> = files
-        .iter()
-        .enumerate()
-        .map(|(index, text)| sources.add(format!("file{index}.vow"), *text))
-        .collect();
-
-    let checks = check_all(&sources, &ids);
-    for checked in &checks {
-        assert!(
-            !checked.has_errors(),
-            "{}",
-            rendered(&sources, &checked.diagnostics)
-        );
-    }
-
-    let mut program = vow_interp::Program::new();
-    for checked in &checks {
-        program.add(checked.file, &checked.module, &checked.resolutions);
-    }
-    let outcomes = vow_interp::run_tests(&program, ids[0]);
-    (sources, outcomes)
-}
-
 #[test]
 fn a_test_can_call_into_another_module() {
     expect_pass(&[
@@ -510,37 +484,64 @@ fn a_callee_reads_its_own_names() {
 }
 
 #[test]
-fn an_effect_from_another_module_still_cannot_be_performed() {
-    // The gap that is left. `Counter.bump` does not resolve to an operation
-    // when `Counter` was imported, so there is nothing to dispatch on, and a
-    // handler declared elsewhere cannot be installed either. Checking says as
-    // much: the effects pass warns that the row cannot be verified.
-    let (sources, outcomes) = run_together_allowing_warnings(&[
-        "module a\n\nuse b.{Counter, InMemory}\n\ntest \"handled\" {\n  with InMemory { count: 0 } {\n    Counter.bump()\n  }\n}\n",
+fn an_effect_from_another_module_finds_its_handler() {
+    // The last thing that did not cross. `Counter.bump` resolves to an
+    // operation of the imported effect, and `with InMemory { .. }` installs a
+    // handler whose operations are written in the other module and run there.
+    expect_pass(&[
+        "module a\n\nuse b.{Counter, InMemory}\n\ntest \"handled\" {\n  with InMemory { count: 0 } {\n    Counter.bump()\n    assert Counter.value() == 1\n  }\n}\n",
         "module b\n\neffect Counter {\n  fn value() -> Int\n  fn bump() -> ()\n}\n\nhandler InMemory implements Counter {\n  state count: Int\n\n  fn value() -> Int { count }\n  fn bump() -> () { count = count + 1 }\n}\n",
     ]);
+}
 
-    let failure = outcomes[0]
-        .failure
-        .as_ref()
-        .expect("performing an imported effect should not run yet");
-    assert_eq!(failure.code, vow_interp::codes::NOT_RUNNABLE);
-    let _ = render_human(&sources, failure);
+#[test]
+fn a_row_over_an_imported_effect_still_has_to_be_tight() {
+    let (sources, checked) = check(&[
+        "module a\n\nuse b.{Counter}\n\nfn f() -> Int\n  uses\n    Counter.value,\n    Counter.bump,\n{\n  Counter.value()\n}\n",
+        "module b\n\neffect Counter {\n  fn value() -> Int\n  fn bump() -> ()\n}\n",
+    ]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_effects::codes::UNUSED_EFFECT),
+        "{text}"
+    );
+    assert!(
+        text.contains("`Counter.bump` is declared but never performed"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_handler_from_another_module_only_discharges_its_own_effect() {
+    // A `with` used to discharge everything when the handler came from
+    // elsewhere, because the compiler could not see which effect it
+    // implements. It can now, so an undeclared effect is still reported.
+    let (sources, checked) = check(&[
+        "module a\n\nuse b.{Counter, InMemory, Other}\n\nfn f() -> Int {\n  with InMemory { count: 0 } {\n    Other.ping()\n    Counter.value()\n  }\n}\n",
+        "module b\n\neffect Counter {\n  fn value() -> Int\n}\n\neffect Other {\n  fn ping() -> ()\n}\n\nhandler InMemory implements Counter {\n  state count: Int\n\n  fn value() -> Int { count }\n}\n",
+    ]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_effects::codes::UNDECLARED_EFFECT),
+        "{text}"
+    );
+    assert!(text.contains("Other.ping"), "{text}");
 }
 
 // -- the example -----------------------------------------------------------
 
 #[test]
-fn the_two_module_example_runs_its_tests() {
+fn the_multi_module_example_runs_its_tests() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
-    let names = std::fs::read_to_string(format!("{dir}/names.vow")).unwrap();
-    let greeting = std::fs::read_to_string(format!("{dir}/greeting.vow")).unwrap();
 
     let mut sources = SourceMap::new();
-    let ids = vec![
-        sources.add("examples/names.vow", names),
-        sources.add("examples/greeting.vow", greeting),
-    ];
+    let ids: Vec<_> = ["names.vow", "sink.vow", "greeting.vow"]
+        .iter()
+        .map(|name| {
+            let text = std::fs::read_to_string(format!("{dir}/{name}")).unwrap();
+            sources.add(format!("examples/{name}"), text)
+        })
+        .collect();
 
     let checks = check_all(&sources, &ids);
     for checked in &checks {
@@ -556,7 +557,7 @@ fn the_two_module_example_runs_its_tests() {
         program.add(checked.file, &checked.module, &checked.resolutions);
     }
 
-    let outcomes = vow_interp::run_tests(&program, ids[1]);
+    let outcomes = vow_interp::run_tests(&program, ids[2]);
     assert!(!outcomes.is_empty(), "greeting.vow should have tests");
     for outcome in &outcomes {
         if let Some(failure) = &outcome.failure {

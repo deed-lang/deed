@@ -45,10 +45,12 @@ impl ExportKind {
 #[derive(Clone, Debug)]
 pub struct Export {
     pub kind: ExportKind,
-    /// The variants of a choice or the operations of an effect.
+    /// The variants of a choice, the operations of an effect, or the one
+    /// effect a handler implements.
     ///
     /// Empty for everything else. This is what lets `Ledger.post` be checked
-    /// when `Ledger` came from another file.
+    /// when `Ledger` came from another file, and what lets a `with` block
+    /// naming an imported handler discharge that handler's effect and no more.
     pub members: Vec<String>,
 }
 
@@ -102,7 +104,11 @@ impl Exports {
                         .map(|o| o.name.name.clone())
                         .collect(),
                 ),
-                Item::Handler(decl) => (&decl.name, ExportKind::Handler, Vec::new()),
+                Item::Handler(decl) => (
+                    &decl.name,
+                    ExportKind::Handler,
+                    vec![decl.effect.name.clone()],
+                ),
                 Item::Function(decl) => (&decl.sig.name, ExportKind::Function, Vec::new()),
                 // A `test` is not part of the surface, and an error node is
                 // not part of anything.

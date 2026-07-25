@@ -129,10 +129,12 @@ Read them in order. Each one leans on the one before it.
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary: `check`, `test`, `run` and `fmt` |
 
-There are four examples, [transfer.vow](examples/transfer.vow),
-[counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow) and
-[config.vow](examples/config.vow). All are self contained and checked by every pass on every
-commit. The first two run their own tests, the last two have a `main`.
+The examples are [transfer.vow](examples/transfer.vow),
+[counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),
+[config.vow](examples/config.vow), and the three that see each other:
+[names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
+[greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
+`hello.vow` and `config.vow` have a `main`, and the rest run their own tests.
 
 `transfer.vow` used to model something that could not exist. `Money.units` was `Positive`,
 which made a zero balance and a debit unwritable, and the type checker said so. The fix was
@@ -159,9 +161,9 @@ type agrees with everything, so a module boundary was a place where checking sto
 
 Running crosses it too. A call through an import walks into the other module's body with
 that module's own names in scope, and a variant carries the module that declared it, so the
-same variant reached two ways is one value. What is still not there is effects: an operation
-of an imported effect does not resolve to anything to dispatch on, and an imported handler
-cannot be installed.
+same variant reached two ways is one value. Effects cross as well: `sink.vow` declares an
+effect and two handlers, `greeting.vow` performs the effect and installs the handlers, and
+the row is checked against the declaration in the other file in both directions.
 
 No dependencies. `cargo test` runs the whole thing, and one of the tests is that
 `examples/transfer.vow` survives every pass.

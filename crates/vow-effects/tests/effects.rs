@@ -378,22 +378,53 @@ fn a_test_performing_an_effect_with_no_with_block_is_an_error() {
     );
 }
 
-// -- rows that cannot be checked -------------------------------------------
+// -- rows across a module boundary -----------------------------------------
 
 #[test]
-fn an_imported_effect_makes_the_row_unverifiable_and_says_so() {
+fn a_row_naming_an_imported_effect_is_checked_like_any_other() {
+    // An effect's operations are part of its declaration, so a row naming one
+    // from another module is as checkable as a local one. Declaring an
+    // operation the body never performs is still too wide.
     let (sources, _, _, analysis) = analyse_source_in(
         "module a\n\nuse ledger.{Ledger}\n\nfn f() -> Int\n  uses Ledger.post,\n{ 0 }\n",
         &universe_of(&[LEDGER_MODULE]),
     );
+    assert_eq!(codes_of(&analysis.diagnostics), vec![codes::UNUSED_EFFECT]);
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(
+        text.contains("`Ledger.post` is declared but never performed"),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_imported_effect_performed_without_being_declared_is_reported() {
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse ledger.{Ledger}\n\nfn f() -> Int { Ledger.balance(1) }\n",
+        &universe_of(&[LEDGER_MODULE]),
+    );
     assert_eq!(
         codes_of(&analysis.diagnostics),
-        vec![codes::UNVERIFIABLE_ROW]
+        vec![codes::UNDECLARED_EFFECT]
     );
-    assert!(!analysis.has_errors(), "a warning, not a rejection");
     let text = rendered(&sources, &analysis.diagnostics);
-    assert!(text.contains("has not been loaded"), "{text}");
+    assert!(text.contains("Ledger.balance"), "{text}");
 }
+
+#[test]
+fn a_tight_row_over_an_imported_effect_is_accepted() {
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse ledger.{Ledger}\n\nfn f() -> Int\n  uses Ledger.balance,\n{ Ledger.balance(1) }\n",
+        &universe_of(&[LEDGER_MODULE]),
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &analysis.diagnostics)
+    );
+}
+
+// -- rows that cannot be checked -------------------------------------------
 
 #[test]
 fn granting_everything_a_capability_carries_is_reported() {
@@ -420,10 +451,11 @@ fn granting_everything_a_capability_carries_is_reported() {
 #[test]
 fn an_unverifiable_row_suppresses_both_checks() {
     // Otherwise every entry would be reported as unused, which is noise about
-    // something the compiler already admitted it cannot see.
-    let (_, _, _, analysis) = analyse_source_in(
-        "module a\n\nuse ledger.{Ledger}\n\nfn f() -> Int\n  uses Ledger.post, Ledger.balance,\n{ 0 }\n",
-        &universe_of(&[LEDGER_MODULE]),
+    // something the compiler already admitted it cannot see. `sys.*` is the
+    // remaining way to get an unverifiable row, since an imported effect is
+    // checked properly now.
+    let (_, _, _, analysis) = analyse_source(
+        "module a\n\neffect Ledger {\n  fn post(n: Int) -> ()\n}\n\nfn main(sys: System) -> Int\n  uses sys.*, Ledger.post,\n{ 0 }\n",
     );
     assert_eq!(
         codes_of(&analysis.diagnostics)

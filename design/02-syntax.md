@@ -330,6 +330,12 @@ named through an import are one value, and two modules that each declare a `Loud
 An effect is identified the same way, since a `DefId` comparison would have made a handler
 in one module answer an operation in another whenever the numbers happened to line up.
 
+**An effect's operations and a choice's variants cross as declarations, not as names.** They
+are part of what an `effect` or a `choice` says, so `Ledger.post` where `Ledger` was imported
+gets a definition of its own and a row naming it is checked in both directions, the same as
+a local one. A handler carries the one effect it implements, so a `with` block naming an
+imported handler discharges that effect and no more.
+
 **A refinement crossing a module boundary becomes opaque.** `type Positive = Int where value
 > 0` exported and then imported is a distinct type that an `Int` does not fit, and the
 predicate does not come with it, so nothing is proven on the far side. Carrying the

@@ -245,6 +245,11 @@ type Origin = (Rc<str>, String);
 /// A handler installed by a `with` block.
 struct Instance {
     handler: DefId,
+    /// Which module the handler's operations are written in.
+    ///
+    /// A `with` block can name a handler from anywhere, and its bodies read
+    /// that module's names, not the ones where the block was written.
+    module: usize,
     effect: Origin,
     state: Fields,
 }
@@ -404,19 +409,31 @@ impl<'a> Interp<'a> {
 
     /// Which module declared an effect, and what it is called there.
     fn effect_id(&self, def: DefId) -> Option<Origin> {
-        let data = self.resolutions().def(def);
+        self.effect_id_in(self.current, def)
+    }
+
+    /// The same, resolved as the module at `index` sees it.
+    fn effect_id_in(&self, index: usize, def: DefId) -> Option<Origin> {
+        let there = &self.modules[index];
+        let data = there.resolutions.def(def);
         match data.kind {
-            DefKind::Effect => Some((self.here(), data.name.clone())),
+            DefKind::Effect => Some((Rc::clone(&there.path), data.name.clone())),
             DefKind::Import => {
-                if self.resolutions().import(def)?.kind != ExportKind::Effect {
+                if there.resolutions.import(def)?.kind != ExportKind::Effect {
                     return None;
                 }
-                let module = self.resolutions().import_module(def)?;
+                let module = there.resolutions.import_module(def)?;
                 let path = match self.by_path.get(module) {
-                    Some(index) => Rc::clone(&self.modules[*index].path),
+                    Some(found) => Rc::clone(&self.modules[*found].path),
                     None => Rc::from(module),
                 };
                 Some((path, data.name.clone()))
+            }
+            // An operation names its effect through its parent, which is what
+            // a `uses` row and a `dispatch` both start from.
+            DefKind::EffectOp => {
+                let parent = data.parent?;
+                self.effect_id_in(index, parent)
             }
             _ => None,
         }
@@ -873,7 +890,8 @@ impl<'a> Interp<'a> {
         };
 
         let handler_def = self.handlers[index].handler;
-        let Some(declaration) = self.handler_decl(handler_def) else {
+        let home = self.handlers[index].module;
+        let Some(declaration) = self.modules[home].handler_decls.get(&handler_def).copied() else {
             return Err(self.not_runnable(span, "this handler"));
         };
         let Some(operation_decl) = declaration
@@ -894,7 +912,11 @@ impl<'a> Interp<'a> {
             ));
         };
 
-        self.call(operation_decl, args, span, Some(index))
+        let caller = self.current;
+        self.current = home;
+        let result = self.call(operation_decl, args, span, Some(index));
+        self.current = caller;
+        result
     }
 
     /// Performs a built-in operation.
@@ -1237,10 +1259,13 @@ impl<'a> Interp<'a> {
             Expr::Ident(ident) => self.def_of(ident),
             _ => None,
         };
-        let Some(def) = def.filter(|def| self.kind_of(*def) == DefKind::Handler) else {
+        let Some(def) = def else {
             return Err(self.not_runnable(expr.span(), "this handler"));
         };
-        let Some(declaration) = self.handler_decl(def) else {
+
+        // A handler from another module is installed here and runs there, so
+        // the instance remembers where its operations live.
+        let Some((home, handler_def, declaration)) = self.handler_at(def) else {
             return Err(self.not_runnable(expr.span(), "this handler"));
         };
 
@@ -1270,19 +1295,44 @@ impl<'a> Interp<'a> {
             }
         }
 
-        let Some(effect) = self.resolutions().resolution(declaration.effect.span) else {
-            return Err(self.not_runnable(expr.span(), "this handler's effect"));
-        };
-        let Some(effect) = self.effect_id(effect) else {
+        // The effect a handler implements is named where the handler is
+        // written, so it is resolved in that module.
+        let there = &self.modules[home];
+        let Some(effect) = there
+            .resolutions
+            .resolution(declaration.effect.span)
+            .and_then(|effect| self.effect_id_in(home, effect))
+        else {
             return Err(self.not_runnable(expr.span(), "this handler's effect"));
         };
 
         self.handlers.push(Instance {
-            handler: def,
+            handler: handler_def,
+            module: home,
             effect,
             state,
         });
         Ok(())
+    }
+
+    /// The handler a name refers to, wherever it was declared.
+    fn handler_at(&self, def: DefId) -> Option<(usize, DefId, &'a HandlerDecl)> {
+        if self.kind_of(def) == DefKind::Handler {
+            return Some((self.current, def, self.handler_decl(def)?));
+        }
+        if self.resolutions().import(def)?.kind != ExportKind::Handler {
+            return None;
+        }
+
+        let module = self.resolutions().import_module(def)?;
+        let index = *self.by_path.get(module)?;
+        let name = &self.resolutions().def(def).name;
+        let there = &self.modules[index];
+        there
+            .handler_decls
+            .iter()
+            .find(|(_, declaration)| declaration.name.name == *name)
+            .map(|(id, declaration)| (index, *id, *declaration))
     }
 
     // -- statements --------------------------------------------------------

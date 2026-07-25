@@ -106,6 +106,13 @@ impl<'a> Checker<'a> {
         self.resolutions.def(def).name.clone()
     }
 
+    /// Whether an imported name is an effect in the module it came from.
+    fn is_imported_effect(&self, def: DefId) -> bool {
+        self.resolutions
+            .import(def)
+            .is_some_and(|export| export.kind == vow_resolve::ExportKind::Effect)
+    }
+
     fn describe(&self, item: &EffectItem) -> String {
         match &item.operation {
             Some(operation) => format!("`{}.{operation}`", self.name_of(item.effect)),
@@ -170,9 +177,23 @@ impl<'a> Checker<'a> {
                     sites.push((item, entry.span));
                 }
 
-                // An effect from a module that has not been loaded. Its
-                // operations are invisible, so nothing about this row can be
-                // checked in either direction.
+                // An effect from another module. Its operations are part of
+                // its declaration and the resolver gives them definitions of
+                // their own now, so a row naming one is checked the same way a
+                // local one is. The `DefId` is this module's handle on the
+                // import, and both the row and the body reach it through that
+                // same handle, so they compare.
+                DefKind::Import if self.is_imported_effect(def) => {
+                    let item = match &entry.operation {
+                        Some(operation) => EffectItem::operation(def, operation.name.clone()),
+                        None => EffectItem::whole(def),
+                    };
+                    row.insert(item.clone());
+                    sites.push((item, entry.span));
+                }
+
+                // Anything else from another module is not an effect, and the
+                // resolver already said whether the name exists.
                 DefKind::Import => {
                     unverifiable = true;
                     let name = self.name_of(def);
@@ -181,10 +202,9 @@ impl<'a> Checker<'a> {
                             codes::UNVERIFIABLE_ROW,
                             self.file,
                             entry.span,
-                            format!("`{name}` comes from a module that has not been loaded, so this row is not checked"),
+                            format!("`{name}` is not an effect, so this row is not checked"),
                         )
-                        .with_primary_label("not checked")
-                        .with_note("declare the effect in this module, or wait for cross module loading"),
+                        .with_primary_label("not checked"),
                     );
                 }
 
@@ -497,6 +517,28 @@ impl<'a> Checker<'a> {
             _ => None,
         }?;
 
-        self.handler_effects.get(&def).copied()
+        if let Some(effect) = self.handler_effects.get(&def).copied() {
+            return Some(effect);
+        }
+
+        // A handler from another module. What it implements is part of its
+        // declaration, so it comes across, and the effect it names is looked
+        // up among this module's imports from that same module. When the
+        // importer never imported the effect it cannot perform it either, so
+        // there is nothing for the row to be wrong about.
+        let export = self.resolutions.import(def)?;
+        if export.kind != vow_resolve::ExportKind::Handler {
+            return None;
+        }
+        let effect_name = export.members.first()?;
+        let home = self.resolutions.import_module(def)?;
+
+        self.resolutions.defs().find_map(|(id, data)| {
+            (data.kind == DefKind::Import
+                && data.name == *effect_name
+                && self.resolutions.import_module(id) == Some(home)
+                && self.is_imported_effect(id))
+            .then_some(id)
+        })
     }
 }
