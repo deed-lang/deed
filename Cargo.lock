@@ -30,6 +30,7 @@ dependencies = [
  "vow-ast",
  "vow-diagnostics",
  "vow-effects",
+ "vow-interp",
  "vow-lexer",
  "vow-parser",
  "vow-resolve",

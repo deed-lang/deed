@@ -17,8 +17,8 @@
 use std::collections::{HashMap, HashSet};
 
 use vow_ast::{
-    BinaryOp, Block, Expr, FieldInit, FnDecl, Ident, Item, MatchArm, Module, Pattern, Stmt, Type,
-    TypeAlias, UnaryOp,
+    BinaryOp, Block, Expr, FieldInit, FnDecl, Ident, Item, MatchArm, Module, Outcome, Pattern,
+    Stmt, Type, TypeAlias, UnaryOp,
 };
 use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
@@ -600,6 +600,20 @@ impl<'a> Checker<'a> {
             self.assign(&ty, &Ty::Bool, Some(requirement), requirement.span(), None);
         }
         for obligation in &function.contract.ensures {
+            // `result` is bound per obligation and its type depends on which
+            // outcome the clause is about.
+            let bound = match (&ret, obligation.outcome) {
+                (Ty::Result(ok, _), Outcome::Ok) => (**ok).clone(),
+                (Ty::Result(_, err), Outcome::Err) => (**err).clone(),
+                (other, Outcome::Ok) => other.clone(),
+                // A function that does not return a `Result` cannot fail, so
+                // there is nothing sensible for an `err` clause to see.
+                (_, Outcome::Err) => Ty::Unknown,
+            };
+            if let Some(def) = self.result_def(&obligation.condition) {
+                self.def_types.insert(def, bound);
+            }
+
             let ty = self.infer(&obligation.condition);
             self.assign(
                 &ty,
@@ -627,6 +641,31 @@ impl<'a> Checker<'a> {
             tail_span,
             Some((ret_span, "the declared return type".to_string())),
         );
+    }
+
+    /// The definition `result` refers to inside an obligation, if it is used.
+    ///
+    /// Found by looking, rather than carried on the tree, because the AST holds
+    /// no definitions and one binding for one keyword did not seem worth
+    /// threading identities through every node for.
+    fn result_def(&self, expr: &Expr) -> Option<DefId> {
+        match expr {
+            Expr::Ident(ident) if ident.name == "result" => self.def_of(ident),
+            Expr::Field { receiver, .. } => self.result_def(receiver),
+            Expr::Call { callee, args, .. } => self
+                .result_def(callee)
+                .or_else(|| args.iter().find_map(|arg| self.result_def(arg))),
+            Expr::StructLit { path, fields, .. } => self.result_def(path).or_else(|| {
+                fields
+                    .iter()
+                    .filter_map(|field| field.value.as_ref())
+                    .find_map(|value| self.result_def(value))
+            }),
+            Expr::Unary { operand, .. } | Expr::Try { operand, .. } => self.result_def(operand),
+            Expr::Binary { lhs, rhs, .. } => self.result_def(lhs).or_else(|| self.result_def(rhs)),
+            Expr::Old { expr, .. } => self.result_def(expr),
+            _ => None,
+        }
     }
 
     fn check_block(&mut self, block: &Block) -> Ty {

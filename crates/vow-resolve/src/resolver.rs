@@ -515,7 +515,20 @@ impl Resolver {
             self.resolve_effect_ref(effect);
         }
         for obligation in &function.contract.ensures {
+            // `result` is what the function produced. It is bound per
+            // obligation rather than once, because an `ok` clause and an `err`
+            // clause see different things and therefore different types.
+            self.push_scope(ScopeKind::Local);
+            let def = self.resolutions.add_def(DefData {
+                kind: DefKind::Local,
+                name: "result".to_string(),
+                span: obligation.outcome_span,
+                parent: None,
+            });
+            self.insert("result", def);
+            self.used.insert(def);
             self.resolve_expr(&obligation.condition);
+            self.pop_scope();
         }
 
         self.resolve_block(&function.body);
