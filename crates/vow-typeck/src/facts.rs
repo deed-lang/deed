@@ -8,8 +8,9 @@
 //!
 //! This is interval reasoning and nothing more. Each integer-valued name gets a
 //! range, ranges come from the things that state one (a `where` clause, an
-//! `if`, a guard that leaves, a refined parameter type), and a predicate is
-//! discharged by evaluating it over the range rather than over a value.
+//! `if`, a guard that leaves, a refined parameter type, the contract of a
+//! function being called), and a predicate is discharged by evaluating it over
+//! the range rather than over a value.
 //!
 //! # What this cannot do
 //!
@@ -20,8 +21,9 @@
 //!   biggest limitation and the first thing anyone will hit.
 //! - **Anything that is not an integer.** No `String`, no record field, no
 //!   variant.
-//! - **Reasoning across a call.** A function's `ensures` clause is not
-//!   consulted, so the result of any call is unknown.
+//! - **The payload of a `Result`.** A call that can fail is a `Result` at the
+//!   call site, and the range of a `Result` means nothing, so an `ensures` on
+//!   a fallible function is not read here.
 //! - **Division and remainder.** The sign rules around zero and around
 //!   `i64::MIN` are fiddly enough that getting them wrong is worse than not
 //!   trying.
@@ -265,39 +267,59 @@ impl Facts {
     }
 }
 
+/// What the fact machinery needs to know that it cannot read off the syntax.
+///
+/// Closures rather than a borrow of the checker, so this module stays
+/// independent of how the checker stores things and can be tested without one.
+pub struct Env<'a> {
+    /// The definition an identifier refers to.
+    pub def_of: &'a dyn Fn(&Expr) -> Option<DefId>,
+    /// The range a call to this callee is guaranteed to land in, from its
+    /// declared return type and its `ensures` clause. Whoever answers this is
+    /// responsible for only answering for contracts that are themselves
+    /// checked, since a promise nobody keeps is not a fact.
+    pub call: &'a dyn Fn(&Expr) -> Range,
+}
+
+impl Env<'_> {
+    /// An environment that knows nothing, for reading a predicate on its own.
+    pub fn blind() -> Env<'static> {
+        Env {
+            def_of: &|_| None,
+            call: &|_| Range::ANY,
+        }
+    }
+}
+
 /// Whether an expression is a name a fact can be attached to.
-fn def_of<'a>(expr: &'a Expr, resolve: &dyn Fn(&'a Expr) -> Option<DefId>) -> Option<DefId> {
+fn def_of(expr: &Expr, env: &Env<'_>) -> Option<DefId> {
     match expr {
-        Expr::Ident(_) => resolve(expr),
+        Expr::Ident(_) => (env.def_of)(expr),
         _ => None,
     }
 }
 
 /// The range an expression can take, given what is known.
-///
-/// `resolve` turns an identifier into the definition it refers to. It is a
-/// closure rather than a borrow of the resolution table so this module stays
-/// independent of how the checker stores things.
-pub fn range_of<'a>(
-    expr: &'a Expr,
-    facts: &Facts,
-    resolve: &dyn Fn(&'a Expr) -> Option<DefId>,
-) -> Range {
+pub fn range_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
     match expr {
         Expr::Int { value, .. } => Range::exactly(*value),
         Expr::Ident(ident) if ident.name == "value" => facts.subject.unwrap_or(Range::ANY),
-        Expr::Ident(_) => match def_of(expr, resolve) {
+        Expr::Ident(_) => match def_of(expr, env) {
             Some(def) => facts.get(def),
             None => Range::ANY,
         },
+        // The contract of whatever is being called. This is the one place the
+        // reasoning leaves the function it is looking at, and it is why a
+        // proof inside one function is worth anything to its callers.
+        Expr::Call { callee, .. } => (env.call)(callee),
         Expr::Unary {
             op: UnaryOp::Neg,
             operand,
             ..
-        } => range_of(operand, facts, resolve).negate(),
+        } => range_of(operand, facts, env).negate(),
         Expr::Binary { op, lhs, rhs, .. } => {
-            let left = range_of(lhs, facts, resolve);
-            let right = range_of(rhs, facts, resolve);
+            let left = range_of(lhs, facts, env);
+            let right = range_of(rhs, facts, env);
             match op {
                 BinaryOp::Add => left.add(right),
                 BinaryOp::Sub => left.sub(right),
@@ -312,36 +334,26 @@ pub fn range_of<'a>(
 }
 
 /// Whether a condition holds, given what is known.
-pub fn holds<'a>(
-    condition: &'a Expr,
-    facts: &Facts,
-    resolve: &dyn Fn(&'a Expr) -> Option<DefId>,
-) -> Truth {
+pub fn holds(condition: &Expr, facts: &Facts, env: &Env<'_>) -> Truth {
     match condition {
         Expr::Bool { value, .. } => Truth::of(*value),
         Expr::Unary {
             op: UnaryOp::Not,
             operand,
             ..
-        } => holds(operand, facts, resolve).negate(),
+        } => holds(operand, facts, env).negate(),
         Expr::Binary { op, lhs, rhs, .. } => match op {
-            BinaryOp::And => holds(lhs, facts, resolve).and(holds(rhs, facts, resolve)),
-            BinaryOp::Or => holds(lhs, facts, resolve).or(holds(rhs, facts, resolve)),
-            _ => compare(*op, lhs, rhs, facts, resolve),
+            BinaryOp::And => holds(lhs, facts, env).and(holds(rhs, facts, env)),
+            BinaryOp::Or => holds(lhs, facts, env).or(holds(rhs, facts, env)),
+            _ => compare(*op, lhs, rhs, facts, env),
         },
         _ => Truth::Unknown,
     }
 }
 
-fn compare<'a>(
-    op: BinaryOp,
-    lhs: &'a Expr,
-    rhs: &'a Expr,
-    facts: &Facts,
-    resolve: &dyn Fn(&'a Expr) -> Option<DefId>,
-) -> Truth {
-    let left = range_of(lhs, facts, resolve);
-    let right = range_of(rhs, facts, resolve);
+fn compare(op: BinaryOp, lhs: &Expr, rhs: &Expr, facts: &Facts, env: &Env<'_>) -> Truth {
+    let left = range_of(lhs, facts, env);
+    let right = range_of(rhs, facts, env);
 
     let (Some((a_low, a_high)), Some((b_low, b_high))) = (left.bounds(), right.bounds()) else {
         // One side cannot happen, so the comparison never does either.
@@ -367,8 +379,8 @@ fn compare<'a>(
                 Truth::Unknown
             }
         }
-        BinaryOp::Gt => compare(BinaryOp::Lt, rhs, lhs, facts, resolve),
-        BinaryOp::Ge => compare(BinaryOp::Le, rhs, lhs, facts, resolve),
+        BinaryOp::Gt => compare(BinaryOp::Lt, rhs, lhs, facts, env),
+        BinaryOp::Ge => compare(BinaryOp::Le, rhs, lhs, facts, env),
         BinaryOp::Eq => {
             if a_low == a_high && b_low == b_high && a_low == b_low {
                 Truth::Always
@@ -378,7 +390,7 @@ fn compare<'a>(
                 Truth::Unknown
             }
         }
-        BinaryOp::Ne => compare(BinaryOp::Eq, lhs, rhs, facts, resolve).negate(),
+        BinaryOp::Ne => compare(BinaryOp::Eq, lhs, rhs, facts, env).negate(),
         _ => Truth::Unknown,
     }
 }
@@ -388,29 +400,19 @@ fn compare<'a>(
 /// Only comparisons of a name against something with a known range, and
 /// conjunctions of those. An `||` tells you nothing about either side on its
 /// own, which is why it is absent rather than approximated.
-pub fn narrowed<'a>(
-    condition: &'a Expr,
-    facts: &Facts,
-    resolve: &dyn Fn(&'a Expr) -> Option<DefId>,
-    when_true: bool,
-) -> Facts {
+pub fn narrowed(condition: &Expr, facts: &Facts, env: &Env<'_>, when_true: bool) -> Facts {
     let mut result = facts.clone();
-    apply_narrowing(condition, &mut result, resolve, when_true);
+    apply_narrowing(condition, &mut result, env, when_true);
     result
 }
 
-fn apply_narrowing<'a>(
-    condition: &'a Expr,
-    facts: &mut Facts,
-    resolve: &dyn Fn(&'a Expr) -> Option<DefId>,
-    when_true: bool,
-) {
+fn apply_narrowing(condition: &Expr, facts: &mut Facts, env: &Env<'_>, when_true: bool) {
     match condition {
         Expr::Unary {
             op: UnaryOp::Not,
             operand,
             ..
-        } => apply_narrowing(operand, facts, resolve, !when_true),
+        } => apply_narrowing(operand, facts, env, !when_true),
 
         // `a && b` holding means both hold. `a && b` failing means at least one
         // failed, which says nothing about either.
@@ -420,8 +422,8 @@ fn apply_narrowing<'a>(
             rhs,
             ..
         } if when_true => {
-            apply_narrowing(lhs, facts, resolve, true);
-            apply_narrowing(rhs, facts, resolve, true);
+            apply_narrowing(lhs, facts, env, true);
+            apply_narrowing(rhs, facts, env, true);
         }
 
         // The mirror image: `a || b` failing means both failed.
@@ -431,8 +433,8 @@ fn apply_narrowing<'a>(
             rhs,
             ..
         } if !when_true => {
-            apply_narrowing(lhs, facts, resolve, false);
-            apply_narrowing(rhs, facts, resolve, false);
+            apply_narrowing(lhs, facts, env, false);
+            apply_narrowing(rhs, facts, env, false);
         }
 
         Expr::Binary { op, lhs, rhs, .. } => {
@@ -441,9 +443,9 @@ fn apply_narrowing<'a>(
 
             // Both directions, so `0 < n` narrows `n` the same way `n > 0`
             // does.
-            narrow_side(effective, lhs, rhs, facts, resolve);
+            narrow_side(effective, lhs, rhs, facts, env);
             if let Some(flipped) = flipped(effective) {
-                narrow_side(flipped, rhs, lhs, facts, resolve);
+                narrow_side(flipped, rhs, lhs, facts, env);
             }
         }
 
@@ -452,17 +454,11 @@ fn apply_narrowing<'a>(
 }
 
 /// Narrows the left side of `left op right`.
-fn narrow_side<'a>(
-    op: BinaryOp,
-    left: &'a Expr,
-    right: &'a Expr,
-    facts: &mut Facts,
-    resolve: &dyn Fn(&'a Expr) -> Option<DefId>,
-) {
-    let Some(def) = def_of(left, resolve) else {
+fn narrow_side(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
+    let Some(def) = def_of(left, env) else {
         return;
     };
-    let Some((low, high)) = range_of(right, facts, resolve).bounds() else {
+    let Some((low, high)) = range_of(right, facts, env).bounds() else {
         return;
     };
 
@@ -518,18 +514,29 @@ fn flipped(op: BinaryOp) -> Option<BinaryOp> {
 /// This is what turns a parameter already of a refined type into a fact,
 /// without anyone writing a `where` clause saying the same thing again.
 pub fn range_admitted_by(predicate: &Expr) -> Range {
-    let facts = Facts::new();
-    let resolve = |_: &Expr| None;
-    let mut narrowed = facts.clone();
-    apply_subject_narrowing(predicate, &mut narrowed, &resolve, true);
+    range_of_subject(predicate, "value")
+}
+
+/// The range a condition pins its subject to, reading nothing else.
+///
+/// `value` in a refinement and `result` in an `ensures` clause are the same
+/// idea twice: a name that stands for the thing being described and has no
+/// definition of its own. Everything else in the condition is unknown, so a
+/// clause that mentions an argument tells us nothing, which is the honest
+/// answer rather than a wrong one.
+pub fn range_of_subject(condition: &Expr, subject: &str) -> Range {
+    let mut narrowed = Facts::new();
+    let env = Env::blind();
+    apply_subject_narrowing(condition, &mut narrowed, &env, subject, true);
     narrowed.subject.unwrap_or(Range::ANY)
 }
 
-/// The same walk as [`apply_narrowing`], for the implicit `value`.
-fn apply_subject_narrowing<'a>(
-    predicate: &'a Expr,
+/// The same walk as [`apply_narrowing`], for a subject with no definition.
+fn apply_subject_narrowing(
+    predicate: &Expr,
     facts: &mut Facts,
-    resolve: &dyn Fn(&'a Expr) -> Option<DefId>,
+    env: &Env<'_>,
+    subject: &str,
     when_true: bool,
 ) {
     match predicate {
@@ -537,40 +544,41 @@ fn apply_subject_narrowing<'a>(
             op: UnaryOp::Not,
             operand,
             ..
-        } => apply_subject_narrowing(operand, facts, resolve, !when_true),
+        } => apply_subject_narrowing(operand, facts, env, subject, !when_true),
         Expr::Binary {
             op: BinaryOp::And,
             lhs,
             rhs,
             ..
         } if when_true => {
-            apply_subject_narrowing(lhs, facts, resolve, true);
-            apply_subject_narrowing(rhs, facts, resolve, true);
+            apply_subject_narrowing(lhs, facts, env, subject, true);
+            apply_subject_narrowing(rhs, facts, env, subject, true);
         }
         Expr::Binary { op, lhs, rhs, .. } => {
             let Some(effective) = (if when_true { Some(*op) } else { negated(*op) }) else {
                 return;
             };
-            narrow_subject(effective, lhs, rhs, facts, resolve);
+            narrow_subject(effective, lhs, rhs, facts, env, subject);
             if let Some(flipped) = flipped(effective) {
-                narrow_subject(flipped, rhs, lhs, facts, resolve);
+                narrow_subject(flipped, rhs, lhs, facts, env, subject);
             }
         }
         _ => {}
     }
 }
 
-fn narrow_subject<'a>(
+fn narrow_subject(
     op: BinaryOp,
-    left: &'a Expr,
-    right: &'a Expr,
+    left: &Expr,
+    right: &Expr,
     facts: &mut Facts,
-    resolve: &dyn Fn(&'a Expr) -> Option<DefId>,
+    env: &Env<'_>,
+    subject: &str,
 ) {
-    if !matches!(left, Expr::Ident(ident) if ident.name == "value") {
+    if !matches!(left, Expr::Ident(ident) if ident.name == subject) {
         return;
     }
-    let Some((low, high)) = range_of(right, facts, resolve).bounds() else {
+    let Some((low, high)) = range_of(right, facts, env).bounds() else {
         return;
     };
 

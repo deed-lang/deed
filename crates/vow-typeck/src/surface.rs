@@ -16,13 +16,19 @@
 //! than as a proof obligation. Carrying the predicate means carrying the
 //! expression it is written in, which means carrying that module's scope, and
 //! that is a much larger thing than this.
+//!
+//! What does cross is the *range* a function promises its result lands in, as a
+//! pair of bounds. That is the difference between exporting a proof and
+//! exporting the conclusion of one: a caller gets what it needs to reason, and
+//! nothing about how the callee decided it.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use vow_ast::{FieldDecl, Ident, Item, Module, Type};
+use vow_ast::{Expr, FieldDecl, Ident, Item, Module, Outcome, Type};
 use vow_resolve::{DefKind, Resolutions};
 
+use crate::facts::{self, Range};
 use crate::ty::Ty;
 
 /// The module path builtin types are named under.
@@ -38,6 +44,9 @@ pub enum SurfaceItem {
     Function {
         params: Vec<Ty>,
         ret: Ty,
+        /// The range a call is promised to land in. See the note at the top
+        /// about why the bounds cross and the predicate does not.
+        guarantee: Range,
     },
     Record {
         fields: Vec<(String, Ty)>,
@@ -119,10 +128,39 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
         resolutions,
     };
 
+    // Refinement predicates, by the name they are declared under. Needed here
+    // and nowhere else: a function returning `Positive` promises a positive
+    // number, and nobody on the far side of the boundary can look the
+    // predicate up, so the bounds have to be worked out on this side.
+    let mut predicates: BTreeMap<&str, &Expr> = BTreeMap::new();
+    for item in &module.items {
+        if let Item::TypeAlias(decl) = item
+            && let Some(predicate) = &decl.refinement
+        {
+            predicates.insert(decl.name.name.as_str(), predicate);
+        }
+    }
+
     let mut items = BTreeMap::new();
     for item in &module.items {
         match item {
             Item::Function(decl) => {
+                let declared = match &decl.sig.ret {
+                    Some(Type::Named { name, .. }) => predicates
+                        .get(name.name.as_str())
+                        .map(|predicate| facts::range_admitted_by(predicate))
+                        .unwrap_or(Range::ANY),
+                    _ => Range::ANY,
+                };
+                let promised = decl
+                    .contract
+                    .ensures
+                    .iter()
+                    .filter(|clause| clause.outcome == Outcome::Ok)
+                    .fold(Range::ANY, |range, clause| {
+                        range.meet(facts::range_of_subject(&clause.condition, "result"))
+                    });
+
                 items.insert(
                     decl.sig.name.name.clone(),
                     SurfaceItem::Function {
@@ -139,6 +177,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                             Some(ty) => lowerer.ty(ty),
                             None => Ty::Unit,
                         },
+                        guarantee: declared.meet(promised),
                     },
                 );
             }

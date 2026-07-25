@@ -141,9 +141,10 @@ postcondition or explains, in a comment, why the checker cannot, and the file is
 that the two halves sit next to each other. The `Proven` tier used to hold constant
 expressions and nothing else, which made a refinement in real code a runtime check with
 ceremony around it. It now reasons about intervals, so a `where` clause, a refined parameter
-type, an `if` condition and a guard that returns are all facts the rest of the body can use.
-What it still cannot do is a relationship between two names, so `high - low` where
-`low < high` stays `Guarded`. [design/02-syntax.md](design/02-syntax.md) lists the rest.
+type, an `if` condition, a guard that returns and the contract of a function being called are
+all facts the rest of the body can use. What it still cannot do is a relationship between two
+names, so `high - low` where `low < high` stays `Guarded`.
+[design/02-syntax.md](design/02-syntax.md) lists the rest.
 
 `transfer.vow` used to model something that could not exist. `Money.units` was `Positive`,
 which made a zero balance and a debit unwritable, and the type checker said so. The fix was

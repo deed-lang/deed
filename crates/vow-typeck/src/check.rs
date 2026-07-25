@@ -18,8 +18,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use vow_ast::{
-    BinaryOp, Block, Expr, FieldInit, FnDecl, Ident, Item, MatchArm, Module, Outcome, Pattern,
-    Stmt, Type, TypeAlias, UnaryOp,
+    BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, Ident, Item, MatchArm, Module, Outcome,
+    Pattern, Stmt, Type, TypeAlias, UnaryOp,
 };
 use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
@@ -77,6 +77,9 @@ struct Signature {
     params: Vec<ParamTy>,
     ret: Ty,
     span: Span,
+    /// The range a call to this is known to land in, from the declared return
+    /// type and from the `ensures` clause. `ANY` when nothing is promised.
+    guarantee: Range,
 }
 
 struct Checker<'a> {
@@ -150,6 +153,7 @@ impl<'a> Checker<'a> {
                         .collect(),
                     ret,
                     span: Span::at(0),
+                    guarantee: Range::ANY,
                 },
             );
         }
@@ -270,7 +274,10 @@ impl<'a> Checker<'a> {
                     let Some(def) = self.def_of(&function.sig.name) else {
                         continue;
                     };
-                    let signature = self.lower_signature(&function.sig);
+                    let mut signature = self.lower_signature(&function.sig);
+                    signature.guarantee = signature
+                        .guarantee
+                        .meet(promised_by(&function.contract.ensures));
                     self.signatures.insert(def, signature);
                 }
                 _ => {}
@@ -306,10 +313,25 @@ impl<'a> Checker<'a> {
             None => Ty::Unit,
         };
 
+        let guarantee = self.guarantee_of(&ret);
+
         Signature {
             params,
             ret,
             span: sig.span,
+            guarantee,
+        }
+    }
+
+    /// What a return type alone promises about the value coming back.
+    ///
+    /// A `Result` promises nothing usable here: the call site holds the
+    /// wrapper, not the payload, and giving a range to a `Result` would be
+    /// answering a question nobody asked.
+    fn guarantee_of(&mut self, ret: &Ty) -> Range {
+        match ret {
+            Ty::Named(def) => self.refinement_range(*def),
+            _ => Range::ANY,
         }
     }
 
@@ -662,18 +684,76 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// The range a call to `callee` is promised to land in.
+    ///
+    /// Reading a promise is only honest if the promise is kept, and both of
+    /// these are. An `ensures` clause is evaluated on the way out of every
+    /// call, whatever tier it landed in, and a refined return type is checked
+    /// against its predicate at the same point. So a caller holding the
+    /// returned value is holding something that already passed. The tier on
+    /// the callee's own obligation says how much was settled ahead of time; it
+    /// does not say whether the check happens.
+    ///
+    /// This is the one place the reasoning leaves the function being checked,
+    /// so it is also the one place a broken contract could launder itself into
+    /// a proof somewhere else. That is why it reads what the callee declared
+    /// and never what its body happens to do.
+    fn call_range(&self, callee: &Expr) -> Range {
+        let def = match callee {
+            Expr::Ident(ident) => self.def_of(ident),
+            Expr::Field { name, .. } => self.resolutions.resolution(name.span),
+            _ => None,
+        };
+        let Some(def) = def else {
+            return Range::ANY;
+        };
+
+        if let Some(signature) = self.signatures.get(&def) {
+            return signature.guarantee;
+        }
+
+        // An imported function. Its refinement is opaque out here, which is
+        // why the range travels rather than the predicate: a pair of bounds
+        // says what the caller needs without exporting how it was decided.
+        let Some(module) = self.resolutions.import_module(def) else {
+            return Range::ANY;
+        };
+        match self.world.get(module, &self.resolutions.def(def).name) {
+            Some(SurfaceItem::Function { guarantee, .. }) => *guarantee,
+            _ => Range::ANY,
+        }
+    }
+
+    /// What the fact machinery is allowed to look up while checking this body.
+    fn env(
+        &self,
+    ) -> (
+        impl Fn(&Expr) -> Option<DefId> + use<'a>,
+        impl Fn(&Expr) -> Range + '_,
+    ) {
+        (self.resolver(), |callee: &Expr| self.call_range(callee))
+    }
+
     fn narrowed_by(&self, condition: &Expr, when_true: bool) -> Facts {
         self.narrowed_from(&self.facts, condition, when_true)
     }
 
     fn narrowed_from(&self, base: &Facts, condition: &Expr, when_true: bool) -> Facts {
-        let resolve = self.resolver();
-        facts::narrowed(condition, base, &resolve, when_true)
+        let (def_of, call) = self.env();
+        let env = facts::Env {
+            def_of: &def_of,
+            call: &call,
+        };
+        facts::narrowed(condition, base, &env, when_true)
     }
 
     fn range_of(&self, expr: &Expr) -> Range {
-        let resolve = self.resolver();
-        facts::range_of(expr, &self.facts, &resolve)
+        let (def_of, call) = self.env();
+        let env = facts::Env {
+            def_of: &def_of,
+            call: &call,
+        };
+        facts::range_of(expr, &self.facts, &env)
     }
 
     /// Whether the facts in scope settle a refinement predicate for `expr`.
@@ -683,8 +763,12 @@ impl<'a> Checker<'a> {
         };
         let subject = self.range_of(expr);
         let with_subject = self.facts.with_subject(subject);
-        let resolve = self.resolver();
-        facts::holds(predicate, &with_subject, &resolve)
+        let (def_of, call) = self.env();
+        let env = facts::Env {
+            def_of: &def_of,
+            call: &call,
+        };
+        facts::holds(predicate, &with_subject, &env)
     }
 
     /// Records the tier an obligation landed in, and says so when it is not
@@ -1099,6 +1183,18 @@ impl<'a> Checker<'a> {
                     None => init_ty,
                 };
                 self.bind_pattern(pattern, &bound);
+
+                // Naming a value should not lose what was known about it.
+                // Without this, `let n = f()` throws away the contract the
+                // call site just read, and every proof would have to be
+                // written as one long expression.
+                if let Pattern::Path { segments, .. } = pattern
+                    && let [ident] = segments.as_slice()
+                    && let Some(def) = self.def_of(ident)
+                {
+                    let range = self.range_of(init).meet(self.declared_range(def));
+                    self.facts.set(def, range);
+                }
             }
             Stmt::Assign {
                 target,
@@ -1364,7 +1460,7 @@ impl<'a> Checker<'a> {
             return Ty::Unknown;
         };
         match self.world.get(module, &ident.name) {
-            Some(SurfaceItem::Function { params, ret }) => Ty::Fn {
+            Some(SurfaceItem::Function { params, ret, .. }) => Ty::Fn {
                 params: params.clone(),
                 ret: Box::new(ret.clone()),
             },
@@ -2283,6 +2379,20 @@ fn capability(name: &str) -> Ty {
         module: Rc::from(PRELUDE_MODULE),
         name: Rc::from(name),
     }
+}
+
+/// The range an `ensures` block pins the returned value to.
+///
+/// Only the `ok` outcome, and only what it says about `result` itself. A clause
+/// that relates `result` to an argument says something true and useful that an
+/// interval cannot hold, so it contributes nothing rather than something wrong.
+fn promised_by(ensures: &[Ensures]) -> Range {
+    ensures
+        .iter()
+        .filter(|clause| clause.outcome == Outcome::Ok)
+        .fold(Range::ANY, |range, clause| {
+            range.meet(facts::range_of_subject(&clause.condition, "result"))
+        })
 }
 
 /// Fields from another module's surface, as the checker's own field type.

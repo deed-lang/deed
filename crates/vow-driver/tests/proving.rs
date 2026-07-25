@@ -231,10 +231,52 @@ fn a_relationship_between_two_names_is_not_a_fact_an_interval_can_hold() {
 }
 
 #[test]
-fn the_result_of_a_call_is_unknown_however_it_was_specified() {
+fn an_ensures_clause_is_a_fact_at_the_call_site() {
+    expect(
+        Tier::Proven,
+        "fn one() -> Int\n  ensures\n    ok  => result == 1,\n{\n    1\n}\n\nfn f() -> Positive { one() }\n",
+    );
+}
+
+#[test]
+fn a_return_type_is_a_fact_at_the_call_site_too() {
+    // Nothing is restated in an `ensures`. The type already said it.
+    expect(
+        Tier::Proven,
+        "fn one() -> Positive { 1 }\n\nfn f() -> Positive { one() }\n",
+    );
+}
+
+#[test]
+fn an_ensures_clause_that_relates_the_result_to_an_argument_says_nothing() {
+    // True, useful, and not something an interval can hold. The tier says so
+    // instead of pretending.
     expect(
         Tier::Guarded,
-        "fn one() -> Int\n  ensures\n    ok  => result == 1,\n{\n    1\n}\n\nfn f() -> Positive { one() }\n",
+        "fn same(n: Int) -> Int\n  ensures\n    ok  => result == n,\n{\n    n\n}\n\nfn f(n: Positive) -> Positive { same(n) }\n",
+    );
+}
+
+#[test]
+fn a_call_that_can_fail_promises_nothing_at_the_call_site() {
+    // The call site holds a `Result`, not the payload, so the range of the
+    // success case is not the range of the expression.
+    let (sources, checked) = check(
+        "fn one() -> Result<Int, String>\n  ensures\n    ok  => result == 1,\n{\n    ok(1)\n}\n\nfn f() -> Result<Positive, String> { one() }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(checked.obligations_at(Tier::Proven), 0);
+}
+
+#[test]
+fn naming_a_value_does_not_lose_what_was_known_about_it() {
+    expect(
+        Tier::Proven,
+        "fn one() -> Positive { 1 }\n\nfn f() -> Positive {\n    let n = one()\n    n\n}\n",
     );
 }
 
@@ -268,6 +310,76 @@ fn an_or_says_nothing_about_either_side() {
         Tier::Guarded,
         "fn f(n: Int) -> Result<Positive, Int> {\n    if n > 0 || n < -10 {\n        ok(n)\n    } else {\n        err(0)\n    }\n}\n",
     );
+}
+
+// -- across a module boundary ----------------------------------------------
+
+/// Checks both files together and returns the result for the second.
+fn check_pair(first: &str, second: &str) -> (SourceMap, Checked) {
+    let mut sources = SourceMap::new();
+    let ids = vec![
+        sources.add("first.vow", first),
+        sources.add("second.vow", second),
+    ];
+    let mut checks = vow_driver::check_all(&sources, &ids);
+    (sources, checks.remove(1))
+}
+
+#[test]
+fn a_promise_crosses_a_module_boundary() {
+    // A refinement is opaque from outside, on purpose, so what travels is the
+    // range and not the predicate. The caller gets what it needs to reason
+    // without learning how the callee decided anything.
+    let (sources, checked) = check_pair(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn one() -> Positive { 1 }\n",
+        "module b\n\n\
+         use a.{one}\n\n\
+         type AlsoPositive = Int where value > 0\n\n\
+         fn f() -> AlsoPositive { one() }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(checked.obligations_at(Tier::Proven), 1);
+}
+
+#[test]
+fn an_ensures_clause_crosses_a_module_boundary_too() {
+    let (sources, checked) = check_pair(
+        "module a\n\n\
+         fn one() -> Int\n  ensures\n    ok  => result == 1,\n{\n    1\n}\n",
+        "module b\n\n\
+         use a.{one}\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f() -> Positive { one() }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(checked.obligations_at(Tier::Proven), 1);
+}
+
+#[test]
+fn a_function_that_promises_nothing_still_promises_nothing_across_a_boundary() {
+    let (sources, checked) = check_pair(
+        "module a\n\nfn anything() -> Int { 1 }\n",
+        "module b\n\n\
+         use a.{anything}\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f() -> Positive { anything() }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(checked.obligations_at(Tier::Guarded), 1);
 }
 
 // -- what it rejects outright ----------------------------------------------
@@ -313,8 +425,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Seven proven and three guarded, and the file explains each of the three.
+    // Nine proven and three guarded, and the file explains each of the three.
     // If either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 7);
+    assert_eq!(checked.obligations_at(Tier::Proven), 9);
     assert_eq!(checked.obligations_at(Tier::Guarded), 3);
 }
