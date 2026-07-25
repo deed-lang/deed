@@ -73,7 +73,8 @@ fn clamped(raw: Int) -> Percent
 
 // Guarded, and correctly so. `n` could be the largest integer there is, and
 // then `n + 1` has no answer at all. Refusing to prove this is not a gap in
-// the reasoning, it is the reasoning working.
+// the reasoning, it is the reasoning working, and the warning points at the
+// `+` and says as much rather than leaving it to be guessed.
 fn one_more(n: Positive) -> Positive {
     n + 1
 }
