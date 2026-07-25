@@ -20,11 +20,11 @@ use vow_ast::{
     Pattern, Stmt, Type, UnaryOp,
 };
 use vow_diagnostics::{Diagnostic, FileId, Span};
-use vow_resolve::{DefId, DefKind, Resolutions};
+use vow_resolve::{DefId, DefKind, ExportKind, Resolutions};
 
 use crate::codes;
 use crate::sandbox;
-use crate::value::{Capability, Fields, Value};
+use crate::value::{Capability, Fields, Value, VariantValue};
 
 /// How one `test` block went.
 pub struct TestOutcome {
@@ -40,8 +40,63 @@ impl TestOutcome {
     }
 }
 
-/// Runs every `test` block in a module.
-pub fn run_tests(file: FileId, module: &Module, resolutions: &Resolutions) -> Vec<TestOutcome> {
+/// Every module the interpreter has the code of.
+///
+/// A call that goes through an import has to run in the module the body was
+/// written in, using that module's resolutions. Reading the callee's names out
+/// of the caller's scope would be a class of bug that does not announce itself,
+/// so the current module is part of the interpreter's state rather than
+/// something a call site remembers to pass.
+#[derive(Default)]
+pub struct Program<'a> {
+    entries: Vec<Entry<'a>>,
+}
+
+struct Entry<'a> {
+    path: Rc<str>,
+    file: FileId,
+    module: &'a Module,
+    resolutions: &'a Resolutions,
+}
+
+impl<'a> Program<'a> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a module. A file with no `module` line cannot be imported, so it
+    /// is registered under its own file name and nothing can reach it.
+    pub fn add(&mut self, file: FileId, module: &'a Module, resolutions: &'a Resolutions) {
+        let path = match &module.name {
+            Some(name) => name.to_string_path(),
+            None => format!("<file {}>", file.index()),
+        };
+        self.entries.push(Entry {
+            path: Rc::from(path.as_str()),
+            file,
+            module,
+            resolutions,
+        });
+    }
+
+    fn index_of(&self, file: FileId) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.file == file)
+    }
+
+    fn module(&self, file: FileId) -> Option<&'a Module> {
+        self.entries
+            .iter()
+            .find(|entry| entry.file == file)
+            .map(|entry| entry.module)
+    }
+}
+
+/// Runs every `test` block in one of the program's modules.
+pub fn run_tests(program: &Program, file: FileId) -> Vec<TestOutcome> {
+    let Some(module) = program.module(file) else {
+        return Vec::new();
+    };
+
     module
         .items
         .iter()
@@ -50,7 +105,7 @@ pub fn run_tests(file: FileId, module: &Module, resolutions: &Resolutions) -> Ve
             _ => None,
         })
         .map(|test| {
-            let mut interp = Interp::new(file, module, resolutions);
+            let mut interp = Interp::new(program, file);
             let failure = match interp.eval_block(&test.body) {
                 Ok(_) | Err(Signal::Return(_)) => None,
                 Err(Signal::Fail(diagnostic)) => Some(*diagnostic),
@@ -81,18 +136,17 @@ pub struct Run {
 /// nothing outside it. The caller supplies it rather than the runtime picking
 /// one, because how much of the filesystem a program gets is a decision and
 /// decisions belong at the call site.
-pub fn run_main(
-    file: FileId,
-    module: &Module,
-    resolutions: &Resolutions,
-    root: &Path,
-) -> Option<Run> {
-    let main = module.items.iter().find_map(|item| match item {
-        Item::Function(function) if function.sig.name.name == "main" => Some(function),
-        _ => None,
-    })?;
+pub fn run_main(program: &Program, file: FileId, root: &Path) -> Option<Run> {
+    let main = program
+        .module(file)?
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function) if function.sig.name.name == "main" => Some(function),
+            _ => None,
+        })?;
 
-    let mut interp = Interp::new(file, module, resolutions);
+    let mut interp = Interp::new(program, file);
     interp.root = sandbox::root(root).ok().map(Rc::from);
 
     let span = main.sig.name.span;
@@ -119,19 +173,87 @@ enum Signal {
     Fail(Box<Diagnostic>),
 }
 
+/// Whether a runtime variant is the one a pattern named.
+fn variant_is(variant: &VariantValue, id: &(Rc<str>, String)) -> bool {
+    variant.origin == id.0 && variant.name == id.1
+}
+
+/// Walks one module's items once, so lookups during a run are by definition.
+fn index_module<'a>(entry: &Entry<'a>) -> Code<'a> {
+    let resolutions = entry.resolutions;
+    let def_of = |ident: &Ident| resolutions.resolution(ident.span);
+
+    let mut code = Code {
+        path: Rc::clone(&entry.path),
+        file: entry.file,
+        resolutions,
+        functions: HashMap::new(),
+        handler_decls: HashMap::new(),
+        refinements: HashMap::new(),
+        state_names: HashMap::new(),
+        variant_names: HashMap::new(),
+    };
+
+    for item in &entry.module.items {
+        match item {
+            Item::Function(function) => {
+                if let Some(def) = def_of(&function.sig.name) {
+                    code.functions.insert(def, function);
+                }
+            }
+            Item::Handler(handler) => {
+                if let Some(def) = def_of(&handler.name) {
+                    code.handler_decls.insert(def, handler);
+                }
+                for field in &handler.state {
+                    if let Some(def) = def_of(&field.name) {
+                        code.state_names.insert(def, field.name.name.clone());
+                    }
+                }
+            }
+            Item::Choice(choice) => {
+                for variant in &choice.variants {
+                    if let Some(def) = def_of(&variant.name) {
+                        code.variant_names.insert(def, variant.name.name.clone());
+                    }
+                }
+            }
+            Item::TypeAlias(alias) => {
+                if let (Some(def), Some(predicate)) =
+                    (def_of(&alias.name), alias.refinement.as_ref())
+                {
+                    code.refinements.insert(def, predicate);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    code
+}
+
 type Eval<T> = Result<T, Signal>;
+
+/// Which module declared something, and what it is called there.
+///
+/// Used for anything that has to be the same thing seen from two modules. A
+/// `DefId` cannot do this: it is an index into one module's resolution table,
+/// so two unrelated declarations can share a number and the same declaration
+/// reached two ways cannot.
+type Origin = (Rc<str>, String);
 
 /// A handler installed by a `with` block.
 struct Instance {
     handler: DefId,
-    effect: DefId,
+    effect: Origin,
     state: Fields,
 }
 
-pub(crate) struct Interp<'a> {
+/// One module's code, indexed the way the interpreter needs it.
+struct Code<'a> {
+    path: Rc<str>,
     file: FileId,
     resolutions: &'a Resolutions,
-
     functions: HashMap<DefId, &'a FnDecl>,
     handler_decls: HashMap<DefId, &'a HandlerDecl>,
     /// Type alias definition to the predicate it refines by.
@@ -139,6 +261,13 @@ pub(crate) struct Interp<'a> {
     /// Handler state definition to the field name it stands for.
     state_names: HashMap<DefId, String>,
     variant_names: HashMap<DefId, String>,
+}
+
+pub(crate) struct Interp<'a> {
+    modules: Vec<Code<'a>>,
+    by_path: HashMap<Rc<str>, usize>,
+    /// Which module the running frame belongs to.
+    current: usize,
 
     /// One per active call. Bindings are keyed by definition, which resolution
     /// already made unique, so blocks need no scopes of their own.
@@ -150,7 +279,7 @@ pub(crate) struct Interp<'a> {
     /// Values of `old(...)` captured on entry to the running call.
     olds: Vec<HashMap<Span, Value>>,
     /// Handler state captured on entry, for `unchanged(...)`.
-    entry_states: Vec<HashMap<DefId, Fields>>,
+    entry_states: Vec<HashMap<Origin, Fields>>,
 
     /// Lines written through a `Console`. Collected rather than printed so the
     /// caller decides what to do with them, and so a test can read them.
@@ -165,15 +294,19 @@ pub(crate) struct Interp<'a> {
 }
 
 impl<'a> Interp<'a> {
-    fn new(file: FileId, module: &'a Module, resolutions: &'a Resolutions) -> Self {
-        let mut interp = Interp {
-            file,
-            resolutions,
-            functions: HashMap::new(),
-            handler_decls: HashMap::new(),
-            refinements: HashMap::new(),
-            state_names: HashMap::new(),
-            variant_names: HashMap::new(),
+    fn new(program: &Program<'a>, file: FileId) -> Self {
+        let mut modules = Vec::new();
+        let mut by_path = HashMap::new();
+
+        for entry in &program.entries {
+            by_path.insert(Rc::clone(&entry.path), modules.len());
+            modules.push(index_module(entry));
+        }
+
+        Interp {
+            current: program.index_of(file).unwrap_or(0),
+            modules,
+            by_path,
             frames: vec![HashMap::new()],
             handlers: Vec::new(),
             inside_handler: Vec::new(),
@@ -182,48 +315,115 @@ impl<'a> Interp<'a> {
             output: Vec::new(),
             ticks: 0,
             root: None,
-        };
-
-        for item in &module.items {
-            match item {
-                Item::Function(function) => {
-                    if let Some(def) = interp.def_of(&function.sig.name) {
-                        interp.functions.insert(def, function);
-                    }
-                }
-                Item::Handler(handler) => {
-                    if let Some(def) = interp.def_of(&handler.name) {
-                        interp.handler_decls.insert(def, handler);
-                    }
-                    for field in &handler.state {
-                        if let Some(def) = interp.def_of(&field.name) {
-                            interp.state_names.insert(def, field.name.name.clone());
-                        }
-                    }
-                }
-                Item::Choice(choice) => {
-                    for variant in &choice.variants {
-                        if let Some(def) = interp.def_of(&variant.name) {
-                            interp.variant_names.insert(def, variant.name.name.clone());
-                        }
-                    }
-                }
-                Item::TypeAlias(alias) => {
-                    if let (Some(def), Some(predicate)) =
-                        (interp.def_of(&alias.name), alias.refinement.as_ref())
-                    {
-                        interp.refinements.insert(def, predicate);
-                    }
-                }
-                _ => {}
-            }
         }
+    }
 
-        interp
+    // -- the module the running frame belongs to ---------------------------
+
+    fn code(&self) -> &Code<'a> {
+        &self.modules[self.current]
+    }
+
+    fn resolutions(&self) -> &'a Resolutions {
+        self.modules[self.current].resolutions
+    }
+
+    fn file(&self) -> FileId {
+        self.modules[self.current].file
+    }
+
+    fn here(&self) -> Rc<str> {
+        Rc::clone(&self.modules[self.current].path)
+    }
+
+    fn function(&self, def: DefId) -> Option<&'a FnDecl> {
+        self.code().functions.get(&def).copied()
+    }
+
+    fn handler_decl(&self, def: DefId) -> Option<&'a HandlerDecl> {
+        self.code().handler_decls.get(&def).copied()
+    }
+
+    fn refinement(&self, def: DefId) -> Option<&'a Expr> {
+        self.code().refinements.get(&def).copied()
+    }
+
+    fn state_name(&self, def: DefId) -> String {
+        self.code().state_names[&def].clone()
+    }
+
+    /// The function an imported name refers to, and the module it lives in.
+    fn imported_function(&self, def: DefId) -> Option<(usize, &'a FnDecl)> {
+        if self.resolutions().import(def)?.kind != ExportKind::Function {
+            return None;
+        }
+        let module = self.resolutions().import_module(def)?;
+        let index = *self.by_path.get(module)?;
+        let name = &self.resolutions().def(def).name;
+
+        // Only top level functions are in this map, so a handler operation
+        // that happens to share a name cannot be reached by mistake.
+        let there = &self.modules[index];
+        let function = there
+            .functions
+            .iter()
+            .find(|(id, _)| there.resolutions.def(**id).name == *name)
+            .map(|(_, function)| *function)?;
+        Some((index, function))
+    }
+
+    /// Which module declared a variant, and what it is called there.
+    ///
+    /// A local variant is declared here. One reached through an import was
+    /// declared wherever the import points, and it has to keep that identity
+    /// or the same variant would compare unequal to itself depending on which
+    /// file the reader came through.
+    fn variant_id(&self, def: DefId) -> Option<(Rc<str>, String)> {
+        let data = self.resolutions().def(def);
+        match data.kind {
+            DefKind::Variant => Some((self.here(), data.name.clone())),
+            DefKind::Import => {
+                if self.resolutions().import(def)?.kind != ExportKind::Variant {
+                    return None;
+                }
+                let module = self.resolutions().import_module(def)?;
+                let path = match self.by_path.get(module) {
+                    Some(index) => Rc::clone(&self.modules[*index].path),
+                    None => Rc::from(module),
+                };
+                Some((path, data.name.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The same, for the property generator, which builds values from outside.
+    pub(crate) fn variant_identity(&self, def: DefId) -> Option<(Rc<str>, String)> {
+        self.variant_id(def)
+    }
+
+    /// Which module declared an effect, and what it is called there.
+    fn effect_id(&self, def: DefId) -> Option<Origin> {
+        let data = self.resolutions().def(def);
+        match data.kind {
+            DefKind::Effect => Some((self.here(), data.name.clone())),
+            DefKind::Import => {
+                if self.resolutions().import(def)?.kind != ExportKind::Effect {
+                    return None;
+                }
+                let module = self.resolutions().import_module(def)?;
+                let path = match self.by_path.get(module) {
+                    Some(index) => Rc::clone(&self.modules[*index].path),
+                    None => Rc::from(module),
+                };
+                Some((path, data.name.clone()))
+            }
+            _ => None,
+        }
     }
 
     fn def_of(&self, ident: &Ident) -> Option<DefId> {
-        self.resolutions.resolution(ident.span)
+        self.resolutions().resolution(ident.span)
     }
 
     /// Calls a function from outside any running program.
@@ -249,12 +449,12 @@ impl<'a> Interp<'a> {
         self.eval_predicate(predicate, value).unwrap_or(false)
     }
 
-    pub(crate) fn make(file: FileId, module: &'a Module, resolutions: &'a Resolutions) -> Self {
-        Self::new(file, module, resolutions)
+    pub(crate) fn make(program: &Program<'a>, file: FileId) -> Self {
+        Self::new(program, file)
     }
 
     fn kind_of(&self, def: DefId) -> DefKind {
-        self.resolutions.def(def).kind
+        self.resolutions().def(def).kind
     }
 
     fn frame(&mut self) -> &mut HashMap<DefId, Value> {
@@ -271,7 +471,7 @@ impl<'a> Interp<'a> {
         self.fail(
             Diagnostic::error(
                 codes::NOT_RUNNABLE,
-                self.file,
+                self.file(),
                 span,
                 format!("the interpreter cannot run {what} yet"),
             )
@@ -295,10 +495,10 @@ impl<'a> Interp<'a> {
                 // A resolved name here is qualification, which resolution
                 // already settled, and the only qualified thing that is a value
                 // is a variant with no payload.
-                if let Some(def) = self.resolutions.resolution(name.span)
-                    && self.kind_of(def) == DefKind::Variant
+                if let Some(def) = self.resolutions().resolution(name.span)
+                    && let Some((origin, variant)) = self.variant_id(def)
                 {
-                    return Ok(Value::variant(def, name.name.clone(), Fields::new()));
+                    return Ok(Value::variant(origin, variant, Fields::new()));
                 }
 
                 let receiver_value = self.eval(receiver)?;
@@ -373,7 +573,7 @@ impl<'a> Interp<'a> {
                 Err(self.fail(
                     Diagnostic::error(
                         codes::NOT_RUNNABLE,
-                        self.file,
+                        self.file(),
                         *span,
                         format!("no arm of this match accepted {value}"),
                     )
@@ -395,12 +595,15 @@ impl<'a> Interp<'a> {
                 let Some(def) = self.def_of(&effect.effect) else {
                     return Err(self.not_runnable(*span, "this effect reference"));
                 };
+                let Some(id) = self.effect_id(def) else {
+                    return Err(self.not_runnable(*span, "this effect reference"));
+                };
                 let before = self
                     .entry_states
                     .last()
-                    .and_then(|states| states.get(&def))
+                    .and_then(|states| states.get(&id))
                     .cloned();
-                let now = self.state_of(def);
+                let now = self.state_of(&id);
                 Ok(Value::Bool(before == now))
             }
 
@@ -440,8 +643,11 @@ impl<'a> Interp<'a> {
         if self.kind_of(def) == DefKind::State {
             return self.read_state(def, ident.span);
         }
-        if self.kind_of(def) == DefKind::Variant {
-            return Ok(Value::variant(def, ident.name.clone(), Fields::new()));
+        // A variant with no payload is a value. One reached through an import
+        // is the same value as the one built where it was declared, which is
+        // what `variant_id` is for.
+        if let Some((origin, variant)) = self.variant_id(def) {
+            return Ok(Value::variant(origin, variant, Fields::new()));
         }
 
         match self.frames.last().and_then(|frame| frame.get(&def)) {
@@ -457,19 +663,19 @@ impl<'a> Interp<'a> {
         let Some(index) = self.inside_handler.last().copied() else {
             return Err(self.not_runnable(span, "handler state from outside a handler"));
         };
-        let name = &self.state_names[&def];
-        match self.handlers[index].state.get(name) {
+        let name = self.state_name(def);
+        match self.handlers[index].state.get(&name) {
             Some(value) => Ok(value.clone()),
             None => Err(self.not_runnable(span, "handler state that was never initialised")),
         }
     }
 
     /// The state of the handler currently installed for `effect`.
-    fn state_of(&self, effect: DefId) -> Option<Fields> {
+    fn state_of(&self, effect: &Origin) -> Option<Fields> {
         self.handlers
             .iter()
             .rev()
-            .find(|instance| instance.effect == effect)
+            .find(|instance| instance.effect == *effect)
             .map(|instance| instance.state.clone())
     }
 
@@ -570,7 +776,7 @@ impl<'a> Interp<'a> {
         self.fail(
             Diagnostic::error(
                 codes::ARITHMETIC,
-                self.file,
+                self.file(),
                 span,
                 "this arithmetic has no answer",
             )
@@ -584,7 +790,7 @@ impl<'a> Interp<'a> {
     fn call_expr(&mut self, callee: &'a Expr, args: &'a [Expr], span: Span) -> Eval<Value> {
         let def = match callee {
             Expr::Ident(ident) => self.def_of(ident),
-            Expr::Field { name, .. } => self.resolutions.resolution(name.span),
+            Expr::Field { name, .. } => self.resolutions().resolution(name.span),
             _ => None,
         };
 
@@ -599,14 +805,14 @@ impl<'a> Interp<'a> {
 
         match self.kind_of(def) {
             DefKind::Function => {
-                let Some(function) = self.functions.get(&def).copied() else {
+                let Some(function) = self.function(def) else {
                     return Err(self.not_runnable(callee.span(), "this call"));
                 };
                 self.call(function, values, span, None)
             }
             DefKind::EffectOp => self.dispatch(def, values, span),
             DefKind::Builtin => {
-                let name = self.resolutions.def(def).name.clone();
+                let name = self.resolutions().def(def).name.clone();
                 let carried = values.first().map(|(value, _)| value.clone());
                 match (name.as_str(), carried) {
                     ("ok", Some(value)) => Ok(Value::ok(value)),
@@ -614,36 +820,50 @@ impl<'a> Interp<'a> {
                     _ => Err(self.not_runnable(callee.span(), "this call")),
                 }
             }
-            DefKind::Import => {
-                Err(self.not_runnable(callee.span(), "a call into a module that cannot be loaded"))
-            }
+            // The body lives in another module and so do its names, so the
+            // call runs with that module current. Reading the callee's names
+            // out of the caller's scope would be a class of bug that does not
+            // announce itself.
+            DefKind::Import => match self.imported_function(def) {
+                Some((module, function)) => {
+                    let caller = self.current;
+                    self.current = module;
+                    let result = self.call(function, values, span, None);
+                    self.current = caller;
+                    result
+                }
+                None => Err(self.not_runnable(
+                    callee.span(),
+                    "a call into a module whose code was not handed to the interpreter",
+                )),
+            },
             _ => Err(self.not_runnable(callee.span(), "this call")),
         }
     }
 
     fn dispatch(&mut self, operation: DefId, args: Vec<(Value, Span)>, span: Span) -> Eval<Value> {
-        let name = self.resolutions.def(operation).name.clone();
-        let Some(effect) = self.resolutions.def(operation).parent else {
+        let name = self.resolutions().def(operation).name.clone();
+        let Some(effect) = self.resolutions().def(operation).parent else {
             return Err(self.not_runnable(span, "this effect operation"));
         };
 
         // The built-in effect has no handler to install, because the handler is
         // the outside world. Which part of it is decided by the capability that
         // was passed in, not by anything in scope.
-        if self.resolutions.builtin("Io") == Some(effect) {
+        if self.resolutions().builtin("Io") == Some(effect) {
             return self.perform_io(&name, &args, span);
         }
 
-        let Some(index) = self
-            .handlers
-            .iter()
-            .rposition(|instance| instance.effect == effect)
+        let effect_name = self.resolutions().def(effect).name.clone();
+        let id = self.effect_id(effect);
+        let Some(index) = id
+            .as_ref()
+            .and_then(|id| self.handlers.iter().rposition(|found| found.effect == *id))
         else {
-            let effect_name = self.resolutions.def(effect).name.clone();
             return Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,
-                    self.file,
+                    self.file(),
                     span,
                     format!("no handler is installed for `{effect_name}`"),
                 )
@@ -653,7 +873,7 @@ impl<'a> Interp<'a> {
         };
 
         let handler_def = self.handlers[index].handler;
-        let Some(declaration) = self.handler_decls.get(&handler_def).copied() else {
+        let Some(declaration) = self.handler_decl(handler_def) else {
             return Err(self.not_runnable(span, "this handler"));
         };
         let Some(operation_decl) = declaration
@@ -665,7 +885,7 @@ impl<'a> Interp<'a> {
             return Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,
-                    self.file,
+                    self.file(),
                     span,
                     format!("the handler `{handler_name}` does not implement `{name}`"),
                 )
@@ -733,7 +953,7 @@ impl<'a> Interp<'a> {
             (_, held) => Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,
-                    self.file,
+                    self.file(),
                     span,
                     format!("`Io.{name}` cannot be performed with a `{}`", held.name()),
                 )
@@ -796,7 +1016,7 @@ impl<'a> Interp<'a> {
                 return Err(self.fail(
                     Diagnostic::error(
                         codes::PRECONDITION_FAILED,
-                        self.file,
+                        self.file(),
                         call_span,
                         format!("this call does not satisfy what `{name}` requires"),
                     )
@@ -854,7 +1074,7 @@ impl<'a> Interp<'a> {
 
         let mut states = HashMap::new();
         for instance in &self.handlers {
-            states.insert(instance.effect, instance.state.clone());
+            states.insert(instance.effect.clone(), instance.state.clone());
         }
         self.entry_states.push(states);
 
@@ -877,7 +1097,7 @@ impl<'a> Interp<'a> {
 
             // `result` is what the function produced: the success value for an
             // `ok` clause, the error value for an `err` one.
-            if let Some(def) = result_def(&obligation.condition, self.resolutions) {
+            if let Some(def) = result_def(&obligation.condition, self.resolutions()) {
                 let bound = match (value, outcome) {
                     (Value::Result { value, .. }, _) => (**value).clone(),
                     (other, _) => other.clone(),
@@ -890,7 +1110,7 @@ impl<'a> Interp<'a> {
                 return Err(self.fail(
                     Diagnostic::error(
                         codes::POSTCONDITION_FAILED,
-                        self.file,
+                        self.file(),
                         obligation.span,
                         format!("`{name}` did not keep this promise"),
                     )
@@ -913,7 +1133,7 @@ impl<'a> Interp<'a> {
         let Some(def) = self.def_of(name) else {
             return Ok(());
         };
-        let Some(predicate) = self.refinements.get(&def).copied() else {
+        let Some(predicate) = self.refinement(def) else {
             return Ok(());
         };
 
@@ -928,7 +1148,7 @@ impl<'a> Interp<'a> {
         Err(self.fail(
             Diagnostic::error(
                 codes::REFINEMENT_FAILED,
-                self.file,
+                self.file(),
                 span,
                 format!("{value} does not satisfy `{refinement}`"),
             )
@@ -973,7 +1193,7 @@ impl<'a> Interp<'a> {
     fn build(&mut self, path: &'a Expr, fields: &'a [FieldInit], span: Span) -> Eval<Value> {
         let def = match path {
             Expr::Ident(ident) => self.def_of(ident),
-            Expr::Field { name, .. } => self.resolutions.resolution(name.span),
+            Expr::Field { name, .. } => self.resolutions().resolution(name.span),
             _ => None,
         };
 
@@ -988,12 +1208,23 @@ impl<'a> Interp<'a> {
 
         match def.map(|def| (def, self.kind_of(def))) {
             Some((_, DefKind::Record)) => Ok(Value::record(values)),
-            Some((def, DefKind::Variant)) => {
-                let name = self.variant_names[&def].clone();
-                Ok(Value::variant(def, name, values))
-            }
+            Some((def, _)) => match self.variant_id(def) {
+                Some((origin, name)) => Ok(Value::variant(origin, name, values)),
+                // A record from another module has no nominal identity at
+                // runtime either way, since records already compare by their
+                // contents alone.
+                None if self.imported_record(def) => Ok(Value::record(values)),
+                None => Err(self.not_runnable(span, "this literal")),
+            },
             _ => Err(self.not_runnable(span, "this literal")),
         }
+    }
+
+    /// Whether an imported name is a record in the module it came from.
+    fn imported_record(&self, def: DefId) -> bool {
+        self.resolutions()
+            .import(def)
+            .is_some_and(|export| export.kind == ExportKind::Record)
     }
 
     fn install(&mut self, expr: &'a Expr) -> Eval<()> {
@@ -1009,7 +1240,7 @@ impl<'a> Interp<'a> {
         let Some(def) = def.filter(|def| self.kind_of(*def) == DefKind::Handler) else {
             return Err(self.not_runnable(expr.span(), "this handler"));
         };
-        let Some(declaration) = self.handler_decls.get(&def).copied() else {
+        let Some(declaration) = self.handler_decl(def) else {
             return Err(self.not_runnable(expr.span(), "this handler"));
         };
 
@@ -1029,7 +1260,7 @@ impl<'a> Interp<'a> {
                 return Err(self.fail(
                     Diagnostic::error(
                         codes::NOT_RUNNABLE,
-                        self.file,
+                        self.file(),
                         expr.span(),
                         format!("`{handler}` needs an initial value for `{missing}`"),
                     )
@@ -1039,7 +1270,10 @@ impl<'a> Interp<'a> {
             }
         }
 
-        let Some(effect) = self.resolutions.resolution(declaration.effect.span) else {
+        let Some(effect) = self.resolutions().resolution(declaration.effect.span) else {
+            return Err(self.not_runnable(expr.span(), "this handler's effect"));
+        };
+        let Some(effect) = self.effect_id(effect) else {
             return Err(self.not_runnable(expr.span(), "this handler's effect"));
         };
 
@@ -1084,7 +1318,7 @@ impl<'a> Interp<'a> {
                 let Some(index) = self.inside_handler.last().copied() else {
                     return Err(self.not_runnable(target.span, "assignment from outside a handler"));
                 };
-                let name = self.state_names[&def].clone();
+                let name = self.state_name(def);
                 self.handlers[index].state.insert(name, value);
                 Ok(())
             }
@@ -1141,7 +1375,7 @@ impl<'a> Interp<'a> {
 
         let mut diagnostic = Diagnostic::error(
             codes::ASSERTION_FAILED,
-            self.file,
+            self.file(),
             condition.span(),
             "this assertion is not true",
         )
@@ -1167,20 +1401,25 @@ impl<'a> Interp<'a> {
                 _ => false,
             },
             Pattern::Path { segments, .. } => match segments.last() {
-                Some(last) => match self.resolutions.resolution(last.span) {
-                    Some(def) if self.kind_of(def) == DefKind::Variant => match value {
-                        Value::Variant(variant) => variant.def == def,
-                        _ => false,
+                Some(last) => match self.resolutions().resolution(last.span) {
+                    Some(def) => match self.variant_id(def) {
+                        Some(id) => match value {
+                            Value::Variant(variant) => variant_is(variant, &id),
+                            _ => false,
+                        },
+                        // A binding matches anything.
+                        None => true,
                     },
-                    // A binding matches anything.
-                    _ => true,
+                    None => true,
                 },
                 None => false,
             },
             Pattern::Record { path, .. } => match (path.last(), value) {
-                (Some(last), Value::Variant(variant)) => {
-                    self.resolutions.resolution(last.span) == Some(variant.def)
-                }
+                (Some(last), Value::Variant(variant)) => self
+                    .resolutions()
+                    .resolution(last.span)
+                    .and_then(|def| self.variant_id(def))
+                    .is_some_and(|id| variant_is(variant, &id)),
                 _ => false,
             },
             Pattern::Tuple { path, .. } => match value {
@@ -1197,8 +1436,8 @@ impl<'a> Interp<'a> {
     /// The prelude name a pattern head refers to, if it is one.
     fn builtin_name(&self, path: &[Ident]) -> Option<String> {
         let last = path.last()?;
-        let def = self.resolutions.resolution(last.span)?;
-        (self.kind_of(def) == DefKind::Builtin).then(|| self.resolutions.def(def).name.clone())
+        let def = self.resolutions().resolution(last.span)?;
+        (self.kind_of(def) == DefKind::Builtin).then(|| self.resolutions().def(def).name.clone())
     }
 
     fn bind(&mut self, value: &Value, pattern: &Pattern) {

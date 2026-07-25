@@ -8,11 +8,18 @@ use std::path::{Path, PathBuf};
 
 use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_driver::{Checked, check_text};
-use vow_interp::{Run, run_main};
+use vow_interp::{Program, Run, run_main};
 
 /// A directory nothing was granted, for programs that do not touch files.
 fn nowhere() -> &'static Path {
     Path::new("")
+}
+
+/// The one checked module, as something the interpreter can run.
+fn program_of(checked: &Checked) -> Program<'_> {
+    let mut program = Program::new();
+    program.add(checked.file, &checked.module, &checked.resolutions);
+    program
 }
 
 fn check(src: &str) -> (SourceMap, Checked) {
@@ -37,8 +44,7 @@ fn run(src: &str) -> (SourceMap, Run) {
 
 fn run_in(src: &str, root: &Path) -> (SourceMap, Run) {
     let (sources, checked) = check_ok(src);
-    let run = run_main(checked.file, &checked.module, &checked.resolutions, root)
-        .expect("there should be a main");
+    let run = run_main(&program_of(&checked), checked.file, root).expect("there should be a main");
     (sources, run)
 }
 
@@ -313,13 +319,8 @@ fn the_hello_example_runs() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    let run = run_main(
-        checked.file,
-        &checked.module,
-        &checked.resolutions,
-        nowhere(),
-    )
-    .expect("the example has a main");
+    let run =
+        run_main(&program_of(&checked), checked.file, nowhere()).expect("the example has a main");
     assert!(run.result.is_ok());
     assert!(run.output.iter().any(|line| line.contains("world")));
 }
@@ -338,13 +339,8 @@ fn the_config_example_reads_itself_and_nothing_else() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    let run = run_main(
-        checked.file,
-        &checked.module,
-        &checked.resolutions,
-        Path::new(dir),
-    )
-    .expect("the example has a main");
+    let run = run_main(&program_of(&checked), checked.file, Path::new(dir))
+        .expect("the example has a main");
     assert!(run.result.is_ok());
     assert_eq!(run.output[0], "found it");
     assert!(
@@ -357,15 +353,7 @@ fn the_config_example_reads_itself_and_nothing_else() {
 #[test]
 fn a_file_with_no_main_is_not_runnable() {
     let (_, checked) = check_ok("module a\n\nfn f() -> Int { 0 }\n");
-    assert!(
-        run_main(
-            checked.file,
-            &checked.module,
-            &checked.resolutions,
-            nowhere()
-        )
-        .is_none()
-    );
+    assert!(run_main(&program_of(&checked), checked.file, nowhere()).is_none());
 }
 
 /// A scratch directory, named so parallel tests do not collide.

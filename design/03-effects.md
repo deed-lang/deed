@@ -174,6 +174,11 @@ this whole design fails on ergonomics, exactly like its predecessors.
   operation has to exist, because an effect's operations are part of its declaration and
   that much crosses a file boundary as syntax. Whether the row is tight is still not
   checkable, because that needs to know what the body of a call into that module performs.
+- **An imported effect cannot be performed.** `Counter.bump()` where `Counter` came from a
+  `use` does not resolve to an operation, so there is nothing to dispatch on, and a handler
+  declared in another module cannot be installed either. Calls and values cross a module
+  boundary at runtime now; effects do not. This is the largest thing still missing and it
+  needs the resolver to give an imported effect's operations definitions of their own.
 - Can rows be inferred well enough that most functions carry none, and does that then
   undermine the review argument, which depends on the signature being complete?
 - How do effects interact with data structures. Does a `Map` holding closures need a row?

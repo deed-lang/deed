@@ -16,13 +16,14 @@
 //! means there is no separate precondition path either.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use vow_ast::{ChoiceDecl, FnDecl, Item, Module, RecordDecl, Type, TypeAlias};
 use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
 use crate::codes;
-use crate::interp::Interp;
+use crate::interp::{Interp, Program};
 use crate::value::{Fields, Value};
 
 /// How hard to try.
@@ -80,6 +81,7 @@ pub fn is_testable(function: &FnDecl, module: &Module, resolutions: &Resolutions
 
 /// Runs a generated property test for every function that has one.
 pub fn run_properties<'a>(
+    program: &Program<'a>,
     file: FileId,
     module: &'a Module,
     resolutions: &'a Resolutions,
@@ -94,11 +96,12 @@ pub fn run_properties<'a>(
             }
             _ => None,
         })
-        .map(|function| run_property(file, module, resolutions, function, config))
+        .map(|function| run_property(program, file, module, resolutions, function, config))
         .collect()
 }
 
 fn run_property<'a>(
+    program: &Program<'a>,
     file: FileId,
     module: &'a Module,
     resolutions: &'a Resolutions,
@@ -107,7 +110,7 @@ fn run_property<'a>(
 ) -> PropertyOutcome {
     let types = TypeIndex::new(module, resolutions);
     let mut rng = Rng::new(config.seed);
-    let mut interp = Interp::make(file, module, resolutions);
+    let mut interp = Interp::make(program, file);
 
     let mut cases = 0usize;
     let mut rejected = 0usize;
@@ -333,7 +336,7 @@ fn smaller(value: &Value) -> Vec<Value> {
             .collect(),
         Value::Variant(variant) => shrink_fields(&variant.fields)
             .into_iter()
-            .map(|fields| Value::variant(variant.def, variant.name.clone(), fields))
+            .map(|fields| Value::variant(Rc::clone(&variant.origin), variant.name.clone(), fields))
             .collect(),
         Value::Int(0) => Vec::new(),
         Value::Int(n) => {
@@ -532,6 +535,7 @@ impl<'a> TypeIndex<'a> {
                         let index = (rng.next() as usize) % choice.variants.len();
                         let variant = &choice.variants[index];
                         let variant_def = self.resolutions.resolution(variant.name.span)?;
+                        let (origin, name) = interp.variant_identity(variant_def)?;
 
                         let mut fields = Fields::new();
                         for field in variant.fields.iter().flatten() {
@@ -540,11 +544,7 @@ impl<'a> TypeIndex<'a> {
                                 self.generate(&field.ty, rng, interp, depth + 1)?,
                             );
                         }
-                        Some(Value::variant(
-                            variant_def,
-                            variant.name.name.clone(),
-                            fields,
-                        ))
+                        Some(Value::variant(origin, name, fields))
                     }
 
                     DefKind::Type => {

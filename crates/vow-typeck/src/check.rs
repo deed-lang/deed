@@ -1141,7 +1141,11 @@ impl<'a> Checker<'a> {
                 Ty::Unknown
             }
             Some(SurfaceItem::Effect { .. }) => {
-                self.not_a_value(ident, "an effect");
+                // `Counter.bump` where `Counter` was imported does not resolve
+                // to an operation yet, so the checker sees the effect name in
+                // what looks like value position. Complaining here would be a
+                // message about the wrong thing, and the effects pass already
+                // says the row cannot be verified.
                 Ty::Unknown
             }
             // A handler names itself in a `with` block, which goes through

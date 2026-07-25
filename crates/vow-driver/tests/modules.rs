@@ -379,10 +379,159 @@ fn a_cycle_of_types_still_terminates() {
     );
 }
 
+// -- running across the boundary -------------------------------------------
+
+/// Runs the tests of the first source with the rest loaded alongside it.
+fn run_together(files: &[&str]) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
+    let mut sources = SourceMap::new();
+    let ids: Vec<_> = files
+        .iter()
+        .enumerate()
+        .map(|(index, text)| sources.add(format!("file{index}.vow"), *text))
+        .collect();
+
+    let checks = check_all(&sources, &ids);
+    for checked in &checks {
+        assert!(
+            checked.diagnostics.is_empty(),
+            "{}",
+            rendered(&sources, &checked.diagnostics)
+        );
+    }
+
+    let mut program = vow_interp::Program::new();
+    for checked in &checks {
+        program.add(checked.file, &checked.module, &checked.resolutions);
+    }
+    let outcomes = vow_interp::run_tests(&program, ids[0]);
+    (sources, outcomes)
+}
+
+fn expect_pass(files: &[&str]) {
+    let (sources, outcomes) = run_together(files);
+    assert!(!outcomes.is_empty(), "nothing ran");
+    for outcome in &outcomes {
+        if let Some(failure) = &outcome.failure {
+            panic!(
+                "`{}` should pass:\n{}",
+                outcome.name,
+                render_human(&sources, failure)
+            );
+        }
+    }
+}
+
+/// The same, for sources that are expected to warn but not to fail checking.
+fn run_together_allowing_warnings(files: &[&str]) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
+    let mut sources = SourceMap::new();
+    let ids: Vec<_> = files
+        .iter()
+        .enumerate()
+        .map(|(index, text)| sources.add(format!("file{index}.vow"), *text))
+        .collect();
+
+    let checks = check_all(&sources, &ids);
+    for checked in &checks {
+        assert!(
+            !checked.has_errors(),
+            "{}",
+            rendered(&sources, &checked.diagnostics)
+        );
+    }
+
+    let mut program = vow_interp::Program::new();
+    for checked in &checks {
+        program.add(checked.file, &checked.module, &checked.resolutions);
+    }
+    let outcomes = vow_interp::run_tests(&program, ids[0]);
+    (sources, outcomes)
+}
+
+#[test]
+fn a_test_can_call_into_another_module() {
+    expect_pass(&[
+        "module a\n\nuse b.{twice}\n\ntest \"it runs\" {\n  assert twice(21) == 42\n}\n",
+        "module b\n\nfn twice(n: Int) -> Int { n + n }\n",
+    ]);
+}
+
+#[test]
+fn a_record_built_in_one_module_is_read_in_another() {
+    expect_pass(&[
+        "module a\n\nuse b.{Thing, make}\n\ntest \"fields survive\" {\n  let t = make(7)\n  assert t.n == 7\n  assert make(7) == Thing { n: 7 }\n}\n",
+        "module b\n\nrecord Thing { n: Int }\n\nfn make(n: Int) -> Thing { Thing { n } }\n",
+    ]);
+}
+
+#[test]
+fn a_variant_is_one_variant_however_it_was_reached() {
+    // Built in `b`, named in `a`, and they have to be the same value. A
+    // `DefId` cannot express that, which is why a variant carries the module
+    // that declared it instead.
+    expect_pass(&[
+        "module a\n\nuse b.{Loud, Plain, loudest}\n\ntest \"same value\" {\n  assert loudest() == Loud\n  assert loudest() != Plain\n}\n",
+        "module b\n\nchoice Tone {\n  Plain,\n  Loud,\n}\n\nfn loudest() -> Tone { Loud }\n",
+    ]);
+}
+
+#[test]
+fn a_match_across_a_boundary_picks_the_right_arm() {
+    expect_pass(&[
+        "module a\n\nuse b.{Loud, Plain, Tone, loudest}\n\nfn describe(t: Tone) -> Int {\n  match t {\n    Plain => 1,\n    Loud => 2,\n  }\n}\n\ntest \"the right arm\" {\n  assert describe(loudest()) == 2\n}\n",
+        "module b\n\nchoice Tone {\n  Plain,\n  Loud,\n}\n\nfn loudest() -> Tone { Loud }\n",
+    ]);
+}
+
+#[test]
+fn two_modules_with_a_same_named_variant_are_two_types() {
+    // Comparing them never reaches the interpreter, because the checker
+    // already knows a `Tone` from `one` is not a `Volume` from `two`. Worth a
+    // test because the failure it prevents is silent: an `assert` passing for
+    // the wrong reason.
+    let (sources, checked) = check(&[
+        "module a\n\nuse one.{first}\nuse two.{second}\n\nfn f() -> Bool { first() == second() }\n",
+        "module one\n\nchoice Tone {\n  Quiet,\n  Loud,\n}\n\nfn first() -> Tone { Loud }\n",
+        "module two\n\nchoice Volume {\n  Soft,\n  Loud,\n}\n\nfn second() -> Volume { Loud }\n",
+    ]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_typeck::codes::TYPE_MISMATCH),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_callee_reads_its_own_names() {
+    // Both modules declare `limit`. A call into `b` has to see `b`'s.
+    expect_pass(&[
+        "module a\n\nuse b.{capped}\n\nfn limit() -> Int { 1 }\n\ntest \"its own\" {\n  assert capped() == 100\n}\n",
+        "module b\n\nfn limit() -> Int { 100 }\n\nfn capped() -> Int { limit() }\n",
+    ]);
+}
+
+#[test]
+fn an_effect_from_another_module_still_cannot_be_performed() {
+    // The gap that is left. `Counter.bump` does not resolve to an operation
+    // when `Counter` was imported, so there is nothing to dispatch on, and a
+    // handler declared elsewhere cannot be installed either. Checking says as
+    // much: the effects pass warns that the row cannot be verified.
+    let (sources, outcomes) = run_together_allowing_warnings(&[
+        "module a\n\nuse b.{Counter, InMemory}\n\ntest \"handled\" {\n  with InMemory { count: 0 } {\n    Counter.bump()\n  }\n}\n",
+        "module b\n\neffect Counter {\n  fn value() -> Int\n  fn bump() -> ()\n}\n\nhandler InMemory implements Counter {\n  state count: Int\n\n  fn value() -> Int { count }\n  fn bump() -> () { count = count + 1 }\n}\n",
+    ]);
+
+    let failure = outcomes[0]
+        .failure
+        .as_ref()
+        .expect("performing an imported effect should not run yet");
+    assert_eq!(failure.code, vow_interp::codes::NOT_RUNNABLE);
+    let _ = render_human(&sources, failure);
+}
+
 // -- the example -----------------------------------------------------------
 
 #[test]
-fn the_two_module_example_checks() {
+fn the_two_module_example_runs_its_tests() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
     let names = std::fs::read_to_string(format!("{dir}/names.vow")).unwrap();
     let greeting = std::fs::read_to_string(format!("{dir}/greeting.vow")).unwrap();
@@ -393,11 +542,29 @@ fn the_two_module_example_checks() {
         sources.add("examples/greeting.vow", greeting),
     ];
 
-    for checked in check_all(&sources, &ids) {
+    let checks = check_all(&sources, &ids);
+    for checked in &checks {
         assert!(
             checked.diagnostics.is_empty(),
             "{}",
             rendered(&sources, &checked.diagnostics)
         );
+    }
+
+    let mut program = vow_interp::Program::new();
+    for checked in &checks {
+        program.add(checked.file, &checked.module, &checked.resolutions);
+    }
+
+    let outcomes = vow_interp::run_tests(&program, ids[1]);
+    assert!(!outcomes.is_empty(), "greeting.vow should have tests");
+    for outcome in &outcomes {
+        if let Some(failure) = &outcome.failure {
+            panic!(
+                "`{}` should pass:\n{}",
+                outcome.name,
+                render_human(&sources, failure)
+            );
+        }
     }
 }

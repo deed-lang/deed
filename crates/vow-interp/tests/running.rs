@@ -5,7 +5,7 @@
 //! the product here as much as the evaluation is.
 
 use vow_diagnostics::{SourceMap, render_human};
-use vow_interp::{TestOutcome, codes, run_tests};
+use vow_interp::{Program, TestOutcome, codes, run_tests};
 use vow_lexer::tokenize;
 use vow_parser::parse;
 use vow_resolve::{Universe, resolve};
@@ -25,7 +25,48 @@ fn run_in(src: &str, universe: &Universe) -> (SourceMap, Vec<TestOutcome>) {
     let resolved = resolve(file, &parsed.module, universe);
     assert!(!resolved.has_errors(), "test source should resolve cleanly");
 
-    let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
+    // One module, so a call that leaves it has nowhere to go. Tests that need
+    // the other side use `run_together`.
+    let mut program = Program::new();
+    program.add(file, &parsed.module, &resolved.resolutions);
+    let outcomes = run_tests(&program, file);
+    (sources, outcomes)
+}
+
+/// Runs the first of `sources` with the rest of them loaded alongside it.
+fn run_together(sources_text: &[&str]) -> (SourceMap, Vec<TestOutcome>) {
+    let mut sources = SourceMap::new();
+    let files: Vec<_> = sources_text
+        .iter()
+        .enumerate()
+        .map(|(index, text)| sources.add(format!("file{index}.vow"), *text))
+        .collect();
+
+    let parsed: Vec<_> = files
+        .iter()
+        .map(|file| {
+            let lexed = tokenize(*file, sources.file(*file).text());
+            parse(*file, &lexed.tokens)
+        })
+        .collect();
+
+    let mut universe = Universe::new();
+    for entry in &parsed {
+        universe.add(&entry.module);
+    }
+
+    let resolutions: Vec<_> = files
+        .iter()
+        .zip(&parsed)
+        .map(|(file, entry)| resolve(*file, &entry.module, &universe))
+        .collect();
+
+    let mut program = Program::new();
+    for ((file, entry), resolved) in files.iter().zip(&parsed).zip(&resolutions) {
+        program.add(*file, &entry.module, &resolved.resolutions);
+    }
+
+    let outcomes = run_tests(&program, files[0]);
     (sources, outcomes)
 }
 
@@ -66,6 +107,16 @@ fn expect_failure(src: &str) -> (SourceMap, vow_diagnostics::Diagnostic) {
 
 fn expect_failure_in(src: &str, universe: &Universe) -> (SourceMap, vow_diagnostics::Diagnostic) {
     let (sources, mut outcomes) = run_in(src, universe);
+    assert_eq!(outcomes.len(), 1, "expected exactly one test");
+    let failure = outcomes
+        .remove(0)
+        .failure
+        .expect("the test should have failed");
+    (sources, failure)
+}
+
+fn expect_failure_together(sources_text: &[&str]) -> (SourceMap, vow_diagnostics::Diagnostic) {
+    let (sources, mut outcomes) = run_together(sources_text);
     assert_eq!(outcomes.len(), 1, "expected exactly one test");
     let failure = outcomes
         .remove(0)
@@ -121,7 +172,9 @@ fn the_examples_pass_their_own_tests() {
         let resolved = resolve(file, &parsed.module, &Universe::new());
         assert!(!resolved.has_errors(), "examples/{name} should resolve");
 
-        let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
+        let mut program = Program::new();
+        program.add(file, &parsed.module, &resolved.resolutions);
+        let outcomes = run_tests(&program, file);
         assert!(!outcomes.is_empty(), "examples/{name} should have tests");
         for outcome in &outcomes {
             if let Some(failure) = &outcome.failure {
@@ -472,24 +525,76 @@ fn overflow_is_a_diagnostic_not_a_wrap() {
     assert!(render_human(&sources, &failure).contains("overflow"));
 }
 
-// -- gaps ------------------------------------------------------------------
+// -- across modules --------------------------------------------------------
 
 #[test]
-fn calling_into_another_module_is_not_runnable() {
-    // The name resolves, so this is not about a missing module. The
-    // interpreter only holds the code of the file it was handed, so a call
-    // that leaves it has no body to evaluate.
+fn a_call_into_another_module_runs_that_module_s_code() {
+    let (sources, outcomes) = run_together(&[
+        "module a\n\nuse b.{twice}\n\ntest \"it runs\" {\n  assert twice(21) == 42\n}\n",
+        "module b\n\nfn twice(n: Int) -> Int { n + n }\n",
+    ]);
+    for outcome in &outcomes {
+        if let Some(failure) = &outcome.failure {
+            panic!("{}", render_human(&sources, failure));
+        }
+    }
+    assert_eq!(outcomes.len(), 1);
+}
+
+#[test]
+fn a_callee_reads_its_own_names_not_the_caller_s() {
+    // Both modules declare `limit`, with different values. The body of
+    // `capped` has to see its own, or a call across a boundary would quietly
+    // pick up whatever the caller happened to have in scope.
+    let (sources, outcomes) = run_together(&[
+        "module a\n\nuse b.{capped}\n\nfn limit() -> Int { 1 }\n\ntest \"its own\" {\n  assert capped() == 100\n}\n",
+        "module b\n\nfn limit() -> Int { 100 }\n\nfn capped() -> Int { limit() }\n",
+    ]);
+    for outcome in &outcomes {
+        if let Some(failure) = &outcome.failure {
+            panic!("{}", render_human(&sources, failure));
+        }
+    }
+    assert_eq!(outcomes.len(), 1);
+}
+
+#[test]
+fn a_variant_is_the_same_variant_on_both_sides_of_an_import() {
+    let (sources, outcomes) = run_together(&[
+        "module a\n\nuse b.{Loud, Tone, loudest}\n\ntest \"same variant\" {\n  assert loudest() == Loud\n}\n",
+        "module b\n\nchoice Tone {\n  Plain,\n  Loud,\n}\n\nfn loudest() -> Tone { Loud }\n",
+    ]);
+    for outcome in &outcomes {
+        if let Some(failure) = &outcome.failure {
+            panic!("{}", render_human(&sources, failure));
+        }
+    }
+    assert_eq!(outcomes.len(), 1);
+}
+
+#[test]
+fn a_contract_on_an_imported_function_is_still_enforced() {
+    // The call crosses a boundary, the precondition does not stop applying.
+    let (sources, failure) = expect_failure_together(&[
+        "module a\n\nuse b.{halve}\n\ntest \"breaks it\" {\n  assert halve(3) == 1\n}\n",
+        "module b\n\nfn halve(n: Int) -> Int\n  where\n    n % 2 == 0,\n{\n  n / 2\n}\n",
+    ]);
+    assert_eq!(failure.code, codes::PRECONDITION_FAILED);
+    let text = render_human(&sources, &failure);
+    assert!(text.contains("halve"), "{text}");
+}
+
+#[test]
+fn a_call_into_a_module_that_was_not_handed_over_says_so() {
+    // The name resolves, because the module is in the universe the resolver
+    // was given. The interpreter was handed one file, so there is no body.
     let (sources, failure) = expect_failure_in(
         "module a\n\nuse std/result.{ok}\n\ntest \"cannot run\" {\n  assert ok(1) == ok(1)\n}\n",
         &universe_of(&["module std/result\n\nfn ok(n: Int) -> Int { n }\n"]),
     );
     assert_eq!(failure.code, codes::NOT_RUNNABLE);
     let text = render_human(&sources, &failure);
-    assert!(text.contains("cannot be loaded"), "{text}");
-    assert!(
-        text.contains("a gap in the interpreter, not something the language forbids"),
-        "{text}"
-    );
+    assert!(text.contains("was not handed to the interpreter"), "{text}");
 }
 
 #[test]

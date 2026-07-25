@@ -14,8 +14,6 @@ use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
 
-use vow_resolve::DefId;
-
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Value {
     Unit,
@@ -66,9 +64,16 @@ impl Capability {
 /// compare equal and print the same.
 pub type Fields = BTreeMap<String, Value>;
 
+/// A value of a `choice`.
+///
+/// Identity is the module that declared the variant together with its name,
+/// not a `DefId`. A `DefId` is an index into one module's resolution table, so
+/// the same variant reached through an import would compare unequal to itself,
+/// and structural equality is what `unchanged(E)` and every `assert` are built
+/// on.
 #[derive(PartialEq, Eq, Debug)]
 pub struct VariantValue {
-    pub def: DefId,
+    pub origin: Rc<str>,
     pub name: String,
     pub fields: Fields,
 }
@@ -78,9 +83,9 @@ impl Value {
         Value::Record(Rc::new(fields))
     }
 
-    pub fn variant(def: DefId, name: impl Into<String>, fields: Fields) -> Self {
+    pub fn variant(origin: Rc<str>, name: impl Into<String>, fields: Fields) -> Self {
         Value::Variant(Rc::new(VariantValue {
-            def,
+            origin,
             name: name.into(),
             fields,
         }))
@@ -172,8 +177,9 @@ fn write_fields(f: &mut fmt::Formatter<'_>, prefix: &str, fields: &Fields) -> fm
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use super::{Fields, Value};
-    use vow_resolve::DefId;
 
     #[test]
     fn records_compare_by_content_not_by_insertion_order() {
@@ -190,10 +196,22 @@ mod tests {
 
     #[test]
     fn variants_of_different_shapes_differ() {
-        let empty = Value::variant(DefId::from_raw(0), "A", Fields::new());
+        let empty = Value::variant(Rc::from("m"), "A", Fields::new());
         let mut fields = Fields::new();
         fields.insert("n".into(), Value::Int(1));
-        assert_ne!(empty, Value::variant(DefId::from_raw(0), "A", fields));
+        assert_ne!(empty, Value::variant(Rc::from("m"), "A", fields));
+    }
+
+    #[test]
+    fn a_variant_is_the_same_variant_however_it_was_reached() {
+        // Two modules can each declare a `Loud`, and one module can reach
+        // another's through an import. Only the second pair is one variant.
+        let here = Value::variant(Rc::from("one"), "Loud", Fields::new());
+        let elsewhere = Value::variant(Rc::from("two"), "Loud", Fields::new());
+        assert_ne!(here, elsewhere);
+
+        let reached_again = Value::variant(Rc::from("one"), "Loud", Fields::new());
+        assert_eq!(here, reached_again);
     }
 
     #[test]
@@ -202,7 +220,7 @@ mod tests {
         fields.insert("units".into(), Value::Int(40));
         assert_eq!(Value::record(fields).to_string(), "{ units: 40 }");
         assert_eq!(
-            Value::variant(DefId::from_raw(1), "Bare", Fields::new()).to_string(),
+            Value::variant(Rc::from("m"), "Bare", Fields::new()).to_string(),
             "Bare"
         );
         assert_eq!(Value::Bool(true).to_string(), "true");
