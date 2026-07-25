@@ -6,10 +6,11 @@
 // these the compiler settled at check time and which became a runtime guard,
 // and it never claims to have proven something it did not.
 //
-// What does the proving is interval reasoning: what is known about each
-// integer in scope, from the contract, from the types, from the conditions
-// above the line, and from the contracts of the functions being called. It is
-// not a solver, and three of the functions below are what that costs.
+// What does the proving is interval reasoning, plus a range for the difference
+// between two names: what is known about each integer in scope, from the
+// contract, from the types, from the conditions above the line, and from the
+// contracts of the functions being called. It is not a solver, and three of the
+// functions below are what that costs.
 
 module examples/proven
 
@@ -77,10 +78,23 @@ fn one_more(n: Positive) -> Positive {
     n + 1
 }
 
-// Guarded, and this one is a gap. An interval cannot hold a relationship
-// between two names, so `low < high` tells it nothing about `high - low`. This
-// is the first limitation anyone will hit and the largest one.
+// Proven from a relationship. An interval has nowhere to put `low < high`, so
+// there is a range for the difference of two names alongside the range for each
+// one. The other two clauses are not there for the relationship, they are there
+// so the subtraction has an answer at all.
 fn span(low: Int, high: Int) -> Positive
+  where
+    low >= 0,
+    high <= 100,
+    low < high,
+{
+    high - low
+}
+
+// Guarded, and this one is the same limit as `one_more`. Nothing bounds either
+// name, so `high - low` can be larger than an integer, and an expression with
+// no answer proves nothing about the answer.
+fn unbounded_span(low: Int, high: Int) -> Positive
   where
     low < high,
 {
@@ -103,8 +117,8 @@ fn always_one() -> Int
 }
 
 // Guarded. An `ensures` that ties the result to an argument says something
-// true and useful, and an interval cannot hold it, so the tier admits that
-// rather than pretending.
+// true and useful, and what crosses a call is a pair of bounds rather than a
+// clause, so the tier admits that rather than pretending.
 fn echoed(n: Positive) -> Positive {
     same(n)
 }
@@ -120,6 +134,7 @@ test "the proven ones still hold at runtime" {
     assert order_of(3).quantity == 3
     assert as_count(4) == 4
     assert clamped(10) == 60
+    assert span(2, 5) == 3
     assert from_a_call() == 1
     assert order_from_either(0) == err("a quantity has to be positive")
 }
@@ -137,6 +152,6 @@ test "the proven ones still hold at runtime" {
 // them here is a gap in the test syntax, and worth naming.
 test "the guarded ones are checked when they run" {
     assert one_more(1) == 2
-    assert span(2, 5) == 3
+    assert unbounded_span(2, 5) == 3
     assert echoed(7) == 7
 }

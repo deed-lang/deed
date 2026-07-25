@@ -190,8 +190,8 @@ counterexample it finds. Everything else is `Guarded`, checked on every call.
 
 ### What `Proven` can decide
 
-Interval reasoning, and nothing more. Each integer in scope has a known range, and a
-refinement is discharged by evaluating its predicate over that range rather than over a
+Interval reasoning with one relation on top. Each integer in scope has a known range, and
+a refinement is discharged by evaluating its predicate over that range rather than over a
 value. Ranges come from the things that state one:
 
 - a `where` clause, so `n > 0` makes `n` at least one for the whole body
@@ -201,6 +201,31 @@ value. Ranges come from the things that state one:
 - a guard that leaves, so after `if n <= 0 { return err(..) }` the rest of the body knows
 - the contract of a function being called, so a proof one function did is worth something to
   the next one
+
+The relation is the difference between two names. An interval has nowhere to put `low < high`,
+so every contract that says how two arguments relate used to be thrown away, and that is half
+of what a `where` clause is for. A range per pair of names holds exactly the orderings, which
+is what comparisons produce and nothing more:
+
+```vow
+fn span(low: Int, high: Int) -> Positive
+  where
+    low >= 0,
+    high <= 100,
+    low < high,
+{
+    high - low
+}
+```
+
+A difference and a range each tighten the other, so a bound arriving after the comparison that
+needed it still counts, and two differences sharing a name make a third, so `a < b` and `b < c`
+settle `a < c`. That last one is a fixpoint, and it is run for a fixed small number of rounds
+rather than to exhaustion, because P9 is a budget and not a preference.
+
+The other two clauses in that example are not there for the relationship. They are there so
+`high - low` has an answer: without a bound on either name the difference can be larger than an
+integer, and an expression that cannot be computed proves nothing about what it computes.
 
 A refined value can also reach a different refinement over the same base. `Positive` widens to
 `Int` and narrows back into `NonNegative`, and the predicate that arrives is usually enough to
@@ -232,13 +257,14 @@ and comparing at the end. That is local bidirectional checking and it exists for
 
 Every one of these is `Guarded`, with a warning, never a wrong answer.
 
-- **A relationship between two names.** An interval cannot hold `a < b`, so a `where
-  low < high` proves nothing about `high - low`. This is the largest limitation and the
-  first one anyone will hit. The same thing stops an `ensures ok => result == n` from
-  saying anything at a call site: it is true, it is useful, and it is not an interval.
+- **A relationship that is not a difference.** `a < b * b` relates two names through a
+  product, and a pair of bounds has nowhere to put that. The same limit is why an
+  `ensures ok => result == n` says nothing at a call site: what crosses a call is a range,
+  and `n` is a name the caller cannot see.
 - **Arithmetic that could overflow.** `n + 1` where `n` is `Positive` is not provably
   positive, because `n` could be the largest integer there is. That is the reasoning working
-  rather than a gap in it, and the runtime agrees: the sum has no answer.
+  rather than a gap in it, and the runtime agrees: the sum has no answer. The same rule is
+  why `low < high` alone does not settle `high - low`.
 - **The payload of a call that can fail.** The call site holds a `Result`, not the value
   inside it, so an `ensures` on a fallible function is not read.
 - **Anything that is not an integer.** No `String`, no record field, no variant.

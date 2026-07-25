@@ -6,19 +6,29 @@
 //! around it, and the argument for having refinements at all is that they
 //! replace checks rather than decorate them.
 //!
-//! This is interval reasoning and nothing more. Each integer-valued name gets a
-//! range, ranges come from the things that state one (a `where` clause, an
-//! `if`, a guard that leaves, a refined parameter type, the contract of a
-//! function being called), and a predicate is discharged by evaluating it over
-//! the range rather than over a value.
+//! This is interval reasoning with one relation on top. Each integer-valued
+//! name gets a range, ranges come from the things that state one (a `where`
+//! clause, an `if`, a guard that leaves, a refined parameter type, the contract
+//! of a function being called), and a predicate is discharged by evaluating it
+//! over the range rather than over a value.
+//!
+//! The relation is the difference of two names. An interval has nowhere to put
+//! `low < high`, so every contract that says how two arguments relate used to
+//! be thrown away, and that is most of what a `where` clause is for. A range
+//! per pair of names holds exactly the orderings, which is what comparisons
+//! produce and nothing more.
 //!
 //! # What this cannot do
 //!
 //! A great deal, and the answer is always "not proven", never a wrong answer.
 //!
-//! - **Relationships between variables.** `a < b` is not something an interval
-//!   can hold, so a `where a < b` proves nothing about `b - a`. This is the
-//!   biggest limitation and the first thing anyone will hit.
+//! - **Relationships that are not a difference.** `a < b * c` relates three
+//!   names through a product, and a pair of bounds has nowhere to put that.
+//!   Deciding it is a solver's job.
+//! - **A difference larger than an integer.** `low < high` on its own does not
+//!   settle `high - low`, because with nothing bounding either name the
+//!   subtraction overflows, and an expression with no answer proves nothing
+//!   about the answer.
 //! - **Anything that is not an integer.** No `String`, no record field, no
 //!   variant.
 //! - **The payload of a `Result`.** A call that can fail is a `Result` at the
@@ -157,6 +167,37 @@ impl Range {
         }
     }
 
+    /// The difference of two ranges, clamped rather than given up on.
+    ///
+    /// [`Range::sub`] answers what the program would compute, and a subtraction
+    /// with no answer has to say so. This one answers which side of zero a
+    /// difference falls on, which is all a comparison ever asks, and clamping
+    /// keeps that answer while `i64::MIN` and `i64::MAX` stand in for "further
+    /// than this, in that direction".
+    fn spread(self, other: Range) -> Range {
+        match (self.bounds(), other.bounds()) {
+            (Some((a_low, a_high)), Some((b_low, b_high))) => {
+                Range::between(a_low.saturating_sub(b_high), a_high.saturating_sub(b_low))
+            }
+            _ => Range::Empty,
+        }
+    }
+
+    /// The sum of two ranges, clamped for the same reason [`Range::spread`] is.
+    ///
+    /// Two differences chained together, or a name moved by a difference. A
+    /// bound that clamps is weaker than the true one and never wrong: every
+    /// value being described is an `i64`, so "at least `i64::MIN`" is something
+    /// already known about all of them.
+    fn shift(self, other: Range) -> Range {
+        match (self.bounds(), other.bounds()) {
+            (Some((a_low, a_high)), Some((b_low, b_high))) => {
+                Range::between(a_low.saturating_add(b_low), a_high.saturating_add(b_high))
+            }
+            _ => Range::Empty,
+        }
+    }
+
     /// Everything at or below `bound`, and everything above it.
     ///
     /// Not used by the checker, which narrows through [`Range::meet`], but it
@@ -211,7 +252,7 @@ impl Truth {
     }
 }
 
-/// Ranges for the names in scope.
+/// Ranges for the names in scope, and for the differences between them.
 ///
 /// Keyed by definition, which resolution already made unique, so a shadowed
 /// name cannot pick up a fact about the one it hid. There is no shadowing in
@@ -220,12 +261,27 @@ impl Truth {
 #[derive(Clone, Debug, Default)]
 pub struct Facts {
     known: HashMap<DefId, Range>,
+    /// The range of `a - b`, for the pair `(a, b)`.
+    ///
+    /// Both orders are stored. Reading a difference the wrong way round means
+    /// negating it, negating `i64::MIN` is not a thing that can be done, and
+    /// the honest answer in that case is that nothing is known. Recording both
+    /// orders keeps that answer where it belongs, on the order that could not
+    /// be worked out, instead of on every lookup.
+    differences: HashMap<(DefId, DefId), Range>,
     /// The range `value` stands for, while a refinement predicate is being
     /// evaluated. `value` has no definition of its own.
     subject: Option<Range>,
 }
 
 impl Facts {
+    /// How many times [`Facts::settle`] goes round.
+    ///
+    /// Bounded rather than run to a real fixpoint. A couple of rounds cover
+    /// anything anyone writes, and a body full of related names must not cost
+    /// the checker something surprising, which is P9.
+    const ROUNDS: usize = 4;
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -234,34 +290,144 @@ impl Facts {
         self.known.get(&def).copied().unwrap_or(Range::ANY)
     }
 
+    /// Replaces what is known about `def`.
+    ///
+    /// Any difference involving `def` goes with it. This is what a binding
+    /// does, and a fact about the old meaning of a name is not a fact about the
+    /// new one.
     pub fn set(&mut self, def: DefId, range: Range) {
+        self.differences
+            .retain(|(left, right), _| *left != def && *right != def);
         self.known.insert(def, range);
+        self.settle();
     }
 
     /// Narrows what is known about `def`, keeping anything already known.
     pub fn narrow(&mut self, def: DefId, range: Range) {
-        let narrowed = self.get(def).meet(range);
+        if self.tighten(def, range) {
+            self.settle();
+        }
+    }
+
+    /// The range of `a - b`.
+    pub fn difference(&self, a: DefId, b: DefId) -> Range {
+        if a == b {
+            return Range::exactly(0);
+        }
+        self.differences.get(&(a, b)).copied().unwrap_or(Range::ANY)
+    }
+
+    /// Narrows what is known about `a - b`, keeping anything already known.
+    pub fn narrow_difference(&mut self, a: DefId, b: DefId, range: Range) {
+        if self.tighten_difference(a, b, range) {
+            self.settle();
+        }
+    }
+
+    fn tighten(&mut self, def: DefId, range: Range) -> bool {
+        let current = self.get(def);
+        let narrowed = current.meet(range);
+        if narrowed == current {
+            return false;
+        }
         self.known.insert(def, narrowed);
+        true
+    }
+
+    fn tighten_difference(&mut self, a: DefId, b: DefId, range: Range) -> bool {
+        if a == b {
+            return false;
+        }
+
+        let current = self.difference(a, b);
+        let narrowed = current.meet(range);
+        // The other order is narrowed rather than replaced. Negating a bound
+        // can lose it, and a fact already recorded the other way round must not
+        // be thrown away by one that could not be worked out.
+        let opposite = self.difference(b, a);
+        let mirrored = opposite.meet(narrowed.negate());
+
+        if narrowed == current && mirrored == opposite {
+            return false;
+        }
+        self.differences.insert((a, b), narrowed);
+        self.differences.insert((b, a), mirrored);
+        true
+    }
+
+    /// Works out what the ranges and the differences say about each other.
+    ///
+    /// Three things, until nothing changes: a difference bounds the two names
+    /// in it, the two names bound the difference, and two differences that
+    /// share a name make a third. The last is what makes `a < b` and `b < c`
+    /// enough to settle `a < c`.
+    fn settle(&mut self) {
+        for _ in 0..Self::ROUNDS {
+            if !self.settle_once() {
+                break;
+            }
+        }
+    }
+
+    fn settle_once(&mut self) -> bool {
+        let entries: Vec<((DefId, DefId), Range)> =
+            self.differences.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut changed = false;
+
+        for ((a, b), difference) in &entries {
+            // `a - b` is in `difference`, so `a` is in `b + difference` and `b`
+            // is in `a - difference`. Both names are integers whatever the
+            // difference turns out to be, so the arithmetic clamps.
+            let from_b = self.get(*b).shift(*difference);
+            changed |= self.tighten(*a, from_b);
+            let from_a = self.get(*a).shift(Range::exactly(0).spread(*difference));
+            changed |= self.tighten(*b, from_a);
+
+            let from_both = self.get(*a).spread(self.get(*b));
+            changed |= self.tighten_difference(*a, *b, from_both);
+        }
+
+        for ((a, b), first) in &entries {
+            for ((c, d), second) in &entries {
+                if b == c && a != d {
+                    let chained = first.shift(*second);
+                    changed |= self.tighten_difference(*a, *d, chained);
+                }
+            }
+        }
+
+        changed
     }
 
     pub fn with_subject(&self, range: Range) -> Facts {
         Facts {
             known: self.known.clone(),
+            differences: self.differences.clone(),
             subject: Some(range),
         }
     }
 
     /// Everything both sides agree on, for joining two branches.
     pub fn join(&self, other: &Facts) -> Facts {
-        let mut joined = HashMap::new();
+        let mut known = HashMap::new();
         for (def, range) in &self.known {
             let combined = range.join(other.get(*def));
             if !combined.is_any() {
-                joined.insert(*def, combined);
+                known.insert(*def, combined);
             }
         }
+
+        let mut differences = HashMap::new();
+        for ((a, b), range) in &self.differences {
+            let combined = range.join(other.difference(*a, *b));
+            if !combined.is_any() {
+                differences.insert((*a, *b), combined);
+            }
+        }
+
         Facts {
-            known: joined,
+            known,
+            differences,
             subject: None,
         }
     }
@@ -299,8 +465,159 @@ fn def_of(expr: &Expr, env: &Env<'_>) -> Option<DefId> {
     }
 }
 
+/// An expression rewritten as names added, names subtracted, and a range.
+///
+/// The only shape worth recovering is `a - b + k`, because that is what a
+/// difference fact is about. Everything else collapses into the range, where
+/// the interval reasoning answers it as it always did.
+#[derive(Clone, Debug)]
+struct Linear {
+    positive: Vec<DefId>,
+    negative: Vec<DefId>,
+    offset: Range,
+}
+
+impl Linear {
+    fn constant(offset: Range) -> Linear {
+        Linear {
+            positive: Vec::new(),
+            negative: Vec::new(),
+            offset,
+        }
+    }
+
+    fn name(def: DefId) -> Linear {
+        Linear {
+            positive: vec![def],
+            negative: Vec::new(),
+            offset: Range::exactly(0),
+        }
+    }
+
+    fn negate(self) -> Linear {
+        Linear {
+            positive: self.negative,
+            negative: self.positive,
+            offset: self.offset.negate(),
+        }
+    }
+
+    fn add(self, other: Linear) -> Linear {
+        let mut positive = self.positive;
+        positive.extend(other.positive);
+        let mut negative = self.negative;
+        negative.extend(other.negative);
+        let offset = self.offset.add(other.offset);
+
+        // A name on both sides cancels, so `n - n` is zero rather than a
+        // difference nobody recorded.
+        let mut kept = Vec::with_capacity(positive.len());
+        for def in positive {
+            match negative.iter().position(|other| *other == def) {
+                Some(at) => {
+                    negative.remove(at);
+                }
+                None => kept.push(def),
+            }
+        }
+
+        Linear {
+            positive: kept,
+            negative,
+            offset,
+        }
+    }
+
+    /// The pair this is the difference of, when it is the difference of a pair.
+    fn pair(&self) -> Option<(DefId, DefId)> {
+        match (self.positive.as_slice(), self.negative.as_slice()) {
+            ([a], [b]) => Some((*a, *b)),
+            _ => None,
+        }
+    }
+}
+
+/// Reads `expr` as names and an offset, as far as it goes.
+fn linear(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Linear {
+    match expr {
+        // `value` stands for whatever is being described and has no definition,
+        // so it is a range and never a name.
+        Expr::Ident(ident) if ident.name == "value" => {
+            Linear::constant(facts.subject.unwrap_or(Range::ANY))
+        }
+        Expr::Ident(_) => match def_of(expr, env) {
+            Some(def) => Linear::name(def),
+            None => Linear::constant(interval_of(expr, facts, env)),
+        },
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+            ..
+        } => linear(operand, facts, env).negate(),
+        Expr::Binary {
+            op: BinaryOp::Add,
+            lhs,
+            rhs,
+            ..
+        } => linear(lhs, facts, env).add(linear(rhs, facts, env)),
+        Expr::Binary {
+            op: BinaryOp::Sub,
+            lhs,
+            rhs,
+            ..
+        } => linear(lhs, facts, env).add(linear(rhs, facts, env).negate()),
+        // Not a sum of names. Whatever it is, the interval answers it, and
+        // asking for the interval rather than the range avoids going round
+        // again through the same expression.
+        _ => Linear::constant(interval_of(expr, facts, env)),
+    }
+}
+
+/// The range `left - right` falls in, using what is known about the pair.
+///
+/// Clamped throughout, because the only caller is a comparison, and a
+/// comparison asks which side of zero this lands on rather than what the
+/// program would compute.
+fn difference_of(left: &Expr, right: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
+    let spread = range_of(left, facts, env).spread(range_of(right, facts, env));
+    let form = linear(left, facts, env).add(linear(right, facts, env).negate());
+    match form.pair() {
+        Some((a, b)) => spread.meet(facts.difference(a, b).shift(form.offset)),
+        None => spread,
+    }
+}
+
 /// The range an expression can take, given what is known.
 pub fn range_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
+    let interval = interval_of(expr, facts, env);
+    match related(expr, facts, env) {
+        Some(range) => interval.meet(range),
+        None => interval,
+    }
+}
+
+/// What the difference facts add to an expression, when it is a difference.
+///
+/// Only worth the walk for a sum, since nothing else can reduce to one. The
+/// arithmetic here is checked rather than clamped: this is the value the
+/// program computes, and a subtraction that overflows does not have one.
+fn related(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Range> {
+    if !matches!(
+        expr,
+        Expr::Binary {
+            op: BinaryOp::Add | BinaryOp::Sub,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let form = linear(expr, facts, env);
+    let (a, b) = form.pair()?;
+    Some(facts.difference(a, b).add(form.offset))
+}
+
+/// The range an expression can take, from the ranges of the names in it alone.
+fn interval_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
     match expr {
         Expr::Int { value, .. } => Range::exactly(*value),
         Expr::Ident(ident) if ident.name == "value" => facts.subject.unwrap_or(Range::ANY),
@@ -351,40 +668,63 @@ pub fn holds(condition: &Expr, facts: &Facts, env: &Env<'_>) -> Truth {
     }
 }
 
+/// Whether `left op right` holds, which is a question about `left - right`.
+///
+/// Writing it once against the difference rather than once per operator against
+/// two intervals is what lets a recorded relationship count. Where there is no
+/// relationship the difference is the one the two intervals imply, which is the
+/// same answer as before.
 fn compare(op: BinaryOp, lhs: &Expr, rhs: &Expr, facts: &Facts, env: &Env<'_>) -> Truth {
-    let left = range_of(lhs, facts, env);
-    let right = range_of(rhs, facts, env);
-
-    let (Some((a_low, a_high)), Some((b_low, b_high))) = (left.bounds(), right.bounds()) else {
+    if range_of(lhs, facts, env) == Range::Empty || range_of(rhs, facts, env) == Range::Empty {
         // One side cannot happen, so the comparison never does either.
+        return Truth::Never;
+    }
+
+    let Some((low, high)) = difference_of(lhs, rhs, facts, env).bounds() else {
         return Truth::Never;
     };
 
     match op {
         BinaryOp::Lt => {
-            if a_high < b_low {
+            if high < 0 {
                 Truth::Always
-            } else if a_low >= b_high {
+            } else if low >= 0 {
                 Truth::Never
             } else {
                 Truth::Unknown
             }
         }
         BinaryOp::Le => {
-            if a_high <= b_low {
+            if high <= 0 {
                 Truth::Always
-            } else if a_low > b_high {
+            } else if low > 0 {
                 Truth::Never
             } else {
                 Truth::Unknown
             }
         }
-        BinaryOp::Gt => compare(BinaryOp::Lt, rhs, lhs, facts, env),
-        BinaryOp::Ge => compare(BinaryOp::Le, rhs, lhs, facts, env),
-        BinaryOp::Eq => {
-            if a_low == a_high && b_low == b_high && a_low == b_low {
+        BinaryOp::Gt => {
+            if low > 0 {
                 Truth::Always
-            } else if a_high < b_low || b_high < a_low {
+            } else if high <= 0 {
+                Truth::Never
+            } else {
+                Truth::Unknown
+            }
+        }
+        BinaryOp::Ge => {
+            if low >= 0 {
+                Truth::Always
+            } else if high < 0 {
+                Truth::Never
+            } else {
+                Truth::Unknown
+            }
+        }
+        BinaryOp::Eq => {
+            if low == 0 && high == 0 {
+                Truth::Always
+            } else if low > 0 || high < 0 {
                 Truth::Never
             } else {
                 Truth::Unknown
@@ -447,10 +787,52 @@ fn apply_narrowing(condition: &Expr, facts: &mut Facts, env: &Env<'_>, when_true
             if let Some(flipped) = flipped(effective) {
                 narrow_side(flipped, rhs, lhs, facts, env);
             }
+
+            narrow_relation(effective, lhs, rhs, facts, env);
         }
 
         _ => {}
     }
+}
+
+/// Records what `left op right` says about the difference of two names.
+///
+/// This is the half an interval cannot hold. `low < high` says nothing about
+/// either name on its own, and everything about `low - high`.
+fn narrow_relation(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
+    let form = linear(left, facts, env).add(linear(right, facts, env).negate());
+    let Some((a, b)) = form.pair() else {
+        return;
+    };
+    let Some((low, high)) = form.offset.bounds() else {
+        return;
+    };
+
+    // The constraint is `(a - b) + offset op 0`, and the offset is only known
+    // to be somewhere in its own range, so a bound has to hold for the whole of
+    // it: the upper one comes from the smallest offset and the lower one from
+    // the largest. An offset at the edge of what an `i64` holds is not worth a
+    // special case, so nothing is learned there rather than something wrong.
+    let (Some(least), Some(most)) = (high.checked_neg(), low.checked_neg()) else {
+        return;
+    };
+
+    let bound = match op {
+        BinaryOp::Lt => match most.checked_sub(1) {
+            Some(bound) => Range::between(i64::MIN, bound),
+            None => Range::Empty,
+        },
+        BinaryOp::Le => Range::between(i64::MIN, most),
+        BinaryOp::Gt => match least.checked_add(1) {
+            Some(bound) => Range::between(bound, i64::MAX),
+            None => Range::Empty,
+        },
+        BinaryOp::Ge => Range::between(least, i64::MAX),
+        BinaryOp::Eq => Range::between(least, most),
+        _ => return,
+    };
+
+    facts.narrow_difference(a, b, bound);
 }
 
 /// Narrows the left side of `left op right`.
@@ -656,5 +1038,64 @@ mod tests {
         assert_eq!(below, Range::between(0, 4));
         assert_eq!(above, Range::between(5, 10));
         assert_eq!(below.join(above), Range::between(0, 10));
+    }
+
+    #[test]
+    fn a_clamped_difference_still_says_which_side_of_zero_it_is_on() {
+        // The subtraction has no answer, because the answer is larger than an
+        // integer. Which side of zero it falls on is not in doubt, and that is
+        // the only thing a comparison asks.
+        let below = Range::between(i64::MIN, -1);
+        let above = Range::between(0, i64::MAX);
+        assert_eq!(below.sub(above), Range::ANY);
+
+        let (_, highest) = below.spread(above).bounds().expect("not empty");
+        assert!(highest < 0, "the difference is negative whatever its size");
+    }
+
+    #[test]
+    fn two_differences_that_share_a_name_make_a_third() {
+        let (a, b, c) = (DefId::from_raw(0), DefId::from_raw(1), DefId::from_raw(2));
+        let mut facts = Facts::new();
+        facts.narrow_difference(a, b, Range::between(i64::MIN, -1));
+        facts.narrow_difference(b, c, Range::between(i64::MIN, -1));
+
+        // `a < b` and `b < c`, so `a < c`, however far apart any of them are.
+        let (_, highest) = facts.difference(a, c).bounds().expect("not empty");
+        assert!(highest < 0);
+    }
+
+    #[test]
+    fn a_difference_carries_a_bound_from_one_name_to_the_other() {
+        let (n, limit) = (DefId::from_raw(0), DefId::from_raw(1));
+        let mut facts = Facts::new();
+        facts.narrow_difference(n, limit, Range::between(i64::MIN, -1));
+
+        // Nothing bounded `limit` when the difference was recorded, so this is
+        // the fact arriving after the reasoning that needed it.
+        facts.narrow(limit, Range::between(0, 100));
+        let (_, highest) = facts.get(n).bounds().expect("not empty");
+        assert_eq!(highest, 99);
+    }
+
+    #[test]
+    fn a_binding_does_not_inherit_the_differences_of_the_name_it_replaces() {
+        let (a, b) = (DefId::from_raw(0), DefId::from_raw(1));
+        let mut facts = Facts::new();
+        facts.narrow_difference(a, b, Range::between(i64::MIN, -1));
+        facts.set(a, Range::ANY);
+        assert_eq!(facts.difference(a, b), Range::ANY);
+    }
+
+    #[test]
+    fn joining_two_branches_keeps_only_the_differences_both_agree_on() {
+        let (a, b) = (DefId::from_raw(0), DefId::from_raw(1));
+        let mut left = Facts::new();
+        left.narrow_difference(a, b, Range::between(-10, -1));
+        let mut right = Facts::new();
+        right.narrow_difference(a, b, Range::between(-4, 8));
+
+        assert_eq!(left.join(&right).difference(a, b), Range::between(-10, 8));
+        assert_eq!(left.join(&Facts::new()).difference(a, b), Range::ANY);
     }
 }
