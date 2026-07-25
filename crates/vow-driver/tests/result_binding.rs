@@ -32,7 +32,14 @@ fn run(src: &str) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
     let resolved = resolve(file, &parsed.module, &Universe::new());
     assert!(!resolved.has_errors(), "source should resolve cleanly");
     let mut program = vow_interp::Program::new();
-    program.add(file, &parsed.module, &resolved.resolutions);
+    // Nothing here is refined, so there is nothing for the checker to have
+    // given up on and nothing to guard.
+    program.add(
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        vow_interp::Guards::new(),
+    );
     let outcomes = run_tests(&program, file);
     (sources, outcomes)
 }

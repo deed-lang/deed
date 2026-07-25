@@ -174,6 +174,16 @@ always visible:
 runtime check would be the single most dishonest thing this language could do, so it does
 not happen quietly.
 
+There is a worse thing, and it happened. For a while the checker recorded a `Guarded`
+obligation on a return value, printed "so it becomes a runtime check", and the interpreter
+had no check there: it guarded arguments and annotated `let`s and nothing else, because those
+were the two places somebody happened to write the call. The warning was what convinced a
+reader they were covered.
+
+The two passes now read the same table. An obligation recorded as `Guarded` at a span is a
+check at that span, and there is no second place where the runtime decides what to check, so
+they cannot drift apart without a test noticing.
+
 All three tiers exist. `Tested` covers pure functions whose parameters can be generated:
 `vow test` runs a hundred generated inputs against the contract and shrinks any
 counterexample it finds. Everything else is `Guarded`, checked on every call.

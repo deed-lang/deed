@@ -5,7 +5,7 @@
 //! the product here as much as the evaluation is.
 
 use vow_diagnostics::{SourceMap, render_human};
-use vow_interp::{Program, TestOutcome, codes, run_tests};
+use vow_interp::{Guards, Program, TestOutcome, codes, run_tests};
 use vow_lexer::tokenize;
 use vow_parser::parse;
 use vow_resolve::{Universe, resolve};
@@ -28,7 +28,7 @@ fn run_in(src: &str, universe: &Universe) -> (SourceMap, Vec<TestOutcome>) {
     // One module, so a call that leaves it has nowhere to go. Tests that need
     // the other side use `run_together`.
     let mut program = Program::new();
-    program.add(file, &parsed.module, &resolved.resolutions);
+    program.add(file, &parsed.module, &resolved.resolutions, Guards::new());
     let outcomes = run_tests(&program, file);
     (sources, outcomes)
 }
@@ -63,7 +63,7 @@ fn run_together(sources_text: &[&str]) -> (SourceMap, Vec<TestOutcome>) {
 
     let mut program = Program::new();
     for ((file, entry), resolved) in files.iter().zip(&parsed).zip(&resolutions) {
-        program.add(*file, &entry.module, &resolved.resolutions);
+        program.add(*file, &entry.module, &resolved.resolutions, Guards::new());
     }
 
     let outcomes = run_tests(&program, files[0]);
@@ -173,7 +173,7 @@ fn the_examples_pass_their_own_tests() {
         assert!(!resolved.has_errors(), "examples/{name} should resolve");
 
         let mut program = Program::new();
-        program.add(file, &parsed.module, &resolved.resolutions);
+        program.add(file, &parsed.module, &resolved.resolutions, Guards::new());
         let outcomes = run_tests(&program, file);
         assert!(!outcomes.is_empty(), "examples/{name} should have tests");
         for outcome in &outcomes {
@@ -610,38 +610,9 @@ fn unchanged_catches_a_function_that_writes() {
     assert!(render_human(&sources, &failure).contains("`sneaky` did not keep this promise"));
 }
 
-#[test]
-fn a_refinement_the_compiler_could_not_prove_is_checked_here() {
-    // This is the Guarded tier guarding something. The compiler warns that it
-    // cannot prove the call, and the interpreter is where that promise is kept.
-    let (sources, failure) = expect_failure(
-        "module a\n\n\
-         type Positive = Int where value > 0\n\n\
-         fn take(n: Positive) -> Int { n }\n\n\
-         fn indirect(n: Int) -> Int { take(n) }\n\n\
-         test \"zero is not positive\" {\n\
-         \x20 assert indirect(0) == 0\n\
-         }\n",
-    );
-
-    assert_eq!(failure.code, codes::REFINEMENT_FAILED);
-    let text = render_human(&sources, &failure);
-    assert!(text.contains("0 does not satisfy `Positive`"), "{text}");
-    assert!(text.contains("could not prove this statically"), "{text}");
-}
-
-#[test]
-fn a_refinement_that_holds_passes_quietly() {
-    expect_pass(
-        "module a\n\n\
-         type Positive = Int where value > 0\n\n\
-         fn take(n: Positive) -> Int { n }\n\n\
-         fn indirect(n: Int) -> Int { take(n) }\n\n\
-         test \"one is positive\" {\n\
-         \x20 assert indirect(1) == 1\n\
-         }\n",
-    );
-}
+// Refinements at runtime live in `vow-driver/tests/guards.rs`. What has to be
+// checked is what the type checker gave up on, so a test for it has to run the
+// checker, and these tests deliberately do not.
 
 // -- assertions ------------------------------------------------------------
 
@@ -696,36 +667,6 @@ fn strings_compare_in_order() {
          \x20 assert \"abc\" < \"abd\"\n\
          \x20 assert \"ab\" < \"abc\"\n\
          \x20 assert !(\"b\" <= \"a\")\n\
-         }\n",
-    );
-}
-
-#[test]
-fn a_refinement_over_a_string_is_guarded_at_runtime() {
-    // Nothing here proves anything about a length, so the check is real. It
-    // also needs `length(value)` to be runnable inside a predicate, which it
-    // was not: predicates used to be walked by a small interpreter of their own
-    // that understood comparisons and nothing else.
-    let (sources, failure) = expect_failure(
-        "module a\n\n\
-         type NonEmpty = String where length(value) > 0\n\n\
-         fn shout(s: NonEmpty) -> String { s + \"!\" }\n\n\
-         test \"empty is refused\" {\n\
-         \x20 assert shout(\"\") == \"!\"\n\
-         }\n",
-    );
-    assert_eq!(failure.code, codes::REFINEMENT_FAILED);
-    assert!(render_human(&sources, &failure).contains("NonEmpty"));
-}
-
-#[test]
-fn a_string_that_satisfies_its_refinement_passes() {
-    expect_pass(
-        "module a\n\n\
-         type NonEmpty = String where length(value) > 0\n\n\
-         fn shout(s: NonEmpty) -> String { s + \"!\" }\n\n\
-         test \"a real name\" {\n\
-         \x20 assert shout(\"hey\") == \"hey!\"\n\
          }\n",
     );
 }

@@ -212,7 +212,12 @@ fn run_fmt(files: &[PathBuf], check_only: bool) -> ExitCode {
 fn program_of(checks: &[Checked]) -> Program<'_> {
     let mut program = Program::new();
     for checked in checks {
-        program.add(checked.file, &checked.module, &checked.resolutions);
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+        );
     }
     program
 }

@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use vow_ast::{Item, Module, Outcome};
 use vow_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use vow_effects::Effects;
+use vow_interp::Guards;
 use vow_resolve::{Resolutions, Universe};
 use vow_typeck::{Tier, Types, World};
 
@@ -102,6 +103,21 @@ impl Checked {
             .iter()
             .filter(|obligation| obligation.tier == tier)
             .count()
+    }
+
+    /// Everything the checker could not settle, for the interpreter to check.
+    ///
+    /// The runtime rule is the checker's rule, read off the same table rather
+    /// than worked out again from the syntax. When the two were separate, the
+    /// checker said "so it becomes a runtime check" at places the interpreter
+    /// had no check for, and nothing noticed because nothing compared them.
+    pub fn guards(&self) -> Guards {
+        self.types
+            .obligations()
+            .iter()
+            .filter(|obligation| obligation.tier == Tier::Guarded)
+            .map(|obligation| (obligation.span, obligation.refinement))
+            .collect()
     }
 }
 

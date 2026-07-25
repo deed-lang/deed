@@ -181,6 +181,17 @@ accepted on anything as long as both sides had the same type, so comparing two r
 the type checker and failed at runtime with a message blaming the interpreter for not
 implementing something that has nothing to implement.
 
+The worst one so far was found the same afternoon. The `Guarded` tier did not guard a return
+value. `vow check` printed "so it becomes a runtime check" and there was no check: the
+interpreter guarded arguments and annotated `let`s, because those were the two places
+somebody had happened to write the call. A function declared to return a `Positive` would
+hand back a `-5` and every caller downstream was entitled to believe it. The warning was the
+part that made it dangerous, since that is what convinces a reader they are covered. The two
+passes now read the same table, and `crates/vow-driver/tests/guards.rs` has a test for every
+place a refined value can come into existence, each one handing the guard something it is
+supposed to refuse. The test that should have caught this did exist, and it passed, because
+it only ever handed the guard values it accepts.
+
 `vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
 is not configurable long before anything enforced it, which meant the files were formatted
 the way they happened to have been typed. A test now asserts that every `.vow` file in the
