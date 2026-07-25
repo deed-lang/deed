@@ -239,10 +239,31 @@ settled ahead of time, not whether the check happens. So a caller holding a retu
 holding something that already passed, and a broken promise cannot launder itself into a proof
 somewhere else.
 
-What crosses a module boundary is the range, not the predicate. A refinement stays opaque from
-outside, which is the rule modules already had, so an exported `fn one() -> Positive` arrives
-as a pair of bounds. That is the difference between exporting a proof and exporting the
-conclusion of one.
+What a call carries is the same shape as what a body reasons with: the range the result lands
+in, and the range of `result - argument` for each argument a clause ties it to. A promise that
+never mentions its arguments is a rare thing to want, so a call used to lose most of what an
+`ensures` said:
+
+```vow
+fn same(n: Int) -> Int
+  ensures
+    ok  => result == n,
+{
+    n
+}
+
+fn echoed(n: Positive) -> Positive {
+    same(n)
+}
+```
+
+`result - n` is zero, `n` is positive, so the result is. Before this, an `ensures` mentioning
+an argument was decorative outside of tests, and most of them mention an argument.
+
+What crosses a module boundary is those bounds, not the predicate. A refinement stays opaque
+from outside, which is the rule modules already had, so an exported `fn one() -> Positive`
+arrives as a pair of numbers and `fn same(n: Int) -> Int` arrives as a pair per argument. That
+is the difference between exporting a proof and exporting the conclusion of one.
 
 That last group is what made this worth building. Before it, `Proven` held constant
 expressions and nothing else, so a refinement in real code was a runtime check with a
@@ -258,9 +279,9 @@ and comparing at the end. That is local bidirectional checking and it exists for
 Every one of these is `Guarded`, with a warning, never a wrong answer.
 
 - **A relationship that is not a difference.** `a < b * b` relates two names through a
-  product, and a pair of bounds has nowhere to put that. The same limit is why an
-  `ensures ok => result == n` says nothing at a call site: what crosses a call is a range,
-  and `n` is a name the caller cannot see.
+  product, and a pair of bounds has nowhere to put that. The same limit applies to a promise:
+  `ensures ok => result == n * n` says something true and useful and there is nowhere to put
+  it.
 - **Arithmetic that could overflow.** `n + 1` where `n` is `Positive` is not provably
   positive, because `n` could be the largest integer there is. That is the reasoning working
   rather than a gap in it, and the runtime agrees: the sum has no answer. The same rule is

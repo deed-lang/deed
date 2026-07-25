@@ -38,7 +38,7 @@
 //!   `i64::MIN` are fiddly enough that getting them wrong is worse than not
 //!   trying.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use vow_ast::{BinaryOp, Expr, UnaryOp};
 use vow_resolve::DefId;
@@ -433,6 +433,112 @@ impl Facts {
     }
 }
 
+/// What a call promises about the value it hands back.
+///
+/// A range on its own is what a callee can say without mentioning its
+/// arguments, and most contracts worth writing mention them. `ensures ok =>
+/// result == n` is the ordinary shape of a promise and it says nothing at all
+/// as a pair of bounds, so what travels is the range plus the range of
+/// `result - argument` for each argument the clause ties the result to.
+///
+/// That is the same relation the body reasoning uses, which is the point: a
+/// difference is small enough to cross a module boundary as two numbers, and a
+/// predicate is not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Guarantee {
+    /// Where the result lands, whatever it was called with.
+    pub range: Range,
+    /// The range of `result - argument`, by the argument's position.
+    pub offsets: BTreeMap<usize, Range>,
+}
+
+impl Guarantee {
+    /// A promise about the result alone.
+    pub fn of(range: Range) -> Guarantee {
+        Guarantee {
+            range,
+            offsets: BTreeMap::new(),
+        }
+    }
+
+    /// Promises nothing.
+    pub fn any() -> Guarantee {
+        Guarantee::of(Range::ANY)
+    }
+
+    /// Everything both promises say, for a function with more than one clause.
+    pub fn meet(mut self, other: Guarantee) -> Guarantee {
+        self.range = self.range.meet(other.range);
+        for (index, range) in other.offsets {
+            let combined = match self.offsets.get(&index) {
+                Some(existing) => existing.meet(range),
+                None => range,
+            };
+            self.offsets.insert(index, combined);
+        }
+        self
+    }
+
+    /// Where the result lands, given what the arguments were.
+    fn applied(&self, args: &[Expr], facts: &Facts, env: &Env<'_>) -> Range {
+        let mut range = self.range;
+        for (index, offset) in &self.offsets {
+            let Some(arg) = args.get(*index) else {
+                continue;
+            };
+            // Clamped, because the result is an integer whatever the promise
+            // adds up to, so `i64::MIN` and `i64::MAX` are bounds it already
+            // satisfies rather than ones this could get wrong.
+            range = range.meet(range_of(arg, facts, env).shift(*offset));
+        }
+        range
+    }
+}
+
+/// What an `ensures` clause promises, read as a range and a set of differences.
+///
+/// `subject` is the name standing for the thing being described, which has no
+/// definition of its own, and `names` are the parameters it is allowed to be
+/// related to. Both get a definition invented here, so the narrowing a function
+/// body gets can be run over a contract without one.
+///
+/// A parameter sharing the subject's name is left out of the relation rather
+/// than confused with it. There is nothing useful to say about `result == result`.
+pub fn promised_by(condition: &Expr, subject: &str, names: &[&str]) -> Guarantee {
+    let result = DefId::from_raw(0);
+    let params: Vec<(usize, DefId)> = names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| **name != subject)
+        .map(|(index, _)| (index, DefId::from_raw(index as u32 + 1)))
+        .collect();
+
+    let def_of = |expr: &Expr| match expr {
+        Expr::Ident(ident) if ident.name == subject => Some(result),
+        Expr::Ident(ident) => params
+            .iter()
+            .find(|(index, _)| names[*index] == ident.name)
+            .map(|(_, def)| *def),
+        _ => None,
+    };
+    let env = Env {
+        def_of: &def_of,
+        call: &|_| Guarantee::any(),
+    };
+
+    let mut facts = Facts::new();
+    apply_narrowing(condition, &mut facts, &env, true);
+
+    Guarantee {
+        range: facts.get(result),
+        offsets: params
+            .into_iter()
+            .map(|(index, def)| (index, facts.difference(result, def)))
+            .filter(|(_, range)| !range.is_any())
+            .collect(),
+    }
+}
+
 /// What the fact machinery needs to know that it cannot read off the syntax.
 ///
 /// Closures rather than a borrow of the checker, so this module stays
@@ -440,11 +546,11 @@ impl Facts {
 pub struct Env<'a> {
     /// The definition an identifier refers to.
     pub def_of: &'a dyn Fn(&Expr) -> Option<DefId>,
-    /// The range a call to this callee is guaranteed to land in, from its
-    /// declared return type and its `ensures` clause. Whoever answers this is
-    /// responsible for only answering for contracts that are themselves
-    /// checked, since a promise nobody keeps is not a fact.
-    pub call: &'a dyn Fn(&Expr) -> Range,
+    /// What a call to this callee promises, from its declared return type and
+    /// its `ensures` clause. Whoever answers this is responsible for only
+    /// answering for contracts that are themselves checked, since a promise
+    /// nobody keeps is not a fact.
+    pub call: &'a dyn Fn(&Expr) -> Guarantee,
 }
 
 impl Env<'_> {
@@ -452,7 +558,7 @@ impl Env<'_> {
     pub fn blind() -> Env<'static> {
         Env {
             def_of: &|_| None,
-            call: &|_| Range::ANY,
+            call: &|_| Guarantee::any(),
         }
     }
 }
@@ -628,7 +734,7 @@ fn interval_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
         // The contract of whatever is being called. This is the one place the
         // reasoning leaves the function it is looking at, and it is why a
         // proof inside one function is worth anything to its callers.
-        Expr::Call { callee, .. } => (env.call)(callee),
+        Expr::Call { callee, args, .. } => (env.call)(callee).applied(args, facts, env),
         Expr::Unary {
             op: UnaryOp::Neg,
             operand,

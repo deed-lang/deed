@@ -258,6 +258,51 @@ fn an_equality_carries_a_bound_from_one_name_to_the_other() {
     );
 }
 
+#[test]
+fn an_ensures_clause_that_ties_the_result_to_an_argument_travels() {
+    // The ordinary shape of a promise, and it says nothing as a pair of bounds.
+    // What crosses the call is `result - n`, which is zero here, so the
+    // caller's `n` being positive makes the result positive.
+    expect(
+        Tier::Proven,
+        "fn same(n: Int) -> Int\n  ensures\n    ok  => result == n,\n{\n    n\n}\n\nfn f(n: Positive) -> Positive { same(n) }\n",
+    );
+}
+
+#[test]
+fn a_promise_can_be_an_inequality() {
+    expect(
+        Tier::Proven,
+        "fn at_least(n: Int) -> Int\n  ensures\n    ok  => result >= n,\n{\n    n\n}\n\nfn f(n: Positive) -> Positive { at_least(n) }\n",
+    );
+}
+
+#[test]
+fn a_promise_can_move_the_result_away_from_the_argument() {
+    expect(
+        Tier::Proven,
+        "fn next(n: Int) -> Int\n  ensures\n    ok  => result == n + 1,\n{\n    n + 1\n}\n\nfn f(n: Int) -> Positive\n  where\n    n >= 0,\n{\n    next(n)\n}\n",
+    );
+}
+
+#[test]
+fn a_promise_is_about_the_argument_in_that_position() {
+    // Two parameters, and the promise names the second. Getting the position
+    // wrong would prove this from whatever happened to be first.
+    expect(
+        Tier::Proven,
+        "fn second(a: Int, b: Int) -> Int\n  ensures\n    ok  => result == b,\n{\n    b\n}\n\nfn f(a: Int, b: Positive) -> Positive { second(a, b) }\n",
+    );
+}
+
+#[test]
+fn two_clauses_bound_the_result_from_both_sides() {
+    expect(
+        Tier::Proven,
+        "type Percent = Int where value >= 0 && value <= 100\n\nfn near(n: Int) -> Int\n  ensures\n    ok  => result >= n,\n    ok  => result <= n + 50,\n{\n    n\n}\n\nfn f(n: Int) -> Percent\n  where\n    n >= 0,\n    n <= 50,\n{\n    near(n)\n}\n",
+    );
+}
+
 // -- what it refuses to prove ----------------------------------------------
 
 #[test]
@@ -345,13 +390,30 @@ fn a_return_type_is_a_fact_at_the_call_site_too() {
 }
 
 #[test]
-fn an_ensures_clause_that_relates_the_result_to_an_argument_says_nothing() {
-    // True, useful, and not something that crosses a call. What travels from a
-    // callee is a pair of bounds, and `result == n` is a fact about a name the
-    // caller cannot see.
+fn a_promise_through_a_product_is_not_a_difference() {
+    // `result == n * n` is true and useful and there is nowhere to put it,
+    // which is the same limit as `a < b * b` inside a body.
     expect(
         Tier::Guarded,
-        "fn same(n: Int) -> Int\n  ensures\n    ok  => result == n,\n{\n    n\n}\n\nfn f(n: Positive) -> Positive { same(n) }\n",
+        "fn square(n: Int) -> Int\n  ensures\n    ok  => result == n * n,\n{\n    n * n\n}\n\nfn f(n: Positive) -> Positive { square(n) }\n",
+    );
+}
+
+#[test]
+fn a_promise_about_an_argument_nobody_bounded_says_nothing() {
+    // The difference travels, and a difference from an unknown number is an
+    // unknown number.
+    expect(
+        Tier::Guarded,
+        "fn same(n: Int) -> Int\n  ensures\n    ok  => result == n,\n{\n    n\n}\n\nfn f(n: Int) -> Positive { same(n) }\n",
+    );
+}
+
+#[test]
+fn a_promise_about_the_failure_case_says_nothing_about_the_value() {
+    expect(
+        Tier::Guarded,
+        "fn same(n: Int) -> Int\n  ensures\n    err => result == n,\n{\n    n\n}\n\nfn f(n: Positive) -> Positive { same(n) }\n",
     );
 }
 
@@ -464,6 +526,28 @@ fn an_ensures_clause_crosses_a_module_boundary_too() {
 }
 
 #[test]
+fn a_promise_about_an_argument_crosses_a_module_boundary() {
+    // The predicate stays behind, which is the rule modules already had. What
+    // arrives is a range and the difference from each argument, which is a pair
+    // of numbers per argument rather than an expression out of someone else's
+    // scope.
+    let (sources, checked) = check_pair(
+        "module a\n\n\
+         fn same(n: Int) -> Int\n  ensures\n    ok  => result == n,\n{\n    n\n}\n",
+        "module b\n\n\
+         use a.{same}\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f(n: Positive) -> Positive { same(n) }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(checked.obligations_at(Tier::Proven), 1);
+}
+
+#[test]
 fn a_function_that_promises_nothing_still_promises_nothing_across_a_boundary() {
     let (sources, checked) = check_pair(
         "module a\n\nfn anything() -> Int { 1 }\n",
@@ -523,8 +607,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Ten proven and three guarded, and the file explains each of the three.
+    // Twelve proven and three guarded, and the file explains each of the three.
     // If either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 10);
+    assert_eq!(checked.obligations_at(Tier::Proven), 12);
     assert_eq!(checked.obligations_at(Tier::Guarded), 3);
 }

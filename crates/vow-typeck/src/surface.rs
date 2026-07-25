@@ -17,10 +17,11 @@
 //! expression it is written in, which means carrying that module's scope, and
 //! that is a much larger thing than this.
 //!
-//! What does cross is the *range* a function promises its result lands in, as a
-//! pair of bounds. That is the difference between exporting a proof and
-//! exporting the conclusion of one: a caller gets what it needs to reason, and
-//! nothing about how the callee decided it.
+//! What does cross is what a function promises about its result: the range it
+//! lands in, and the range of `result - argument` for each argument a clause
+//! ties it to. That is the difference between exporting a proof and exporting
+//! the conclusion of one. A caller gets what it needs to reason, and nothing
+//! about how the callee decided it.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -28,7 +29,7 @@ use std::rc::Rc;
 use vow_ast::{Expr, FieldDecl, Ident, Item, Module, Outcome, Type};
 use vow_resolve::{DefKind, Resolutions};
 
-use crate::facts::{self, Range};
+use crate::facts::{self, Guarantee, Range};
 use crate::ty::Ty;
 
 /// The module path builtin types are named under.
@@ -44,9 +45,9 @@ pub enum SurfaceItem {
     Function {
         params: Vec<Ty>,
         ret: Ty,
-        /// The range a call is promised to land in. See the note at the top
-        /// about why the bounds cross and the predicate does not.
-        guarantee: Range,
+        /// What a call is promised to hand back. See the note at the top about
+        /// why the bounds cross and the predicate does not.
+        guarantee: Guarantee,
     },
     Record {
         fields: Vec<(String, Ty)>,
@@ -159,13 +160,19 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                         .unwrap_or(Range::ANY),
                     _ => Range::ANY,
                 };
+                let names: Vec<&str> = decl
+                    .sig
+                    .params
+                    .iter()
+                    .map(|param| param.name.name.as_str())
+                    .collect();
                 let promised = decl
                     .contract
                     .ensures
                     .iter()
                     .filter(|clause| clause.outcome == Outcome::Ok)
-                    .fold(Range::ANY, |range, clause| {
-                        range.meet(facts::range_of_subject(&clause.condition, "result"))
+                    .fold(Guarantee::any(), |promise, clause| {
+                        promise.meet(facts::promised_by(&clause.condition, "result", &names))
                     });
 
                 items.insert(
@@ -184,7 +191,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                             Some(ty) => lowerer.ty(ty),
                             None => Ty::Unit,
                         },
-                        guarantee: declared.meet(promised),
+                        guarantee: Guarantee::of(declared).meet(promised),
                     },
                 );
             }
