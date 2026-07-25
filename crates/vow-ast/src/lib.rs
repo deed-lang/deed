@@ -1,0 +1,552 @@
+//! The syntax tree.
+//!
+//! This layer answers "is this a well formed program" and nothing else. It does
+//! not know what a name refers to, whether a type exists, or whether an effect
+//! is declared. Those are later questions and mixing them in here is how a
+//! parser turns into a compiler nobody can follow.
+//!
+//! Two conventions run through the whole tree.
+//!
+//! **Every node carries a span.** Diagnostics are only as good as the source
+//! range they can point at, and a node that cannot be located is a node that
+//! can only produce a vague error.
+//!
+//! **Errors are nodes, not absences.** [`Expr::Error`] and friends mean the
+//! parser gave up on a subtree but kept its extent. Later passes skip them
+//! instead of tripping over a missing branch, which is what keeps one syntax
+//! error from silencing everything after it.
+
+use vow_diagnostics::Span;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ident {
+    pub name: String,
+    pub span: Span,
+}
+
+impl Ident {
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            span,
+        }
+    }
+}
+
+/// A module path such as `payments/transfer`.
+#[derive(Clone, Debug)]
+pub struct ModulePath {
+    pub segments: Vec<Ident>,
+    pub span: Span,
+}
+
+impl ModulePath {
+    pub fn to_string_path(&self) -> String {
+        self.segments
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+}
+
+/// `use std/result.{Result, ok, err}`
+///
+/// There is no wildcard form. If a name is in scope, some line in the file put
+/// it there, which is P1 applied to imports.
+#[derive(Clone, Debug)]
+pub struct Use {
+    pub path: ModulePath,
+    pub names: Vec<Ident>,
+    pub span: Span,
+}
+
+/// One file.
+#[derive(Clone, Debug)]
+pub struct Module {
+    pub name: Option<ModulePath>,
+    pub uses: Vec<Use>,
+    pub items: Vec<Item>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum Item {
+    TypeAlias(TypeAlias),
+    Record(RecordDecl),
+    Choice(ChoiceDecl),
+    Effect(EffectDecl),
+    Handler(HandlerDecl),
+    Function(FnDecl),
+    Test(TestDecl),
+    Error(Span),
+}
+
+impl Item {
+    pub fn span(&self) -> Span {
+        match self {
+            Item::TypeAlias(d) => d.span,
+            Item::Record(d) => d.span,
+            Item::Choice(d) => d.span,
+            Item::Effect(d) => d.span,
+            Item::Handler(d) => d.span,
+            Item::Function(d) => d.span,
+            Item::Test(d) => d.span,
+            Item::Error(span) => *span,
+        }
+    }
+}
+
+/// `type Positive = Int where value > 0`
+///
+/// The refinement is what stops most validation from needing to exist. A
+/// `Positive` cannot be constructed without the predicate holding, so nothing
+/// downstream re-checks it.
+#[derive(Clone, Debug)]
+pub struct TypeAlias {
+    pub name: Ident,
+    pub ty: Type,
+    pub refinement: Option<Expr>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct FieldDecl {
+    pub name: Ident,
+    pub ty: Type,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecordDecl {
+    pub name: Ident,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct Variant {
+    pub name: Ident,
+    /// `None` for a variant with no payload, such as `LimitExceeded`.
+    pub fields: Option<Vec<FieldDecl>>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChoiceDecl {
+    pub name: Ident,
+    pub variants: Vec<Variant>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct EffectDecl {
+    pub name: Ident,
+    /// Operation signatures. An effect has no bodies; that is the point of it.
+    pub operations: Vec<FnSig>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct HandlerDecl {
+    pub name: Ident,
+    pub effect: Ident,
+    pub state: Vec<FieldDecl>,
+    pub operations: Vec<FnDecl>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct TestDecl {
+    pub name: String,
+    pub name_span: Span,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct Param {
+    pub name: Ident,
+    /// Optional because handler operations inherit their types from the effect
+    /// they implement.
+    pub ty: Option<Type>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct FnSig {
+    pub name: Ident,
+    pub params: Vec<Param>,
+    pub ret: Option<Type>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct FnDecl {
+    pub sig: FnSig,
+    pub contract: Contract,
+    pub body: Block,
+    pub span: Span,
+}
+
+/// The contract block: everything between the return type and the opening brace.
+///
+/// This is the review surface. A person reads a [`FnSig`] and a `Contract` and
+/// is entitled to stop there.
+#[derive(Clone, Debug, Default)]
+pub struct Contract {
+    /// `where`, what the caller must guarantee.
+    pub requires: Vec<Expr>,
+    /// `uses`, every effect the body may perform. Empty means pure.
+    pub uses: Vec<EffectRef>,
+    /// `ensures`, what the function guarantees, per outcome.
+    pub ensures: Vec<Ensures>,
+    pub span: Option<Span>,
+}
+
+impl Contract {
+    pub fn is_empty(&self) -> bool {
+        self.requires.is_empty() && self.uses.is_empty() && self.ensures.is_empty()
+    }
+
+    /// A function that declares no effects is pure.
+    pub fn is_pure(&self) -> bool {
+        self.uses.is_empty()
+    }
+}
+
+/// `Ledger`, `Ledger.read`, or `sys.*`.
+#[derive(Clone, Debug)]
+pub struct EffectRef {
+    pub effect: Ident,
+    /// `None` means the whole effect, so every operation it declares.
+    pub operation: Option<Ident>,
+    /// True for the `sys.*` form.
+    pub all: bool,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Ok,
+    Err,
+}
+
+/// One `ensures` obligation, such as `err => unchanged(Ledger)`.
+///
+/// Obligations are stated per outcome so that neither the success case nor the
+/// failure case can be left unsaid by accident.
+#[derive(Clone, Debug)]
+pub struct Ensures {
+    pub outcome: Outcome,
+    pub outcome_span: Span,
+    pub condition: Expr,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum Type {
+    /// `Money`, `Result<Receipt, TransferError>`
+    Named {
+        name: Ident,
+        args: Vec<Type>,
+        span: Span,
+    },
+    Unit(Span),
+    Error(Span),
+}
+
+impl Type {
+    pub fn span(&self) -> Span {
+        match self {
+            Type::Named { span, .. } | Type::Unit(span) | Type::Error(span) => *span,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Block {
+    pub stmts: Vec<Stmt>,
+    /// A trailing expression with no terminator, which is the block's value.
+    pub tail: Option<Box<Expr>>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum Stmt {
+    Let {
+        pattern: Pattern,
+        ty: Option<Type>,
+        init: Expr,
+        span: Span,
+    },
+    Return {
+        value: Option<Expr>,
+        span: Span,
+    },
+    Assert {
+        condition: Expr,
+        span: Span,
+    },
+    Expr(Expr),
+    Error(Span),
+}
+
+impl Stmt {
+    pub fn span(&self) -> Span {
+        match self {
+            Stmt::Let { span, .. }
+            | Stmt::Return { span, .. }
+            | Stmt::Assert { span, .. }
+            | Stmt::Error(span) => *span,
+            Stmt::Expr(expr) => expr.span(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOp {
+    Or,
+    And,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
+impl BinaryOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BinaryOp::Or => "||",
+            BinaryOp::And => "&&",
+            BinaryOp::Eq => "==",
+            BinaryOp::Ne => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Le => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Ge => ">=",
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Rem => "%",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnaryOp {
+    Neg,
+    Not,
+}
+
+/// A field in a struct literal. `value` is `None` for the shorthand form,
+/// where `Receipt { from }` means `from: from`.
+#[derive(Clone, Debug)]
+pub struct FieldInit {
+    pub name: Ident,
+    pub value: Option<Expr>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expr,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum Expr {
+    Int {
+        value: i64,
+        span: Span,
+    },
+    Str {
+        value: String,
+        span: Span,
+    },
+    Bool {
+        value: bool,
+        span: Span,
+    },
+    Unit(Span),
+    Ident(Ident),
+
+    /// `a.b`
+    ///
+    /// Module qualification and field access look identical at this stage, and
+    /// the parser has no way to tell them apart. Both produce this node and
+    /// name resolution decides. Inventing two node kinds here would only push
+    /// a guess earlier than the information arrives.
+    Field {
+        receiver: Box<Expr>,
+        name: Ident,
+        span: Span,
+    },
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+        span: Span,
+    },
+    StructLit {
+        path: Box<Expr>,
+        fields: Vec<FieldInit>,
+        span: Span,
+    },
+    Unary {
+        op: UnaryOp,
+        op_span: Span,
+        operand: Box<Expr>,
+        span: Span,
+    },
+    Binary {
+        op: BinaryOp,
+        op_span: Span,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        span: Span,
+    },
+    /// `expr?`, which propagates the error case.
+    Try {
+        operand: Box<Expr>,
+        span: Span,
+    },
+    If {
+        condition: Box<Expr>,
+        then_branch: Block,
+        else_branch: Option<Box<Expr>>,
+        span: Span,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+        span: Span,
+    },
+    Block(Block),
+    Closure {
+        params: Vec<Param>,
+        body: Box<Expr>,
+        span: Span,
+    },
+
+    /// `old(expr)`, the value of `expr` in the state on entry.
+    ///
+    /// A keyword rather than a call, because no function can reach a previous
+    /// state, and the tree should not pretend otherwise.
+    Old {
+        expr: Box<Expr>,
+        span: Span,
+    },
+    /// `unchanged(Ledger)`, which takes an effect rather than a value.
+    Unchanged {
+        effect: EffectRef,
+        span: Span,
+    },
+    /// `with SomeHandler, Another { ... }`
+    With {
+        handlers: Vec<Expr>,
+        body: Block,
+        span: Span,
+    },
+
+    Error(Span),
+}
+
+impl Expr {
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::Int { span, .. }
+            | Expr::Str { span, .. }
+            | Expr::Bool { span, .. }
+            | Expr::Unit(span)
+            | Expr::Field { span, .. }
+            | Expr::Call { span, .. }
+            | Expr::StructLit { span, .. }
+            | Expr::Unary { span, .. }
+            | Expr::Binary { span, .. }
+            | Expr::Try { span, .. }
+            | Expr::If { span, .. }
+            | Expr::Match { span, .. }
+            | Expr::Closure { span, .. }
+            | Expr::Old { span, .. }
+            | Expr::Unchanged { span, .. }
+            | Expr::With { span, .. }
+            | Expr::Error(span) => *span,
+            Expr::Ident(ident) => ident.span,
+            Expr::Block(block) => block.span,
+        }
+    }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self, Expr::Error(_))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PatternField {
+    pub name: Ident,
+    /// `None` for the shorthand form, where `{ available }` binds `available`.
+    pub pattern: Option<Pattern>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum Pattern {
+    Wildcard(Span),
+    /// A dotted name.
+    ///
+    /// A single segment is a binding unless it resolves to a variant with no
+    /// payload. The parser cannot know which, so it does not guess.
+    Path {
+        segments: Vec<Ident>,
+        span: Span,
+    },
+    /// `Ok(receipt)`
+    Tuple {
+        path: Vec<Ident>,
+        elements: Vec<Pattern>,
+        span: Span,
+    },
+    /// `InsufficientFunds { available }`
+    Record {
+        path: Vec<Ident>,
+        fields: Vec<PatternField>,
+        span: Span,
+    },
+    Int {
+        value: i64,
+        span: Span,
+    },
+    Str {
+        value: String,
+        span: Span,
+    },
+    Bool {
+        value: bool,
+        span: Span,
+    },
+    Error(Span),
+}
+
+impl Pattern {
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Wildcard(span)
+            | Pattern::Path { span, .. }
+            | Pattern::Tuple { span, .. }
+            | Pattern::Record { span, .. }
+            | Pattern::Int { span, .. }
+            | Pattern::Str { span, .. }
+            | Pattern::Bool { span, .. }
+            | Pattern::Error(span) => *span,
+        }
+    }
+}
