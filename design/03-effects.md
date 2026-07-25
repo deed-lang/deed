@@ -131,6 +131,17 @@ No mocking library, no monkey patching, no dependency injection framework. The e
 already said what the function reaches for, so substituting an implementation is just
 supplying a different handler.
 
+A handler operation writes no parameter types, because the effect already declared them and
+saying it twice would be a second place for them to disagree. That only means anything if the
+effect is actually consulted, and for a long time it was not: every parameter in every handler
+body was the unknown type, unknown agrees with everything, and so the piece of code holding
+the state and talking to the outside world was the least checked in the language. A refined
+parameter raised no obligation, no warning and no runtime check.
+
+The types come from the effect now, including one from another module, and a handler
+operation that does not line up with the effect is `VOW4021`: an operation the effect never
+declared, or one taking a different number of arguments.
+
 ## What this buys
 
 **Colour-free async.** The `async`/`await` split exists because a language noticed one

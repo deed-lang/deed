@@ -81,3 +81,12 @@ pub const NOT_A_VALUE: &str = "VOW4019";
 /// message about the interpreter being incomplete. It was not incomplete: there
 /// is nothing to implement, because there is nothing the comparison could mean.
 pub const NOT_ORDERED: &str = "VOW4020";
+
+/// A handler operation that does not line up with the effect it implements.
+///
+/// A handler operation writes no types, because the effect already declared
+/// them. That only works if the effect is actually consulted, and it was not:
+/// every parameter in every handler body was the unknown type, which agrees
+/// with everything, so a handler was the least checked code in the language
+/// while being the piece that holds the state and talks to the outside world.
+pub const OPERATION_MISMATCH: &str = "VOW4021";
