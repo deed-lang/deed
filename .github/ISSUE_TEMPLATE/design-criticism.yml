@@ -1,0 +1,40 @@
+name: Attack the design
+description: A claim in design/ that does not hold up. The most useful thing you can open.
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the one CONTRIBUTING calls the most valuable, so it is first.
+
+        A concrete counterexample beats an opinion, and an opinion beats silence. Neither
+        needs to be polished.
+
+  - type: input
+    id: claim
+    attributes:
+      label: Which claim
+      description: The document and, if you can, the sentence.
+      placeholder: design/03-effects.md, "the annotation burden disappears for ordinary code"
+    validations:
+      required: true
+
+  - type: textarea
+    id: breaks
+    attributes:
+      label: Where it breaks
+      description: |
+        A program that the claim says should be fine and is not, or the reverse. Vow source
+        is ideal, pseudocode is fine, prose is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: What it would cost to fix
+      description: |
+        Optional, and worth guessing at. A principle that never rejects anything is
+        decoration, so what a fix would rule out matters as much as what it would enable.
+    validations:
+      required: false

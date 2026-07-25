@@ -1,0 +1,56 @@
+name: Compiler bug
+description: The compiler accepted something it should not have, refused something it should not have, or crashed.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most valuable kind is the first: something that checked cleanly and should not
+        have. Nine bugs here so far had the same shape, where a value had no type, the
+        unknown type agreed with everything, and checking quietly stopped.
+
+  - type: textarea
+    id: source
+    attributes:
+      label: The source
+      description: The smallest file that shows it. It will be pasted into a test, so smaller is genuinely better.
+      render: vow
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: What you ran
+      placeholder: vow check thing.vow
+    validations:
+      required: true
+
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: The output, including the diagnostic code if there was one.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+      description: |
+        If this is a soundness bug, say which guarantee it breaks: a contract, an effect row,
+        a capability, or the `Dir` sandbox. A sandbox escape is a security report rather than
+        a bug, and SECURITY.md says where those go.
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Which commit
+      description: There are no releases, so `git rev-parse --short HEAD` is the version.
+      placeholder: 599e944
+    validations:
+      required: false
