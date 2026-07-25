@@ -28,3 +28,13 @@ dependencies = [
  "vow-diagnostics",
  "vow-lexer",
 ]
+
+[[package]]
+name = "vow-resolve"
+version = "0.0.0"
+dependencies = [
+ "vow-ast",
+ "vow-diagnostics",
+ "vow-lexer",
+ "vow-parser",
+]

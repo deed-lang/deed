@@ -84,7 +84,7 @@ fn the_worked_example_parses_cleanly() {
         module.name.as_ref().unwrap().to_string_path(),
         "payments/transfer"
     );
-    assert_eq!(module.uses.len(), 3);
+    assert_eq!(module.uses.len(), 4);
 
     let functions = module
         .items
@@ -96,7 +96,7 @@ fn the_worked_example_parses_cleanly() {
         .iter()
         .filter(|i| matches!(i, Item::Test(_)))
         .count();
-    assert_eq!(functions, 1);
+    assert_eq!(functions, 2);
     assert_eq!(tests, 2);
 }
 
