@@ -6,16 +6,19 @@ Built for code that machines write and humans review.
 > **Status: it runs.** The compiler lexes, parses, resolves names, type checks and checks
 > effect rows, and a tree walking interpreter executes `test` blocks and `main` with
 > contracts enforced at runtime. Programs get their authority from a `System` capability
-> handed to `main`, and there is no other way to get any. There is no code generation.
-> Criticism of the design is still the most useful contribution. See
-> [issue #1](https://github.com/onatozmenn/vow/issues/1) for where this is going.
+> handed to `main`, and a `Dir` narrows to a subdirectory and cannot be walked back out of.
+> There is no code generation. Criticism of the design is still the most useful
+> contribution. See [issue #1](https://github.com/onatozmenn/vow/issues/1) for where this is
+> going.
 
 ```
-$ cargo run -p vow-cli -- run examples/hello.vow
-hello, 
-world
-
-the pure part does not need any of this
+$ cargo run -p vow-cli -- run examples/config.vow --dir examples
+found it
+`..` would leave the directory, and there is no way out of a `Dir`
+`../Cargo.toml` is not a single name, and a `Dir` only takes one at a time
+`/etc/passwd` is not a single name, and a `Dir` only takes one at a time
+`nowhere` is not there
+used the fallback
 ```
 
 ```
@@ -125,10 +128,10 @@ Read them in order. Each one leans on the one before it.
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary: `check`, `test` and `run` |
 
-There are three examples, [transfer.vow](examples/transfer.vow),
-[counter.vow](examples/counter.vow) and [hello.vow](examples/hello.vow). All are self
-contained and checked by every pass on every commit. The first two run their own tests, the
-third has a `main`.
+There are four examples, [transfer.vow](examples/transfer.vow),
+[counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow) and
+[config.vow](examples/config.vow). All are self contained and checked by every pass on every
+commit. The first two run their own tests, the last two have a `main`.
 
 `transfer.vow` used to model something that could not exist. `Money.units` was `Positive`,
 which made a zero balance and a debit unwritable, and the type checker said so. The fix was

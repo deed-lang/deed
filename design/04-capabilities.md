@@ -29,10 +29,10 @@ fn main(sys: System) -> Int
 }
 ```
 
-`System` carries `console` and `clock`. Both are opaque: there is no field to read, no
-constructor, nothing to know about one except that you were handed it. `Io.write` takes the
-`Console` it writes to and `Io.now` takes the `Clock` it reads, so the operation cannot be
-performed without naming the thing it acts on.
+`System` carries `console`, `clock` and `files`. All three are opaque: there is no field to
+read, no constructor, nothing to know about one except that you were handed it. `Io.write`
+takes the `Console` it writes to and `Io.now` takes the `Clock` it reads, so the operation
+cannot be performed without naming the thing it acts on.
 
 The parts that are real:
 
@@ -48,8 +48,7 @@ written. The type checker gave a type name in expression position no type at all
 type-less expression is compatible with everything, so authority could be conjured by
 spelling it. The test that was supposed to prove capabilities work found it.
 
-`Dir` and the filesystem are not implemented. Neither is attenuation, which is the more
-interesting half. The rest of this document is the target, not the state.
+`Dir` is real too, and it is the interesting one, so it gets its own section below.
 
 ## No ambient authority
 
@@ -104,19 +103,68 @@ from.
 Capabilities narrow as they are passed down.
 
 ```vow
-let data = sys.fs.open_dir("/var/lib/app")?
-let readonly = data.read_only()
-let cache = data.open_dir("cache")?
+fn describe(files: Dir, name: String) -> String
+  uses
+    Io.read,
+{
+    match Io.read(files, name) {
+        ok(text) => "found it",
+        err(why) => why,
+    }
+}
 ```
 
-Each derived capability is strictly weaker. There is no widening operation, no way to walk
-back up, and `..` does not escape a `Dir`. A function that receives `cache` cannot reach
-`/var/lib/app`, and no audit is required to know that.
+`describe` reads inside whatever directory it was handed and has no way to tell which one
+that is. Hand it `sys.files` and it reads the working directory. Hand it the result of
+`Io.open(sys.files, "cache")` and it reads `cache`, and there is no argument it could be
+given and no string it could build that would get it back out.
 
-None of this exists yet. What exists is the trivial case, `sys.console` being weaker than
-`sys`, which is narrowing by projection and does not need any of the machinery a `Dir`
-would. Deriving a capability from another one is the part that is actually hard, and until
-it is built the claim above is a plan.
+That holds because narrowing is the only operation. `Io.open` goes down, nothing goes up,
+and a `Dir` carries a canonical path the program can neither read nor compare.
+
+### The part that has to be right
+
+Refusing `..` is the obvious half and the useless half on its own. The rules, in
+`crates/vow-interp/src/sandbox.rs`:
+
+- a name is one component, so no separator of either flavour
+- `.` and `..` are refused by name, and so is the empty string
+- anything absolute, or carrying a drive prefix, is refused
+- the result is canonicalized and checked to still be under the root
+
+The last one is what decides. A check that refuses `../etc` textually and then follows a
+symlink to `/etc` is not a check, it is a message. Canonicalizing first and comparing after
+is the only version that survives `ln -s`, and there is a test that makes the symlink and
+asserts the escape fails.
+
+Backslashes are refused textually as well as structurally, because on Unix a backslash is an
+ordinary character in a filename and `Path` would call `a\b` one component. A name that
+means two different things on two platforms is not something to hand to a security check.
+
+### What a refusal is
+
+`Io.open` and `Io.read` return `Result<_, String>`, and every refusal above comes back as
+`err` naming the rule it hit. That is deliberate: the name usually comes from data, and a
+path that arrived in a request is not a bug in the program that received it. It does mean a
+program can write `Io.read(files, "..")` and get a runtime answer to a question that could
+have been settled earlier, which is a real cost and the alternative was worse.
+
+The error being a `String` is a placeholder. A real `IoError` in the prelude is its own
+argument about how much of the P2 budget capabilities get to spend.
+
+### Still missing
+
+`read_only()`. Returning the same `Dir` type from it would mean nothing, and doing it
+properly needs a second type. Writing files, listing a directory and creating one are also
+not there, so `Dir` is currently a read capability wearing a more general name.
+
+### Where the root comes from
+
+`vow run --dir <path>` decides, defaulting to the working directory. The runtime does not
+pick one on its own: a program given no directory gets no `sys.files` rather than a quiet
+fallback to wherever the process happens to be. Defaulting to the working directory at all
+is not obviously right, and the reason it is not `--dir` or nothing is that a flag people
+have to type every time is a flag people type without reading.
 
 ## What this changes
 

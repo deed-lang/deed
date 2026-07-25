@@ -103,15 +103,15 @@ impl<'a> Checker<'a> {
     fn collect(&mut self, module: &'a Module) {
         // The capability types the language provides. They have to be named
         // here or a diagnostic about one would say "an unnamed type".
-        for name in ["System", "Console", "Clock"] {
+        for name in ["System", "Console", "Clock", "Dir"] {
             if let Some(def) = self.resolutions.builtin(name) {
                 self.types.set_name(def, name.to_string());
             }
         }
 
-        // `Io.write(out, line)` and `Io.now(clock)`. Each takes the capability
-        // it acts on, so which console is a question about the value rather
-        // than about the row.
+        // Every `Io` operation takes the capability it acts on as its first
+        // argument. The row says what kind of thing is happening, the argument
+        // says which resource it happens to, and neither is enough alone.
         let capability = |checker: &Self, name: &str| {
             checker
                 .resolutions
@@ -121,37 +121,36 @@ impl<'a> Checker<'a> {
         };
         let console = capability(self, "Console");
         let clock = capability(self, "Clock");
+        let dir = capability(self, "Dir");
 
-        if let Some(def) = self.resolutions.builtin("write") {
-            self.types.set_name(def, "write".to_string());
+        // `open` hands back a narrower `Dir` and `read` hands back the file's
+        // contents. Both can fail, because a path that is not there is not a
+        // bug in the caller.
+        let io_error = |ok: Ty| Ty::Result(Box::new(ok), Box::new(Ty::Str));
+
+        let operations: [(&str, Vec<Ty>, Ty); 4] = [
+            ("write", vec![console, Ty::Str], Ty::Unit),
+            ("now", vec![clock], Ty::Int),
+            ("open", vec![dir.clone(), Ty::Str], io_error(dir.clone())),
+            ("read", vec![dir, Ty::Str], io_error(Ty::Str)),
+        ];
+
+        for (name, params, ret) in operations {
+            let Some(def) = self.resolutions.builtin(name) else {
+                continue;
+            };
+            self.types.set_name(def, name.to_string());
             self.signatures.insert(
                 def,
                 Signature {
-                    params: vec![
-                        ParamTy {
-                            ty: console,
+                    params: params
+                        .into_iter()
+                        .map(|ty| ParamTy {
+                            ty,
                             span: Span::at(0),
-                        },
-                        ParamTy {
-                            ty: Ty::Str,
-                            span: Span::at(0),
-                        },
-                    ],
-                    ret: Ty::Unit,
-                    span: Span::at(0),
-                },
-            );
-        }
-        if let Some(def) = self.resolutions.builtin("now") {
-            self.types.set_name(def, "now".to_string());
-            self.signatures.insert(
-                def,
-                Signature {
-                    params: vec![ParamTy {
-                        ty: clock,
-                        span: Span::at(0),
-                    }],
-                    ret: Ty::Int,
+                        })
+                        .collect(),
+                    ret,
                     span: Span::at(0),
                 },
             );
@@ -338,7 +337,7 @@ impl<'a> Checker<'a> {
                         "Bool" => Ty::Bool,
                         // Capabilities are opaque. There is nothing to know
                         // about one except that you were handed it.
-                        "System" | "Console" | "Clock" => Ty::Named(def),
+                        "System" | "Console" | "Clock" | "Dir" => Ty::Named(def),
                         "Result" => {
                             if lowered_args.len() == 2 {
                                 return Ty::Result(
@@ -1068,7 +1067,7 @@ impl<'a> Checker<'a> {
         )
         .with_primary_label(format!("`{name}` cannot be used here"));
 
-        if matches!(name.as_str(), "System" | "Console" | "Clock") {
+        if matches!(name.as_str(), "System" | "Console" | "Clock" | "Dir") {
             diagnostic = diagnostic.with_note(format!(
                 "a `{name}` cannot be constructed, only received, which is the point: \
                  a function that was not handed one cannot reach one"
@@ -1100,6 +1099,7 @@ impl<'a> Checker<'a> {
             let narrower = match name.name.as_str() {
                 "console" => Some("Console"),
                 "clock" => Some("Clock"),
+                "files" => Some("Dir"),
                 _ => None,
             };
             return match narrower.and_then(|name| self.resolutions.builtin(name)) {
@@ -1113,7 +1113,7 @@ impl<'a> Checker<'a> {
                             format!("`System` carries no `{}`", name.name),
                         )
                         .with_primary_label("no such capability")
-                        .with_note("it carries `console` and `clock`"),
+                        .with_note("it carries `console`, `clock` and `files`"),
                     );
                     Ty::Unknown
                 }

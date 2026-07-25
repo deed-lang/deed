@@ -29,12 +29,12 @@ use crate::defs::{DefData, DefId, DefKind, Dot, Resolutions};
 /// language where you cannot write a failing function without an import is not
 /// finished. Errors as values and `?` are core to the design.
 ///
-/// `System`, `Console` and `Clock` are capability types. They have to be built
-/// in for the same reason there is no ambient authority: if a program could
-/// declare its own `Console` and conjure one, none of the rest would mean
+/// `System`, `Console`, `Clock` and `Dir` are capability types. They have to be
+/// built in for the same reason there is no ambient authority: if a program
+/// could declare its own `Console` and conjure one, none of the rest would mean
 /// anything.
 pub const PRELUDE: &[&str] = &[
-    "Int", "String", "Bool", "Result", "ok", "err", "System", "Console", "Clock",
+    "Int", "String", "Bool", "Result", "ok", "err", "System", "Console", "Clock", "Dir",
 ];
 
 /// Operations of the built-in `Io` effect.
@@ -42,7 +42,7 @@ pub const PRELUDE: &[&str] = &[
 /// Each takes the capability it acts on. The row says what kind of operation,
 /// the argument says which resource, which is the split `04-capabilities.md`
 /// describes.
-pub const IO_OPERATIONS: &[&str] = &["write", "now"];
+pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read"];
 
 pub struct Resolved {
     pub resolutions: Resolutions,

@@ -1,7 +1,8 @@
 //! Runs Vow programs.
 //!
-//! Only far enough to execute `test` blocks. There is no `main`, because a
-//! `main` needs IO, which needs capabilities that can actually do something.
+//! `test` blocks, generated property tests, and `main`. A `main` receives a
+//! `System`, which is the only place authority enters a program, and
+//! [`sandbox`] is what makes a `Dir` mean something.
 //!
 //! ```
 //! use vow_diagnostics::SourceMap;
@@ -34,8 +35,10 @@
 pub mod codes;
 pub mod interp;
 pub mod property;
+pub mod sandbox;
 pub mod value;
 
 pub use interp::{Run, TestOutcome, run_main, run_tests};
 pub use property::{PropertyConfig, PropertyOutcome, is_testable, run_properties};
+pub use sandbox::Refused;
 pub use value::{Capability, Fields, Value, VariantValue};

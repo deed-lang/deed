@@ -32,7 +32,14 @@ fn stamp(time: Clock) -> Int
 // This one is pure. Not by convention, not by review: it declares no effects,
 // so it cannot perform any, and it holds no capability, so there is nothing it
 // could reach even if it could.
+//
+// The `where` clause is not decoration. Without it the property test runner
+// generates inputs until it finds one where `n + n` overflows, which it does,
+// and then the postcondition is a promise the function cannot keep.
 fn twice(n: Int) -> Int
+  where
+    n < 1000000000,
+    n > -1000000000,
   ensures
     ok => result == n + n,
 {

@@ -292,12 +292,12 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is nine names and one effect:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `System`, `Console`, `Clock`, and the `Io` effect with its `write` and `now`
-operations. Everything else is imported. Each prelude entry is a name that cannot be looked
-up in any file, which is the kind of thing P2 is a budget for, so the list is short on
-purpose. The three capability types are there because a capability that could be imported
-would not be a capability.
+**The prelude is ten names and one effect:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `System`, `Console`, `Clock`, `Dir`, and the `Io` effect with its `write`, `now`,
+`open` and `read` operations. Everything else is imported. Each prelude entry is a name that
+cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
+is short on purpose. The four capability types are there because a capability that could be
+imported would not be a capability.
 **Names reached through an import are not checked.** `Ledger.read` where `Ledger` came from
 `use ledger.{Ledger}` is left alone, because the compiler has not loaded that module and
 cannot honestly say anything about its contents. When cross module loading exists this
@@ -341,10 +341,10 @@ and the error types must line up.
 be. That is what makes them work with no unification anywhere, and it is the whole reason the
 unknown type absorbs rather than unifies.
 
-**The prelude is nine names and one effect:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `System`, `Console`, `Clock`, and `Io`. Importing or declaring a name the language
-already provides is a warning, because silently shadowing a builtin would put everything
-that depends on it quietly back to being unchecked.
+**The prelude is ten names and one effect:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `System`, `Console`, `Clock`, `Dir`, and `Io`. Importing or declaring a name the
+language already provides is a warning, because silently shadowing a builtin would put
+everything that depends on it quietly back to being unchecked.
 
 **A type name is not a value.** Writing `Console` where an expression is expected is
 `VOW4019` rather than something with no type. This looks like a footnote and is not: an

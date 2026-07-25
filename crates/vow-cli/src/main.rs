@@ -103,7 +103,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     if args.mode == Mode::Run {
-        match run_main(&mut out, &sources, &checks) {
+        match run_main(&mut out, &sources, &checks, args.dir.as_deref()) {
             Ok(Some(true)) => {}
             Ok(Some(false)) => return ExitCode::FAILURE,
             Ok(None) => return ExitCode::from(EXIT_USAGE),
@@ -126,10 +126,17 @@ fn run_main(
     out: &mut impl Write,
     sources: &SourceMap,
     checks: &[Checked],
+    dir: Option<&Path>,
 ) -> io::Result<Option<bool>> {
+    let root = match dir {
+        Some(dir) => dir.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+
     let mut runs = Vec::new();
     for checked in checks {
-        if let Some(run) = vow_interp::run_main(checked.file, &checked.module, &checked.resolutions)
+        if let Some(run) =
+            vow_interp::run_main(checked.file, &checked.module, &checked.resolutions, &root)
         {
             runs.push((sources.file(checked.file).name().to_string(), run));
         }
