@@ -45,6 +45,13 @@ pub const PRELUDE: &[&str] = &[
 /// describes.
 pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read"];
 
+/// How many "did you mean" suggestions one file gets.
+///
+/// See [`Resolver::suggest`] for why there is a limit at all. The number is
+/// chosen so that a file being edited, which has a handful of unresolved names
+/// while something is half typed, never notices it.
+const SUGGESTION_BUDGET: usize = 24;
+
 pub struct Resolved {
     pub resolutions: Resolutions,
     pub diagnostics: Vec<Diagnostic>,
@@ -69,6 +76,7 @@ pub fn resolve(file: FileId, module: &Module, universe: &Universe) -> Resolved {
         scopes: Vec::new(),
         diagnostics: Vec::new(),
         used: HashSet::new(),
+        suggestions: SUGGESTION_BUDGET,
     };
 
     resolver.push_scope(ScopeKind::Prelude);
@@ -139,6 +147,9 @@ struct Resolver<'a> {
     scopes: Vec<Scope>,
     diagnostics: Vec<Diagnostic>,
     used: HashSet<DefId>,
+    /// How many more "did you mean" suggestions this file gets. See
+    /// [`Resolver::suggest`].
+    suggestions: usize,
 }
 
 impl Resolver<'_> {
@@ -424,7 +435,28 @@ impl Resolver<'_> {
         }
     }
 
-    fn suggest(&self, name: &str) -> Option<String> {
+    /// Suggests a name, while there is budget for it.
+    ///
+    /// Finding the nearest name costs a pass over everything in scope, so doing
+    /// it once per unresolved name is quadratic in the size of the file. A file
+    /// full of unresolved names is the normal state of a file being edited,
+    /// which is exactly when P9's latency claim is about something, so there is
+    /// a budget and it is small.
+    ///
+    /// Spending it in source order is what makes the output the same every
+    /// time. Cutting off by count rather than by cost would depend on how fast
+    /// the machine was, and a diagnostic that changes with the weather is not
+    /// an API.
+    ///
+    /// Past the budget the diagnostic still points at the name and still says
+    /// it was not found. Only the "did you mean" goes, and a file with two
+    /// dozen unresolved names has a problem that a typo hint does not solve.
+    fn suggest(&mut self, name: &str) -> Option<String> {
+        if self.suggestions == 0 {
+            return None;
+        }
+        self.suggestions -= 1;
+
         let mut candidates = Vec::new();
         for scope in &self.scopes {
             candidates.extend(scope.names.keys().map(String::as_str));
@@ -916,12 +948,31 @@ fn starts_upper(name: &str) -> bool {
 }
 
 /// The nearest candidate to `name`, when there is an unambiguous one.
+///
+/// Only candidates within the threshold are considered at all, which matters
+/// more than it looks. This runs once per unresolved name and a file being
+/// edited is a file full of unresolved names, so an edit distance against every
+/// name in scope is quadratic in the size of the file. A scaling test caught
+/// exactly that: ten times the broken input cost ninety times the time.
 fn closest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<String> {
+    // One edit for short names, proportionally more for long ones. A
+    // suggestion that is not obviously right is worse than none, because a
+    // machine-applicable fix gets applied.
+    let length = name.chars().count();
+    let threshold = (length / 3).max(1);
+
     let mut best: Option<(usize, &str)> = None;
     let mut ambiguous = false;
 
     for candidate in candidates {
-        let distance = levenshtein(name, candidate);
+        // An edit distance is at least the difference in length, so this rules
+        // most candidates out without looking at a single character.
+        if candidate.chars().count().abs_diff(length) > threshold {
+            continue;
+        }
+        let Some(distance) = levenshtein_within(name, candidate, threshold) else {
+            continue;
+        };
         match best {
             Some((best_distance, _)) if distance < best_distance => {
                 best = Some((distance, candidate));
@@ -933,43 +984,77 @@ fn closest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<
         }
     }
 
-    let (distance, candidate) = best?;
-    // One edit for short names, proportionally more for long ones. A
-    // suggestion that is not obviously right is worse than none, because a
-    // machine-applicable fix gets applied.
-    let threshold = (name.chars().count() / 3).max(1);
-    (distance <= threshold && !ambiguous).then(|| candidate.to_string())
+    let (_, candidate) = best?;
+    (!ambiguous).then(|| candidate.to_string())
 }
 
-/// Edit distance, used only for suggestions.
-fn levenshtein(a: &str, b: &str) -> usize {
+/// Edit distance, or `None` when it is greater than `limit`.
+///
+/// Only the band of cells within `limit` of the diagonal can hold a value that
+/// small, so the rest are never computed. With a limit of one or two that is a
+/// handful of cells per row rather than the whole table.
+fn levenshtein_within(a: &str, b: &str, limit: usize) -> Option<usize> {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
 
+    if a.len().abs_diff(b.len()) > limit {
+        return None;
+    }
     if a.is_empty() {
-        return b.len();
+        return (b.len() <= limit).then_some(b.len());
     }
 
-    let mut previous: Vec<usize> = (0..=b.len()).collect();
-    let mut current = vec![0usize; b.len() + 1];
+    let too_far = limit + 1;
+    if b.is_empty() {
+        return (a.len() <= limit).then_some(a.len());
+    }
+
+    let mut previous: Vec<usize> = (0..=b.len()).map(|j| j.min(too_far)).collect();
+    let mut current = vec![too_far; b.len() + 1];
 
     for (i, &ca) in a.iter().enumerate() {
-        current[0] = i + 1;
-        for (j, &cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
+        // Cell (i + 1, j + 1) can only be within the limit when the row and
+        // the column are within the limit of each other, so the rest of the
+        // table is never computed.
+        let first = i.saturating_sub(limit);
+        let last = (i + limit).min(b.len() - 1);
+
+        current[0] = (i + 1).min(too_far);
+        for cell in current.iter_mut().skip(1) {
+            *cell = too_far;
+        }
+
+        for j in first..=last {
+            let cost = usize::from(ca != b[j]);
             current[j + 1] = (current[j] + 1)
                 .min(previous[j + 1] + 1)
-                .min(previous[j] + cost);
+                .min(previous[j] + cost)
+                .min(too_far);
+        }
+
+        if current[first..=last + 1]
+            .iter()
+            .all(|cell| *cell >= too_far)
+            && current[0] >= too_far
+        {
+            return None;
         }
         std::mem::swap(&mut previous, &mut current);
     }
 
-    previous[b.len()]
+    let distance = previous[b.len()];
+    (distance <= limit).then_some(distance)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::levenshtein;
+    use super::levenshtein_within;
+
+    /// The distance when it is wanted regardless of how large it is.
+    fn levenshtein(a: &str, b: &str) -> usize {
+        let limit = a.chars().count().max(b.chars().count());
+        levenshtein_within(a, b, limit).expect("the limit cannot be exceeded")
+    }
 
     #[test]
     fn edit_distance_is_symmetric_and_zero_on_equal() {
@@ -979,5 +1064,36 @@ mod tests {
         assert_eq!(levenshtein("", "abc"), 3);
         assert_eq!(levenshtein("abc", ""), 3);
         assert_eq!(levenshtein("kitten", "sitting"), 3);
+    }
+
+    #[test]
+    fn a_distance_past_the_limit_is_not_computed() {
+        assert_eq!(levenshtein_within("balance", "balanse", 1), Some(1));
+        assert_eq!(levenshtein_within("balance", "sitting", 2), None);
+        assert_eq!(levenshtein_within("a", "abcdefg", 2), None);
+        assert_eq!(levenshtein_within("kitten", "sitting", 3), Some(3));
+        assert_eq!(levenshtein_within("kitten", "sitting", 2), None);
+    }
+
+    #[test]
+    fn the_band_agrees_with_the_full_table() {
+        // The banded version is an optimisation, so it has to answer the same
+        // thing wherever it answers at all.
+        let words = [
+            "", "a", "ab", "abc", "balance", "balanse", "kitten", "sitting", "counter", "count",
+        ];
+        for a in words {
+            for b in words {
+                let full = levenshtein(a, b);
+                for limit in 0..8 {
+                    let banded = levenshtein_within(a, b, limit);
+                    if full <= limit {
+                        assert_eq!(banded, Some(full), "`{a}` vs `{b}` at limit {limit}");
+                    } else {
+                        assert_eq!(banded, None, "`{a}` vs `{b}` at limit {limit}");
+                    }
+                }
+            }
+        }
     }
 }

@@ -156,6 +156,13 @@ whether that patch is certain or a guess, and nothing applied them, so what P7 d
 a data structure. `vow fix` applies the certain ones and refuses the guesses, with no flag to
 override that.
 
+`vow check --timings` is the same move for P9, which said check latency is budgeted and had
+never been measured. The guard is not a wall clock budget, since a test that fails on a busy
+machine is a test people learn to rerun. It is the shape of the curve: ten times the input
+has to cost well under a hundred times the time. That test found a quadratic on its first
+run, in the "did you mean" suggestions, which cost an edit distance against every name in
+scope for every name that failed to resolve.
+
 `names.vow` and `greeting.vow` are two modules that see each other. A module is named by its
 own `module` line, and the unit of compilation is the set of files you handed the compiler,
 so `vow check examples/` resolves the `use` in one against the declarations in the other. A

@@ -149,6 +149,35 @@ codebase.
 **Rejects:** whole-program type inference, macro expansion at check time, anything that
 makes editing one function require re-checking things that did not change.
 
+### What is measured, and what is not
+
+`vow check --timings` reports wall time per pass. On one developer machine, an unoptimised
+build checking the seven files in `examples/` takes about 4ms, and a generated module of 800
+functions with contracts on half of them takes about 26ms. Those are numbers from one
+machine and a debug build, not a guarantee.
+
+They are also not the target. There is no incremental checking, so what is measured is a
+full check of a small program, and P9's claim is about the edit loop. Until something
+re-checks only what changed, the target above is a statement of intent and this section is
+the honest version of it.
+
+### What is guarded
+
+Not a wall clock budget. A test that fails when the machine is busy is a test people learn
+to rerun until it passes, and CI is always busy. What is guarded is the shape of the curve:
+ten times the input has to cost well under a hundred times the time, which catches
+accidental quadratic behaviour and does not care how fast the machine is.
+
+That test earned its place immediately. It found that every unresolved name ran an edit
+distance against every name in scope, so a file with ten times as many errors cost ninety
+times as much to check. A file full of unresolved names is the normal state of a file being
+edited, which is exactly when this principle is about something. Suggestions are budgeted
+now, in source order so the output stays the same every time.
+
+**What would falsify this:** a realistic codebase where a full check is slow enough that the
+absence of incremental checking stops being a footnote, or a change that makes the scaling
+test pass while the constant factor grows enough to miss the target anyway.
+
 ---
 
 ## P10. Say what is not solved

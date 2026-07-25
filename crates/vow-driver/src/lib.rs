@@ -19,6 +19,8 @@
 
 pub mod fix;
 
+use std::time::{Duration, Instant};
+
 use vow_ast::{Item, Module, Outcome};
 use vow_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use vow_effects::Effects;
@@ -35,6 +37,37 @@ pub struct ObligationReport {
     pub subject: String,
 }
 
+/// How long each pass took, for one file.
+///
+/// P9 says check latency is a language feature and it is budgeted. A budget
+/// nobody measures is a wish, so this is measured and reported rather than
+/// asserted in a document.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Timings {
+    pub lex: Duration,
+    pub parse: Duration,
+    pub resolve: Duration,
+    pub typeck: Duration,
+    pub effects: Duration,
+}
+
+impl Timings {
+    pub fn total(&self) -> Duration {
+        self.lex + self.parse + self.resolve + self.typeck + self.effects
+    }
+
+    /// Each pass with its name, in the order they run.
+    pub fn passes(&self) -> [(&'static str, Duration); 5] {
+        [
+            ("lex", self.lex),
+            ("parse", self.parse),
+            ("resolve", self.resolve),
+            ("typeck", self.typeck),
+            ("effects", self.effects),
+        ]
+    }
+}
+
 /// Everything the compiler worked out about one file.
 pub struct Checked {
     pub file: FileId,
@@ -45,6 +78,7 @@ pub struct Checked {
     /// In source order, so output reads top to bottom.
     pub diagnostics: Vec<Diagnostic>,
     pub obligations: Vec<ObligationReport>,
+    pub timings: Timings,
 }
 
 impl Checked {
@@ -98,8 +132,15 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
         .iter()
         .map(|file| {
             let text = sources.file(*file).text();
+
+            let start = Instant::now();
             let lexed = vow_lexer::tokenize(*file, text);
+            let lex = start.elapsed();
+
+            let start = Instant::now();
             let parsed = vow_parser::parse(*file, &lexed.tokens);
+            let parse = start.elapsed();
+
             Parsed {
                 file: *file,
                 module: parsed.module,
@@ -108,6 +149,11 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
                     .into_iter()
                     .chain(parsed.diagnostics)
                     .collect(),
+                timings: Timings {
+                    lex,
+                    parse,
+                    ..Timings::default()
+                },
             }
         })
         .collect();
@@ -129,11 +175,15 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
     // every module has to be resolved before any surface can be lowered.
     let resolutions: Vec<_> = parsed
         .iter()
-        .map(|entry| vow_resolve::resolve(entry.file, &entry.module, &universe))
+        .map(|entry| {
+            let start = Instant::now();
+            let resolved = vow_resolve::resolve(entry.file, &entry.module, &universe);
+            (resolved, start.elapsed())
+        })
         .collect();
 
     let mut world = World::new();
-    for (entry, resolved) in parsed.iter().zip(&resolutions) {
+    for (entry, (resolved, _)) in parsed.iter().zip(&resolutions) {
         if let Some(name) = &entry.module.name {
             world.insert(
                 name.to_string_path(),
@@ -145,8 +195,8 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
     parsed
         .into_iter()
         .zip(resolutions)
-        .map(|(entry, resolved)| {
-            let mut checked = check_parsed(entry, resolved, &world);
+        .map(|(entry, (resolved, resolve_time))| {
+            let mut checked = check_parsed(entry, resolved, resolve_time, &world);
             for (file, span, path) in &duplicates {
                 if *file == checked.file {
                     checked.diagnostics.push(
@@ -176,17 +226,30 @@ struct Parsed {
     file: FileId,
     module: Module,
     diagnostics: Vec<Diagnostic>,
+    timings: Timings,
 }
 
-fn check_parsed(parsed: Parsed, resolved: vow_resolve::Resolved, world: &World) -> Checked {
+fn check_parsed(
+    parsed: Parsed,
+    resolved: vow_resolve::Resolved,
+    resolve_time: Duration,
+    world: &World,
+) -> Checked {
     let Parsed {
         file,
         module,
         diagnostics: mut collected,
+        mut timings,
     } = parsed;
+    timings.resolve = resolve_time;
 
+    let start = Instant::now();
     let checked = vow_typeck::check(file, &module, &resolved.resolutions, world);
+    timings.typeck = start.elapsed();
+
+    let start = Instant::now();
     let analysed = vow_effects::analyse(file, &module, &resolved.resolutions);
+    timings.effects = start.elapsed();
 
     let mut diagnostics = Vec::new();
     diagnostics.append(&mut collected);
@@ -246,6 +309,7 @@ fn check_parsed(parsed: Parsed, resolved: vow_resolve::Resolved, world: &World) 
         effects: analysed.effects,
         diagnostics,
         obligations,
+        timings,
     }
 }
 
