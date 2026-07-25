@@ -10,8 +10,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "vow-cli"
+version = "0.0.0"
+dependencies = [
+ "vow-diagnostics",
+ "vow-driver",
+ "vow-typeck",
+]
+
+[[package]]
 name = "vow-diagnostics"
 version = "0.0.0"
+
+[[package]]
+name = "vow-driver"
+version = "0.0.0"
+dependencies = [
+ "vow-ast",
+ "vow-diagnostics",
+ "vow-effects",
+ "vow-lexer",
+ "vow-parser",
+ "vow-resolve",
+ "vow-typeck",
+]
 
 [[package]]
 name = "vow-effects"

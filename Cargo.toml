@@ -2,7 +2,9 @@
 resolver = "3"
 members = [
     "crates/vow-ast",
+    "crates/vow-cli",
     "crates/vow-diagnostics",
+    "crates/vow-driver",
     "crates/vow-effects",
     "crates/vow-lexer",
     "crates/vow-parser",
