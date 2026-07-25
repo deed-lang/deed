@@ -328,6 +328,125 @@ fn a_length_is_never_negative() {
     assert_eq!(types.obligations_at(Tier::Proven), 1);
 }
 
+// -- handlers ---------------------------------------------------------------
+
+const COUNTER: &str = "module a\n\n\
+     effect Counter {\n    fn set(to: Int) -> ()\n    fn value() -> Int\n}\n\n";
+
+#[test]
+fn a_handler_operation_takes_its_types_from_the_effect() {
+    // Nothing here writes `Int` anywhere, and `to + 1` still has to be
+    // arithmetic. Before this, every parameter in every handler body was the
+    // unknown type, so nothing done with one was checked at all.
+    check_ok(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: Int\n\n\
+         \x20 fn set(to) -> () {{\n    count = to + 1\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    count\n  }}\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn a_handler_operation_is_checked_against_those_types() {
+    let (sources, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: String\n\n\
+         \x20 fn set(to) -> () {{\n    count = to\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    1\n  }}\n\
+         }}\n"
+    ));
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    assert!(rendered(&sources, &checked.diagnostics).contains("found `Int`"));
+}
+
+#[test]
+fn a_refined_state_field_is_an_obligation_like_any_other() {
+    // This is the one that could not be written before. The parameter had no
+    // type, unknown absorbs, and assigning it to a refined state field raised
+    // nothing at all: no warning, no tier, no runtime check.
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         effect Counter {\n    fn set(to: Int) -> ()\n}\n\n\
+         handler InMemory implements Counter {\n\
+         \x20 state count: Positive\n\n\
+         \x20 fn set(to) -> () {\n    count = to\n  }\n\
+         }\n",
+    );
+    assert!(!checked.has_errors());
+    assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
+}
+
+#[test]
+fn a_handler_operation_the_effect_does_not_have_is_an_error() {
+    let (sources, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: Int\n\n\
+         \x20 fn set(to) -> () {{\n    count = to\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    count\n  }}\n\n\
+         \x20 fn nonsense() -> Int {{\n    1\n  }}\n\
+         }}\n"
+    ));
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::OPERATION_MISMATCH]
+    );
+    assert!(rendered(&sources, &checked.diagnostics).contains("does not declare an operation"));
+}
+
+#[test]
+fn a_handler_operation_with_the_wrong_arity_is_an_error() {
+    // Both parameters used to be accepted and both used to be unknown, so a
+    // handler could disagree with its effect about the shape of a call and
+    // nobody was told.
+    let (sources, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: Int\n\n\
+         \x20 fn set(to, extra) -> () {{\n    count = 1\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    count\n  }}\n\
+         }}\n"
+    ));
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::OPERATION_MISMATCH]
+    );
+    assert!(
+        rendered(&sources, &checked.diagnostics).contains("takes 1 argument, and this takes 2")
+    );
+}
+
+#[test]
+fn a_handler_for_an_imported_effect_gets_its_types_too() {
+    check_ok_in(
+        "module a\n\n\
+         use other.{Ledger}\n\n\
+         handler InMemory implements Ledger {\n\
+         \x20 state total: Int\n\n\
+         \x20 fn post(amount) -> () {\n    total = total + amount\n  }\n\
+         }\n",
+        &universe_of(&["module other\n\neffect Ledger {\n    fn post(amount: Int) -> ()\n}\n"]),
+    );
+}
+
+#[test]
+fn an_imported_handler_operation_is_checked_against_those_types() {
+    let (_, checked) = check_source_in(
+        "module a\n\n\
+         use other.{Ledger}\n\n\
+         handler InMemory implements Ledger {\n\
+         \x20 state total: String\n\n\
+         \x20 fn post(amount) -> () {\n    total = amount\n  }\n\
+         }\n",
+        &universe_of(&["module other\n\neffect Ledger {\n    fn post(amount: Int) -> ()\n}\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+}
+
 // -- refinements -----------------------------------------------------------
 
 #[test]

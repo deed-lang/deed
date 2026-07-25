@@ -180,24 +180,43 @@ fn an_annotated_let_is_guarded() {
 fn handler_state_is_guarded() {
     // Handler state is the only mutable thing in the language, so it is the
     // one place a refined value can be replaced rather than created.
-    //
-    // The value comes from the state itself rather than from the operation's
-    // parameter, because a handler operation's parameters have no types yet:
-    // the effect declares them and the handler does not receive them. That is
-    // its own hole and its own issue.
     expect_refused(
         "module a\n\n\
          type Positive = Int where value > 0\n\n\
-         effect Counter {\n    fn drop() -> ()\n}\n\n\
+         effect Counter {\n    fn set(to: Int) -> ()\n}\n\n\
          handler InMemory implements Counter {\n\
          \x20 state count: Positive\n\n\
-         \x20 fn drop() -> () {\n\
-         \x20   count = count - 1\n\
+         \x20 fn set(to) -> () {\n\
+         \x20   count = to\n\
          \x20 }\n\
          }\n\n\
          test \"state is a boundary too\" {\n\
          \x20 with InMemory { count: 1 } {\n\
-         \x20   Counter.drop()\n\
+         \x20   Counter.set(0)\n\
+         \x20 }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_handler_operation_parameter_is_guarded() {
+    // A handler operation writes no types, because the effect declares them.
+    // The effect used never to be consulted, so every parameter in every
+    // handler body was the unknown type and nothing done with one was checked.
+    expect_refused(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         effect Counter {\n    fn set(to: Positive) -> ()\n}\n\n\
+         handler InMemory implements Counter {\n\
+         \x20 state count: Int\n\n\
+         \x20 fn set(to) -> () {\n\
+         \x20   count = to\n\
+         \x20 }\n\
+         }\n\n\
+         fn hide(n: Int) -> Int { n }\n\n\
+         test \"the operation's own parameter\" {\n\
+         \x20 with InMemory { count: 1 } {\n\
+         \x20   Counter.set(hide(0))\n\
          \x20 }\n\
          }\n",
     );

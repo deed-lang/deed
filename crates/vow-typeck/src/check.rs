@@ -18,8 +18,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use vow_ast::{
-    BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, Ident, Item, MatchArm, Module, Outcome,
-    Pattern, Stmt, Type, TypeAlias, UnaryOp,
+    BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item, MatchArm, Module,
+    Outcome, Pattern, Stmt, Type, TypeAlias, UnaryOp,
 };
 use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
@@ -877,7 +877,8 @@ impl<'a> Checker<'a> {
                         }
                     }
                     for operation in &handler.operations {
-                        self.check_fn(operation);
+                        let declared = self.operation_signature(handler, operation);
+                        self.check_fn_against(operation, declared);
                     }
                 }
                 Item::Test(test) => {
@@ -888,7 +889,97 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// What the effect says a handler operation's signature is.
+    ///
+    /// A handler operation writes no types because the effect already declared
+    /// them, so this is where they come from. Without it every parameter in
+    /// every handler body was the unknown type, and unknown agrees with
+    /// everything, so the piece of code holding the state and talking to the
+    /// outside world was the least checked in the language.
+    ///
+    /// `None` when the effect cannot be found at all, in which case the
+    /// resolver has already said so and inventing a complaint here would be
+    /// piling on.
+    fn operation_signature(
+        &mut self,
+        handler: &'a HandlerDecl,
+        operation: &'a FnDecl,
+    ) -> Option<(Vec<Ty>, Ty)> {
+        let name = operation.sig.name.name.as_str();
+        let effect = self.def_of(&handler.effect)?;
+
+        let found = match self.resolutions.def(effect).kind {
+            DefKind::Import => self.imported_operation(effect, name),
+            _ => self.local_operation(effect, name),
+        };
+
+        let Some((params, ret)) = found else {
+            let effect_name = self.types.name_of(effect).to_string();
+            self.emit(
+                Diagnostic::error(
+                    codes::OPERATION_MISMATCH,
+                    self.file,
+                    operation.sig.name.span,
+                    format!("`{effect_name}` does not declare an operation called `{name}`"),
+                )
+                .with_primary_label("not part of the effect")
+                .with_secondary(handler.effect.span, "the effect this handler implements"),
+            );
+            return None;
+        };
+
+        if params.len() != operation.sig.params.len() {
+            let effect_name = self.types.name_of(effect).to_string();
+            self.emit(
+                Diagnostic::error(
+                    codes::OPERATION_MISMATCH,
+                    self.file,
+                    operation.sig.name.span,
+                    format!(
+                        "`{effect_name}.{name}` takes {} argument{}, and this takes {}",
+                        params.len(),
+                        if params.len() == 1 { "" } else { "s" },
+                        operation.sig.params.len()
+                    ),
+                )
+                .with_primary_label("does not match the effect")
+                .with_secondary(handler.effect.span, "the effect this handler implements")
+                .with_note("a handler operation writes no types because the effect declares them, so the shape has to line up"),
+            );
+            return None;
+        }
+
+        Some((params, ret))
+    }
+
+    /// An operation of an effect declared in this module.
+    fn local_operation(&self, effect: DefId, name: &str) -> Option<(Vec<Ty>, Ty)> {
+        let operation = self.resolutions.defs().find_map(|(def, data)| {
+            (data.kind == DefKind::EffectOp && data.parent == Some(effect) && data.name == name)
+                .then_some(def)
+        })?;
+        let signature = self.signatures.get(&operation)?;
+        Some((
+            signature.params.iter().map(|p| p.ty.clone()).collect(),
+            signature.ret.clone(),
+        ))
+    }
+
+    /// An operation of an effect from another module.
+    fn imported_operation(&self, effect: DefId, name: &str) -> Option<(Vec<Ty>, Ty)> {
+        let module = self.resolutions.import_module(effect)?;
+        let effect_name = &self.resolutions.def(effect).name;
+        let Some(SurfaceItem::Effect { operations }) = self.world.get(module, effect_name) else {
+            return None;
+        };
+        operations.get(name).cloned()
+    }
+
     fn check_fn(&mut self, function: &'a FnDecl) {
+        self.check_fn_against(function, None);
+    }
+
+    fn check_fn_against(&mut self, function: &'a FnDecl, declared: Option<(Vec<Ty>, Ty)>) {
         // Reuse the signature computed during collection where there is one.
         // Lowering the same annotation twice would report anything wrong with
         // it twice, which is a cascade from a single mistake.
@@ -896,12 +987,15 @@ impl<'a> Checker<'a> {
             .def_of(&function.sig.name)
             .and_then(|def| self.signatures.get(&def).cloned());
 
-        let (param_types, ret) = match &signature {
-            Some(signature) => (
+        let (param_types, ret) = match (&signature, declared) {
+            // A handler operation. The effect said what the types are, and
+            // anything written here as well would be a second source of truth.
+            (_, Some((params, ret))) => (params, ret),
+            (Some(signature), None) => (
                 signature.params.iter().map(|p| p.ty.clone()).collect(),
                 signature.ret.clone(),
             ),
-            None => {
+            (None, None) => {
                 let mut params = Vec::new();
                 for param in &function.sig.params {
                     params.push(match &param.ty {
