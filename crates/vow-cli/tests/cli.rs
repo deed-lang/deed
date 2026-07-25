@@ -493,3 +493,81 @@ fn the_config_example_runs_and_reaches_nothing_it_was_not_given() {
     assert!(text.contains("no way out of a `Dir`"), "{text}");
     assert!(text.contains("used the fallback"), "{text}");
 }
+
+// -- formatting ------------------------------------------------------------
+
+#[test]
+fn fmt_rewrites_a_file_in_place() {
+    let scratch = Scratch::new("fmt");
+    let file = scratch.write("cramped.vow", "module a\nfn   f( n:Int )->Int{n+n}\n");
+
+    let output = run(&["fmt", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n"
+    );
+    assert!(
+        stdout(&output).contains("cramped.vow"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn fmt_leaves_a_canonical_file_alone() {
+    let scratch = Scratch::new("fmt-noop");
+    let canonical = "module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n";
+    let file = scratch.write("fine.vow", canonical);
+
+    let output = run(&["fmt", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0);
+    assert_eq!(stdout(&output), "", "it reported a file it did not change");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), canonical);
+}
+
+#[test]
+fn fmt_check_reports_without_writing() {
+    let scratch = Scratch::new("fmt-check");
+    let cramped = "module a\nfn   f( n:Int )->Int{n+n}\n";
+    let file = scratch.write("cramped.vow", cramped);
+
+    let output = run(&["fmt", "--check", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    assert!(stdout(&output).contains("cramped.vow"));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        cramped,
+        "`--check` wrote to the file"
+    );
+}
+
+#[test]
+fn fmt_refuses_a_file_that_does_not_parse() {
+    let scratch = Scratch::new("fmt-broken");
+    let broken = "module a\n\nfn f( -> Int {\n";
+    let file = scratch.write("broken.vow", broken);
+
+    let output = run(&["fmt", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        broken,
+        "it reshaped a file it could not parse"
+    );
+}
+
+#[test]
+fn the_examples_are_in_canonical_form() {
+    let output = run(&["fmt", "--check", EXAMPLES]);
+    assert_eq!(code(&output), 0, "run `vow fmt`:\n{}", stdout(&output));
+}
+
+#[test]
+fn fmt_has_no_options_for_the_output() {
+    // The point of P4 is that there is nothing to argue about, and a flag that
+    // changes the output would be the first thing to argue about.
+    let output = run(&["fmt", "--indent", "2", EXAMPLES]);
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("unknown option"));
+}

@@ -26,7 +26,9 @@ effect Counter {
 handler InMemory implements Counter {
     state count: Int
 
-    fn value() -> Int { count }
+    fn value() -> Int {
+        count
+    }
 
     fn bump(by) -> () {
         count = count + by
@@ -39,9 +41,11 @@ handler InMemory implements Counter {
 handler Frozen implements Counter {
     state count: Int
 
-    fn value() -> Int { count }
+    fn value() -> Int {
+        count
+    }
 
-    fn bump(by) -> () { }
+    fn bump(by) -> () {}
 }
 
 // The contract is the review surface. `old(...)` is the value on entry, and
@@ -53,7 +57,7 @@ fn bump_twice(by: Positive) -> Int
     Counter.bump,
     Counter.value,
   ensures
-    ok => Counter.value() == old(Counter.value()) + by + by,
+    ok  => Counter.value() == old(Counter.value()) + by + by,
 {
     Counter.bump(by)
     Counter.bump(by)
@@ -68,8 +72,8 @@ fn bump_twice(by: Positive) -> Int
 // return value is the only thing it produces.
 fn clamp(n: Int, limit: Positive) -> Int
   ensures
-    ok => result <= limit,
-    ok => result == n || result == limit,
+    ok  => result <= limit,
+    ok  => result == n || result == limit,
 {
     if n > limit {
         return limit
@@ -83,7 +87,7 @@ fn peek() -> Int
   uses
     Counter.value,
   ensures
-    ok => unchanged(Counter),
+    ok  => unchanged(Counter),
 {
     Counter.value()
 }

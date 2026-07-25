@@ -16,6 +16,26 @@ use vow_diagnostics::{Applicability, Diagnostic, FileId, Span};
 use crate::codes;
 use crate::token::{Keyword, Token, TokenKind};
 
+/// A comment.
+///
+/// Kept out of the token stream, because a parser that has to skip comments
+/// between every pair of tokens is a parser with a bug waiting in it. Kept at
+/// all, because a formatter that eats comments is not usable, and the tree has
+/// nowhere to hang them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Trivia {
+    pub kind: TriviaKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriviaKind {
+    /// `// ...` to the end of the line.
+    Line,
+    /// `/* ... */`, which nests.
+    Block,
+}
+
 /// The result of lexing one file.
 ///
 /// Tokens and diagnostics are returned together rather than as a `Result`,
@@ -23,6 +43,8 @@ use crate::token::{Keyword, Token, TokenKind};
 /// parser should get the chance to say something about it.
 pub struct Lexed {
     pub tokens: Vec<Token>,
+    /// Comments, in source order. Nothing but the formatter looks at these.
+    pub trivia: Vec<Trivia>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -47,6 +69,7 @@ pub fn tokenize(file: FileId, src: &str) -> Lexed {
             0
         },
         tokens: Vec::new(),
+        trivia: Vec::new(),
         diagnostics: Vec::new(),
     }
     .run()
@@ -57,6 +80,7 @@ struct Lexer<'a> {
     file: FileId,
     pos: usize,
     tokens: Vec<Token>,
+    trivia: Vec<Trivia>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -147,6 +171,7 @@ impl<'a> Lexer<'a> {
 
         Lexed {
             tokens: self.tokens,
+            trivia: self.trivia,
             diagnostics: self.diagnostics,
         }
     }
@@ -189,12 +214,17 @@ impl<'a> Lexer<'a> {
                     self.bump();
                 }
                 (Some('/'), Some('/')) => {
+                    let start = self.pos;
                     while let Some(c) = self.peek() {
                         if c == '\n' {
                             break;
                         }
                         self.bump();
                     }
+                    self.trivia.push(Trivia {
+                        kind: TriviaKind::Line,
+                        span: Span::new(start as u32, self.pos as u32),
+                    });
                 }
                 (Some('/'), Some('*')) => self.block_comment(),
                 _ => return,
@@ -250,6 +280,11 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
+
+        self.trivia.push(Trivia {
+            kind: TriviaKind::Block,
+            span: Span::new(start as u32, self.pos as u32),
+        });
     }
 
     // -- identifiers -------------------------------------------------------

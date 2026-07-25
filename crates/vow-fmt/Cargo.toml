@@ -1,0 +1,17 @@
+[package]
+name = "vow-fmt"
+description = "The one canonical form of a Vow source file"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vow-ast = { path = "../vow-ast" }
+vow-diagnostics = { path = "../vow-diagnostics" }
+vow-lexer = { path = "../vow-lexer" }
+vow-parser = { path = "../vow-parser" }
+
+[lints]
+workspace = true

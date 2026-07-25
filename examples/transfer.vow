@@ -94,7 +94,7 @@ fn transfer(from: AccountId, to: AccountId, amount: Amount)
     ok  => result.from == from,
     ok  => result.amount == amount,
     ok  => Ledger.balance(from).units == old(Ledger.balance(from).units) - amount.units,
-    ok  => Ledger.balance(to).units   == old(Ledger.balance(to).units)   + amount.units,
+    ok  => Ledger.balance(to).units == old(Ledger.balance(to).units) + amount.units,
     ok  => Ledger.total() == old(Ledger.total()),
     err => unchanged(Ledger),
 {
@@ -192,13 +192,12 @@ test "moves the money and conserves the total" {
     let bob = 2
 
     with TwoAccounts {
-             first: alice,
-             first_units: 100,
-             second: bob,
-             second_units: 0,
-             currency: TRY,
-         },
-         CountingAudit { written: 0 }
+        first: alice,
+        first_units: 100,
+        second: bob,
+        second_units: 0,
+        currency: TRY,
+    }, CountingAudit { written: 0 }
     {
         let receipt = ok(Receipt { from: alice, to: bob, amount: amount_of(40) })
 
@@ -214,13 +213,12 @@ test "refuses to overdraw and leaves the ledger alone" {
     let bob = 2
 
     with TwoAccounts {
-             first: alice,
-             first_units: 10,
-             second: bob,
-             second_units: 0,
-             currency: TRY,
-         },
-         CountingAudit { written: 0 }
+        first: alice,
+        first_units: 10,
+        second: bob,
+        second_units: 0,
+        currency: TRY,
+    }, CountingAudit { written: 0 }
     {
         let refusal = err(InsufficientFunds { available: money_of(10) })
 
@@ -237,13 +235,12 @@ test "refuses a currency mismatch and leaves the ledger alone" {
     let bob = 2
 
     with TwoAccounts {
-             first: alice,
-             first_units: 100,
-             second: bob,
-             second_units: 0,
-             currency: USD,
-         },
-         CountingAudit { written: 0 }
+        first: alice,
+        first_units: 100,
+        second: bob,
+        second_units: 0,
+        currency: USD,
+    }, CountingAudit { written: 0 }
     {
         let refusal = err(CurrencyMismatch { expected: USD, found: TRY })
 

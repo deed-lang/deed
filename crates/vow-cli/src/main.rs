@@ -57,6 +57,10 @@ fn run_check(args: CheckArgs) -> ExitCode {
     files.sort();
     files.dedup();
 
+    if args.mode == Mode::Fmt {
+        return run_fmt(&files, args.check_only);
+    }
+
     let mut sources = SourceMap::new();
     let mut checks = Vec::new();
 
@@ -114,6 +118,64 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
     }
 
+    ExitCode::SUCCESS
+}
+
+/// Rewrites files into canonical form, or reports which are not.
+///
+/// Files are rewritten in place only when the content actually changes, so a
+/// no-op run does not touch mtimes and trigger every watcher on the machine.
+fn run_fmt(files: &[PathBuf], check_only: bool) -> ExitCode {
+    let mut sources = SourceMap::new();
+    let mut unformatted = Vec::new();
+    let mut failed = false;
+
+    for path in files {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("error: {}: {error}", path.display());
+                return ExitCode::from(EXIT_USAGE);
+            }
+        };
+
+        let file = sources.add(display_path(path), text.clone());
+        let formatted = match vow_fmt::format(file, &text) {
+            Ok(formatted) => formatted,
+            Err(diagnostics) => {
+                // Reshaping a file that does not parse would be guessing at
+                // what was meant, and the guess lands in the working tree.
+                for diagnostic in &diagnostics {
+                    println!("{}", render_human(&sources, diagnostic));
+                }
+                failed = true;
+                continue;
+            }
+        };
+
+        if formatted == text {
+            continue;
+        }
+        if check_only {
+            unformatted.push(path.clone());
+            continue;
+        }
+        if let Err(error) = std::fs::write(path, &formatted) {
+            eprintln!("error: {}: {error}", path.display());
+            return ExitCode::from(EXIT_USAGE);
+        }
+        println!("{}", display_path(path));
+    }
+
+    if failed {
+        return ExitCode::FAILURE;
+    }
+    if !unformatted.is_empty() {
+        for path in &unformatted {
+            println!("{}", display_path(path));
+        }
+        return ExitCode::FAILURE;
+    }
     ExitCode::SUCCESS
 }
 
