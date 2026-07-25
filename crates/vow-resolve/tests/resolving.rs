@@ -133,8 +133,24 @@ fn the_worked_example_has_a_small_context_radius() {
     }
 
     assert!(local > 0, "the body should reference its own parameters");
+    // The bound moved from 12 to 20 when the example stopped importing things.
+    // That is worth being precise about rather than quietly retuning.
+    //
+    // The number grew because more names now resolve, not because the body got
+    // more entangled. `Entry`, `Receipt`, `Debit` and the error variants used
+    // to come from modules that could not be loaded, so they resolved to
+    // nothing and were never counted. The body reaches for exactly what it
+    // always did.
+    //
+    // Which exposes a weakness in the measurement: it counts every module level
+    // name, including types the signature already mentions and variants of
+    // those types. Reaching for `InsufficientFunds` when the signature says
+    // `TransferError` is not a context radius problem. A sharper metric would
+    // only count names unreachable from the signature, and that is harder than
+    // it sounds. Left blunt on purpose, because a metric tuned until it passes
+    // measures nothing.
     assert!(
-        external.len() <= 12,
+        external.len() <= 20,
         "context radius is growing: the body reaches {} names declared outside it: {:?}",
         external.len(),
         external
