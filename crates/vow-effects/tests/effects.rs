@@ -1,0 +1,462 @@
+//! Effect checking behaviour.
+//!
+//! The "too wide" rule gets as much attention as "too narrow", because it is
+//! the one that decides whether an effect row means anything.
+
+use vow_ast::Item;
+use vow_diagnostics::{Diagnostic, SourceMap, render_human};
+use vow_effects::{Analysis, EffectItem, analyse, codes};
+use vow_lexer::tokenize;
+use vow_parser::parse;
+use vow_resolve::resolve;
+
+fn analyse_source(
+    src: &str,
+) -> (
+    SourceMap,
+    vow_ast::Module,
+    vow_resolve::Resolutions,
+    Analysis,
+) {
+    let mut sources = SourceMap::new();
+    let file = sources.add("test.vow", src);
+
+    let lexed = tokenize(file, sources.file(file).text());
+    assert!(!lexed.has_errors(), "test source should lex cleanly");
+    let parsed = parse(file, &lexed.tokens);
+    assert!(!parsed.has_errors(), "test source should parse cleanly");
+    let resolved = resolve(file, &parsed.module);
+    assert!(!resolved.has_errors(), "test source should resolve cleanly");
+
+    let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+    (sources, parsed.module, resolved.resolutions, analysis)
+}
+
+fn analyse_ok(src: &str) {
+    let (sources, _, _, analysis) = analyse_source(src);
+    if !analysis.diagnostics.is_empty() {
+        panic!(
+            "expected a clean analysis:\n{}",
+            rendered(&sources, &analysis.diagnostics)
+        );
+    }
+}
+
+fn codes_of(diagnostics: &[Diagnostic]) -> Vec<&str> {
+    diagnostics.iter().map(|d| d.code).collect()
+}
+
+fn rendered(sources: &SourceMap, diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(|d| render_human(sources, d))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A module with a `Ledger` effect, so the tests can get to the point.
+fn with_ledger(body: &str) -> String {
+    format!(
+        "module a\n\n\
+         effect Ledger {{\n\
+         \x20 fn balance(id: Int) -> Int\n\
+         \x20 fn post(amount: Int) -> ()\n\
+         }}\n\n\
+         effect Audit {{\n\
+         \x20 fn append(note: Int) -> ()\n\
+         }}\n\n\
+         {body}"
+    )
+}
+
+// -- the worked example ----------------------------------------------------
+
+#[test]
+fn the_worked_example_passes_effect_checking() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/transfer.vow");
+    let source = std::fs::read_to_string(path).expect("examples/transfer.vow should exist");
+
+    let mut sources = SourceMap::new();
+    let file = sources.add("examples/transfer.vow", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module);
+    assert!(!resolved.has_errors());
+
+    let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+    if !analysis.diagnostics.is_empty() {
+        panic!(
+            "the worked example should pass effect checking:\n{}",
+            rendered(&sources, &analysis.diagnostics)
+        );
+    }
+}
+
+#[test]
+fn the_worked_example_row_is_exactly_what_the_body_does() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/transfer.vow");
+    let source = std::fs::read_to_string(path).unwrap();
+
+    let mut sources = SourceMap::new();
+    let file = sources.add("transfer.vow", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module);
+    let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+
+    let transfer = parsed
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.sig.name.name == "transfer" => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    let def = resolved
+        .resolutions
+        .resolution(transfer.sig.name.span)
+        .unwrap();
+
+    let declared = analysis.effects.declared(def).unwrap();
+    let performed = analysis.effects.performed(def).unwrap();
+    assert_eq!(declared.len(), 3);
+    assert_eq!(
+        declared, performed,
+        "the row should be tight, not merely sufficient"
+    );
+
+    // `Ledger.total` is called in the `ensures` clause and is deliberately not
+    // in the row, because specification is not action.
+    let total = performed
+        .iter()
+        .any(|item| item.operation.as_deref() == Some("total"));
+    assert!(
+        !total,
+        "a contract should not have to pay for what it observes"
+    );
+}
+
+/// The measurement #12 asked for.
+///
+/// `03-effects.md` admits that effect systems keep dying on annotation burden.
+/// This is that worry as a number rather than a paragraph. The bounds are loose
+/// on purpose: the point is to notice growth, not to freeze today's figures.
+#[test]
+fn the_annotation_burden_is_measured() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/transfer.vow");
+    let source = std::fs::read_to_string(path).unwrap();
+
+    let mut sources = SourceMap::new();
+    let file = sources.add("transfer.vow", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+
+    let functions: Vec<_> = parsed
+        .module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(f) => Some(f),
+            _ => None,
+        })
+        .collect();
+
+    let total = functions.len();
+    let annotated = functions
+        .iter()
+        .filter(|f| !f.contract.uses.is_empty())
+        .count();
+    let longest = functions
+        .iter()
+        .map(|f| f.contract.uses.len())
+        .max()
+        .unwrap_or(0);
+
+    assert!(total > 0);
+    assert!(
+        longest <= 5,
+        "rows are getting long: the worst is {longest} entries, which is where effect systems start losing people"
+    );
+    // Purity should be the common case, not the exception. If this ever needs
+    // relaxing, that is the finding, not the test being wrong.
+    assert!(
+        annotated * 2 <= total,
+        "{annotated} of {total} functions carry an effect row, and the default is supposed to be purity"
+    );
+}
+
+// -- too narrow ------------------------------------------------------------
+
+#[test]
+fn performing_an_undeclared_effect_is_an_error() {
+    let (sources, _, _, analysis) =
+        analyse_source(&with_ledger("fn f() -> Int { Ledger.balance(1) }\n"));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNDECLARED_EFFECT]
+    );
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(
+        text.contains("performs `Ledger.balance` without declaring it"),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_effect_reached_through_a_called_function_counts() {
+    let (_, _, _, analysis) = analyse_source(&with_ledger(
+        "fn inner() -> Int\n  uses Ledger.balance,\n{ Ledger.balance(1) }\n\n\
+         fn outer() -> Int { inner() }\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNDECLARED_EFFECT]
+    );
+}
+
+#[test]
+fn declaring_the_whole_effect_covers_its_operations() {
+    analyse_ok(&with_ledger(
+        "fn f() -> Int\n  uses Ledger,\n{\n  Ledger.post(1)\n  Ledger.balance(2)\n}\n",
+    ));
+}
+
+#[test]
+fn one_operation_does_not_grant_another() {
+    let (sources, _, _, analysis) = analyse_source(&with_ledger(
+        "fn f() -> Int\n  uses Ledger.balance,\n{\n  Ledger.post(1)\n  Ledger.balance(2)\n}\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNDECLARED_EFFECT]
+    );
+    assert!(rendered(&sources, &analysis.diagnostics).contains("`Ledger.post`"));
+}
+
+// -- too wide --------------------------------------------------------------
+
+#[test]
+fn declaring_an_effect_that_is_never_performed_is_an_error() {
+    let (sources, _, _, analysis) = analyse_source(&with_ledger(
+        "fn f() -> Int\n  uses Ledger.balance, Audit.append,\n{ Ledger.balance(1) }\n",
+    ));
+    assert_eq!(codes_of(&analysis.diagnostics), vec![codes::UNUSED_EFFECT]);
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(
+        text.contains("`Audit.append` is declared but never performed"),
+        "{text}"
+    );
+    assert!(text.contains("only worth reading if it is tight"), "{text}");
+}
+
+#[test]
+fn a_row_must_be_tight_not_merely_sufficient() {
+    // Declaring the whole effect while only using one operation is over-wide,
+    // which is the case a laxer rule would let through.
+    let (_, _, _, analysis) = analyse_source(&with_ledger(
+        "fn f() -> Int\n  uses Ledger, Audit,\n{ Ledger.balance(1) }\n",
+    ));
+    assert_eq!(codes_of(&analysis.diagnostics), vec![codes::UNUSED_EFFECT]);
+}
+
+// -- purity ----------------------------------------------------------------
+
+#[test]
+fn a_function_with_no_uses_clause_is_pure() {
+    analyse_ok("module a\n\nfn double(n: Int) -> Int { n + n }\n");
+}
+
+#[test]
+fn purity_is_transitive_through_calls() {
+    analyse_ok("module a\n\nfn one() -> Int { 1 }\n\nfn two() -> Int { one() + one() }\n");
+}
+
+// -- specification is not action -------------------------------------------
+
+#[test]
+fn a_contract_may_observe_an_effect_without_declaring_it() {
+    // `ensures` describes state rather than changing it. Making an obligation
+    // cost permissions would be making obligations expensive to write, which is
+    // the opposite of what this language wants.
+    analyse_ok(&with_ledger(
+        "fn f() -> Int\n\
+         \x20 ensures ok => Ledger.balance(1) == old(Ledger.balance(1)),\n\
+         { 0 }\n",
+    ));
+}
+
+#[test]
+fn unchanged_costs_nothing() {
+    analyse_ok(&with_ledger(
+        "fn f() -> Int\n  ensures err => unchanged(Ledger),\n{ 0 }\n",
+    ));
+}
+
+// -- handlers and tests ----------------------------------------------------
+
+#[test]
+fn a_with_block_discharges_the_effect_its_handler_implements() {
+    analyse_ok(&with_ledger(
+        "handler InMemory implements Ledger {\n\
+         \x20 state holdings: Int\n\n\
+         \x20 fn balance(id) -> Int { holdings }\n\
+         \x20 fn post(amount) -> () { }\n\
+         }\n\n\
+         test \"reads a balance\" {\n\
+         \x20 with InMemory { holdings: 100 } {\n\
+         \x20   assert Ledger.balance(1) == 100\n\
+         \x20 }\n\
+         }\n",
+    ));
+}
+
+#[test]
+fn a_handler_only_discharges_its_own_effect() {
+    let (sources, _, _, analysis) = analyse_source(&with_ledger(
+        "handler InMemory implements Ledger {\n\
+         \x20 state holdings: Int\n\n\
+         \x20 fn balance(id) -> Int { holdings }\n\
+         }\n\n\
+         test \"writes an audit note\" {\n\
+         \x20 with InMemory { holdings: 1 } {\n\
+         \x20   Audit.append(1)\n\
+         \x20 }\n\
+         }\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNHANDLED_EFFECT]
+    );
+    assert!(rendered(&sources, &analysis.diagnostics).contains("`Audit.append`"));
+}
+
+#[test]
+fn a_test_performing_an_effect_with_no_with_block_is_an_error() {
+    let (_, _, _, analysis) = analyse_source(&with_ledger(
+        "test \"forgot the handler\" {\n  Audit.append(1)\n}\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNHANDLED_EFFECT]
+    );
+}
+
+// -- rows that cannot be checked -------------------------------------------
+
+#[test]
+fn an_imported_effect_makes_the_row_unverifiable_and_says_so() {
+    let (sources, _, _, analysis) = analyse_source(
+        "module a\n\nuse ledger.{Ledger}\n\nfn f() -> Int\n  uses Ledger.post,\n{ 0 }\n",
+    );
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNVERIFIABLE_ROW]
+    );
+    assert!(!analysis.has_errors(), "a warning, not a rejection");
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(text.contains("has not been loaded"), "{text}");
+}
+
+#[test]
+fn granting_everything_a_capability_carries_is_reported() {
+    // This is the hole design/04-capabilities.md already worried about. The
+    // compiler saying it out loud is better than reporting a clean check it
+    // never performed.
+    let (sources, _, _, analysis) =
+        analyse_source("module a\n\nfn main(sys: System) -> Int\n  uses sys.*,\n{ 0 }\n");
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNVERIFIABLE_ROW]
+    );
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(
+        text.contains("grants everything that capability carries"),
+        "{text}"
+    );
+    assert!(
+        text.contains("granting everything is the same as promising nothing"),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_unverifiable_row_suppresses_both_checks() {
+    // Otherwise every entry would be reported as unused, which is noise about
+    // something the compiler already admitted it cannot see.
+    let (_, _, _, analysis) = analyse_source(
+        "module a\n\nuse ledger.{Ledger}\n\nfn f() -> Int\n  uses Ledger.post, Ledger.balance,\n{ 0 }\n",
+    );
+    assert_eq!(
+        codes_of(&analysis.diagnostics)
+            .iter()
+            .filter(|code| **code == codes::UNUSED_EFFECT)
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn a_uses_entry_naming_something_that_is_not_an_effect_is_rejected() {
+    let (sources, _, _, analysis) = analyse_source(
+        "module a\n\nrecord Money { units: Int }\n\nfn f() -> Int\n  uses Money,\n{ 0 }\n",
+    );
+    assert_eq!(codes_of(&analysis.diagnostics), vec![codes::NOT_AN_EFFECT]);
+    assert!(rendered(&sources, &analysis.diagnostics).contains("is a record, not an effect"));
+}
+
+// -- robustness ------------------------------------------------------------
+
+#[test]
+fn broken_input_does_not_panic() {
+    let mut sources = SourceMap::new();
+    let file = sources.add(
+        "broken.vow",
+        "module a\n\nfn bad(x: ) -> Int { , }\n\nfn worse() -> Int\n  uses Nope.thing,\n{ 0 }\n",
+    );
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module);
+    let analysis = analyse(file, &parsed.module, &resolved.resolutions);
+
+    // `Nope` never resolved, so there is nothing to say that has not already
+    // been said by an earlier pass.
+    assert!(
+        !codes_of(&analysis.diagnostics).contains(&codes::NOT_AN_EFFECT),
+        "{}",
+        rendered(&sources, &analysis.diagnostics)
+    );
+}
+
+#[test]
+fn rows_are_reported_for_inspection() {
+    let (_, module, resolutions, analysis) = analyse_source(&with_ledger(
+        "fn f() -> Int\n  uses Ledger.balance,\n{ Ledger.balance(1) }\n",
+    ));
+
+    let function = module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) => Some(f),
+            _ => None,
+        })
+        .unwrap();
+    let def = resolutions.resolution(function.sig.name.span).unwrap();
+    let ledger = analysis
+        .effects
+        .declared(def)
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap()
+        .effect;
+
+    assert!(
+        analysis
+            .effects
+            .performed(def)
+            .unwrap()
+            .covers(&EffectItem::operation(ledger, "balance"))
+    );
+}

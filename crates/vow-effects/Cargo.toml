@@ -1,0 +1,20 @@
+[package]
+name = "vow-effects"
+description = "Checks what a Vow function is allowed to touch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vow-ast = { path = "../vow-ast" }
+vow-diagnostics = { path = "../vow-diagnostics" }
+vow-resolve = { path = "../vow-resolve" }
+
+[dev-dependencies]
+vow-lexer = { path = "../vow-lexer" }
+vow-parser = { path = "../vow-parser" }
+
+[lints]
+workspace = true

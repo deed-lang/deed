@@ -136,7 +136,7 @@ fn the_worked_example_contract_is_complete() {
             None => e.effect.name.clone(),
         })
         .collect();
-    assert_eq!(effects, ["Ledger.read", "Ledger.write", "Audit.append"]);
+    assert_eq!(effects, ["Ledger.balance", "Ledger.post", "Audit.append"]);
 
     let outcomes: Vec<Outcome> = function
         .contract

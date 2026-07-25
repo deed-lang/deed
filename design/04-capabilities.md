@@ -77,7 +77,7 @@ The interesting review question stops being "what does this dependency do" and b
 did we hand it", which is a question you can answer by reading one line.
 
 **Generated code can run without a container.** If the untrusted part is a function whose
-signature is `uses Ledger.read` and whose parameters carry no capabilities, running it is
+signature is `uses Ledger.balance` and whose parameters carry no capabilities, running it is
 safe by construction. That matters when the loop is write, run, check, thousands of times,
 and a container boot is a full second of it.
 
@@ -103,7 +103,10 @@ that directory. Either half without the other leaves a hole. Effects alone canno
 The list is longer than I would like, and this is the least settled document here.
 
 - **`uses sys.*` in `main` is doing a lot of work and may be a cheat.** If it becomes the
-  idiom, authority stops being narrow at exactly the place the argument depends on.
+  idiom, authority stops being narrow at exactly the place the argument depends on. The
+  compiler now warns when a row grants everything a capability carries, on the grounds that
+  granting everything is the same as promising nothing, and that saying so is better than
+  reporting a clean check it never performed. The warning is not a fix.
 - **Ergonomics.** Threading capabilities through deep call stacks is exactly the argument
   that killed explicit dependency passing before, and "just use a container" won that
   argument for a reason. Implicit parameters would fix the plumbing and would put a hole

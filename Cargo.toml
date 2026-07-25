@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/vow-ast",
     "crates/vow-diagnostics",
+    "crates/vow-effects",
     "crates/vow-lexer",
     "crates/vow-parser",
     "crates/vow-resolve",

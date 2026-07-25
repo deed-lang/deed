@@ -31,7 +31,7 @@ nothing more.
 
 ```vow
 fn daily_report(account: AccountId) -> Report
-  uses Ledger.read, Clock.now
+  uses Ledger.balance, Clock.now
 {
     let today = Clock.now().date()
     let balance = Ledger.balance(account)
@@ -39,19 +39,25 @@ fn daily_report(account: AccountId) -> Report
 }
 ```
 
-The row is fine-grained. `Ledger.read` and `Ledger.write` are separate obligations, so a
-reporting function can be given read access without also gaining the ability to move money.
-Naming the whole effect grants all its operations.
+The row is fine-grained. A `uses` entry names an operation the effect declares, so a
+reporting function can be granted `Ledger.balance` without also gaining `Ledger.post` and
+the ability to move money. Naming the effect on its own, as `uses Ledger`, grants all of its
+operations.
+
+An earlier version of this document wrote `Ledger.read` and `Ledger.write` next to an effect
+that declared `balance` and `post`. That was two ideas at once, permission groups and
+operations, and only one of them survived. Entries name operations. The read and write
+distinction is carried by which operations you ask for.
 
 ## Propagation
 
 Rows are inferred bottom up and checked against declarations.
 
 ```vow
-fn a() uses Ledger.read { ... }
+fn a() uses Ledger.balance { ... }
 fn b() uses Audit.append { ... }
 
-fn c() uses Ledger.read, Audit.append {
+fn c() uses Ledger.balance, Audit.append {
     a()
     b()
 }
@@ -65,6 +71,20 @@ Two rules, both errors rather than warnings:
 The second one matters more than it looks. If over-declaring were allowed, every signature
 would drift toward listing everything, and the annotation would stop carrying information.
 An effect row is only worth reading if it is tight.
+
+## Specification is not action
+
+A `where` or `ensures` clause may mention any effect operation and contributes nothing to
+the row. `ok => Ledger.total() == old(Ledger.total())` does not require `Ledger.total` in
+`uses`.
+
+An obligation describes state rather than changing it. Making one cost permissions would
+make obligations expensive to write, and obligations that are expensive to write do not get
+written, which defeats the entire point of the language.
+
+The cost of this rule is that a contract can observe something a body is not allowed to
+touch. That looks wrong at first and is probably right: what a specification is allowed to
+talk about and what an implementation is allowed to do are different questions.
 
 ## Purity is the default
 
@@ -122,8 +142,8 @@ arise.
 empty row is reproducible by construction. Replay, and therefore durable execution, becomes
 something the runtime can offer rather than something a library reimplements.
 
-**Sandboxing without a container.** If a function's row is `Ledger.read`, it cannot open a
-socket. That is a compile-time fact, not a runtime policy, and it is enforced without a
+**Sandboxing without a container.** If a function's row is `Ledger.balance`, it cannot open
+a socket. That is a compile-time fact, not a runtime policy, and it is enforced without a
 process boundary. Container startup is milliseconds and it is paid per test. This is not.
 
 ## The honest part
@@ -144,10 +164,17 @@ this whole design fails on ergonomics, exactly like its predecessors.
 
 ## Open questions
 
+- Effects performed by a closure are attributed to nobody. They belong at the call site,
+  which needs the row to be part of the closure's type, and that is where the type system
+  starts getting big.
+- A `with` block discharges the effects of the handlers it names, and discharges everything
+  when a handler comes from a module that has not been loaded. The second half is coarse and
+  will narrow as cross module loading lands.
+- A row that names an effect from an unloaded module cannot be checked in either direction.
+  The compiler says so rather than reporting a clean check it never performed, which is the
+  right behaviour and still a hole.
 - Can rows be inferred well enough that most functions carry none, and does that then
   undermine the review argument, which depends on the signature being complete?
 - How do effects interact with data structures. Does a `Map` holding closures need a row?
-- Is fine granularity worth it, or does `Ledger.read` versus `Ledger.write` just double the
-  annotation cost for a distinction few people use?
 - What does an effect row mean across a network boundary, where the callee is not compiled
   with you?
