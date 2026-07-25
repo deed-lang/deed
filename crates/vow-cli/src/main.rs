@@ -16,7 +16,29 @@ use crate::args::{CheckArgs, Command, Format, Mode, USAGE};
 /// Something went wrong with the invocation rather than with the code.
 const EXIT_USAGE: u8 = 2;
 
+/// How much stack the work gets.
+///
+/// Every pass walks the syntax tree by recursion, and so does the interpreter,
+/// so the depth a Vow program can reach is bounded by the host stack rather
+/// than by anything in the language. The interpreter has its own limit and
+/// reports hitting it, but that limit is only meaningful if there is room to
+/// reach it. The main thread's stack is whatever the platform felt like.
+const STACK: usize = 64 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    // Everything runs here, and nothing crosses back, so none of the values
+    // the compiler builds have to be shared between threads.
+    std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(run)
+        .and_then(|worker| worker.join().map_err(|_| io::Error::other("worker died")))
+        .unwrap_or_else(|error| {
+            eprintln!("error: {error}");
+            ExitCode::from(EXIT_USAGE)
+        })
+}
+
+fn run() -> ExitCode {
     let command = match args::parse(std::env::args().skip(1)) {
         Ok(command) => command,
         Err(message) => {

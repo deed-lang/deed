@@ -359,6 +359,109 @@ fn a_row_that_only_the_closure_uses_is_not_too_wide() {
     ));
 }
 
+// -- termination -----------------------------------------------------------
+
+/// The codes reported for `src`, for the tests that only care about those.
+fn codes_for(src: &str) -> Vec<String> {
+    let (_, _, _, analysis) = analyse_source(src);
+    analysis
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect()
+}
+
+#[test]
+fn a_function_that_calls_itself_has_to_say_so() {
+    // No termination proving happens anywhere, so `factorial` counts. That is
+    // the honest reading of "a loop the compiler cannot show terminates".
+    assert_eq!(
+        codes_for(
+            "module a\n\nfn factorial(n: Int) -> Int {\n    if n <= 1 {\n        1\n    } else {\n        n * factorial(n - 1)\n    }\n}\n"
+        ),
+        vec![codes::UNDECLARED_EFFECT]
+    );
+}
+
+#[test]
+fn saying_so_is_enough() {
+    analyse_ok(
+        "module a\n\nfn forever(n: Int) -> Int\n  uses\n    Diverge,\n{\n    forever(n + 1)\n}\n",
+    );
+}
+
+#[test]
+fn mutual_recursion_catches_both_halves() {
+    // Neither function calls itself. Between them they can loop forever, and
+    // a rule that only looked at direct recursion would miss it entirely.
+    assert_eq!(
+        codes_for(
+            "module a\n\n\
+             fn even(n: Int) -> Bool {\n    if n == 0 {\n        true\n    } else {\n        odd(n - 1)\n    }\n}\n\n\
+             fn odd(n: Int) -> Bool {\n    if n == 0 {\n        false\n    } else {\n        even(n - 1)\n    }\n}\n"
+        ),
+        vec![codes::UNDECLARED_EFFECT, codes::UNDECLARED_EFFECT]
+    );
+}
+
+#[test]
+fn calling_something_that_may_not_return_may_not_return() {
+    // Straight out of the existing propagation: a call contributes the
+    // callee's declared row, and this is in that row like anything else.
+    assert_eq!(
+        codes_for(
+            "module a\n\n\
+             fn forever() -> Int\n  uses\n    Diverge,\n{\n    forever()\n}\n\n\
+             fn caller() -> Int {\n    forever()\n}\n"
+        ),
+        vec![codes::UNDECLARED_EFFECT]
+    );
+}
+
+#[test]
+fn declaring_it_without_recursing_is_too_wide() {
+    // The tightness rule has to apply here too, or `Diverge` becomes the entry
+    // everyone adds pre-emptively and the row stops meaning anything.
+    assert_eq!(
+        codes_for("module a\n\nfn f() -> Int\n  uses\n    Diverge,\n{\n    1\n}\n"),
+        vec![codes::UNUSED_EFFECT]
+    );
+}
+
+#[test]
+fn a_closure_that_calls_a_diverging_function_charges_its_author() {
+    assert_eq!(
+        codes_for(
+            "module a\n\n\
+             fn forever() -> Int\n  uses\n    Diverge,\n{\n    forever()\n}\n\n\
+             fn caller() -> Int {\n    let go = || { forever() }\n    go()\n    0\n}\n"
+        ),
+        vec![codes::UNDECLARED_EFFECT]
+    );
+}
+
+#[test]
+fn a_test_that_runs_something_diverging_needs_no_handler() {
+    // There is nothing to install. Asking for a handler would be asking for a
+    // thing that cannot be written.
+    analyse_ok(
+        "module a\n\n\
+         fn forever(n: Int) -> Int\n  uses\n    Diverge,\n{\n    forever(n + 1)\n}\n\n\
+         test \"runs it on purpose\" {\n    assert forever(0) == 0\n}\n",
+    );
+}
+
+#[test]
+fn a_contract_mentioning_a_recursive_function_is_not_a_call() {
+    // Specification is not action, the same way it is not for any other
+    // effect. A `where` clause naming a recursive function does not run it.
+    analyse_ok(
+        "module a\n\n\
+         fn size() -> Int { 1 }\n\n\
+         fn f(n: Int) -> Int\n  where\n    n > size(),\n{\n    n\n}\n",
+    );
+}
+
 // -- specification is not action -------------------------------------------
 
 #[test]

@@ -371,6 +371,75 @@ fn two_closures_are_not_the_same_closure() {
     );
 }
 
+// -- termination -----------------------------------------------------------
+
+#[test]
+fn bounded_recursion_still_returns() {
+    expect_pass(
+        "module a\n\n\
+         fn factorial(n: Int) -> Int\n\
+         \x20 uses\n\
+         \x20   Diverge,\n\
+         {\n\
+         \x20 if n <= 1 {\n\
+         \x20   1\n\
+         \x20 } else {\n\
+         \x20   n * factorial(n - 1)\n\
+         \x20 }\n\
+         }\n\n\
+         test \"it comes back\" {\n\
+         \x20 assert factorial(5) == 120\n\
+         }\n",
+    );
+}
+
+#[test]
+fn unbounded_recursion_is_reported_rather_than_fatal() {
+    // The point of this one is that it finishes at all. `Diverge` in the row
+    // says a function may not return; it does not make one return, and a
+    // runner that can be taken down by the program it is running is a runner
+    // nobody can point at a file they have not read.
+    let (_, failure) = expect_failure(
+        "module a\n\n\
+         fn forever(n: Int) -> Int\n\
+         \x20 uses\n\
+         \x20   Diverge,\n\
+         {\n\
+         \x20 forever(n + 1)\n\
+         }\n\n\
+         test \"never\" {\n\
+         \x20 assert forever(0) == 0\n\
+         }\n",
+    );
+    assert_eq!(failure.code, codes::TOO_DEEP);
+}
+
+#[test]
+fn a_closure_calling_itself_is_bounded_too() {
+    // A closure is called through a different path, so the limit has to be on
+    // both or one of them still takes the process down.
+    let (_, failure) = expect_failure(
+        "module a\n\n\
+         fn f() -> Int\n\
+         \x20 uses\n\
+         \x20   Diverge,\n\
+         {\n\
+         \x20 go(0)\n\
+         }\n\n\
+         fn go(n: Int) -> Int\n\
+         \x20 uses\n\
+         \x20   Diverge,\n\
+         {\n\
+         \x20 let step = |x| { go(x + 1) }\n\
+         \x20 step(n)\n\
+         }\n\n\
+         test \"never\" {\n\
+         \x20 assert f() == 0\n\
+         }\n",
+    );
+    assert_eq!(failure.code, codes::TOO_DEEP);
+}
+
 // -- effects and handlers --------------------------------------------------
 
 #[test]

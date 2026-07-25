@@ -37,3 +37,10 @@ pub const ARITHMETIC: &str = "VOW6007";
 /// A property that only ever tested a handful of inputs is worse than no
 /// property, because it looks like one.
 pub const NOT_ENOUGH_CASES: &str = "VOW6008";
+
+/// A call that went deeper than the interpreter is willing to go.
+///
+/// `Diverge` in a row says a function may not return. It does not make one
+/// return, so the runtime needs an answer for the case where it does not, and
+/// the answer is a diagnostic rather than the process dying.
+pub const TOO_DEEP: &str = "VOW6009";

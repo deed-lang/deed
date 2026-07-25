@@ -26,6 +26,7 @@ use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
 use crate::codes;
+use crate::cycles::{self, CallGraph};
 use crate::row::{EffectItem, Row};
 
 pub struct Analysis {
@@ -71,9 +72,11 @@ pub fn analyse(file: FileId, module: &Module, resolutions: &Resolutions) -> Anal
         diagnostics: Vec::new(),
         handler_effects: HashMap::new(),
         declared_sites: HashMap::new(),
+        recursive: HashSet::new(),
     };
 
     checker.collect(module);
+    checker.recursive = cycles::on_a_cycle(&checker.call_graph(module));
     checker.check_module(module);
 
     Analysis {
@@ -91,6 +94,8 @@ struct Checker<'a> {
     handler_effects: HashMap<DefId, DefId>,
     /// Where each declared entry was written, for diagnostics.
     declared_sites: HashMap<DefId, Vec<(EffectItem, Span)>>,
+    /// Functions that can reach themselves, so may not return.
+    recursive: HashSet<DefId>,
 }
 
 impl<'a> Checker<'a> {
@@ -147,6 +152,123 @@ impl<'a> Checker<'a> {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Who calls whom, among the functions declared in this module.
+    ///
+    /// Local calls only. A cycle that leaves the module and comes back is not
+    /// visible here, and pretending otherwise would mean reading another
+    /// module's bodies, which is exactly what a module boundary is for. The
+    /// declared row is what crosses, so a function that admits to `Diverge`
+    /// still passes it on to its callers wherever they are.
+    fn call_graph(&self, module: &Module) -> CallGraph {
+        let mut graph = CallGraph::new();
+        for item in &module.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            let Some(def) = self.resolutions.resolution(function.sig.name.span) else {
+                continue;
+            };
+            let mut called = Vec::new();
+            self.calls_in_block(&function.body, &mut called);
+            graph.insert(def, called);
+        }
+        graph
+    }
+
+    fn calls_in_block(&self, block: &Block, found: &mut Vec<DefId>) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let { init, .. } => self.calls_in(init, found),
+                Stmt::Assign { value, .. } => self.calls_in(value, found),
+                Stmt::Return { value, .. } => {
+                    if let Some(value) = value {
+                        self.calls_in(value, found);
+                    }
+                }
+                Stmt::Assert { condition, .. } => self.calls_in(condition, found),
+                Stmt::Expr(expr) => self.calls_in(expr, found),
+                Stmt::Error(_) => {}
+            }
+        }
+        if let Some(tail) = &block.tail {
+            self.calls_in(tail, found);
+        }
+    }
+
+    /// Every local function `expr` can call, including from inside a closure.
+    ///
+    /// Contract expressions are left out, the same way they are left out of the
+    /// row. A `where` clause describing a recursive function does not run it.
+    fn calls_in(&self, expr: &Expr, found: &mut Vec<DefId>) {
+        match expr {
+            Expr::Call { callee, args, .. } => {
+                let def = match &**callee {
+                    Expr::Ident(ident) => self.resolutions.resolution(ident.span),
+                    Expr::Field { name, .. } => self.resolutions.resolution(name.span),
+                    _ => None,
+                };
+                match def {
+                    Some(def) if self.kind_of(def) == DefKind::Function => found.push(def),
+                    _ => self.calls_in(callee, found),
+                }
+                for arg in args {
+                    self.calls_in(arg, found);
+                }
+            }
+            Expr::Field { receiver, .. } => self.calls_in(receiver, found),
+            Expr::StructLit { path, fields, .. } => {
+                self.calls_in(path, found);
+                for field in fields {
+                    if let Some(value) = &field.value {
+                        self.calls_in(value, found);
+                    }
+                }
+            }
+            Expr::Unary { operand, .. } => self.calls_in(operand, found),
+            Expr::Binary { lhs, rhs, .. } => {
+                self.calls_in(lhs, found);
+                self.calls_in(rhs, found);
+            }
+            Expr::Try { operand, .. } => self.calls_in(operand, found),
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.calls_in(condition, found);
+                self.calls_in_block(then_branch, found);
+                if let Some(else_branch) = else_branch {
+                    self.calls_in(else_branch, found);
+                }
+            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                self.calls_in(scrutinee, found);
+                for arm in arms {
+                    self.calls_in(&arm.body, found);
+                }
+            }
+            Expr::Block(block) => self.calls_in_block(block, found),
+            Expr::Closure { body, .. } => self.calls_in(body, found),
+            Expr::With { handlers, body, .. } => {
+                for handler in handlers {
+                    self.calls_in(handler, found);
+                }
+                self.calls_in_block(body, found);
+            }
+            Expr::Int { .. }
+            | Expr::Str { .. }
+            | Expr::Bool { .. }
+            | Expr::Unit(_)
+            | Expr::Ident(_)
+            | Expr::Old { .. }
+            | Expr::Unchanged { .. }
+            | Expr::Error(_) => {}
         }
     }
 
@@ -269,6 +391,14 @@ impl<'a> Checker<'a> {
                 Item::Test(test) => {
                     let performed = self.infer_block(&test.body);
                     for item in performed.iter() {
+                        // `Diverge` is the one effect with nothing to install.
+                        // A test that calls something which may not return is
+                        // running it on purpose, and there is no handler to
+                        // suggest, so asking for one would be asking for a
+                        // thing that cannot be written.
+                        if self.resolutions.builtin("Diverge") == Some(item.effect) {
+                            continue;
+                        }
                         let described = self.describe(item);
                         self.emit(
                             Diagnostic::error(
@@ -301,7 +431,19 @@ impl<'a> Checker<'a> {
             None => self.lower_row(&function.contract.uses),
         };
 
-        let performed = self.infer_block(&function.body);
+        let mut performed = self.infer_block(&function.body);
+
+        // Not returning is something the function does, so it goes in the row
+        // with everything else it does. There is no termination proving here:
+        // a function that can reach itself may not return as far as this pass
+        // is concerned, and `factorial` has to say so like anything else.
+        if let Some(def) = def
+            && self.recursive.contains(&def)
+            && let Some(diverge) = self.resolutions.builtin("Diverge")
+        {
+            performed.insert(EffectItem::whole(diverge));
+        }
+
         if let Some(def) = def {
             self.effects.performed.insert(def, performed.clone());
         }
@@ -317,15 +459,31 @@ impl<'a> Checker<'a> {
             }
             let described = self.describe(item);
             let name = function.sig.name.name.clone();
+
+            // `Diverge` is not something the body calls, so a message about
+            // performing it would send the reader looking for a line that is
+            // not there.
+            let diverges = self.resolutions.builtin("Diverge") == Some(item.effect);
+            let message = if diverges {
+                format!("`{name}` can reach itself, so it may not return")
+            } else {
+                format!("`{name}` performs {described} without declaring it")
+            };
+            let note = if diverges {
+                "nothing here proves termination, so any call cycle needs `Diverge`; see design/02-syntax.md"
+            } else {
+                "a function can only do what its signature admits to"
+            };
+
             self.emit(
                 Diagnostic::error(
                     codes::UNDECLARED_EFFECT,
                     self.file,
                     function.sig.name.span,
-                    format!("`{name}` performs {described} without declaring it"),
+                    message,
                 )
                 .with_primary_label(format!("add {described} to the `uses` clause"))
-                .with_note("a function can only do what its signature admits to"),
+                .with_note(note),
             );
         }
 

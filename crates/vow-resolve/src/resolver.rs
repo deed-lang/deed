@@ -106,6 +106,21 @@ pub fn resolve(file: FileId, module: &Module, universe: &Universe) -> Resolved {
     resolver.resolutions.record_builtin("Io", io);
     resolver.used.insert(io);
 
+    // Not returning is something a function can do, so it goes in the row like
+    // anything else a function can do. It has no operations: there is nothing
+    // to call, only something to admit to. Built in for the same reason `Io`
+    // is, since a program that could declare its own would be a program that
+    // could opt out of saying it might not finish.
+    let diverge = resolver.resolutions.add_def(DefData {
+        kind: DefKind::Effect,
+        name: "Diverge".to_string(),
+        span: Span::at(0),
+        parent: None,
+    });
+    resolver.insert("Diverge", diverge);
+    resolver.resolutions.record_builtin("Diverge", diverge);
+    resolver.used.insert(diverge);
+
     for operation in IO_OPERATIONS {
         let def = resolver.resolutions.add_def(DefData {
             kind: DefKind::EffectOp,
@@ -209,7 +224,10 @@ impl Resolver<'_> {
                     format!("first declared as a {} here", previous_kind.describe()),
                 ),
             );
-        } else if PRELUDE.contains(&ident.name.as_str()) || ident.name == "Io" {
+        } else if PRELUDE.contains(&ident.name.as_str())
+            || ident.name == "Io"
+            || ident.name == "Diverge"
+        {
             // Silently shadowing a builtin would put everything that depends on
             // it quietly back to being unchecked, which is the worst way for
             // this to go wrong.

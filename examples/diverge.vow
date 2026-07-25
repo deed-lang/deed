@@ -1,0 +1,76 @@
+// Non-termination, which is something a function does, so it goes in the row.
+//
+// design/02-syntax.md has claimed for a long time that functions are total by
+// default and that anything the compiler cannot show terminates needs
+// `Diverge`. Until recently that word appeared in the document and nowhere
+// else: nothing checked it and nobody could even write it. Worse, running an
+// unbounded recursion took the whole process down with a stack overflow, which
+// is not something a tool aimed at unfamiliar code gets to do.
+//
+// There is no termination proving here and this file does not pretend
+// otherwise. The rule is that a function which can reach itself may not
+// return, so it says so. `factorial` obviously terminates and still has to
+// declare it, which is the cost of not having a prover.
+
+module examples/diverge
+
+// Vow has no loop syntax, so this is the only way to count down, and the row
+// says out loud that it might not come back up.
+fn factorial(n: Int) -> Int
+  uses
+    Diverge,
+{
+    if n <= 1 {
+        1
+    } else {
+        n * factorial(n - 1)
+    }
+}
+
+// Mutual recursion counts too. Neither of these calls itself, and between them
+// they can go forever, so a rule that only looked one function deep would miss
+// it entirely.
+fn even(n: Int) -> Bool
+  uses
+    Diverge,
+{
+    if n <= 0 {
+        true
+    } else {
+        odd(n - 1)
+    }
+}
+
+fn odd(n: Int) -> Bool
+  uses
+    Diverge,
+{
+    if n <= 0 {
+        false
+    } else {
+        even(n - 1)
+    }
+}
+
+// Nothing special here. Calling something that may not return means this may
+// not return, which is the ordinary way a row propagates through a call.
+fn parity(n: Int) -> Bool
+  uses
+    Diverge,
+{
+    even(n)
+}
+
+// And a function that does not recurse cannot claim it. Adding `Diverge` here
+// would be VOW5002, the same as declaring any other authority you do not use,
+// because a row is only worth reading if it is tight.
+fn double(n: Int) -> Int {
+    n + n
+}
+
+test "the ones that do come back" {
+    assert factorial(5) == 120
+    assert parity(4)
+    assert !parity(7)
+    assert double(21) == 42
+}
