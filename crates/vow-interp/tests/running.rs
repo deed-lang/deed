@@ -138,6 +138,30 @@ fn return_leaves_the_function_early() {
 }
 
 #[test]
+fn matching_a_result_binds_the_right_case() {
+    expect_pass(
+        "module a\n\n\
+         choice Failure { TooBig { limit: Int } }\n\n\
+         fn small(n: Int) -> Result<Int, Failure> {\n\
+         \x20 if n > 10 {\n\
+         \x20   return err(TooBig { limit: 10 })\n\
+         \x20 }\n\
+         \x20 ok(n)\n\
+         }\n\n\
+         fn handled(n: Int) -> Int {\n\
+         \x20 match small(n) {\n\
+         \x20   ok(value) => value,\n\
+         \x20   err(TooBig { limit }) => 0 - limit,\n\
+         \x20 }\n\
+         }\n\n\
+         test \"both arms\" {\n\
+         \x20 assert handled(3) == 3\n\
+         \x20 assert handled(50) == 0 - 10\n\
+         }\n",
+    );
+}
+
+#[test]
 fn records_and_variants_evaluate() {
     expect_pass(
         "module a\n\n\

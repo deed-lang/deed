@@ -62,3 +62,6 @@ pub const NOT_A_RESULT: &str = "VOW4016";
 
 /// `?` inside a function that does not return a `Result`.
 pub const TRY_NEEDS_RESULT_RETURN: &str = "VOW4017";
+
+/// A pattern that cannot match the thing it is applied to.
+pub const PATTERN_MISMATCH: &str = "VOW4018";

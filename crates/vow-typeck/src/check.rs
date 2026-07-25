@@ -1296,6 +1296,11 @@ impl<'a> Checker<'a> {
     /// why a catch-all arm over a choice is rejected rather than accepted as
     /// coverage.
     fn check_exhaustive(&mut self, scrutinee: &Ty, arms: &[MatchArm], span: Span) {
+        if matches!(self.widen(scrutinee), Ty::Result(_, _)) {
+            self.check_result_exhaustive(arms, span);
+            return;
+        }
+
         let Ty::Named(def) = self.widen(scrutinee) else {
             return;
         };
@@ -1376,6 +1381,73 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// A `Result` has two cases and the same rules apply: both have to be
+    /// handled, and neither can be swallowed by a catch-all.
+    fn check_result_exhaustive(&mut self, arms: &[MatchArm], span: Span) {
+        let mut covered: HashSet<&'static str> = HashSet::new();
+        let mut catch_all: Option<Span> = None;
+
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Wildcard(span) => {
+                    catch_all.get_or_insert(*span);
+                }
+                Pattern::Path { .. } => {
+                    catch_all.get_or_insert(arm.pattern.span());
+                }
+                Pattern::Tuple { path, .. } => {
+                    let name = path.last().and_then(|last| {
+                        let def = self.resolutions.resolution(last.span)?;
+                        Some(self.resolutions.def(def).name.clone())
+                    });
+                    match name.as_deref() {
+                        Some("ok") => {
+                            covered.insert("ok");
+                        }
+                        Some("err") => {
+                            covered.insert("err");
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(catch_all) = catch_all {
+            self.emit(
+                Diagnostic::error(
+                    codes::CATCH_ALL_ON_CHOICE,
+                    self.file,
+                    catch_all,
+                    "this arm matches both cases of the `Result`",
+                )
+                .with_primary_label("catches everything")
+                .with_secondary(span, "in this match")
+                .with_note("write `ok(...)` and `err(...)` instead, so the failure case cannot be handled by accident"),
+            );
+            return;
+        }
+
+        let missing: Vec<&str> = ["ok", "err"]
+            .into_iter()
+            .filter(|case| !covered.contains(case))
+            .collect();
+
+        if !missing.is_empty() {
+            self.emit(
+                Diagnostic::error(
+                    codes::NON_EXHAUSTIVE_MATCH,
+                    self.file,
+                    span,
+                    format!("this match does not cover {}", list(&missing)),
+                )
+                .with_primary_label("not exhaustive")
+                .with_note("a `Result` has two cases and both need an arm"),
+            );
+        }
+    }
+
     fn bind_pattern(&mut self, pattern: &Pattern, ty: &Ty) {
         match pattern {
             Pattern::Wildcard(_)
@@ -1394,11 +1466,11 @@ impl<'a> Checker<'a> {
                 }
             }
 
-            Pattern::Tuple { elements, .. } => {
-                for element in elements {
-                    self.bind_pattern(element, &Ty::Unknown);
-                }
-            }
+            Pattern::Tuple {
+                path,
+                elements,
+                span,
+            } => self.bind_result_pattern(path, elements, *span, ty),
 
             Pattern::Record { path, fields, .. } => {
                 let variant_fields = path
@@ -1423,6 +1495,73 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+        }
+    }
+
+    /// `ok(x)` and `err(e)`, the only patterns that carry a value positionally.
+    ///
+    /// Variants have named fields, so anything else in this shape can never
+    /// match, and a pattern that can never match should say so rather than
+    /// quietly falling through.
+    fn bind_result_pattern(&mut self, path: &[Ident], elements: &[Pattern], span: Span, ty: &Ty) {
+        let head = path.last().and_then(|last| {
+            let def = self.resolutions.resolution(last.span)?;
+            (self.resolutions.def(def).kind == DefKind::Builtin)
+                .then(|| self.resolutions.def(def).name.clone())
+        });
+
+        let inner = match (head.as_deref(), self.widen(ty)) {
+            (Some("ok"), Ty::Result(ok, _)) => *ok,
+            (Some("err"), Ty::Result(_, err)) => *err,
+            (Some(name @ ("ok" | "err")), other) => {
+                if !other.absorbs() {
+                    let described = self.types.describe(&other);
+                    self.emit(
+                        Diagnostic::error(
+                            codes::PATTERN_MISMATCH,
+                            self.file,
+                            span,
+                            format!("`{name}(...)` matches a `Result`, and this is {described}"),
+                        )
+                        .with_primary_label("cannot match"),
+                    );
+                }
+                Ty::Unknown
+            }
+            _ => {
+                self.emit(
+                    Diagnostic::error(
+                        codes::PATTERN_MISMATCH,
+                        self.file,
+                        span,
+                        "only `ok` and `err` carry a value in a pattern",
+                    )
+                    .with_primary_label("not a pattern that can match")
+                    .with_note(
+                        "variants have named fields, so they are matched with `Variant { field }`",
+                    ),
+                );
+                Ty::Unknown
+            }
+        };
+
+        if elements.len() != 1 {
+            self.emit(
+                Diagnostic::error(
+                    codes::PATTERN_MISMATCH,
+                    self.file,
+                    span,
+                    format!(
+                        "this pattern binds {} values, and it should bind one",
+                        elements.len()
+                    ),
+                )
+                .with_primary_label("wrong number of bindings"),
+            );
+        }
+
+        for element in elements {
+            self.bind_pattern(element, &inner);
         }
     }
 
