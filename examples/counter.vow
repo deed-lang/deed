@@ -1,0 +1,99 @@
+// A Vow program that actually runs. `vow test examples/counter.vow` executes
+// the tests at the bottom.
+//
+// examples/transfer.vow is checked but cannot run: it returns `ok(...)` and
+// `err(...)`, which come from `std/result`, and there is no cross module
+// loading. `Result` being an import rather than part of the language is
+// probably wrong, since errors as values are core to the design, but that is
+// its own change.
+//
+// This file avoids the problem by not failing at all.
+
+module examples/counter
+
+// A refinement. `bump(0)` and `bump(-1)` are not writable.
+type Positive = Int where value > 0
+
+// An effect declares operations and nothing else.
+effect Counter {
+    fn value() -> Int
+    fn bump(by: Positive) -> ()
+}
+
+// A handler implements them. `state` is the only mutable thing in the
+// language, and only a handler can have it.
+handler InMemory implements Counter {
+    state count: Int
+
+    fn value() -> Int { count }
+
+    fn bump(by) -> () {
+        count = count + by
+    }
+}
+
+// A handler that accepts writes and ignores them, which is enough to make a
+// function break its own postcondition. There is a test for that in the Rust
+// suite, since a file of tests that are supposed to fail cannot live here.
+handler Frozen implements Counter {
+    state count: Int
+
+    fn value() -> Int { count }
+
+    fn bump(by) -> () { }
+}
+
+// The contract is the review surface. `old(...)` is the value on entry, and
+// the compiler checks the effect row against what the body actually performs.
+fn bump_twice(by: Positive) -> Int
+  where
+    by > 0,
+  uses
+    Counter.bump,
+    Counter.value,
+  ensures
+    ok => Counter.value() == old(Counter.value()) + by + by,
+{
+    Counter.bump(by)
+    Counter.bump(by)
+    Counter.value()
+}
+
+// Reading changes nothing, and `unchanged` says so. It compares the state of
+// the handler installed for `Counter` before and after the call.
+fn peek() -> Int
+  uses
+    Counter.value,
+  ensures
+    ok => unchanged(Counter),
+{
+    Counter.value()
+}
+
+test "bumping twice adds twice" {
+    with InMemory { count: 0 } {
+        assert bump_twice(5) == 10
+        assert Counter.value() == 10
+    }
+}
+
+test "bumping starts from whatever the handler was given" {
+    with InMemory { count: 100 } {
+        assert bump_twice(1) == 102
+    }
+}
+
+test "reading leaves the counter alone" {
+    with InMemory { count: 7 } {
+        assert peek() == 7
+        assert peek() == 7
+        assert Counter.value() == 7
+    }
+}
+
+test "a frozen counter never moves" {
+    with Frozen { count: 3 } {
+        assert Counter.value() == 3
+        assert peek() == 3
+    }
+}
