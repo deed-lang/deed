@@ -68,8 +68,14 @@ is decoration.
 
 ## Code of conduct
 
-Be straightforward and assume good faith. Criticism of ideas is the point of this repository;
-criticism of people is not. That is the whole policy.
+Criticism of ideas is the point of this repository; criticism of people is not. That is the
+whole policy, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) is what it means in practice.
+
+## Security
+
+The `Dir` sandbox and capability safety are claims this project makes out loud, so a way
+around either is a security report rather than a bug. [SECURITY.md](SECURITY.md) says where
+those go and what is in scope.
 
 ## AI assistance
 
