@@ -298,10 +298,30 @@ they name has no other way to be written down.
 cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
 is short on purpose. The four capability types are there because a capability that could be
 imported would not be a capability.
-**Names reached through an import are not checked.** `Ledger.read` where `Ledger` came from
-`use ledger.{Ledger}` is left alone, because the compiler has not loaded that module and
-cannot honestly say anything about its contents. When cross module loading exists this
-becomes a real check.
+**A module is named by its own `module` line, not by where it sits on disk.** `use
+payments/ledger` is answered by looking for the file that says `module payments/ledger`
+among the files handed to the compiler. The unit of compilation is that set of files, so
+`vow check src/` sees the whole thing and `vow check one.vow` sees one module with an empty
+universe, in which any `use` fails. That is a real cost and it buys not having a second set
+of rules about roots, extensions and case sensitivity, which is the part of every module
+system that goes wrong.
+
+**Imports are checked at the level of names.** A `use` of a module that is not there is
+`VOW3007`, a `use` of a name that module does not declare is `VOW3008`, and an operation an
+imported effect does not have is `VOW3006`. All three used to be accepted in silence.
+
+**Every item is exported, and a choice's variants are exported in their own right.** There
+is no visibility modifier, because a language with no wildcard imports already makes the
+reader of a file see every name it pulled in, and `pub` on top of that is a second and
+weaker version of the same guarantee. Variants are separate names rather than arriving with
+their choice, since a `use` that quietly brought in six more names would be exactly the
+wildcard import that does not exist. A `test` is not exported: it is not part of what a
+module offers.
+
+**What crosses an import is still only a name.** An imported type does not yet have a type
+behind it, so the type checker treats it as unknown and unknown agrees with everything. An
+imported function's arity is not checked either. That is the half that needs a type identity
+which survives crossing a file boundary, and it is not built.
 
 ## Rules type checking had to pin down
 

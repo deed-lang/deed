@@ -10,17 +10,38 @@ use vow_ast::Item;
 use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_lexer::tokenize;
 use vow_parser::parse;
-use vow_resolve::{DefKind, Dot, Resolutions, Resolved, codes, resolve};
+use vow_resolve::{DefKind, Dot, Resolutions, Resolved, Universe, codes, resolve};
 
 fn resolve_source(src: &str) -> (SourceMap, vow_ast::Module, Resolved) {
+    resolve_source_in(src, &Universe::new())
+}
+
+fn resolve_source_in(src: &str, universe: &Universe) -> (SourceMap, vow_ast::Module, Resolved) {
     let mut sources = SourceMap::new();
     let file = sources.add("test.vow", src);
     let lexed = tokenize(file, sources.file(file).text());
     assert!(!lexed.has_errors(), "test source should lex cleanly");
     let parsed = parse(file, &lexed.tokens);
     assert!(!parsed.has_errors(), "test source should parse cleanly");
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, universe);
     (sources, parsed.module, resolved)
+}
+
+/// A universe holding each of `modules`, parsed from source.
+///
+/// Any test that touches an import needs something on the other side of it,
+/// which is the whole point of this pass: an import with nothing behind it is
+/// an error now rather than a name nobody checks.
+fn universe_of(modules: &[&str]) -> Universe {
+    let mut universe = Universe::new();
+    let mut sources = SourceMap::new();
+    for (index, source) in modules.iter().enumerate() {
+        let file = sources.add(format!("dep{index}.vow"), *source);
+        let lexed = tokenize(file, sources.file(file).text());
+        let parsed = parse(file, &lexed.tokens);
+        universe.add(&parsed.module);
+    }
+    universe
 }
 
 fn resolve_ok(src: &str) -> (SourceMap, vow_ast::Module, Resolutions) {
@@ -69,7 +90,7 @@ fn the_worked_example_resolves_cleanly() {
     let parsed = parse(file, &lexed.tokens);
     assert!(!parsed.has_errors());
 
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     if !resolved.diagnostics.is_empty() {
         let rendered: Vec<String> = resolved
             .diagnostics
@@ -97,7 +118,7 @@ fn the_worked_example_has_a_small_context_radius() {
     let file = sources.add("transfer.vow", source);
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
 
     let function = parsed
         .module
@@ -173,16 +194,94 @@ fn a_dot_after_a_local_is_a_field_access() {
 }
 
 #[test]
-fn a_dot_after_an_import_is_left_alone() {
+fn a_dot_after_an_imported_record_is_left_alone() {
+    // A record's fields are the type checker's business, and it does not know
+    // about the other module's types yet, so the `.` is still classified as
+    // foreign and nothing is asserted about it.
     let src = "module a\n\nuse other.{Thing}\n\nfn f() -> Int { Thing.whatever }\n";
-    let (_, _, resolutions) = resolve_ok(src);
+    let universe = universe_of(&["module other\n\nrecord Thing { whatever: Int }\n"]);
+    let (sources, _, resolved) = resolve_source_in(src, &universe);
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "{}",
+        resolved
+            .diagnostics
+            .iter()
+            .map(|d| render_human(&sources, d))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 
     let dot = span_of(src, "whatever", 0);
     assert_eq!(
-        resolutions.dot(dot),
+        resolved.resolutions.dot(dot),
         Some(Dot::Foreign),
-        "nothing can be said about the inside of a module we have not loaded"
+        "a member of another module's type is not resolved here"
     );
+}
+
+#[test]
+fn an_operation_an_imported_effect_does_not_have_is_an_error() {
+    // The half that is checkable now. An effect's operations are part of its
+    // declaration, so a typo in one crosses the module boundary and gets
+    // caught, which it never did before.
+    let src = "module a\n\nuse other.{Ledger}\n\nfn f() -> Int\n  uses Ledger.balence,\n{ 0 }\n";
+    let universe =
+        universe_of(&["module other\n\neffect Ledger {\n  fn balance(id: Int) -> Int\n}\n"]);
+    let (sources, _, resolved) = resolve_source_in(src, &universe);
+
+    assert_eq!(
+        codes_of(&resolved.diagnostics),
+        vec![codes::UNKNOWN_MEMBER],
+        "{}",
+        resolved
+            .diagnostics
+            .iter()
+            .map(|d| render_human(&sources, d))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(render_human(&sources, &resolved.diagnostics[0]).contains("balance"));
+}
+
+#[test]
+fn importing_from_a_module_that_is_not_there_is_an_error() {
+    let (_, _, resolved) = resolve_source("module a\n\nuse other.{Thing}\n\nfn f() -> Thing {}\n");
+    assert!(
+        codes_of(&resolved.diagnostics).contains(&codes::UNKNOWN_MODULE),
+        "an import with nothing behind it used to be accepted silently"
+    );
+}
+
+#[test]
+fn importing_a_name_the_module_does_not_declare_is_an_error() {
+    let universe = universe_of(&["module other\n\nrecord Thing { n: Int }\n"]);
+    let (sources, _, resolved) = resolve_source_in(
+        "module a\n\nuse other.{Thng}\n\nfn f() -> Thng {}\n",
+        &universe,
+    );
+
+    assert!(
+        codes_of(&resolved.diagnostics).contains(&codes::UNKNOWN_EXPORT),
+        "{}",
+        resolved
+            .diagnostics
+            .iter()
+            .map(|d| render_human(&sources, d))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let text = render_human(&sources, &resolved.diagnostics[0]);
+    assert!(text.contains("declares a `Thing`"), "{text}");
+}
+
+#[test]
+fn a_test_block_is_not_exported() {
+    // Nothing outside a module can name its tests, because a test is not part
+    // of what the module offers.
+    let universe = universe_of(&["module other\n\ntest \"t\" {\n  assert true\n}\n"]);
+    let (_, _, resolved) = resolve_source_in("module a\n\nuse other.{t}\n", &universe);
+    assert!(codes_of(&resolved.diagnostics).contains(&codes::UNKNOWN_EXPORT));
 }
 
 #[test]
@@ -349,8 +448,12 @@ fn a_duplicate_declaration_points_at_both() {
 
 #[test]
 fn an_unused_import_is_a_warning_not_an_error() {
-    let (_, _, resolved) =
-        resolve_source("module a\n\nuse other.{Used, Spare}\n\nfn f() -> Used { }\n");
+    let universe =
+        universe_of(&["module other\n\nrecord Used { n: Int }\n\nrecord Spare { n: Int }\n"]);
+    let (_, _, resolved) = resolve_source_in(
+        "module a\n\nuse other.{Used, Spare}\n\nfn f() -> Used { }\n",
+        &universe,
+    );
     assert_eq!(codes_of(&resolved.diagnostics), vec![codes::UNUSED_IMPORT]);
     assert!(!resolved.has_errors());
     assert!(resolved.diagnostics[0].message.contains("Spare"));
@@ -407,7 +510,7 @@ fn error_nodes_do_not_derail_resolution() {
     let parsed = parse(file, &lexed.tokens);
     assert!(parsed.has_errors());
 
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     // Whatever it says, it must not invent unknown-name errors for the holes.
     for diagnostic in &resolved.diagnostics {
         assert_ne!(

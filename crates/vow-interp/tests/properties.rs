@@ -4,9 +4,17 @@ use vow_diagnostics::{SourceMap, render_human};
 use vow_interp::{PropertyConfig, PropertyOutcome, codes, run_properties};
 use vow_lexer::tokenize;
 use vow_parser::parse;
-use vow_resolve::resolve;
+use vow_resolve::{Universe, resolve};
 
 fn properties(src: &str, config: PropertyConfig) -> (SourceMap, Vec<PropertyOutcome>) {
+    properties_in(src, config, &Universe::new())
+}
+
+fn properties_in(
+    src: &str,
+    config: PropertyConfig,
+    universe: &Universe,
+) -> (SourceMap, Vec<PropertyOutcome>) {
     let mut sources = SourceMap::new();
     let file = sources.add("test.vow", src);
 
@@ -14,11 +22,27 @@ fn properties(src: &str, config: PropertyConfig) -> (SourceMap, Vec<PropertyOutc
     assert!(!lexed.has_errors(), "source should lex cleanly");
     let parsed = parse(file, &lexed.tokens);
     assert!(!parsed.has_errors(), "source should parse cleanly");
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, universe);
     assert!(!resolved.has_errors(), "source should resolve cleanly");
 
     let outcomes = run_properties(file, &parsed.module, &resolved.resolutions, config);
     (sources, outcomes)
+}
+
+/// A universe holding each of `modules`, parsed from source.
+///
+/// An import with nothing behind it is an error now, so a test about a name
+/// from elsewhere needs a real module declaring it.
+fn universe_of(modules: &[&str]) -> Universe {
+    let mut universe = Universe::new();
+    let mut sources = SourceMap::new();
+    for (index, source) in modules.iter().enumerate() {
+        let file = sources.add(format!("dep{index}.vow"), *source);
+        let lexed = tokenize(file, sources.file(file).text());
+        let parsed = parse(file, &lexed.tokens);
+        universe.add(&parsed.module);
+    }
+    universe
 }
 
 fn only(src: &str) -> (SourceMap, PropertyOutcome) {
@@ -106,13 +130,14 @@ fn an_effectful_function_gets_nothing() {
 
 #[test]
 fn a_parameter_the_generator_cannot_produce_stops_it() {
-    let (_, outcomes) = properties(
+    let (_, outcomes) = properties_in(
         "module a\n\n\
          use other.{Thing}\n\n\
          fn f(t: Thing) -> Int\n\
          \x20 ensures ok => result == 0,\n\
          { 0 }\n",
         PropertyConfig::default(),
+        &universe_of(&["module other\n\nrecord Thing { n: Int }\n"]),
     );
     assert!(outcomes.is_empty());
 }
@@ -305,7 +330,7 @@ fn the_counter_example_has_a_property_and_it_passes() {
     let file = sources.add("examples/counter.vow", source);
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
 
     let outcomes = run_properties(
         file,

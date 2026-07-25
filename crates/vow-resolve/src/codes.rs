@@ -22,3 +22,9 @@ pub const SHADOWED_DECLARATION: &str = "VOW3005";
 
 /// A qualified name whose container has no such member.
 pub const UNKNOWN_MEMBER: &str = "VOW3006";
+
+/// A `use` of a module that is not among the files being compiled.
+pub const UNKNOWN_MODULE: &str = "VOW3007";
+
+/// A `use` of a name the module does not declare.
+pub const UNKNOWN_EXPORT: &str = "VOW3008";

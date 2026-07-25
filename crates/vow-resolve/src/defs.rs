@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use vow_diagnostics::Span;
 
+use crate::exports::Export;
+
 /// Handle to a declaration.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct DefId(u32);
@@ -107,6 +109,12 @@ pub struct Resolutions {
     dots: HashMap<Span, Dot>,
     unresolved: HashSet<Span>,
     builtins: HashMap<String, DefId>,
+    /// What each `use`d name turned out to be in the module it came from.
+    ///
+    /// Absent when the module was not among the files being compiled, which
+    /// is already an error, so the rest of the pipeline treats it the way it
+    /// used to treat every import.
+    imports: HashMap<DefId, Export>,
 }
 
 impl Resolutions {
@@ -130,6 +138,15 @@ impl Resolutions {
 
     pub(crate) fn record_builtin(&mut self, name: &str, def: DefId) {
         self.builtins.insert(name.to_string(), def);
+    }
+
+    pub(crate) fn record_export(&mut self, def: DefId, export: Export) {
+        self.imports.insert(def, export);
+    }
+
+    /// What an imported name is, on the other side of the import.
+    pub fn import(&self, def: DefId) -> Option<&Export> {
+        self.imports.get(&def)
     }
 
     /// A name the language provides, such as `Console` or the `Io` effect.

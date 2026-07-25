@@ -9,7 +9,7 @@
 //! use vow_interp::run_tests;
 //! use vow_lexer::tokenize;
 //! use vow_parser::parse;
-//! use vow_resolve::resolve;
+//! use vow_resolve::{Universe, resolve};
 //!
 //! let source = "\
 //! module demo
@@ -25,7 +25,7 @@
 //! let file = sources.add("demo.vow", source);
 //! let lexed = tokenize(file, sources.file(file).text());
 //! let parsed = parse(file, &lexed.tokens);
-//! let resolved = resolve(file, &parsed.module);
+//! let resolved = resolve(file, &parsed.module, &Universe::new());
 //!
 //! let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
 //! assert_eq!(outcomes.len(), 1);

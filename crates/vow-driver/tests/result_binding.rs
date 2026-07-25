@@ -5,7 +5,7 @@ use vow_driver::check_text;
 use vow_interp::run_tests;
 use vow_lexer::tokenize;
 use vow_parser::parse;
-use vow_resolve::resolve;
+use vow_resolve::{Universe, resolve};
 
 fn check(src: &str) -> (SourceMap, vow_driver::Checked) {
     let mut sources = SourceMap::new();
@@ -29,7 +29,7 @@ fn run(src: &str) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
     let file = sources.add("test.vow", src);
     let lexed = tokenize(file, sources.file(file).text());
     let parsed = parse(file, &lexed.tokens);
-    let resolved = resolve(file, &parsed.module);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
     assert!(!resolved.has_errors(), "source should resolve cleanly");
     let outcomes = run_tests(file, &parsed.module, &resolved.resolutions);
     (sources, outcomes)

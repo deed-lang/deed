@@ -168,11 +168,12 @@ this whole design fails on ergonomics, exactly like its predecessors.
   which needs the row to be part of the closure's type, and that is where the type system
   starts getting big.
 - A `with` block discharges the effects of the handlers it names, and discharges everything
-  when a handler comes from a module that has not been loaded. The second half is coarse and
-  will narrow as cross module loading lands.
-- A row that names an effect from an unloaded module cannot be checked in either direction.
-  The compiler says so rather than reporting a clean check it never performed, which is the
-  right behaviour and still a hole.
+  when a handler comes from another module. The second half is coarse and will narrow when
+  an imported handler carries the effect it implements, which needs cross module types.
+- A row that names an effect from another module is now checked in one direction: the
+  operation has to exist, because an effect's operations are part of its declaration and
+  that much crosses a file boundary as syntax. Whether the row is tight is still not
+  checkable, because that needs to know what the body of a call into that module performs.
 - Can rows be inferred well enough that most functions carry none, and does that then
   undermine the review argument, which depends on the signature being complete?
 - How do effects interact with data structures. Does a `Map` holding closures need a row?
