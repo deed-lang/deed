@@ -25,6 +25,7 @@ use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
 use crate::codes;
+use crate::facts::{self, Facts, Range, Truth};
 use crate::surface::{PRELUDE_MODULE, SurfaceItem, World};
 use crate::ty::{FieldTy, Nominal, Obligation, Tier, Ty, Types, VariantTy};
 
@@ -53,6 +54,7 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         alias_targets: HashMap::new(),
         alias_stack: Vec::new(),
         returns: Vec::new(),
+        facts: Facts::new(),
     };
 
     checker.collect(module);
@@ -92,6 +94,12 @@ struct Checker<'a> {
     alias_stack: Vec<DefId>,
     /// Declared return type of the function being checked.
     returns: Vec<(Ty, Span)>,
+    /// What is known about the integers in scope, at the point being checked.
+    ///
+    /// This is the Proven tier. Without it, a refinement can only be
+    /// discharged against a literal, which is a small enough slice of the tier
+    /// that almost every refinement in real code became a runtime check.
+    facts: Facts,
 }
 
 impl<'a> Checker<'a> {
@@ -520,6 +528,33 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// The value inside `ok(x)` or `err(x)`, when the expression is one.
+    ///
+    /// Returned separately so blame lands on the value rather than on the
+    /// constructor around it, and so a refinement on the success type is
+    /// discharged against `x` rather than against a `Result` that has no
+    /// range.
+    fn result_parts<'e>(&self, expr: Option<&'e Expr>) -> (Option<&'e Expr>, Option<&'e Expr>) {
+        let Some(Expr::Call { callee, args, .. }) = expr else {
+            return (None, None);
+        };
+        let Some(def) = (match &**callee {
+            Expr::Ident(ident) => self.def_of(ident),
+            _ => None,
+        }) else {
+            return (None, None);
+        };
+        if self.resolutions.def(def).kind != DefKind::Builtin {
+            return (None, None);
+        }
+        let inner = args.first();
+        match self.resolutions.def(def).name.as_str() {
+            "ok" => (inner, None),
+            "err" => (None, inner),
+            _ => (None, None),
+        }
+    }
+
     // -- assignment --------------------------------------------------------
 
     /// Checks that `actual` may be used where `expected` was required.
@@ -538,12 +573,27 @@ impl<'a> Checker<'a> {
             return;
         }
 
-        // Narrowing into a refinement is the interesting direction.
+        // `ok(n)` where the success type is refined. Without this, a guard
+        // that establishes a refinement and then returns it fails to type
+        // check, which is the ordinary shape for establishing one at all.
+        if let (Ty::Result(a_ok, a_err), Ty::Result(e_ok, e_err)) = (actual, expected) {
+            let (ok_expr, err_expr) = self.result_parts(expr);
+            let ok_span = ok_expr.map(Expr::span).unwrap_or(span);
+            let err_span = err_expr.map(Expr::span).unwrap_or(span);
+            self.assign(a_ok, e_ok, ok_expr, ok_span, because.clone());
+            self.assign(a_err, e_err, err_expr, err_span, because);
+            return;
+        }
+
+        // Narrowing into a refinement is the interesting direction. The value
+        // may already be refined by something else: going sideways is widening
+        // out of one and back into the other, and the predicate that arrives is
+        // often enough to discharge the predicate that is wanted.
         if let Ty::Named(def) = expected
             && let Some(Nominal::Refinement { base, .. }) = self.types.nominal(*def)
         {
             let base = base.clone();
-            if actual == &base || actual.absorbs() {
+            if self.widen(actual) == base || actual.absorbs() {
                 self.discharge(*def, expr, span);
                 return;
             }
@@ -577,16 +627,83 @@ impl<'a> Checker<'a> {
     /// the Proven tier and honestly not much. What matters is that an
     /// obligation that cannot be proven is recorded and said out loud rather
     /// than quietly becoming a runtime check.
+    /// The range a definition's declared type admits, if it is refined.
+    ///
+    /// A parameter of type `Positive` is already known to be positive, and
+    /// making the author write `where n > 0` next to it would be asking them
+    /// to repeat the type in prose.
+    fn declared_range(&self, def: DefId) -> Range {
+        let Some(Ty::Named(refinement)) = self.def_types.get(&def) else {
+            return Range::ANY;
+        };
+        self.refinement_range(*refinement)
+    }
+
+    /// The range a refinement admits, when its predicate is simple enough.
+    fn refinement_range(&self, refinement: DefId) -> Range {
+        let Some(alias) = self.aliases.get(&refinement) else {
+            return Range::ANY;
+        };
+        match &alias.refinement {
+            Some(predicate) => facts::range_admitted_by(predicate),
+            None => Range::ANY,
+        }
+    }
+
+    /// Turns an identifier into what it refers to, for the fact machinery.
+    ///
+    /// Captures the resolution table rather than the checker, so the result
+    /// can be alive while the checker is being mutated.
+    fn resolver(&self) -> impl Fn(&Expr) -> Option<DefId> + use<'a> {
+        let resolutions = self.resolutions;
+        move |expr: &Expr| match expr {
+            Expr::Ident(ident) => resolutions.resolution(ident.span),
+            _ => None,
+        }
+    }
+
+    fn narrowed_by(&self, condition: &Expr, when_true: bool) -> Facts {
+        self.narrowed_from(&self.facts, condition, when_true)
+    }
+
+    fn narrowed_from(&self, base: &Facts, condition: &Expr, when_true: bool) -> Facts {
+        let resolve = self.resolver();
+        facts::narrowed(condition, base, &resolve, when_true)
+    }
+
+    fn range_of(&self, expr: &Expr) -> Range {
+        let resolve = self.resolver();
+        facts::range_of(expr, &self.facts, &resolve)
+    }
+
+    /// Whether the facts in scope settle a refinement predicate for `expr`.
+    fn proves(&self, predicate: &Expr, expr: Option<&Expr>) -> Truth {
+        let Some(expr) = expr else {
+            return Truth::Unknown;
+        };
+        let subject = self.range_of(expr);
+        let with_subject = self.facts.with_subject(subject);
+        let resolve = self.resolver();
+        facts::holds(predicate, &with_subject, &resolve)
+    }
+
+    /// Records the tier an obligation landed in, and says so when it is not
+    /// the one the author probably wanted.
+    ///
+    /// The Proven tier is interval reasoning: what is known about the integers
+    /// in scope, from the contract, from the types, and from the conditions
+    /// above this point. It cannot relate two variables to each other and it
+    /// cannot see through a call, which is written down in `facts.rs` and in
+    /// `design/02-syntax.md` rather than left to be discovered.
     fn discharge(&mut self, refinement: DefId, expr: Option<&Expr>, span: Span) {
         let predicate = self
             .aliases
             .get(&refinement)
             .and_then(|alias| alias.refinement.as_ref());
 
-        let value = expr.and_then(constant);
-        let outcome = match (predicate, value) {
-            (Some(predicate), Some(value)) => evaluate(predicate, value),
-            _ => None,
+        let outcome = match predicate {
+            Some(predicate) => self.proves(predicate, expr),
+            None => Truth::Unknown,
         };
 
         let name = self.types.name_of(refinement).to_string();
@@ -599,12 +716,12 @@ impl<'a> Checker<'a> {
             });
 
         match outcome {
-            Some(Constant::Bool(true)) => self.types.push_obligation(Obligation {
+            Truth::Always => self.types.push_obligation(Obligation {
                 span,
                 refinement,
                 tier: Tier::Proven,
             }),
-            Some(Constant::Bool(false)) => {
+            Truth::Never => {
                 let mut diagnostic = Diagnostic::error(
                     codes::VIOLATED_REFINEMENT,
                     self.file,
@@ -645,7 +762,7 @@ impl<'a> Checker<'a> {
 
     // -- walking -----------------------------------------------------------
 
-    fn check_module(&mut self, module: &Module) {
+    fn check_module(&mut self, module: &'a Module) {
         for item in &module.items {
             match item {
                 Item::Function(function) => self.check_fn(function),
@@ -668,7 +785,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_fn(&mut self, function: &FnDecl) {
+    fn check_fn(&mut self, function: &'a FnDecl) {
         // Reuse the signature computed during collection where there is one.
         // Lowering the same annotation twice would report anything wrong with
         // it twice, which is a cascade from a single mistake.
@@ -703,6 +820,19 @@ impl<'a> Checker<'a> {
             }
         }
 
+        // A fresh set of facts per function. Nothing a caller knows survives
+        // the call, because the body is checked against its own contract and
+        // nothing else, which is P1.
+        self.facts = Facts::new();
+        for param in &function.sig.params {
+            if let Some(def) = self.def_of(&param.name) {
+                let range = self.declared_range(def);
+                if !range.is_any() {
+                    self.facts.set(def, range);
+                }
+            }
+        }
+
         let ret_span = function
             .sig
             .ret
@@ -713,6 +843,13 @@ impl<'a> Checker<'a> {
         for requirement in &function.contract.requires {
             let ty = self.infer(requirement);
             self.assign(&ty, &Ty::Bool, Some(requirement), requirement.span(), None);
+        }
+
+        // A `where` clause is a fact about the body, not just a check on the
+        // caller. This is where most of the Proven tier comes from: the
+        // precondition usually says exactly what a refinement below it needs.
+        for requirement in &function.contract.requires {
+            self.facts = self.narrowed_by(requirement, true);
         }
         for obligation in &function.contract.ensures {
             // `result` is bound per obligation and its type depends on which
@@ -740,22 +877,12 @@ impl<'a> Checker<'a> {
         }
 
         self.returns.push((ret.clone(), ret_span));
-        let body = self.check_block(&function.body);
-        self.returns.pop();
-
-        let tail_span = function
-            .body
-            .tail
-            .as_ref()
-            .map(|tail| tail.span())
-            .unwrap_or(function.body.span);
-        self.assign(
-            &body,
+        self.check_block_against(
+            &function.body,
             &ret,
-            function.body.tail.as_deref(),
-            tail_span,
             Some((ret_span, "the declared return type".to_string())),
         );
+        self.returns.pop();
     }
 
     /// The definition `result` refers to inside an obligation, if it is used.
@@ -783,7 +910,155 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_block(&mut self, block: &Block) -> Ty {
+    /// Checks an expression against the type that was wanted.
+    ///
+    /// Local bidirectional checking, and the reason it exists is refinements.
+    /// Inferring a body and then comparing the answer against the return type
+    /// loses where each part of it was written, so the branch that established
+    /// a fact is no longer the branch being checked and every refinement in a
+    /// conditional falls back to a runtime guard.
+    fn check_against(
+        &mut self,
+        expr: &'a Expr,
+        expected: &Ty,
+        because: Option<(Span, String)>,
+    ) -> Ty {
+        match expr {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => self.check_if(
+                condition,
+                then_branch,
+                else_branch.as_deref(),
+                Some((expected.clone(), because)),
+            ),
+            Expr::Block(block) => self.check_block_against(block, expected, because),
+            other => {
+                let ty = self.infer(other);
+                self.assign(&ty, expected, Some(other), other.span(), because);
+                ty
+            }
+        }
+    }
+
+    fn check_block_against(
+        &mut self,
+        block: &'a Block,
+        expected: &Ty,
+        because: Option<(Span, String)>,
+    ) -> Ty {
+        let mut diverges = false;
+        for stmt in &block.stmts {
+            self.check_stmt(stmt);
+            if matches!(stmt, Stmt::Return { .. }) {
+                diverges = true;
+            }
+        }
+
+        let ty = match &block.tail {
+            Some(tail) => self.check_against(tail, expected, because),
+            None if diverges => Ty::Never,
+            None => {
+                self.assign(&Ty::Unit, expected, None, block.span, because);
+                Ty::Unit
+            }
+        };
+        self.types.record_expr(block.span, ty.clone());
+        ty
+    }
+
+    /// An `if`, with each branch checked knowing what its condition settled.
+    ///
+    /// `wanted` is the type the whole expression has to produce, when there is
+    /// one. Without it the branches are only compared against each other,
+    /// which is enough for types and not enough for refinements.
+    fn check_if(
+        &mut self,
+        condition: &'a Expr,
+        then_branch: &'a Block,
+        else_branch: Option<&'a Expr>,
+        wanted: Option<(Ty, Option<(Span, String)>)>,
+    ) -> Ty {
+        let condition_ty = self.infer(condition);
+        self.assign(
+            &condition_ty,
+            &Ty::Bool,
+            Some(condition),
+            condition.span(),
+            None,
+        );
+
+        // This is the other half of the Proven tier. A guard above a value is
+        // the ordinary way anyone establishes a refinement, and it only counts
+        // if the branch is checked while the fact is still in scope.
+        let outer = self.facts.clone();
+        self.facts = self.narrowed_by(condition, true);
+
+        let then_ty = match &wanted {
+            Some((expected, because)) => {
+                self.check_block_against(then_branch, expected, because.clone())
+            }
+            None => self.check_block(then_branch),
+        };
+        let after_then = self.facts.clone();
+
+        match else_branch {
+            Some(else_branch) => {
+                self.facts = self.narrowed_from(&outer, condition, false);
+                let else_ty = match &wanted {
+                    Some((expected, because)) => {
+                        self.check_against(else_branch, expected, because.clone())
+                    }
+                    None => self.infer(else_branch),
+                };
+                let after_else = self.facts.clone();
+
+                // Past the `if`, only what both branches agree on survives,
+                // unless one of them cannot fall through.
+                self.facts = match (then_ty.absorbs(), else_ty.absorbs()) {
+                    (true, false) => after_else,
+                    (false, true) => after_then,
+                    _ => after_then.join(&after_else),
+                };
+
+                if then_ty.absorbs() {
+                    else_ty
+                } else {
+                    // Already checked against what was wanted, so comparing
+                    // the branches again would report one mistake twice.
+                    if wanted.is_none() {
+                        self.assign(
+                            &else_ty,
+                            &then_ty,
+                            Some(else_branch),
+                            else_branch.span(),
+                            Some((then_branch.span, "the other branch".to_string())),
+                        );
+                    }
+                    then_ty
+                }
+            }
+            None => {
+                // A guard that leaves settles the condition for everything
+                // below it: after `if n <= 0 { return .. }` the rest of the
+                // body knows `n` is at least one.
+                self.facts = if then_ty.absorbs() {
+                    self.narrowed_from(&outer, condition, false)
+                } else {
+                    outer.clone()
+                };
+                if wanted.is_none() {
+                    self.assign(&then_ty, &Ty::Unit, None, then_branch.span, None);
+                }
+                Ty::Unit
+            }
+        }
+    }
+
+    fn check_block(&mut self, block: &'a Block) -> Ty {
         // A `return` anywhere at this level means the end of the block is not
         // reachable. Coarse, and enough to type a body that ends in `return`.
         let mut diverges = false;
@@ -803,7 +1078,7 @@ impl<'a> Checker<'a> {
         ty
     }
 
-    fn check_stmt(&mut self, stmt: &Stmt) {
+    fn check_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
             Stmt::Let {
                 pattern, ty, init, ..
@@ -889,13 +1164,13 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn infer(&mut self, expr: &Expr) -> Ty {
+    fn infer(&mut self, expr: &'a Expr) -> Ty {
         let ty = self.infer_inner(expr);
         self.types.record_expr(expr.span(), ty.clone());
         ty
     }
 
-    fn infer_inner(&mut self, expr: &Expr) -> Ty {
+    fn infer_inner(&mut self, expr: &'a Expr) -> Ty {
         match expr {
             Expr::Int { .. } => Ty::Int,
             Expr::Str { .. } => Ty::Str,
@@ -1005,39 +1280,7 @@ impl<'a> Checker<'a> {
                 then_branch,
                 else_branch,
                 ..
-            } => {
-                let condition_ty = self.infer(condition);
-                self.assign(
-                    &condition_ty,
-                    &Ty::Bool,
-                    Some(condition),
-                    condition.span(),
-                    None,
-                );
-
-                let then_ty = self.check_block(then_branch);
-                match else_branch {
-                    Some(else_branch) => {
-                        let else_ty = self.infer(else_branch);
-                        if then_ty.absorbs() {
-                            else_ty
-                        } else {
-                            self.assign(
-                                &else_ty,
-                                &then_ty,
-                                Some(else_branch),
-                                else_branch.span(),
-                                Some((then_branch.span, "the other branch".to_string())),
-                            );
-                            then_ty
-                        }
-                    }
-                    None => {
-                        self.assign(&then_ty, &Ty::Unit, None, then_branch.span, None);
-                        Ty::Unit
-                    }
-                }
-            }
+            } => self.check_if(condition, then_branch, else_branch.as_deref(), None),
 
             Expr::Match {
                 scrutinee,
@@ -1252,7 +1495,7 @@ impl<'a> Checker<'a> {
         Ty::Unknown
     }
 
-    fn infer_call(&mut self, callee: &Expr, args: &[Expr], span: Span) -> Ty {
+    fn infer_call(&mut self, callee: &'a Expr, args: &'a [Expr], span: Span) -> Ty {
         let callee_def = match callee {
             Expr::Ident(ident) => self.def_of(ident),
             Expr::Field { name, .. } => self.resolutions.resolution(name.span),
@@ -1385,7 +1628,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn infer_struct_lit(&mut self, path: &Expr, fields: &[FieldInit], span: Span) -> Ty {
+    fn infer_struct_lit(&mut self, path: &'a Expr, fields: &'a [FieldInit], span: Span) -> Ty {
         let ctor = match path {
             Expr::Ident(ident) => self.def_of(ident),
             Expr::Field { name, .. } => self.resolutions.resolution(name.span),
@@ -1464,7 +1707,7 @@ impl<'a> Checker<'a> {
     }
 
     /// A literal of a record or variant declared in another module.
-    fn imported_literal(&mut self, def: DefId, fields: &[FieldInit], span: Span) -> Option<Ty> {
+    fn imported_literal(&mut self, def: DefId, fields: &'a [FieldInit], span: Span) -> Option<Ty> {
         let module: Rc<str> = Rc::from(self.resolutions.import_module(def)?);
         let name = self.resolutions.def(def).name.clone();
 
@@ -1498,7 +1741,7 @@ impl<'a> Checker<'a> {
     fn check_literal_fields(
         &mut self,
         declared: &[FieldTy],
-        fields: &[FieldInit],
+        fields: &'a [FieldInit],
         span: Span,
         what: &str,
     ) {
@@ -1575,7 +1818,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn infer_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], span: Span) -> Ty {
+    fn infer_match(&mut self, scrutinee: &'a Expr, arms: &'a [MatchArm], span: Span) -> Ty {
         let scrutinee_ty = self.infer(scrutinee);
 
         let mut result: Option<Ty> = None;
@@ -2066,83 +2309,6 @@ fn list(items: &[&str]) -> String {
             let rest: Vec<String> = rest.iter().map(|item| format!("`{item}`")).collect();
             format!("{} and `{last}`", rest.join(", "))
         }
-    }
-}
-
-// -- constant evaluation ---------------------------------------------------
-
-/// The sliver of evaluation the compiler can do at check time.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Constant {
-    Int(i64),
-    Bool(bool),
-}
-
-fn constant(expr: &Expr) -> Option<Constant> {
-    match expr {
-        Expr::Int { value, .. } => Some(Constant::Int(*value)),
-        Expr::Bool { value, .. } => Some(Constant::Bool(*value)),
-        Expr::Unary {
-            op: UnaryOp::Neg,
-            operand,
-            ..
-        } => match constant(operand)? {
-            Constant::Int(value) => value.checked_neg().map(Constant::Int),
-            Constant::Bool(_) => None,
-        },
-        _ => None,
-    }
-}
-
-/// Evaluates a refinement predicate with `value` bound.
-///
-/// Returns `None` for anything it cannot decide, which is most things. That is
-/// the honest answer and the caller treats it as such.
-fn evaluate(predicate: &Expr, value: Constant) -> Option<Constant> {
-    match predicate {
-        Expr::Int { .. } | Expr::Bool { .. } => constant(predicate),
-        Expr::Ident(ident) if ident.name == "value" => Some(value),
-        Expr::Unary { op, operand, .. } => match (op, evaluate(operand, value)?) {
-            (UnaryOp::Neg, Constant::Int(v)) => v.checked_neg().map(Constant::Int),
-            (UnaryOp::Not, Constant::Bool(v)) => Some(Constant::Bool(!v)),
-            _ => None,
-        },
-        Expr::Binary { op, lhs, rhs, .. } => {
-            let left = evaluate(lhs, value)?;
-            let right = evaluate(rhs, value)?;
-            apply(*op, left, right)
-        }
-        _ => None,
-    }
-}
-
-fn apply(op: BinaryOp, left: Constant, right: Constant) -> Option<Constant> {
-    use BinaryOp::*;
-    use Constant::*;
-
-    match (left, right) {
-        (Int(a), Int(b)) => match op {
-            Add => a.checked_add(b).map(Int),
-            Sub => a.checked_sub(b).map(Int),
-            Mul => a.checked_mul(b).map(Int),
-            Div => a.checked_div(b).map(Int),
-            Rem => a.checked_rem(b).map(Int),
-            Lt => Some(Bool(a < b)),
-            Le => Some(Bool(a <= b)),
-            Gt => Some(Bool(a > b)),
-            Ge => Some(Bool(a >= b)),
-            Eq => Some(Bool(a == b)),
-            Ne => Some(Bool(a != b)),
-            And | Or => None,
-        },
-        (Bool(a), Bool(b)) => match op {
-            And => Some(Bool(a && b)),
-            Or => Some(Bool(a || b)),
-            Eq => Some(Bool(a == b)),
-            Ne => Some(Bool(a != b)),
-            _ => None,
-        },
-        _ => None,
     }
 }
 

@@ -21,9 +21,11 @@
 
 pub mod check;
 pub mod codes;
+pub mod facts;
 pub mod surface;
 pub mod ty;
 
 pub use check::{Checked, check};
+pub use facts::{Facts, Range, Truth};
 pub use surface::{PRELUDE_MODULE, Surface, SurfaceItem, SurfaceVariant, World, surface};
 pub use ty::{FieldTy, Nominal, Obligation, Tier, Ty, Types, VariantTy};

@@ -137,10 +137,54 @@ always visible:
 runtime check would be the single most dishonest thing this language could do, so it does
 not happen quietly.
 
-All three tiers exist. `Proven` holds constant expressions and nothing else, which is a thin
-slice of what it should eventually cover. `Tested` covers pure functions whose parameters
-can be generated: `vow test` runs a hundred generated inputs against the contract and shrinks
-any counterexample it finds. Everything else is `Guarded`, checked on every call.
+All three tiers exist. `Tested` covers pure functions whose parameters can be generated:
+`vow test` runs a hundred generated inputs against the contract and shrinks any
+counterexample it finds. Everything else is `Guarded`, checked on every call.
+
+### What `Proven` can decide
+
+Interval reasoning, and nothing more. Each integer in scope has a known range, and a
+refinement is discharged by evaluating its predicate over that range rather than over a
+value. Ranges come from the things that state one:
+
+- a `where` clause, so `n > 0` makes `n` at least one for the whole body
+- a parameter already of a refined type, so a `Positive` parameter needs no `where` clause
+  repeating the type in prose
+- the condition of an `if`, narrowed one way in the then branch and the other way in the else
+- a guard that leaves, so after `if n <= 0 { return err(..) }` the rest of the body knows
+
+A refined value can also reach a different refinement over the same base. `Positive` widens to
+`Int` and narrows back into `NonNegative`, and the predicate that arrives is usually enough to
+discharge the predicate that is wanted. The narrowing is an obligation like any other, so the
+direction that does not follow is `Guarded` rather than rejected.
+
+That last group is what made this worth building. Before it, `Proven` held constant
+expressions and nothing else, so a refinement in real code was a runtime check with a
+paragraph of ceremony around it, and the argument for having refinements at all is that they
+replace checks rather than decorate them.
+
+The branches are checked while their facts are still in scope, which is the reason the
+checker pushes an expected type down through an `if` rather than inferring the whole thing
+and comparing at the end. That is local bidirectional checking and it exists for exactly this.
+
+### What `Proven` cannot decide
+
+Every one of these is `Guarded`, with a warning, never a wrong answer.
+
+- **A relationship between two names.** An interval cannot hold `a < b`, so a `where
+  low < high` proves nothing about `high - low`. This is the largest limitation and the
+  first one anyone will hit.
+- **Arithmetic that could overflow.** `n + 1` where `n` is `Positive` is not provably
+  positive, because `n` could be the largest integer there is. That is the reasoning working
+  rather than a gap in it, and the runtime agrees: the sum has no answer.
+- **The result of a call.** A function's `ensures` clause is not consulted at the call site,
+  so a call returns an unknown range however carefully it was specified.
+- **Anything that is not an integer.** No `String`, no record field, no variant.
+- **Division and remainder.** The sign rules around zero and around the smallest integer are
+  fiddly enough that getting them wrong is worse than not trying.
+
+A solver would decide most of these and would be a hard dependency at check time, which P9
+has a budget against. Whether that trade is right is an open question, not a settled one.
 
 Generation discards inputs that violate a `where` clause rather than reporting them, since a
 bad input makes the generator a bad caller and the runtime already says so. If too many get
