@@ -151,9 +151,21 @@ fn parse_amount(input: String) -> Result<Money, ParseError> {
 call fails. It is an error to use it on something that is not a `Result`, or inside a
 function that does not return one.
 
-`Result` has no methods. There is no `unwrap`, and there is no pattern for matching on it
-yet, so the only thing you can do with one is compare it or propagate it. That is a gap, and
-it is listed below rather than hidden.
+A `Result` is taken apart by matching on it:
+
+```vow
+match small(n) {
+    ok(value) => value,
+    err(TooBig { limit }) => limit,
+    err(Empty) => 0,
+}
+```
+
+Both cases need an arm and a wildcard is rejected, exactly as for a `choice`, so a failure
+cannot be swallowed by accident.
+
+There is no `unwrap`. A language whose whole argument is that failure should be visible in
+the signature has no business adding a way to ignore it.
 
 Error types are `choice`s, matching is exhaustive, and adding a variant breaks every caller
 that has to care, on purpose.
@@ -162,17 +174,21 @@ that has to care, on purpose.
 
 ```vow
 match result {
-    Ok(receipt) => log(receipt.id),
-    Err(InsufficientFunds { available }) => notify(available),
-    Err(AccountClosed { account }) => escalate(account),
-    Err(LimitExceeded) => retry_later(),
+    ok(receipt) => log(receipt.id),
+    err(InsufficientFunds { available }) => notify(available),
+    err(AccountClosed { account }) => escalate(account),
+    err(LimitExceeded) => retry_later(),
 }
 ```
 
-Exhaustive. No fallthrough, and no catch-all arm when the scrutinee is a `choice`. A
-wildcard there would mean adding a variant stops being a compile error, which is the entire
-value of having variants. Where the cases cannot be enumerated, such as matching an `Int`, a
-wildcard is fine and necessary.
+Exhaustive. No fallthrough, and no catch-all arm when the scrutinee is a `choice` or a
+`Result`. A wildcard there would mean adding a variant stops being a compile error, which is
+the entire value of having variants. Where the cases cannot be enumerated, such as matching
+an `Int`, a wildcard is fine and necessary.
+
+`ok(x)` and `err(e)` are the only patterns that carry a value positionally. Variants have
+named fields, so they are matched as `Variant { field }`, and `Variant(x)` is an error
+rather than a pattern that can never match.
 
 ## Non-termination is an effect
 
@@ -339,9 +355,6 @@ yet, so that bill has not arrived.
 
 ## Open questions
 
-- There is no way to take a `Result` apart. No `unwrap`, and no `ok(x)` or `err(e)` pattern
-  for `match`. Comparing the whole value works and propagating with `?` works, and that is
-  not enough for real code.
 - Ordering operators accept any two operands of the same type, including ones where ordering
   is meaningless. This needs a trait, or a fixed set of orderable types, and has neither.
 - Refinements have no conversion form, so the only values that can enter a refined type are

@@ -974,12 +974,35 @@ impl<'a> Interp<'a> {
                 }
                 _ => false,
             },
-            Pattern::Tuple { .. } | Pattern::Error(_) => false,
+            Pattern::Tuple { path, .. } => match value {
+                Value::Result { ok, .. } => match self.builtin_name(path) {
+                    Some(name) => (name == "ok") == *ok,
+                    None => false,
+                },
+                _ => false,
+            },
+            Pattern::Error(_) => false,
         }
+    }
+
+    /// The prelude name a pattern head refers to, if it is one.
+    fn builtin_name(&self, path: &[Ident]) -> Option<String> {
+        let last = path.last()?;
+        let def = self.resolutions.resolution(last.span)?;
+        (self.kind_of(def) == DefKind::Builtin).then(|| self.resolutions.def(def).name.clone())
     }
 
     fn bind(&mut self, value: &Value, pattern: &Pattern) {
         match pattern {
+            Pattern::Tuple { elements, .. } => {
+                let Value::Result { value: inner, .. } = value else {
+                    return;
+                };
+                let inner = (**inner).clone();
+                for element in elements {
+                    self.bind(&inner, element);
+                }
+            }
             Pattern::Path { segments, .. } => {
                 if let Some(only) = segments.first()
                     && segments.len() == 1

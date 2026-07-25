@@ -102,6 +102,23 @@ fn bump_within_then_force(by: Positive, limit: Int) -> Result<Int, CounterError>
     ok(Counter.value())
 }
 
+// Or handle the failure here. Both cases need an arm, and a wildcard is
+// rejected, so the failure case cannot be swallowed by accident.
+//
+// The field is bound as `reached` rather than `limit` because `limit` is
+// already a parameter and Vow does not allow shadowing. The first version of
+// this function was rejected for exactly that.
+fn bump_or_limit(by: Positive, limit: Int) -> Int
+  uses
+    Counter.bump,
+    Counter.value,
+{
+    match bump_within(by, limit) {
+        ok(count) => count,
+        err(OverLimit { limit: reached }) => reached,
+    }
+}
+
 test "bumping twice adds twice" {
     with InMemory { count: 0 } {
         assert bump_twice(5) == 10
@@ -148,6 +165,19 @@ test "the question mark stops the rest of the body" {
     with InMemory { count: 100 } {
         assert bump_within_then_force(1, 100) == err(OverLimit { limit: 100 })
         // The unconditional bump after the `?` never ran.
+        assert Counter.value() == 100
+    }
+}
+
+test "a match can handle the failure instead of propagating it" {
+    with InMemory { count: 0 } {
+        assert bump_or_limit(5, 100) == 5
+    }
+}
+
+test "and the failing arm gets the error it was given" {
+    with InMemory { count: 100 } {
+        assert bump_or_limit(5, 100) == 100
         assert Counter.value() == 100
     }
 }
