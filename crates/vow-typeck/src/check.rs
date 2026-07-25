@@ -25,7 +25,7 @@ use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
 
 use crate::codes;
-use crate::facts::{self, Facts, Guarantee, Range, Truth};
+use crate::facts::{self, Facts, Guarantee, Promise, Range, Truth};
 use crate::surface::{PRELUDE_MODULE, SurfaceItem, World};
 use crate::ty::{FieldTy, Nominal, Obligation, Tier, Ty, Types, VariantTy};
 
@@ -70,6 +70,19 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
 struct ParamTy {
     ty: Ty,
     span: Span,
+}
+
+/// What is known about a value nothing in the source names.
+///
+/// There is one such value: the number inside the `ok` of a `Result` that came
+/// back from a call. No expression stands for it, so what it is worth and where
+/// it lives have to travel next to the `Result` that contains it.
+#[derive(Clone, Copy, Default)]
+struct Carried {
+    /// The range a promise said it lands in.
+    range: Option<Range>,
+    /// Whether it is one level inside the expression being checked.
+    inside_ok: bool,
 }
 
 #[derive(Clone)]
@@ -621,6 +634,24 @@ impl<'a> Checker<'a> {
         span: Span,
         because: Option<(Span, String)>,
     ) {
+        self.assign_carrying(actual, expected, expr, Carried::default(), span, because);
+    }
+
+    /// The same, for a value that nothing in the source names.
+    ///
+    /// The case this exists for is the number inside the `ok` of a call that
+    /// can fail: the expression at hand is the `Result`, the promise was about
+    /// the payload, and without this there is nowhere to put the promise on the
+    /// way past and no way to tell the runtime what to check.
+    fn assign_carrying(
+        &mut self,
+        actual: &Ty,
+        expected: &Ty,
+        expr: Option<&Expr>,
+        carried: Carried,
+        span: Span,
+        because: Option<(Span, String)>,
+    ) {
         if self.compatible(actual, expected) {
             return;
         }
@@ -632,7 +663,20 @@ impl<'a> Checker<'a> {
             let (ok_expr, err_expr) = self.result_parts(expr);
             let ok_span = ok_expr.map(Expr::span).unwrap_or(span);
             let err_span = err_expr.map(Expr::span).unwrap_or(span);
-            self.assign(a_ok, e_ok, ok_expr, ok_span, because.clone());
+
+            // A `Result` that came back from a call rather than from an `ok`
+            // written here. Nothing names the payload, so its range is what
+            // goes down instead of an expression, and the obligation has to
+            // say that it is one level inside what it points at.
+            let payload = match (ok_expr, expr) {
+                (None, Some(expr)) => Carried {
+                    range: Some(self.ok_range_of(expr)),
+                    inside_ok: true,
+                },
+                _ => Carried::default(),
+            };
+
+            self.assign_carrying(a_ok, e_ok, ok_expr, payload, ok_span, because.clone());
             self.assign(a_err, e_err, err_expr, err_span, because);
             return;
         }
@@ -646,7 +690,11 @@ impl<'a> Checker<'a> {
         {
             let base = base.clone();
             if self.widen(actual) == base || actual.absorbs() {
-                self.discharge(*def, expr, span);
+                let subject = match expr {
+                    Some(expr) => Some(self.range_of(expr)),
+                    None => carried.range,
+                };
+                self.discharge(*def, subject, span, carried.inside_ok);
                 return;
             }
         }
@@ -728,18 +776,28 @@ impl<'a> Checker<'a> {
     /// so it is also the one place a broken contract could launder itself into
     /// a proof somewhere else. That is why it reads what the callee declared
     /// and never what its body happens to do.
-    fn call_guarantee(&self, callee: &Expr) -> Guarantee {
+    ///
+    /// A callee that can fail promises things about the number inside the
+    /// `ok`, and the caller is holding the `Result`, so which of the two the
+    /// promise is about is decided here and read back where the payload is
+    /// taken out.
+    fn call_promise(&self, callee: &Expr) -> Promise {
         let def = match callee {
             Expr::Ident(ident) => self.def_of(ident),
             Expr::Field { name, .. } => self.resolutions.resolution(name.span),
             _ => None,
         };
         let Some(def) = def else {
-            return Guarantee::any();
+            return Promise::any();
+        };
+
+        let promise = |ret: &Ty, guarantee: Guarantee| match ret {
+            Ty::Result(_, _) => Promise::ok(guarantee),
+            _ => Promise::value(guarantee),
         };
 
         if let Some(signature) = self.signatures.get(&def) {
-            return signature.guarantee.clone();
+            return promise(&signature.ret, signature.guarantee.clone());
         }
 
         // An imported function. Its refinement is opaque out here, which is
@@ -747,11 +805,11 @@ impl<'a> Checker<'a> {
         // differences say what the caller needs without exporting how the
         // callee decided any of it.
         let Some(module) = self.resolutions.import_module(def) else {
-            return Guarantee::any();
+            return Promise::any();
         };
         match self.world.get(module, &self.resolutions.def(def).name) {
-            Some(SurfaceItem::Function { guarantee, .. }) => guarantee.clone(),
-            _ => Guarantee::any(),
+            Some(SurfaceItem::Function { ret, guarantee, .. }) => promise(ret, guarantee.clone()),
+            _ => Promise::any(),
         }
     }
 
@@ -760,9 +818,9 @@ impl<'a> Checker<'a> {
         &self,
     ) -> (
         impl Fn(&Expr) -> Option<DefId> + use<'a>,
-        impl Fn(&Expr) -> Guarantee + '_,
+        impl Fn(&Expr) -> Promise + '_,
     ) {
-        (self.resolver(), |callee: &Expr| self.call_guarantee(callee))
+        (self.resolver(), |callee: &Expr| self.call_promise(callee))
     }
 
     fn narrowed_by(&self, condition: &Expr, when_true: bool) -> Facts {
@@ -787,12 +845,25 @@ impl<'a> Checker<'a> {
         facts::range_of(expr, &self.facts, &env)
     }
 
-    /// Whether the facts in scope settle a refinement predicate for `expr`.
-    fn proves(&self, predicate: &Expr, expr: Option<&Expr>) -> Truth {
-        let Some(expr) = expr else {
+    /// The range the value inside the `ok` of `expr` lands in.
+    fn ok_range_of(&self, expr: &Expr) -> Range {
+        let (def_of, call) = self.env();
+        let env = facts::Env {
+            def_of: &def_of,
+            call: &call,
+        };
+        facts::ok_range_of(expr, &self.facts, &env)
+    }
+
+    /// Whether the facts in scope settle a refinement predicate for a value.
+    ///
+    /// The value is a range rather than an expression, because the interesting
+    /// case is the one where nothing in the source names it: the number inside
+    /// the `ok` of a call that can fail.
+    fn proves(&self, predicate: &Expr, subject: Option<Range>) -> Truth {
+        let Some(subject) = subject else {
             return Truth::Unknown;
         };
-        let subject = self.range_of(expr);
         let with_subject = self.facts.with_subject(subject);
         let (def_of, call) = self.env();
         let env = facts::Env {
@@ -812,14 +883,25 @@ impl<'a> Checker<'a> {
     /// subtracting, and it cannot see through a call, which is written down in
     /// `facts.rs` and in `design/02-syntax.md` rather than left to be
     /// discovered.
-    fn discharge(&mut self, refinement: DefId, expr: Option<&Expr>, span: Span) {
+    ///
+    /// `inside_ok` says the value is the number inside the `ok` of whatever is
+    /// at `span`, which happens when a `Result` came back from a call and
+    /// nothing here names its payload. The runtime has to know, or it runs the
+    /// predicate against the `Result`.
+    fn discharge(
+        &mut self,
+        refinement: DefId,
+        subject: Option<Range>,
+        span: Span,
+        inside_ok: bool,
+    ) {
         let predicate = self
             .aliases
             .get(&refinement)
             .and_then(|alias| alias.refinement.as_ref());
 
         let outcome = match predicate {
-            Some(predicate) => self.proves(predicate, expr),
+            Some(predicate) => self.proves(predicate, subject),
             None => Truth::Unknown,
         };
 
@@ -837,6 +919,7 @@ impl<'a> Checker<'a> {
                 span,
                 refinement,
                 tier: Tier::Proven,
+                inside_ok,
             }),
             Truth::Never => {
                 let mut diagnostic = Diagnostic::error(
@@ -872,6 +955,7 @@ impl<'a> Checker<'a> {
                     span,
                     refinement,
                     tier: Tier::Guarded,
+                    inside_ok,
                 });
             }
         }
@@ -1146,6 +1230,11 @@ impl<'a> Checker<'a> {
                 else_branch.as_deref(),
                 Some((expected.clone(), because)),
             ),
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => self.check_match(scrutinee, arms, *span, Some((expected.clone(), because))),
             Expr::Block(block) => self.check_block_against(block, expected, because),
             other => {
                 let ty = self.infer(other);
@@ -2148,28 +2237,81 @@ impl<'a> Checker<'a> {
     }
 
     fn infer_match(&mut self, scrutinee: &'a Expr, arms: &'a [MatchArm], span: Span) -> Ty {
-        let scrutinee_ty = self.infer(scrutinee);
+        self.check_match(scrutinee, arms, span, None)
+    }
 
+    /// A `match`, with each arm checked knowing what its pattern bound.
+    ///
+    /// `wanted` is the type the whole expression has to produce, when there is
+    /// one, and it is pushed into the arms for the same reason it is pushed
+    /// into the branches of an `if`: an arm compared against the answer after
+    /// the fact is no longer the arm being checked, and every refinement
+    /// underneath it falls back to a runtime guard.
+    fn check_match(
+        &mut self,
+        scrutinee: &'a Expr,
+        arms: &'a [MatchArm],
+        span: Span,
+        wanted: Option<(Ty, Option<(Span, String)>)>,
+    ) -> Ty {
+        let scrutinee_ty = self.infer(scrutinee);
+        let payload = self.ok_range_of(scrutinee);
+
+        let outer = self.facts.clone();
+        let mut after: Option<Facts> = None;
         let mut result: Option<Ty> = None;
+
         for arm in arms {
+            // One arm's bindings are not another's, and nor are the facts
+            // about them.
+            self.facts = outer.clone();
             self.bind_pattern(&arm.pattern, &scrutinee_ty);
-            let arm_ty = self.infer(&arm.body);
+
+            // `match f() { ok(n) => ..` is the other way the payload of a
+            // fallible call comes out, and the name bound here is the only
+            // thing that ever stands for it.
+            if let Some(def) = self.ok_binding(&arm.pattern) {
+                let range = payload.meet(self.declared_range(def));
+                self.facts.set(def, range);
+            }
+
+            let arm_ty = match &wanted {
+                Some((expected, because)) => {
+                    self.check_against(&arm.body, expected, because.clone())
+                }
+                None => self.infer(&arm.body),
+            };
+
+            // Only an arm that can fall through says anything about what is
+            // known past the `match`.
+            if !arm_ty.absorbs() {
+                after = Some(match after {
+                    Some(existing) => existing.join(&self.facts),
+                    None => self.facts.clone(),
+                });
+            }
+
             match &result {
                 None => result = Some(arm_ty),
                 Some(expected) if expected.absorbs() => result = Some(arm_ty),
                 Some(expected) => {
-                    let expected = expected.clone();
-                    self.assign(
-                        &arm_ty,
-                        &expected,
-                        Some(&arm.body),
-                        arm.body.span(),
-                        Some((arms[0].span, "the first arm".to_string())),
-                    );
+                    // Already checked against what was wanted, so comparing the
+                    // arms again would report one mistake twice.
+                    if wanted.is_none() {
+                        let expected = expected.clone();
+                        self.assign(
+                            &arm_ty,
+                            &expected,
+                            Some(&arm.body),
+                            arm.body.span(),
+                            Some((arms[0].span, "the first arm".to_string())),
+                        );
+                    }
                 }
             }
         }
 
+        self.facts = after.unwrap_or(outer);
         self.check_exhaustive(&scrutinee_ty, arms, span);
         result.unwrap_or(Ty::Never)
     }
@@ -2417,6 +2559,29 @@ impl<'a> Checker<'a> {
                 .with_note("a `Result` has two cases and both need an arm"),
             );
         }
+    }
+
+    /// The name an `ok(n)` pattern binds, when it binds exactly one.
+    fn ok_binding(&self, pattern: &Pattern) -> Option<DefId> {
+        let Pattern::Tuple { path, elements, .. } = pattern else {
+            return None;
+        };
+        let head = path.last()?;
+        let head_def = self.resolutions.resolution(head.span)?;
+        if self.resolutions.def(head_def).kind != DefKind::Builtin
+            || self.resolutions.def(head_def).name != "ok"
+        {
+            return None;
+        }
+
+        let [Pattern::Path { segments, .. }] = elements.as_slice() else {
+            return None;
+        };
+        let [only] = segments.as_slice() else {
+            return None;
+        };
+        let def = self.def_of(only)?;
+        (self.resolutions.def(def).kind == DefKind::Local).then_some(def)
     }
 
     fn bind_pattern(&mut self, pattern: &Pattern, ty: &Ty) {

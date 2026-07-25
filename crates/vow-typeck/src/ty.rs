@@ -126,6 +126,14 @@ pub struct Obligation {
     pub span: Span,
     pub refinement: DefId,
     pub tier: Tier,
+    /// Whether the value is the number inside the `ok` rather than the
+    /// expression itself.
+    ///
+    /// A `Result` that came back from a call has nothing naming its payload,
+    /// so the obligation lands on the whole expression and has to say that the
+    /// value it is about is one level in. Without this the runtime check ran
+    /// the predicate against the `Result`, which fails whatever is inside it.
+    pub inside_ok: bool,
 }
 
 /// Everything the type checker worked out.

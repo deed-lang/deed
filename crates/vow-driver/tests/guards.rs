@@ -53,7 +53,12 @@ fn expect_refused(src: &str) -> (SourceMap, Diagnostic) {
         .remove(0)
         .failure
         .expect("the guard should have refused the value");
-    assert_eq!(failure.code, codes::REFINEMENT_FAILED);
+    assert_eq!(
+        failure.code,
+        codes::REFINEMENT_FAILED,
+        "{}",
+        render_human(&sources, &failure)
+    );
     (sources, failure)
 }
 
@@ -289,6 +294,54 @@ fn a_refinement_over_a_string_is_guarded() {
     assert!(render_human(&sources, &failure).contains("NonEmpty"));
 }
 
+#[test]
+fn a_payload_that_came_back_from_a_call_is_guarded() {
+    // The `Result` was built somewhere else, so nothing here names the number
+    // inside it. The promise that would have proven it does not exist, and the
+    // guard has to.
+    let (sources, failure) = expect_refused(&format!(
+        "{POSITIVE}\
+         fn make(n: Int) -> Result<Int, String> {{ ok(n) }}\n\n\
+         fn narrowed(n: Int) -> Result<Positive, String> {{ make(n) }}\n\n\
+         test \"a Result from a call is a boundary too\" {{\n\
+         \x20 assert narrowed(0) == ok(1)\n\
+         }}\n"
+    ));
+    assert!(render_human(&sources, &failure).contains("0 does not satisfy `Positive`"));
+}
+
+#[test]
+fn a_payload_taken_out_by_a_question_mark_is_guarded() {
+    expect_refused(&format!(
+        "{POSITIVE}\
+         fn make(n: Int) -> Result<Int, String> {{ ok(n) }}\n\n\
+         fn narrowed(n: Int) -> Result<Int, String> {{\n\
+         \x20 let checked: Positive = make(n)?\n\
+         \x20 ok(checked)\n\
+         }}\n\n\
+         test \"unwrapping does not launder it\" {{\n\
+         \x20 assert narrowed(0) == ok(1)\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn a_payload_bound_by_an_ok_pattern_is_guarded() {
+    expect_refused(&format!(
+        "{POSITIVE}\
+         fn make(n: Int) -> Result<Int, String> {{ ok(n) }}\n\n\
+         fn narrowed(n: Int) -> Result<Positive, String> {{\n\
+         \x20 match make(n) {{\n\
+         \x20   ok(value) => ok(value),\n\
+         \x20   err(e) => err(e),\n\
+         \x20 }}\n\
+         }}\n\n\
+         test \"a pattern is a boundary too\" {{\n\
+         \x20 assert narrowed(0) == ok(1)\n\
+         }}\n"
+    ));
+}
+
 // -- a promise that is not kept ---------------------------------------------
 
 #[test]
@@ -338,6 +391,34 @@ fn a_value_that_satisfies_its_refinement_passes_quietly() {
          \x20 assert make(1) == 1\n\
          \x20 assert order(2).quantity == 2\n\
          \x20 assert wrapped(3) == ok(3)\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn a_payload_that_satisfies_its_refinement_passes_too() {
+    // The other half, and the half that was broken: the guard used to run the
+    // predicate against the `Result` rather than against the number inside it,
+    // so a value that was perfectly fine failed with "the interpreter cannot
+    // run `>` on a Result and an Int".
+    expect_pass(&format!(
+        "{POSITIVE}\
+         fn make(n: Int) -> Result<Int, String> {{ ok(n) }}\n\n\
+         fn narrowed(n: Int) -> Result<Positive, String> {{ make(n) }}\n\n\
+         test \"a good payload gets through\" {{\n\
+         \x20 assert narrowed(1) == ok(1)\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn an_err_is_not_checked_against_the_success_refinement() {
+    expect_pass(&format!(
+        "{POSITIVE}\
+         fn make(n: Int) -> Result<Int, String> {{ err(\"no\") }}\n\n\
+         fn narrowed(n: Int) -> Result<Positive, String> {{ make(n) }}\n\n\
+         test \"there is no number in an err\" {{\n\
+         \x20 assert narrowed(0) == err(\"no\")\n\
          }}\n"
     ));
 }

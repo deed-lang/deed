@@ -132,6 +132,22 @@ fn same(n: Int) -> Int
     n
 }
 
+// Proven through a `?`. A function that can fail promises things about the
+// number inside the `ok`, and the caller is holding the `Result`, so the two
+// only meet where the payload comes out. That is here, and at an `ok(..)`
+// pattern, and nowhere else.
+fn unwrapped() -> Result<Positive, String> {
+    let n = maybe_one()?
+    ok(n)
+}
+
+fn maybe_one() -> Result<Int, String>
+  ensures
+    ok  => result == 1,
+{
+    ok(1)
+}
+
 // Guarded. A promise that ties the result to an argument through anything but
 // adding and subtracting is not a difference, and there is nowhere to put it
 // short of a solver. A `Percent` squared is between nothing and ten thousand,
@@ -154,6 +170,7 @@ test "the proven ones still hold at runtime" {
     assert span(2, 5) == 3
     assert from_a_call() == 1
     assert echoed(7) == 7
+    assert unwrapped() == ok(1)
     assert order_from_either(0) == err("a quantity has to be positive")
 }
 
