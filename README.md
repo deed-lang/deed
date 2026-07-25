@@ -192,6 +192,14 @@ place a refined value can come into existence, each one handing the guard someth
 supposed to refuse. The test that should have caught this did exist, and it passed, because
 it only ever handed the guard values it accepts.
 
+Five of these have now had the same shape: something has no type, the unknown type agrees
+with everything, and checking quietly stops. So there is an invariant for it now. In a file
+that checks cleanly, no expression is unknown, because an unknown one is an expression nothing
+done with it was checked against. Written as a test and pointed at the examples, it found two
+more in the first run and a third once those were fixed: closure bodies, handler literals, and
+every call to an imported effect's operation. `crates/vow-driver/tests/fully_typed.rs` is
+where the next one gets found on purpose.
+
 `vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
 is not configurable long before anything enforced it, which meant the files were formatted
 the way they happened to have been typed. A test now asserts that every `.vow` file in the

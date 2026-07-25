@@ -447,6 +447,117 @@ fn an_imported_handler_operation_is_checked_against_those_types() {
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
 }
 
+#[test]
+fn a_handler_literal_is_checked_against_its_state() {
+    // `with InMemory { count: "hello" }` used to be accepted. The literal had
+    // no type at all, so the field values were never compared with anything.
+    let (sources, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: Int\n\n\
+         \x20 fn set(to) -> () {{\n    count = to\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    count\n  }}\n\
+         }}\n\n\
+         test \"installing it\" {{\n\
+         \x20 with InMemory {{ count: \"hello\" }} {{\n\
+         \x20   assert Counter.value() == 0\n\
+         \x20 }}\n\
+         }}\n"
+    ));
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    assert!(rendered(&sources, &checked.diagnostics).contains("found `String`"));
+}
+
+#[test]
+fn a_handler_literal_missing_state_says_which() {
+    let (sources, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: Int\n\
+         \x20 state limit: Int\n\n\
+         \x20 fn set(to) -> () {{\n    count = to\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    count + limit\n  }}\n\
+         }}\n\n\
+         test \"installing it\" {{\n\
+         \x20 with InMemory {{ count: 0 }} {{\n\
+         \x20   assert Counter.value() == 0\n\
+         \x20 }}\n\
+         }}\n"
+    ));
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::MISSING_FIELDS]);
+    assert!(rendered(&sources, &checked.diagnostics).contains("limit"));
+}
+
+#[test]
+fn a_handler_literal_from_another_module_is_checked_too() {
+    let (_, checked) = check_source_in(
+        "module a\n\n\
+         use other.{Counter, InMemory}\n\n\
+         test \"installing it\" {\n\
+         \x20 with InMemory { count: \"hello\" } {\n\
+         \x20   assert Counter.value() == 0\n\
+         \x20 }\n\
+         }\n",
+        &universe_of(&["module other\n\n\
+             effect Counter {\n    fn value() -> Int\n}\n\n\
+             handler InMemory implements Counter {\n\
+             \x20 state count: Int\n\n\
+             \x20 fn value() -> Int { count }\n\
+             }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+}
+
+#[test]
+fn a_call_to_an_imported_effect_operation_is_checked() {
+    // This one had no type at all, so the arguments, the arity and the result
+    // were all unchecked the moment the effect came from another file.
+    let (_, checked) = check_source_in(
+        "module a\n\n\
+         use other.{Sink}\n\n\
+         fn f() -> Int\n\
+         \x20 uses\n\
+         \x20   Sink.emit,\n\
+         {\n\
+         \x20 Sink.emit(1)\n\
+         \x20 0\n\
+         }\n",
+        &universe_of(&["module other\n\neffect Sink {\n    fn emit(line: String) -> ()\n}\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+}
+
+#[test]
+fn an_imported_effect_operation_call_gives_back_its_declared_type() {
+    check_ok_in(
+        "module a\n\n\
+         use other.{Sink}\n\n\
+         fn f() -> Int\n\
+         \x20 uses\n\
+         \x20   Sink.count,\n\
+         {\n\
+         \x20 Sink.count() + 1\n\
+         }\n",
+        &universe_of(&["module other\n\neffect Sink {\n    fn count() -> Int\n}\n"]),
+    );
+}
+
+#[test]
+fn an_imported_effect_operation_called_with_the_wrong_arity_is_an_error() {
+    let (_, checked) = check_source_in(
+        "module a\n\n\
+         use other.{Sink}\n\n\
+         fn f() -> Int\n\
+         \x20 uses\n\
+         \x20   Sink.count,\n\
+         {\n\
+         \x20 Sink.count(1)\n\
+         }\n",
+        &universe_of(&["module other\n\neffect Sink {\n    fn count() -> Int\n}\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::WRONG_ARITY]);
+}
+
 // -- refinements -----------------------------------------------------------
 
 #[test]

@@ -70,7 +70,14 @@ pub enum SurfaceItem {
     Effect {
         operations: BTreeMap<String, (Vec<Ty>, Ty)>,
     },
-    Handler,
+    /// A handler, and the state a `with` block has to initialise.
+    ///
+    /// The state crosses because installing a handler from another module is
+    /// still writing a literal, and a literal nobody checks is a literal that
+    /// can put a `String` where an `Int` was declared.
+    Handler {
+        state: Vec<(String, Ty)>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -243,7 +250,12 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 items.insert(decl.name.name.clone(), SurfaceItem::Effect { operations });
             }
             Item::Handler(decl) => {
-                items.insert(decl.name.name.clone(), SurfaceItem::Handler);
+                items.insert(
+                    decl.name.name.clone(),
+                    SurfaceItem::Handler {
+                        state: lowerer.fields(&decl.state),
+                    },
+                );
             }
             Item::Test(_) | Item::Error(_) => {}
         }

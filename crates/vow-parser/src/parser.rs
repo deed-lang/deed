@@ -74,10 +74,16 @@ fn clause_rank(kw: Keyword) -> u8 {
 
 /// Whether a parameter list is the only place its types could be written.
 ///
-/// A free function or an effect operation is such a place: leave the type out
-/// and nobody knows it. A handler operation is not, because the effect it
-/// implements already declared the whole signature, and making the handler
-/// repeat it would be redundancy nothing checks.
+/// A handler operation is the one place it is not, because the effect it
+/// implements already declared the whole signature and making the handler
+/// repeat it would be redundancy nothing checks. Everywhere else, including a
+/// closure, leaving the type out means nobody knows it.
+///
+/// Closures were briefly the other exception, on the grounds that a closure
+/// cannot leave the function that wrote it so its parameters are not a boundary
+/// anyone reviews. That is true and it is a different claim from "may be
+/// unchecked": the parameters were the unknown type, so the closure's body was
+/// not checked at all.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TypesRequired {
     Yes,
@@ -1335,6 +1341,22 @@ impl<'a> Parser<'a> {
                 let ty = if self.eat(&TokenKind::Colon) {
                     Some(self.parse_type())
                 } else {
+                    // Nothing can infer this. A `let f = |x| ..` has no
+                    // expected type to push down, and Vow does not do global
+                    // inference, so leaving it out means the body is checked
+                    // against nothing.
+                    self.emit(
+                        Diagnostic::error(
+                            codes::MISSING_PARAMETER_TYPE,
+                            self.file,
+                            name.span,
+                            format!("`{}` has no type", name.name),
+                        )
+                        .with_primary_label("a closure parameter needs a type")
+                        .with_note(
+                            "a parameter with no type is the unknown type, and the unknown type agrees with everything, so the body would not be checked",
+                        ),
+                    );
                     None
                 };
                 params.push(Param {

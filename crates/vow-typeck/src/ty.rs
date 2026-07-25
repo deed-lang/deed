@@ -95,6 +95,15 @@ pub enum Nominal {
         base: Ty,
         predicate: Span,
     },
+    /// A handler, and the state a `with` block has to initialise.
+    ///
+    /// A handler is not a value anyone can do anything with, but the literal
+    /// that installs one is checked like a record's, and a type with no fields
+    /// recorded is a literal nobody checks. `with InMemory { count: "hello" }`
+    /// used to be accepted.
+    Handler {
+        state: Vec<FieldTy>,
+    },
 }
 
 /// How an obligation was discharged.
@@ -161,6 +170,22 @@ impl Types {
 
     pub fn obligations(&self) -> &[Obligation] {
         &self.obligations
+    }
+
+    /// Every expression whose type the checker never worked out.
+    ///
+    /// In a file that checks cleanly this should be empty, and that is a real
+    /// invariant rather than a nice-to-have. `Unknown` agrees with everything,
+    /// so an expression that has one is an expression nothing done with it will
+    /// be checked against. Three separate holes in this language have been
+    /// exactly that: a type name in expression position, a function parameter
+    /// with no type, and a handler operation's parameters. Each was found by
+    /// accident. This is how the next one gets found on purpose.
+    pub fn unknowns(&self) -> impl Iterator<Item = Span> {
+        self.exprs
+            .iter()
+            .filter(|(_, ty)| matches!(ty, Ty::Unknown))
+            .map(|(span, _)| *span)
     }
 
     pub fn obligations_at(&self, tier: Tier) -> usize {

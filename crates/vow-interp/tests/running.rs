@@ -294,7 +294,7 @@ fn a_closure_can_be_called() {
     expect_pass(
         "module a\n\n\
          fn adds(a: Int, b: Int) -> Int {\n\
-         \x20 let plus = |x, y| { x + y }\n\
+         \x20 let plus = |x: Int, y: Int| { x + y }\n\
          \x20 plus(a, b)\n\
          }\n\n\
          test \"calling one\" {\n\
@@ -322,8 +322,8 @@ fn a_closure_can_hold_another_closure() {
     expect_pass(
         "module a\n\n\
          fn f(n: Int) -> Int {\n\
-         \x20 let outer = |x| {\n\
-         \x20   let inner = |y| { y * 2 }\n\
+         \x20 let outer = |x: Int| {\n\
+         \x20   let inner = |y: Int| { y * 2 }\n\
          \x20   inner(x) + n\n\
          \x20 }\n\
          \x20 outer(5)\n\
@@ -430,7 +430,7 @@ fn a_closure_calling_itself_is_bounded_too() {
          \x20 uses\n\
          \x20   Diverge,\n\
          {\n\
-         \x20 let step = |x| { go(x + 1) }\n\
+         \x20 let step = |x: Int| { go(x + 1) }\n\
          \x20 step(n)\n\
          }\n\n\
          test \"never\" {\n\

@@ -30,11 +30,14 @@ handler Counted implements Log {
     }
 }
 
-// A closure is a value with no name in its own right. Its parameters need no
-// types, and that is not an exception to P5: a closure cannot leave the
-// function that wrote it, so its parameters are not a boundary anyone reviews.
+// A closure's parameters carry types, like everything else. They were briefly
+// exempt, on the grounds that a closure cannot leave the function that wrote
+// it so its parameters are not a boundary anyone reviews. That is true, and it
+// is a different claim from "may be unchecked": with no types the parameters
+// were the unknown type, the unknown type agrees with everything, and the body
+// below was not checked at all.
 fn combine(a: Int, b: Int) -> Int {
-    let add = |x, y| {
+    let add = |x: Int, y: Int| {
         x + y
     }
 
@@ -43,7 +46,7 @@ fn combine(a: Int, b: Int) -> Int {
 
 // It can see what was in scope where it was written.
 fn scaled(n: Int, by: Int) -> Int {
-    let scale = |x| {
+    let scale = |x: Int| {
         x * by
     }
 
