@@ -98,6 +98,34 @@ different depending on which letters turned up. It is in the prelude because a `
 cannot measure is a `String` you cannot check, and the prelude stays small enough that every
 entry can be argued for.
 
+It carries four more for taking a string apart and putting one back together:
+
+```vow
+split("a,b,c", ",")      // ["a", "b", "c"]
+split("gün", "")         // ["g", "ü", "n"]
+join(["a", "b"], ",")    // "a,b"
+to_string(0 - 12)        // "-12"
+to_int("41")             // ok(41)
+to_int("forty one")      // err("`forty one` is not a number")
+```
+
+Two pairs of inverses, and that is the argument for all four at once. Before them a program
+could hold text and hold a number and get from neither to the other, so nothing could read
+input, print a count, or write a file back out.
+
+`split` and `join` stay inverses in the corners as well as the middle, which is the only
+property either of them has: a separator at the edges leaves an empty piece rather than being
+tidied away, and splitting something with no separator in it gives one piece rather than
+none. An empty separator gives the characters. The alternatives are an error the return type
+cannot express, or an empty string between every pair of characters, and this way walking a
+string costs the prelude no second name.
+
+`to_int` hands back a `Result`. Text that is not a number usually came from a file or an
+argument, so it is not a mistake in the caller and there is nothing to trap about.
+
+What is still missing is slicing, searching, case and padding. Those want a standard library,
+and there is no story for one yet.
+
 ## Lists
 
 ```vow
@@ -549,12 +577,13 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is fourteen names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `length`, `List`, `at`, `push`, `System`, `Console`, `Clock`, `Dir`, and the effects
-`Io`, with its `write`, `now`, `open` and `read` operations, and `Diverge`. Everything else
-is imported. Each prelude entry is a name that cannot be looked up in any file, which is the
-kind of thing P2 is a budget for, so the list is short on purpose. The four capability types
-are there because a capability that could be imported would not be a capability.
+**The prelude is eighteen names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `length`, `List`, `at`, `push`, `split`, `join`, `to_string`, `to_int`, `System`,
+`Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`, `now`, `open` and `read`
+operations, and `Diverge`. Everything else is imported. Each prelude entry is a name that
+cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
+is short on purpose. The four capability types are there because a capability that could be
+imported would not be a capability.
 **A module is named by its own `module` line, not by where it sits on disk.** `use
 payments/ledger` is answered by looking for the file that says `module payments/ledger`
 among the files handed to the compiler. The unit of compilation is that set of files, so
