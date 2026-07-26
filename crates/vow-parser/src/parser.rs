@@ -1538,19 +1538,43 @@ impl<'a> Parser<'a> {
             }
             other => {
                 let found = other.describe();
-                self.emit(
-                    Diagnostic::error(
-                        codes::UNEXPECTED_TOKEN,
-                        self.file,
-                        span,
-                        format!("expected an expression, found {found}"),
-                    )
-                    .with_primary_label("expected an expression"),
-                );
+                let mut diagnostic = Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    self.file,
+                    span,
+                    format!("expected an expression, found {found}"),
+                )
+                .with_primary_label("expected an expression");
+
+                // An expression ends at the end of a line, so a line that
+                // starts with an operator is a new statement rather than more
+                // of the one above. Every language that lets you break a long
+                // sum over two lines makes this a natural thing to write, and
+                // without the note the error says what happened and none of
+                // why.
+                let carried_over = binary_op(&other).is_some() && self.peek().starts_line;
+                if carried_over {
+                    diagnostic = diagnostic.with_note(
+                        "an expression ends at the end of a line, so this starts a new statement; \
+                         leave the operator on the line above to carry it over",
+                    );
+                }
+
+                self.emit(diagnostic);
                 // Consume it so the caller always makes progress.
                 if !self.at_eof() {
                     self.bump();
                 }
+
+                // What follows the operator was meant to be its right hand
+                // side, so it is part of the same mistake. Taking it here
+                // keeps it from becoming a statement of its own and drawing a
+                // second complaint from a later pass.
+                if carried_over && !self.at_eof() {
+                    let rest = self.parse_expr_bp(0);
+                    return Expr::Error(span.to(rest.span()));
+                }
+
                 Expr::Error(span)
             }
         }

@@ -437,6 +437,49 @@ fn a_comment_between_the_lines_does_not_join_them() {
     assert_eq!(stmts.len(), 2, "{stmts:?}");
 }
 
+#[test]
+fn an_operator_starting_a_line_says_why_it_is_stuck() {
+    // The mistake the rule creates. Every language that lets a long sum break
+    // over two lines makes this a natural thing to write, and without the note
+    // the error says what happened and none of why.
+    let (sources, parsed) =
+        parse_source("module t\n\nfn f() -> Int {\n    let a = 1\n    * 2\n    a\n}\n");
+    assert!(parsed.has_errors());
+
+    let text: Vec<String> = parsed
+        .diagnostics
+        .iter()
+        .map(|d| render_human(&sources, d))
+        .collect();
+    let text = text.join("\n");
+    assert!(
+        text.contains("an expression ends at the end of a line"),
+        "{text}"
+    );
+    assert!(
+        text.contains("leave the operator on the line above"),
+        "{text}"
+    );
+}
+
+#[test]
+fn what_followed_the_operator_is_part_of_the_same_mistake() {
+    // The right hand side was meant to belong to it, so taking it here keeps
+    // it from becoming a statement of its own and drawing a second complaint
+    // from a later pass. One mistake, one diagnostic.
+    let (_, parsed) =
+        parse_source("module t\n\nfn f() -> Int {\n    let a = 1\n    * 2\n    a\n}\n");
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::UNEXPECTED_TOKEN]);
+}
+
+#[test]
+fn an_operator_that_can_start_an_expression_is_left_alone() {
+    // `-2` on its own line is a negation and a perfectly good statement, so
+    // there is nothing to explain and nothing to swallow.
+    let stmts = body_of("let a = 1\n-2\na");
+    assert_eq!(stmts.len(), 3, "{stmts:?}");
+}
+
 // -- expressions -----------------------------------------------------------
 
 #[test]
