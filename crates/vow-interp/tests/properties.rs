@@ -212,6 +212,140 @@ fn the_counterexample_is_shrunk_to_something_readable() {
     );
 }
 
+/// The one counterexample from `src`, rendered.
+fn counterexample(src: &str) -> String {
+    let (sources, outcome) = only(src);
+    let failure = outcome.failure.as_ref().expect("should have been caught");
+    render_human(&sources, failure)
+}
+
+#[test]
+fn a_list_counterexample_is_shrunk_too() {
+    // This is what the generator produced before lists shrank: a list of one
+    // element that happened to be 95, when 1 says the same thing. Everything
+    // the generator can build has to shrink or the counterexample looks small
+    // and awkward rather than minimal.
+    let text = counterexample(
+        "module a\n\n\
+         fn total(numbers: List<Int>) -> Int\n\
+         \x20 ensures ok => result == 0,\n\
+         {\n\
+         \x20 for n in numbers with sum = 0 {\n\
+         \x20   sum + n\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert!(
+        text.contains("numbers = [-1]") || text.contains("numbers = [1]"),
+        "expected one element and the smallest one, got:\n{text}"
+    );
+}
+
+#[test]
+fn a_list_gets_shorter_when_its_length_is_what_matters() {
+    let text = counterexample(
+        "module a\n\n\
+         fn size(items: List<Int>) -> Int\n\
+         \x20 ensures ok => result > 0,\n\
+         { length(items) }\n",
+    );
+    assert!(text.contains("items = []"), "{text}");
+}
+
+#[test]
+fn a_string_counterexample_is_shrunk_too() {
+    let text = counterexample(
+        "module a\n\n\
+         fn measured(word: String) -> Int\n\
+         \x20 ensures ok => result < 3,\n\
+         { length(word) }\n",
+    );
+    assert!(
+        text.contains("word = \"aaa\""),
+        "expected the shortest and plainest failing word, got:\n{text}"
+    );
+}
+
+#[test]
+fn a_string_gets_shorter_when_its_length_is_what_matters() {
+    let text = counterexample(
+        "module a\n\n\
+         fn kept(word: String) -> Int\n\
+         \x20 ensures ok => result > 0,\n\
+         { length(word) }\n",
+    );
+    assert!(text.contains("word = \"\""), "{text}");
+}
+
+#[test]
+fn a_variant_shrinks_to_one_of_its_siblings_that_carries_nothing() {
+    // The nested choice case. `One { n: 0 }` shrinks its field down and then
+    // stops, because nothing in the value says there is a `Nothing` next to
+    // it. The choice declarations are walked once so that it does.
+    let text = counterexample(
+        "module a\n\n\
+         choice Shape {\n\
+         \x20 Nothing,\n\
+         \x20 One { n: Int },\n\
+         }\n\n\
+         fn sized(shape: Shape) -> Int\n\
+         \x20 ensures ok => result == 0 - 1,\n\
+         {\n\
+         \x20 match shape {\n\
+         \x20   Nothing => 0,\n\
+         \x20   One { n } => n,\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert!(text.contains("shape = Nothing"), "{text}");
+}
+
+#[test]
+fn a_variant_that_has_no_simpler_sibling_keeps_its_own_name() {
+    // The other half. Shrinking to a variant that carries nothing is only
+    // possible when there is one, and inventing fields for a variant that has
+    // them would be the generator's job rather than the shrinker's.
+    let text = counterexample(
+        "module a\n\n\
+         choice Shape {\n\
+         \x20 One { n: Int },\n\
+         \x20 Two { n: Int, m: Int },\n\
+         }\n\n\
+         fn sized(shape: Shape) -> Int\n\
+         \x20 ensures ok => result == 0 - 1,\n\
+         {\n\
+         \x20 match shape {\n\
+         \x20   One { n } => n,\n\
+         \x20   Two { n, m } => n + m,\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert!(text.contains("shape = "), "{text}");
+    assert!(!text.contains("Nothing"), "{text}");
+}
+
+#[test]
+fn a_result_payload_is_shrunk_without_changing_the_outcome() {
+    // `ok` and `err` are two outcomes rather than a big one and a small one,
+    // and turning one into the other means inventing a value for the other
+    // side, which is the generator's job rather than the shrinker's.
+    let text = counterexample(
+        "module a\n\n\
+         fn unwrapped(maybe: Result<Int, String>) -> Int\n\
+         \x20 ensures ok => result == 0,\n\
+         {\n\
+         \x20 match maybe {\n\
+         \x20   ok(n) => n,\n\
+         \x20   err(why) => 0,\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert!(
+        text.contains("maybe = ok(-1)") || text.contains("maybe = ok(1)"),
+        "expected an `ok` with the smallest failing payload, got:\n{text}"
+    );
+}
+
 #[test]
 fn running_twice_gives_the_same_counterexample() {
     let source = "module a\n\n\

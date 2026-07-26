@@ -132,7 +132,8 @@ fn run_property<'a>(
             Attempt::Passed => cases += 1,
             Attempt::Rejected => rejected += 1,
             Attempt::Failed(diagnostic) => {
-                let (args, diagnostic) = shrink(&mut interp, function, args, diagnostic);
+                let simpler = Simpler::of(&types, &mut interp);
+                let (args, diagnostic) = shrink(&mut interp, function, args, diagnostic, &simpler);
                 return PropertyOutcome {
                     function: function.sig.name.name.clone(),
                     span: function.sig.name.span,
@@ -205,14 +206,18 @@ fn attempt<'a>(interp: &mut Interp<'a>, function: &'a FnDecl, args: &[Value]) ->
 /// counterexample ends up being `8968765479210500849` when `4611686018427387904`
 /// was the answer.
 ///
-/// Fields of records and variants shrink greedily, one at a time. Nothing else
-/// shrinks. That is a real limitation and is written down rather than left to
-/// be discovered.
+/// Everything else shrinks greedily: try each smaller form of each argument,
+/// keep the first that still fails, and go round again. That covers every shape
+/// the generator can produce, which is the property this has to have. A
+/// counterexample built out of something nothing shrinks is a counterexample
+/// nobody reads, and it looks exactly like a small one that happens to be
+/// awkward.
 fn shrink<'a>(
     interp: &mut Interp<'a>,
     function: &'a FnDecl,
     mut args: Vec<Value>,
     mut failure: Diagnostic,
+    simpler: &Simpler,
 ) -> (Vec<Value>, Diagnostic) {
     let mut budget = 300usize;
 
@@ -234,7 +239,7 @@ fn shrink<'a>(
             if matches!(args[index], Value::Int(_)) {
                 continue;
             }
-            for candidate in smaller(&args[index]) {
+            for candidate in simpler.smaller(&args[index]) {
                 budget = budget.saturating_sub(1);
                 if budget == 0 {
                     break 'outer;
@@ -328,39 +333,194 @@ fn attempt_with<'a>(
     }
 }
 
-fn smaller(value: &Value) -> Vec<Value> {
-    match value {
-        Value::Record(fields) => shrink_fields(fields)
-            .into_iter()
-            .map(Value::record)
-            .collect(),
-        Value::Variant(variant) => shrink_fields(&variant.fields)
-            .into_iter()
-            .map(|fields| Value::variant(Rc::clone(&variant.origin), variant.name.clone(), fields))
-            .collect(),
-        Value::Int(0) => Vec::new(),
-        Value::Int(n) => {
-            let mut candidates = vec![Value::Int(0)];
-            if n.abs() > 1 {
-                candidates.push(Value::Int(n / 2));
-            }
-            candidates.push(Value::Int(if *n > 0 { n - 1 } else { n + 1 }));
-            candidates
-        }
-        _ => Vec::new(),
-    }
+/// A variant's identity: the module that declared it, and its name there.
+///
+/// The same identity [`Value::variant`] carries, for the same reason. A
+/// `DefId` is an index into one module's table, so it would not survive the
+/// trip out here.
+type VariantId = (Rc<str>, String);
+
+/// Which variants a value could be replaced by, worked out once.
+///
+/// A variant cannot be shrunk from the value alone: `One { n: 0 }` says nothing
+/// about there being a `Nothing` next to it. So the choices are walked once and
+/// every variant is told which of its siblings carry no fields, which are the
+/// only ones that can be built here without inventing values for them.
+///
+/// Everything else shrinks from the value, so this is the only table.
+#[derive(Default)]
+struct Simpler {
+    /// Variant identity to the fieldless variants of the same choice.
+    fieldless: HashMap<VariantId, Vec<VariantId>>,
 }
 
-fn shrink_fields(fields: &Fields) -> Vec<Fields> {
-    let mut out = Vec::new();
-    for (name, value) in fields {
-        for candidate in smaller(value) {
-            let mut copy = fields.clone();
-            copy.insert(name.clone(), candidate);
-            out.push(copy);
+impl Simpler {
+    fn of<'a>(types: &TypeIndex<'a>, interp: &mut Interp<'a>) -> Simpler {
+        let mut fieldless = HashMap::new();
+
+        for choice in types.choices.values() {
+            let mut identities = Vec::new();
+            let mut empty = Vec::new();
+            for variant in &choice.variants {
+                let Some(def) = types.resolutions.resolution(variant.name.span) else {
+                    continue;
+                };
+                let Some(identity) = interp.variant_identity(def) else {
+                    continue;
+                };
+                if variant.fields.iter().flatten().next().is_none() {
+                    empty.push(identity.clone());
+                }
+                identities.push(identity);
+            }
+
+            for identity in identities {
+                // A fieldless variant is not simpler than itself, and a list
+                // that held it would make the shrinker go round for nothing.
+                let others: Vec<_> = empty
+                    .iter()
+                    .filter(|it| **it != identity)
+                    .cloned()
+                    .collect();
+                if !others.is_empty() {
+                    fieldless.insert(identity, others);
+                }
+            }
+        }
+
+        Simpler { fieldless }
+    }
+
+    /// Smaller forms of a value, best first.
+    ///
+    /// Best first matters: the loop keeps the first candidate that still fails
+    /// and starts again, so putting the emptiest form at the front is what gets
+    /// a counterexample down in a few steps rather than a few hundred.
+    fn smaller(&self, value: &Value) -> Vec<Value> {
+        match value {
+            Value::Record(fields) => self
+                .shrink_fields(fields)
+                .into_iter()
+                .map(Value::record)
+                .collect(),
+
+            Value::Variant(variant) => {
+                let mut out: Vec<Value> = self
+                    .fieldless
+                    .get(&(Rc::clone(&variant.origin), variant.name.clone()))
+                    .into_iter()
+                    .flatten()
+                    .map(|(origin, name)| {
+                        Value::variant(Rc::clone(origin), name.clone(), Fields::new())
+                    })
+                    .collect();
+                out.extend(
+                    self.shrink_fields(&variant.fields)
+                        .into_iter()
+                        .map(|fields| {
+                            Value::variant(Rc::clone(&variant.origin), variant.name.clone(), fields)
+                        }),
+                );
+                out
+            }
+
+            // Fewer elements first, then simpler elements. A list that is too
+            // long and a list whose contents are too big are two different
+            // complaints, and the first one is the one worth answering.
+            Value::List(elements) if !elements.is_empty() => {
+                let mut out = vec![Value::list(Vec::new())];
+                if elements.len() > 1 {
+                    out.push(Value::list(elements[..elements.len() / 2].to_vec()));
+                    for skip in 0..elements.len() {
+                        let mut shorter = elements.as_ref().clone();
+                        shorter.remove(skip);
+                        out.push(Value::list(shorter));
+                    }
+                }
+                for (index, element) in elements.iter().enumerate() {
+                    for candidate in self.smaller(element) {
+                        let mut copy = elements.as_ref().clone();
+                        copy[index] = candidate;
+                        out.push(Value::list(copy));
+                    }
+                }
+                out
+            }
+
+            // Shorter first, then plainer. `"a"` is the emptiest thing a
+            // non-empty string can be, and a counterexample that says the
+            // letters did not matter is worth as much as one that says the
+            // length did not.
+            Value::Str(text) if !text.is_empty() => {
+                let characters: Vec<char> = text.chars().collect();
+                let mut out = vec![Value::str("")];
+                if characters.len() > 1 {
+                    let half: String = characters[..characters.len() / 2].iter().collect();
+                    out.push(Value::str(half));
+                    for skip in 0..characters.len() {
+                        let shorter: String = characters
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, _)| *index != skip)
+                            .map(|(_, c)| *c)
+                            .collect();
+                        out.push(Value::str(shorter));
+                    }
+                }
+                for (index, character) in characters.iter().enumerate() {
+                    if *character != 'a' {
+                        let mut copy = characters.clone();
+                        copy[index] = 'a';
+                        out.push(Value::str(copy.into_iter().collect::<String>()));
+                    }
+                }
+                out
+            }
+
+            // The payload, and only the payload. `ok` and `err` are two
+            // outcomes rather than a big one and a small one, and turning one
+            // into the other means inventing a value for the other side, which
+            // is the generator's job.
+            Value::Result { ok, value } => self
+                .smaller(value)
+                .into_iter()
+                .map(|inner| {
+                    if *ok {
+                        Value::ok(inner)
+                    } else {
+                        Value::err(inner)
+                    }
+                })
+                .collect(),
+
+            // `false` is the emptier of the two, the way zero is for an
+            // integer and the empty list is for a list.
+            Value::Bool(true) => vec![Value::Bool(false)],
+
+            Value::Int(0) => Vec::new(),
+            Value::Int(n) => {
+                let mut candidates = vec![Value::Int(0)];
+                if n.abs() > 1 {
+                    candidates.push(Value::Int(n / 2));
+                }
+                candidates.push(Value::Int(if *n > 0 { n - 1 } else { n + 1 }));
+                candidates
+            }
+            _ => Vec::new(),
         }
     }
-    out
+
+    fn shrink_fields(&self, fields: &Fields) -> Vec<Fields> {
+        let mut out = Vec::new();
+        for (name, value) in fields {
+            for candidate in self.smaller(value) {
+                let mut copy = fields.clone();
+                copy.insert(name.clone(), candidate);
+                out.push(copy);
+            }
+        }
+        out
+    }
 }
 
 fn with_counterexample(
@@ -639,8 +799,12 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
-    use super::{Rng, smaller};
+    use super::{Rng, Simpler};
     use crate::value::Value;
+
+    fn smaller(value: &Value) -> Vec<Value> {
+        Simpler::default().smaller(value)
+    }
 
     #[test]
     fn the_generator_is_deterministic() {
@@ -675,8 +839,44 @@ mod tests {
     }
 
     #[test]
+    fn a_list_gets_shorter_before_its_elements_get_smaller() {
+        let list = Value::list(vec![Value::Int(9), Value::Int(8)]);
+        let candidates = smaller(&list);
+
+        // The emptiest form first, because the loop keeps the first candidate
+        // that still fails and starts again.
+        assert_eq!(candidates[0], Value::list(Vec::new()));
+        assert!(candidates.contains(&Value::list(vec![Value::Int(9)])));
+        assert!(candidates.contains(&Value::list(vec![Value::Int(8)])));
+        assert!(candidates.contains(&Value::list(vec![Value::Int(0), Value::Int(8)])));
+
+        assert!(smaller(&Value::list(Vec::new())).is_empty());
+    }
+
+    #[test]
+    fn a_string_gets_shorter_and_then_plainer() {
+        let candidates = smaller(&Value::str("qx"));
+
+        assert_eq!(candidates[0], Value::str(""));
+        assert!(candidates.contains(&Value::str("q")));
+        assert!(candidates.contains(&Value::str("x")));
+        assert!(candidates.contains(&Value::str("ax")));
+        assert!(candidates.contains(&Value::str("qa")));
+
+        assert!(smaller(&Value::str("")).is_empty());
+        // Already as plain as it gets, so there is nothing left to try beyond
+        // making it shorter.
+        assert_eq!(smaller(&Value::str("a")), vec![Value::str("")]);
+    }
+
+    #[test]
+    fn true_is_bigger_than_false() {
+        assert_eq!(smaller(&Value::Bool(true)), vec![Value::Bool(false)]);
+        assert!(smaller(&Value::Bool(false)).is_empty());
+    }
+
+    #[test]
     fn things_with_no_smaller_form_do_not_shrink() {
-        assert!(smaller(&Value::Bool(true)).is_empty());
         assert!(smaller(&Value::Unit).is_empty());
     }
 }

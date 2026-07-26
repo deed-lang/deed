@@ -695,6 +695,23 @@ bad input makes the generator a bad caller and the runtime already says so. If t
 discarded, that is reported: a property that only tested a handful of inputs is worse than no
 property, because it looks like one.
 
+A counterexample is shrunk before it is shown, and everything the generator can build
+shrinks. Integers get a binary search toward zero, because greedy halving overshoots a
+boundary and then crawls to it. Everything else is greedy: lists get shorter before their
+elements get smaller, strings get shorter and then plainer, `true` gives way to `false`, the
+payload of a `Result` shrinks without changing which outcome it is, and a variant gives way
+to a sibling that carries no fields.
+
+That last one is the only part that cannot be worked out from the value, since `One { n: 0 }`
+says nothing about there being a `Nothing` next to it, so the choices are walked once and
+every variant is told which of its siblings are empty. A variant whose siblings all carry
+fields keeps its own name, because building one of those means inventing values for them,
+which is generation rather than shrinking.
+
+The rule the list has to keep is that it covers what the generator covers. A counterexample
+built out of something nothing shrinks looks exactly like a small one that happens to be
+awkward, and there is no way to tell them apart from the outside.
+
 ## Errors
 
 Values, always. No exceptions, no panics in library code.
@@ -1057,8 +1074,6 @@ using an effect to get around not having a loop.
 - Property tests only cover pure functions. Running an effectful one needs a handler, and
   inventing a handler means inventing the behaviour the property would then check against
   itself. A module declaring exactly one handler per effect might be a defensible default.
-- Shrinking handles integers by binary search and record fields greedily. Nothing else
-  shrinks, so a counterexample built from strings or nested choices comes out as generated.
 - Refinements have no conversion form. Real code will need `Positive.try(n)` or something
   like it, returning a `Result`, rather than relying on the runtime check a `Guarded`
   obligation leaves behind.
