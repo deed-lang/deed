@@ -136,7 +136,8 @@ Read them in order. Each one leans on the one before it.
 the compiler produces structured diagnostics with spans, `Types::type_of` can say what an
 expression turned out to be, `Resolutions` can say where a name was declared, and the
 formatter has one canonical answer with no options. It publishes diagnostics as you type,
-says the type of whatever is under the cursor, jumps to a declaration, and formats a file.
+says the type of whatever is under the cursor, jumps to a declaration in whichever file
+declares it, and formats a file.
 
 It checks a document together with every other `.vow` file in the folders the editor said it
 has open, and an open file's text comes from the buffer rather than from disk, so removing an

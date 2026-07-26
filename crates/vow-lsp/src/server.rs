@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use vow_diagnostics::{Diagnostic, Severity, SourceMap, Span};
 use vow_driver::Checked;
-use vow_resolve::DefId;
+use vow_resolve::{DefId, DefKind};
 
 use crate::json::Json;
 use crate::position::{Lines, Position};
@@ -48,6 +48,12 @@ impl Document {
         let lines = Lines::of(&text);
         Self { text, lines }
     }
+}
+
+/// One file of the workspace, checked, and the URI it is known by.
+struct Entry {
+    uri: String,
+    checked: Checked,
 }
 
 #[derive(Default)]
@@ -174,11 +180,11 @@ impl Server {
 
     /// Where the name under the cursor was declared.
     ///
-    /// Only inside this file. A name from another module resolves to the `use`
-    /// that brought it in, which is where the reader can see what was imported
-    /// and what the other file is called. Jumping across the boundary would
-    /// need a definition in another module's table, and a `DefId` is an index
-    /// into one module's table and means nothing outside it.
+    /// An imported name leads to the file that declares it rather than to the
+    /// `use` that brought it in. Nothing carries a `DefId` across the
+    /// boundary to do that, because a `DefId` is an index into one module's
+    /// table and means nothing outside it. What crosses is what already
+    /// crosses everywhere else in this compiler: the module path and the name.
     fn definition(&self, message: &Json) -> Json {
         let Some((document, offset, checked)) = self.locate(message) else {
             return Json::Null;
@@ -187,6 +193,13 @@ impl Server {
         let Some((_, def)) = narrowest_name(&checked, offset) else {
             return Json::Null;
         };
+
+        if checked.resolutions.def(def).kind == DefKind::Import
+            && let Some(location) = self.imported_definition(&checked, def)
+        {
+            return location;
+        }
+
         let declared = checked.resolutions.def(def).span;
         // Builtins are declared nowhere. There is no file to open and no line
         // to jump to, and inventing one would land the cursor on whatever
@@ -200,6 +213,41 @@ impl Server {
             ("uri", Json::string(uri)),
             ("range", self.range(document, declared)),
         ])
+    }
+
+    /// Where an imported name was declared, in the file that declares it.
+    ///
+    /// `None` when the module is not in the workspace, or does not declare the
+    /// name, both of which are already errors the editor is showing. Falling
+    /// back to the `use` line is better than answering nothing: it is where a
+    /// reader can see what was imported and what the other file is called.
+    fn imported_definition(&self, from: &Checked, def: DefId) -> Option<Json> {
+        let module = from.resolutions.import_module(def)?.to_string();
+        let name = from.resolutions.def(def).name.clone();
+
+        let (sources, entries) = self.check_workspace();
+        let entry = entries.iter().find(|entry| {
+            entry
+                .checked
+                .module
+                .name
+                .as_ref()
+                .is_some_and(|path| path.to_string_path() == module)
+        })?;
+
+        // Looked up by name in the other module's own table, which is the same
+        // identity an export travels under. Only declarations: a `let` in some
+        // function body may share the name and is not what was imported.
+        let (_, declared) =
+            entry.checked.resolutions.defs().find(|(_, data)| {
+                data.name == name && declares(data.kind) && !data.span.is_empty()
+            })?;
+
+        let text = sources.file(entry.checked.file).text();
+        Some(Json::object(vec![
+            ("uri", Json::string(&entry.uri)),
+            ("range", range_in(text, declared.span)),
+        ]))
     }
 
     /// The whole document, replaced by its canonical form.
@@ -293,17 +341,24 @@ impl Server {
     /// changes what another says: adding an export fixes an import somewhere
     /// else and removing one breaks it, and squiggles left describing a
     /// version of the workspace that no longer exists are worse than none.
+    ///
+    /// Only the open ones. A closed file's problems belong in the panel of a
+    /// tool that was asked about the whole project, and an editor given
+    /// diagnostics for a document it never opened has nowhere obvious to put
+    /// them and no event that clears them.
     fn published(&self) -> Vec<Json> {
-        self.check_workspace()
-            .into_iter()
-            .map(|(uri, checked)| {
-                let document = &self.documents[uri];
-                let reported = checked
+        let (_, checked) = self.check_workspace();
+        checked
+            .iter()
+            .filter_map(|entry| {
+                let document = self.documents.get(&entry.uri)?;
+                let reported = entry
+                    .checked
                     .diagnostics
                     .iter()
-                    .map(|diagnostic| self.render(document, diagnostic, uri))
+                    .map(|diagnostic| self.render(document, diagnostic, &entry.uri))
                     .collect();
-                publish(uri, reported)
+                Some(publish(&entry.uri, reported))
             })
             .collect()
     }
@@ -317,22 +372,32 @@ impl Server {
     /// An open document's text comes from the editor rather than from disk,
     /// because the buffer is what the person is looking at and the file behind
     /// it may not have been saved.
-    fn check_workspace(&self) -> Vec<(&str, Checked)> {
+    ///
+    /// The [`SourceMap`] comes back with the results because a question about
+    /// one file can be answered in another, and turning a span in that other
+    /// file into a range needs its text.
+    fn check_workspace(&self) -> (SourceMap, Vec<Entry>) {
         let mut sources = SourceMap::new();
         let mut ids = Vec::new();
+        let mut uris = Vec::new();
         let mut open: Vec<Option<PathBuf>> = Vec::new();
 
         for (uri, document) in &self.documents {
             ids.push(sources.add(uri.as_str(), document.text.clone()));
+            uris.push(uri.clone());
             open.push(uri::to_path(uri).map(|path| canonical(&path)));
         }
 
         for path in self.workspace.files() {
-            let path = canonical(&path);
-            // Already in, as the editor's copy. Adding the file behind it as
-            // well would be two files claiming one `module` line, which is an
-            // error about a program that is fine.
-            if open.iter().any(|other| other.as_ref() == Some(&path)) {
+            // Compared in canonical form, because the same file arrives from
+            // two directions and they differ on Windows. Named in the form the
+            // walk produced, because that is the form the editor gave us the
+            // folder in, and a canonical path on Windows is a verbatim one
+            // that no editor recognises.
+            if open
+                .iter()
+                .any(|other| other.as_ref() == Some(&canonical(&path)))
+            {
                 continue;
             }
             // A file that cannot be read is not a reason to stop saying
@@ -341,23 +406,25 @@ impl Server {
                 continue;
             };
             ids.push(sources.add(path.display().to_string(), text));
+            uris.push(uri::from_path(&path));
         }
 
-        let mut checked = vow_driver::check_all(&sources, &ids);
-        checked.truncate(self.documents.len());
-        self.documents
-            .keys()
-            .map(String::as_str)
-            .zip(checked)
-            .collect()
+        let entries = uris
+            .into_iter()
+            .zip(vow_driver::check_all(&sources, &ids))
+            .map(|(uri, checked)| Entry { uri, checked })
+            .collect();
+
+        (sources, entries)
     }
 
     /// The same, for one document.
     fn check_one(&self, uri: &str) -> Option<Checked> {
-        self.check_workspace()
+        let (_, checked) = self.check_workspace();
+        checked
             .into_iter()
-            .find(|(other, _)| *other == uri)
-            .map(|(_, checked)| checked)
+            .find(|entry| entry.uri == uri)
+            .map(|entry| entry.checked)
     }
 
     fn render(&self, document: &Document, diagnostic: &Diagnostic, uri: &str) -> Json {
@@ -407,6 +474,36 @@ impl Server {
         let end = document.lines.position(&document.text, span.end);
         Json::object(vec![("start", position(start)), ("end", position(end))])
     }
+}
+
+/// The same, for a file the server has no open document for.
+///
+/// Builds the line index on the spot, because this happens once per jump into
+/// another file rather than once per keystroke.
+fn range_in(text: &str, span: Span) -> Json {
+    let lines = Lines::of(text);
+    Json::object(vec![
+        ("start", position(lines.position(text, span.start))),
+        ("end", position(lines.position(text, span.end))),
+    ])
+}
+
+/// Whether a kind of definition is something a module can export.
+///
+/// A `let` in some function body can share a name with an imported one, and
+/// jumping to it would be an answer about a different thing entirely.
+fn declares(kind: DefKind) -> bool {
+    matches!(
+        kind,
+        DefKind::Type
+            | DefKind::Record
+            | DefKind::Choice
+            | DefKind::Variant
+            | DefKind::Effect
+            | DefKind::EffectOp
+            | DefKind::Handler
+            | DefKind::Function
+    )
 }
 
 fn position(position: Position) -> Json {
