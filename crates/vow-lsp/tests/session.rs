@@ -52,6 +52,16 @@ fn at(id: i64, method: &str, uri: &str, line: u32, character: u32) -> String {
     ))
 }
 
+/// A references request, which carries whether the declaration counts.
+fn references(id: i64, uri: &str, line: u32, character: u32, declaration: bool) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/references\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}},\
+         \"position\":{{\"line\":{line},\"character\":{character}}},\
+         \"context\":{{\"includeDeclaration\":{declaration}}}}}}}"
+    ))
+}
+
 fn format_request(id: i64, uri: &str) -> String {
     framed(&format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/formatting\",\"params\":\
@@ -682,6 +692,115 @@ fn an_import_with_nothing_behind_it_leads_to_the_use_line() {
         Some(2),
         "{location:?}"
     );
+}
+
+// -- find references --------------------------------------------------------
+
+/// The locations a references request came back with.
+fn locations(message: &Json) -> &[Json] {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("expected locations, got {message:?}"))
+}
+
+fn lines_of(locations: &[Json], uri: &str) -> Vec<i64> {
+    locations
+        .iter()
+        .filter(|location| location.at(&["uri"]).and_then(Json::as_str) == Some(uri))
+        .filter_map(|location| {
+            location
+                .at(&["range", "start", "line"])
+                .and_then(Json::as_i64)
+        })
+        .collect()
+}
+
+#[test]
+fn references_to_a_local_stay_in_the_file() {
+    // A parameter cannot be named anywhere else, so the answer is exact: every
+    // span in this file that resolves to that one definition.
+    let source =
+        "module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n\nfn g(n: Int) -> Int {\n    n\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // The `n` in the first parameter list.
+        references(2, URI, 2, 5, true),
+    ]);
+
+    // Declared on line 2, used twice on line 3. The `n` in `g` is a different
+    // definition and is not an answer to this question.
+    assert_eq!(
+        lines_of(locations(sent.last().unwrap()), URI),
+        vec![2, 3, 3]
+    );
+}
+
+#[test]
+fn the_declaration_is_left_out_when_the_editor_says_so() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        references(2, URI, 2, 5, false),
+    ]);
+
+    assert_eq!(lines_of(locations(sent.last().unwrap()), URI), vec![3, 3]);
+}
+
+#[test]
+fn references_to_an_exported_name_cross_the_boundary() {
+    // The other module's uses count, and so does the `use` line that brought
+    // the name in, which is where a reader looking at the list would want to
+    // start.
+    let scratch = Scratch::new("references-across");
+    let one = scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&one, EXPORTER),
+        // The `double` in `fn double`.
+        references(2, &one, 2, 3, true),
+    ]);
+
+    let found = locations(sent.last().unwrap());
+    assert_eq!(lines_of(found, &one), vec![2], "{found:?}");
+    // The `use` on line 2 of the importer and the call on line 5.
+    assert_eq!(lines_of(found, &two), vec![2, 5], "{found:?}");
+}
+
+#[test]
+fn asking_from_the_importing_side_gives_the_same_answer() {
+    let scratch = Scratch::new("references-back");
+    let one = scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, IMPORTER),
+        // The `double` in the call.
+        references(2, &two, 5, 6, true),
+    ]);
+
+    let found = locations(sent.last().unwrap());
+    assert_eq!(lines_of(found, &one), vec![2], "{found:?}");
+    assert_eq!(lines_of(found, &two), vec![2, 5], "{found:?}");
+}
+
+#[test]
+fn a_builtin_has_no_useful_answer() {
+    // Every mention of `length` in a workspace is not an answer to a question
+    // anybody was asking.
+    let source = "module a\n\nfn f(s: String) -> Int {\n    length(s)\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        references(2, URI, 3, 5, true),
+    ]);
+
+    assert!(locations(sent.last().unwrap()).is_empty());
 }
 
 #[test]
