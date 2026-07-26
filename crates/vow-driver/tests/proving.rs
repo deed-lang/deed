@@ -368,12 +368,13 @@ fn a_bound_on_a_multiple_that_does_not_divide_evenly_is_still_exact() {
 // -- what it refuses to prove ----------------------------------------------
 
 #[test]
-fn a_difference_too_large_to_be_an_integer_is_not_proven() {
-    // `low < high` is held, and it is still not enough: with no bound on
-    // either name the subtraction can overflow, and an expression with no
-    // answer proves nothing about the answer. Same rule as `n + 1` above.
+fn a_difference_that_could_leave_the_integers_is_still_proven() {
+    // `low < high` is held, so the difference is at least one, and it does not
+    // matter that `high - low` can be larger than an integer: overflow is an
+    // error rather than a wrap, so a difference that exists is inside `i64`
+    // and the range saturates at the edge rather than collapsing.
     expect(
-        Tier::Guarded,
+        Tier::Proven,
         "fn f(low: Int, high: Int) -> Positive\n  where\n    low < high,\n{\n    high - low\n}\n",
     );
 }
@@ -428,10 +429,24 @@ fn a_precondition_that_does_not_imply_it_stays_guarded() {
 }
 
 #[test]
-fn arithmetic_that_could_overflow_stays_guarded() {
-    // `n` is positive and `n + 1` still is, unless `n` was the largest integer
-    // there is. Refusing to prove this is the reasoning working, not a gap.
-    expect(Tier::Guarded, "fn f(n: Positive) -> Positive { n + 1 }\n");
+fn arithmetic_that_could_overflow_is_still_proven() {
+    // `n` is positive, so `n + 1` is too. It does not matter that the sum has
+    // no answer when `n` is the largest integer there is: overflow stops the
+    // program rather than wrapping it, so a value that exists is inside `i64`
+    // and every value this can produce is greater than one.
+    //
+    // This used to be Guarded, and the example that explained why was arguing
+    // for a runtime check that could never have fired.
+    expect(Tier::Proven, "fn f(n: Positive) -> Positive { n + 1 }\n");
+}
+
+#[test]
+fn a_bound_that_leaves_the_integers_clamps_rather_than_collapsing() {
+    // The same rule read from the other end. `n + 1` for an unbounded `n` can
+    // produce anything from `MIN + 1` up, and `MIN + 1` is not positive, so
+    // this is Guarded for a real reason rather than because the arithmetic was
+    // given up on.
+    expect(Tier::Guarded, "fn f(n: Int) -> Positive { n + 1 }\n");
 }
 
 #[test]
@@ -583,21 +598,25 @@ fn an_or_says_nothing_about_either_side() {
 // -- why a proof failed ----------------------------------------------------
 
 #[test]
-fn a_proof_the_arithmetic_defeated_says_which_operation() {
-    // `n + 1` where `n` is positive is not provably positive, and a reader
-    // looking at that has every right to think the reasoning is weak. It is
-    // not, and the difference has to be printed or it has to be guessed.
-    let (sources, checked) = check("fn f(n: Positive) -> Positive { n + 1 }\n");
+fn a_sum_is_never_blamed_for_having_no_answer() {
+    // It used to be, and that note was explaining a refusal that should not
+    // have happened. Overflow is an error rather than a wrap, so a sum that
+    // produced a value produced one inside `i64`, and the only arithmetic that
+    // can still defeat a proof by having no answer is dividing.
+    let (sources, checked) = check("fn f(n: Int) -> Positive { n + 1 }\n");
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("this can have no answer"), "{text}");
-    assert!(text.contains("bounding what goes into it"), "{text}");
+    assert!(!text.contains("this can have no answer"), "{text}");
 }
 
 #[test]
-fn dividing_by_something_that_could_be_zero_is_named_too() {
+fn dividing_by_something_that_could_be_zero_is_named() {
+    // The one piece of arithmetic that can still defeat a proof by having no
+    // answer, and a reader looking at a refusal here has every right to think
+    // the reasoning is weak unless it says which operation.
     let (sources, checked) = check("fn f(n: Positive, d: Int) -> Positive { n / d }\n");
     let text = rendered(&sources, &checked.diagnostics);
     assert!(text.contains("this can have no answer"), "{text}");
+    assert!(text.contains("bounding what goes into it"), "{text}");
 }
 
 #[test]
@@ -754,8 +773,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Sixteen proven and three guarded, and the file explains each of the
-    // three. If either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 16);
-    assert_eq!(checked.obligations_at(Tier::Guarded), 3);
+    // Eighteen proven and one guarded, and the file explains the one. If
+    // either number moves, the comments in the example are wrong.
+    assert_eq!(checked.obligations_at(Tier::Proven), 18);
+    assert_eq!(checked.obligations_at(Tier::Guarded), 1);
 }

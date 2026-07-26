@@ -247,10 +247,18 @@ expressions and nothing else, which made a refinement in real code a runtime che
 ceremony around it. It now reasons about intervals, about the difference between two names,
 and about what a callee promised: a `where` clause, a refined parameter type, an `if`
 condition, a guard that returns, `low < high`, and `ensures ok => result == n` at a call site
-are all facts the rest of the body can use. What it still cannot do is relate two names
-through a product, so `result == n * n` says nothing, and it will not prove anything about
-arithmetic that could overflow, which is why `n + 1` on a `Positive` stays `Guarded` and says
-so. [design/02-syntax.md](design/02-syntax.md) lists the rest.
+are all facts the rest of the body can use.
+
+It also used to refuse `n + 1` on a `Positive`, and this paragraph used to say that was the
+reasoning working. It was not. Overflow is an error rather than a wrap, so `n + 1` either
+produces a value or stops the program, and it never produces a wrong one; so a value that
+exists is inside `Int`, and any sum that exists is greater than one. The interval clamps at
+the edge instead of collapsing, and the runtime check that used to be emitted there could
+never have fired. Two of the three warnings in the file went away and the comments explaining
+them turned out to be the more interesting half of the fix.
+
+What it still cannot do is relate two names through a product, so `result == n * n` says
+nothing. [design/02-syntax.md](design/02-syntax.md) lists the rest.
 
 `transfer.vow` used to model something that could not exist. `Money.units` was `Positive`,
 which made a zero balance and a debit unwritable, and the type checker said so. The fix was
