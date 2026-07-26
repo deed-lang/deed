@@ -17,6 +17,7 @@ dependencies = [
  "vow-driver",
  "vow-fmt",
  "vow-interp",
+ "vow-lsp",
  "vow-typeck",
 ]
 
@@ -75,6 +76,14 @@ name = "vow-lexer"
 version = "0.0.0"
 dependencies = [
  "vow-diagnostics",
+]
+
+[[package]]
+name = "vow-lsp"
+version = "0.0.0"
+dependencies = [
+ "vow-diagnostics",
+ "vow-driver",
 ]
 
 [[package]]

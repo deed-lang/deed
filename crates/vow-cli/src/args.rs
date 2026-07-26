@@ -15,6 +15,7 @@ Usage:
   vow run   [options] <path>...
   vow fmt   [--check] <path>...
   vow fix   [--check] <path>...
+  vow lsp
 
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
@@ -33,6 +34,8 @@ Paths may be files or directories. A directory is searched for `.vow` files.
 `vow run` calls `main`, handing it the one `System` capability there is.
 `vow fmt` has no options for the output. There is one canonical form.
 `vow fix` applies the fixes that are certain and leaves the guesses alone.
+`vow lsp` speaks the language server protocol on stdin and stdout. It is for an
+editor to start, not for a person to type.
 
 Exit codes:
   0   no errors, though there may be warnings
@@ -76,6 +79,8 @@ pub struct CheckArgs {
 #[derive(Debug)]
 pub enum Command {
     Check(CheckArgs),
+    /// Speak the language server protocol on stdin and stdout.
+    Lsp,
     Help,
     Version,
 }
@@ -88,6 +93,15 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mode = match first.as_str() {
         "-h" | "--help" | "help" => return Ok(Command::Help),
         "-V" | "--version" | "version" => return Ok(Command::Version),
+        // No options and no paths. An editor starts it and talks to it down
+        // the pipe, so anything else on the line is a mistake worth saying so
+        // about rather than ignoring.
+        "lsp" => {
+            return match args.next() {
+                None => Ok(Command::Lsp),
+                Some(extra) => Err(format!("`vow lsp` takes no arguments, found `{extra}`")),
+            };
+        }
         "check" => Mode::Check,
         "test" => Mode::Test,
         "run" => Mode::Run,
@@ -95,7 +109,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "fix" => Mode::Fix,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `check`, `test`, `run`, `fmt` and `fix`"
+                "unknown command `{other}`, the choices are `check`, `test`, `run`, `fmt`, `fix` and `lsp`"
             ));
         }
     };
@@ -196,6 +210,12 @@ mod tests {
             panic!("should parse");
         };
         assert_eq!(check.mode, Mode::Test);
+    }
+
+    #[test]
+    fn lsp_is_a_command_and_takes_nothing_else() {
+        assert!(matches!(parse(args(&["lsp"])), Ok(Command::Lsp)));
+        assert!(parse(args(&["lsp", "a.vow"])).is_err());
     }
 
     #[test]

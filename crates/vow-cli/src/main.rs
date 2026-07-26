@@ -58,6 +58,27 @@ fn run() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Check(check) => run_check(check),
+        Command::Lsp => run_lsp(),
+    }
+}
+
+/// Speaks the language server protocol until the editor stops.
+///
+/// Nothing is printed to stdout that is not a protocol message, because stdout
+/// is the protocol. A stray `println!` anywhere in this path would desync the
+/// editor and the failure would look like the server hanging.
+fn run_lsp() -> ExitCode {
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+
+    match vow_lsp::serve(&mut input, &mut output) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::from(EXIT_USAGE)
+        }
     }
 }
 
