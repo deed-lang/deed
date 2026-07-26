@@ -127,6 +127,15 @@ right. And a fix that leaves more errors than it found is treated as a compiler 
 nothing is written, which is the version of the check that catches a fix that was wrong
 rather than merely unhelpful.
 
+The gap between the principle and what is built is in which diagnostics carry a patch at
+all. A `Fix` is a span and a replacement, so the ones that exist come from the lexer, the
+parser and the resolver, where the repair is a piece of text in a place. The effect checker
+has none, and it is the one that would pay: a row error names the effect, names the function
+and tells the reader to add it to the `uses` clause, and then does not add it. Saying that as
+a span means knowing about commas, indentation, and a clause that may not exist yet, none of
+which the pass that found the problem has any business knowing. A fix that says what the row
+should be and leaves the writing to the printer is the shape that would close it.
+
 ---
 
 ## P8. The default is deterministic

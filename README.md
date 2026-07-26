@@ -552,10 +552,19 @@ is not configurable long before anything enforced it, which meant the files were
 the way they happened to have been typed. A test now asserts that every `.vow` file in the
 repository is already canonical, so the principle either holds or the build fails.
 
-`vow fix` is the same move for P7. Every diagnostic already carried a patch and a note about
+`vow fix` is the same move for P7. Diagnostics already carried a patch and a note about
 whether that patch is certain or a guess, and nothing applied them, so what P7 described was
 a data structure. `vow fix` applies the certain ones and refuses the guesses, with no flag to
 override that.
+
+It does not go as far as the comment above it used to claim. The fixes that exist are the
+ones a single span and a replacement can express, and they come from the lexer, the parser
+and the resolver. The effect checker has none, which is the one that costs something: a row
+error names the effect, names the function and tells you to add it to the `uses` clause, and
+then does not add it. A span cannot say that, because removing an entry has to take its comma
+and its line with it and adding one has to invent a clause that may not be there. The pass
+that knows what the repair is does not know how to write it, and that is a change to what a
+fix is rather than one more call.
 
 `vow check --timings` is the same move for P9, which said check latency is budgeted and had
 never been measured. The guard is not a wall clock budget, since a test that fails on a busy
