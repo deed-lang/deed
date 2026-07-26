@@ -128,7 +128,7 @@ Read them in order. Each one leans on the one before it.
 | `vow-effects` | Every effect row checked against what the body does |
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `vow-fmt` | The one canonical form, with no options for the output |
-| `vow-lsp` | A language server: diagnostics, hover, go to definition and formatting |
+| `vow-lsp` | A language server: diagnostics, hover, go to definition, references, rename and formatting |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary: `check`, `test`, `run`, `fmt`, `fix` and `lsp` |
 
@@ -137,7 +137,17 @@ the compiler produces structured diagnostics with spans, `Types::type_of` can sa
 expression turned out to be, `Resolutions` can say where a name was declared, and the
 formatter has one canonical answer with no options. It publishes diagnostics as you type,
 says the type of whatever is under the cursor, jumps to a declaration in whichever file
-declares it, lists every use of a name across the workspace, and formats a file.
+declares it, lists every use of a name across the workspace, renames one everywhere it is
+written, and formats a file.
+
+Rename and find references are the same walk with two answers, which is the point of them
+sharing one. A rename that edited the declaration and left the `use` line that brought the
+name into another file would fix one file and break another, and that is worse than not
+having rename at all. What it deliberately does not decide is whether the new name is a good
+one: a collision with something already in scope is something the checker has a diagnostic
+for, and answering it twice is how the two answers come to disagree. It does refuse a name
+the language cannot hold, and it asks the lexer rather than holding a second definition of
+what an identifier is.
 
 It checks a document together with every other `.vow` file in the folders the editor said it
 has open, and an open file's text comes from the buffer rather than from disk, so removing an

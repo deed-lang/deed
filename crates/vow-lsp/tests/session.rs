@@ -229,7 +229,10 @@ fn a_question_before_initialize_is_refused() {
 #[test]
 fn a_method_nobody_implemented_is_an_error_rather_than_silence() {
     // A request with no reply is a request the editor waits on forever.
-    let sent = session(&[request(1, "initialize"), request(2, "textDocument/rename")]);
+    let sent = session(&[
+        request(1, "initialize"),
+        request(2, "textDocument/completion"),
+    ]);
     assert_eq!(
         sent[1].at(&["error", "code"]).and_then(Json::as_i64),
         Some(-32601)
@@ -801,6 +804,188 @@ fn a_builtin_has_no_useful_answer() {
     ]);
 
     assert!(locations(sent.last().unwrap()).is_empty());
+}
+
+// -- rename ------------------------------------------------------------------
+
+fn rename(id: i64, uri: &str, line: u32, character: u32, to: &str) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/rename\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}},\
+         \"position\":{{\"line\":{line},\"character\":{character}}},\
+         \"newName\":\"{to}\"}}}}"
+    ))
+}
+
+/// The lines a rename wants to edit in one file, and what it wants to put
+/// there.
+fn edits(message: &Json, uri: &str) -> Vec<(i64, String)> {
+    let changes = message
+        .at(&["result", "changes"])
+        .unwrap_or_else(|| panic!("expected a workspace edit, got {message:?}"));
+    let Some(file) = changes.at(&[uri]) else {
+        return Vec::new();
+    };
+    file.as_array()
+        .expect("a list of edits")
+        .iter()
+        .map(|edit| {
+            (
+                edit.at(&["range", "start", "line"])
+                    .and_then(Json::as_i64)
+                    .expect("a line"),
+                edit.at(&["newText"])
+                    .and_then(Json::as_str)
+                    .expect("the new text")
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn renaming_a_local_edits_every_place_it_is_written() {
+    let source =
+        "module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n\nfn g(n: Int) -> Int {\n    n\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        rename(2, URI, 2, 5, "count"),
+    ]);
+
+    // The declaration and both uses, and not the `n` in `g`, which is a
+    // different definition that happens to be spelled the same.
+    assert_eq!(
+        edits(sent.last().unwrap(), URI),
+        vec![
+            (2, "count".to_string()),
+            (3, "count".to_string()),
+            (3, "count".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn renaming_an_exported_name_rewrites_the_use_line_too() {
+    // The one that matters. A rename that edited the declaration and left the
+    // `use` that brought it in would fix one file and break another, which is
+    // worse than not having rename at all.
+    let scratch = Scratch::new("rename-across");
+    let one = scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&one, EXPORTER),
+        // The `double` in `fn double`.
+        rename(2, &one, 2, 3, "twice"),
+    ]);
+
+    let message = sent.last().unwrap();
+    assert_eq!(edits(message, &one), vec![(2, "twice".to_string())]);
+    // The `use` on line 2 of the importer and the call on line 5.
+    assert_eq!(
+        edits(message, &two),
+        vec![(2, "twice".to_string()), (5, "twice".to_string())]
+    );
+}
+
+#[test]
+fn the_declaration_is_always_edited_even_asking_from_the_other_side() {
+    let scratch = Scratch::new("rename-back");
+    let one = scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, IMPORTER),
+        // The `double` in the call.
+        rename(2, &two, 5, 6, "twice"),
+    ]);
+
+    let message = sent.last().unwrap();
+    assert_eq!(edits(message, &one), vec![(2, "twice".to_string())]);
+    assert_eq!(
+        edits(message, &two),
+        vec![(2, "twice".to_string()), (5, "twice".to_string())]
+    );
+}
+
+#[test]
+fn a_prelude_name_is_not_this_workspaces_to_rename() {
+    let source = "module a\n\nfn f(s: String) -> Int {\n    length(s)\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        rename(2, URI, 3, 5, "size"),
+    ]);
+
+    let message = sent.last().unwrap();
+    // An error rather than an edit with nothing in it. An editor told "here is
+    // your edit" reports success and changes nothing, which looks like a bug
+    // in the editor.
+    assert!(message.at(&["error"]).is_some(), "{message:?}");
+    assert!(message.at(&["result"]).is_none(), "{message:?}");
+}
+
+#[test]
+fn a_new_name_the_language_cannot_hold_is_refused() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n";
+    for bad in ["fn", "2", "a b", "", "n!"] {
+        let sent = session(&[
+            request(1, "initialize"),
+            did_open(URI, source),
+            rename(2, URI, 2, 5, bad),
+        ]);
+        let message = sent.last().unwrap();
+        assert!(
+            message.at(&["error"]).is_some(),
+            "`{bad}` should have been refused: {message:?}"
+        );
+    }
+}
+
+#[test]
+fn prepare_rename_says_where_the_name_is() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        at(2, "textDocument/prepareRename", URI, 2, 5),
+    ]);
+
+    let range = sent.last().unwrap().at(&["result"]).expect("a range");
+    assert_eq!(
+        range.at(&["start", "line"]).and_then(Json::as_i64),
+        Some(2),
+        "{range:?}"
+    );
+    assert_eq!(
+        range.at(&["start", "character"]).and_then(Json::as_i64),
+        Some(5),
+        "{range:?}"
+    );
+}
+
+#[test]
+fn prepare_rename_refuses_what_rename_would_refuse() {
+    // So the command is greyed out rather than asking for a new spelling and
+    // then turning it down.
+    let source = "module a\n\nfn f(s: String) -> Int {\n    length(s)\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        at(2, "textDocument/prepareRename", URI, 3, 5),
+    ]);
+
+    assert!(
+        sent.last()
+            .unwrap()
+            .at(&["result"])
+            .is_some_and(Json::is_null),
+        "{:?}",
+        sent.last().unwrap()
+    );
 }
 
 #[test]
