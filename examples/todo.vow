@@ -26,16 +26,20 @@
 //    not having a loop. The `for` here carries one and still nothing is
 //    mutable: `found` is bound again on every turn rather than assigned.
 //
-// 3. The file format is `x|title` because that is what the language can take
-//    apart. `[x] title` would need searching or slicing and there is neither,
-//    so the data was bent to fit the tool. That is worth writing down rather
-//    than hiding behind a tidy-looking example.
+// 3. The file format was `x|title` because that was what the language could
+//    take apart. `[x] title` needed searching or slicing and there was
+//    neither, so the data was bent to fit the tool. That is fixed in #108 by
+//    the one text operation that could not be written in the language, and
+//    the format below is the one a person would have written first. A title
+//    containing the separator still loses its tail, which was true of `|` too
+//    and is a separator being a separator rather than a hole in the language.
 //
-// 4. Splitting on `"\n"` leaves a `\r` on every line of a file written on
-//    Windows, and there is no way to trim one off. The first run of this
+// 4. Splitting on `"\n"` left a `\r` on every line of a file written on
+//    Windows, and there was no way to trim one off. The first run of this
 //    program printed its own output backwards over itself for exactly that
-//    reason. The repository forces LF, which is a thing a program should not
-//    have to depend on.
+//    reason, and the repository forcing LF was a program depending on
+//    repository configuration to be correct. `trim` is the reason that is no
+//    longer true, and it is the better half of what #108 was for.
 //
 // What it still cannot do is mark a task done, which wants a way to say which
 // one, which wants either an index or a search. Both are writable now; neither
@@ -51,12 +55,17 @@ record Task {
 // One line to a task. `?` propagates the failure of either `at`, so a line
 // with no separator in it comes back as an error rather than as a task with
 // half of it missing.
+//
+// `trim` on both halves is what lets the format be `[x] ship it` rather than
+// something chosen for the parser's convenience: the mark arrives as `[x` or
+// `[` with a space still on it, and the title arrives with the space that
+// followed the bracket.
 fn parse(line: String) -> Result<Task, String> {
-    let parts = split(line, "|")
-    let mark = at(parts, 0)?
-    let title = at(parts, 1)?
+    let parts = split(line, "]")
+    let mark = trim(at(parts, 0)?)
+    let title = trim(at(parts, 1)?)
 
-    ok(Task { done: mark == "x", title })
+    ok(Task { done: mark == "[x", title })
 }
 
 // The three walks, which used to be three recursive functions and three
@@ -145,7 +154,7 @@ fn added(text: String, titles: List<String>) -> String {
     if length(titles) == 0 {
         text
     } else {
-        join(push(entries_in(text), "-|" + join(titles, " ")), "\n") + "\n"
+        join(push(entries_in(text), "[ ] " + join(titles, " ")), "\n") + "\n"
     }
 }
 
@@ -153,12 +162,19 @@ fn added(text: String, titles: List<String>) -> String {
 // grows or does not. A file that ends in a newline has a blank entry at the
 // end of it, and writing that back out would put a blank line in the middle of
 // the file the next time something was added.
+//
+// `trim` is here for a duller reason and a more important one. A file written
+// on Windows has a `\r` on the end of every line, and splitting on `"\n"`
+// leaves it there. Before there was a way to take it off, this program printed
+// its own output backwards over itself, and the only thing stopping that was
+// the repository forcing LF. A program should not depend on how the repository
+// holding it is configured.
 fn entries_in(text: String) -> List<String> {
     for line in split(text, "\n") with kept = [] {
-        if length(line) == 0 {
+        if length(trim(line)) == 0 {
             kept
         } else {
-            push(kept, line)
+            push(kept, trim(line))
         }
     }
 }
@@ -193,8 +209,8 @@ fn main(sys: System) -> Int
 }
 
 test "a line becomes a task" {
-    assert parse("x|ship it") == ok(Task { done: true, title: "ship it" })
-    assert parse("-|ship it") == ok(Task { done: false, title: "ship it" })
+    assert parse("[x] ship it") == ok(Task { done: true, title: "ship it" })
+    assert parse("[ ] ship it") == ok(Task { done: false, title: "ship it" })
 }
 
 test "a line with nothing to split is not a task" {
@@ -202,8 +218,13 @@ test "a line with nothing to split is not a task" {
     assert parse("no separator") == err("index 1 is outside a list of 1")
 }
 
+test "a line written on Windows is the same line" {
+    assert entries_in("[x] one\r\n[ ] two\r\n") == ["[x] one", "[ ] two"]
+    assert parse("[x] ship it\r") == ok(Task { done: true, title: "ship it" })
+}
+
 test "counting and collecting agree with each other" {
-    let lines = ["x|one", "-|two", "-|three", ""]
+    let lines = ["[x] one", "[ ] two", "[ ] three", ""]
 
     assert walk(lines) == 3
     assert count_done(lines) == 1

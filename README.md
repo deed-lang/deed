@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-51 passed, 0 failed
+54 passed, 0 failed
 ```
 
 ```
@@ -179,11 +179,12 @@ stop when the index runs out, and declare `Diverge` for the privilege. An accumu
 be threaded through as a parameter, because handler state is the only mutable thing in the
 language and reaching for a handler to collect strings would be using an effect to avoid a
 loop. Those two are what decided what a loop looks like here, and the three walks are `for`
-loops now with nothing declared. The file format is `x|title` rather than `[x] title` because
-splitting is all there is, so the data got bent to fit the tool. And the first run printed its
-own output backwards over itself, because splitting on `\n` leaves a carriage return on every
-line of a file written on Windows and there is nothing that trims one off. None of those were
-obvious from inside the compiler.
+loops now with nothing declared. The file format was `x|title` rather than `[x] title`
+because splitting was all there was, so the data got bent to fit the tool. And the first run
+printed its own output backwards over itself, because splitting on `\n` leaves a carriage
+return on every line of a file written on Windows and there was nothing that trimmed one off.
+The last two are what `trim` is for, and the file format is `[x] title` now. None of those
+were obvious from inside the compiler.
 
 `for` is a fold with syntax rather than a loop with a variable in it:
 

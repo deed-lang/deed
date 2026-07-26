@@ -1,5 +1,6 @@
-x|hold more than one of something
-x|get from text to a number and back
-x|decide what a loop looks like
-x|write a language server
--|work out what a trait is
+[x] hold more than one of something
+[x] get from text to a number and back
+[x] decide what a loop looks like
+[x] write a language server
+[x] say what a callback is allowed to do
+[ ] work out what a trait is

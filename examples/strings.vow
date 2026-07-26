@@ -85,6 +85,21 @@ fn report(count: Int) -> String {
     "found " + to_string(count)
 }
 
+// The one text operation that cannot be written in the language, which is the
+// test for whether a name belongs in the prelude at all. `contains(a, b)` is
+// `length(split(a, b)) > 1` and `replace(a, from, to)` is
+// `join(split(a, from), to)`, but deciding what whitespace is needs to look at
+// characters and taking it off the ends needs a walk that stops early, which a
+// fold does not do.
+//
+// It is also the difference between a program working and not. Splitting a
+// file on "\n" leaves a "\r" on every line of a file written on Windows, and
+// `examples/todo.vow` printed its own output backwards over itself until there
+// was a way to take one off.
+fn cleaned(raw: String) -> String {
+    trim(raw)
+}
+
 // What is deliberately missing: slicing, searching, case, padding, and any
 // formatting beyond `+`. Those want a standard library and Vow has no story
 // for one yet. This file is the minimum that makes a program writable, not a
@@ -129,4 +144,16 @@ test "numbers and text" {
     assert total_or("41", 0) == 41
     assert total_or("forty one", 7) == 7
     assert to_int("") == err("`` is not a number")
+}
+
+test "trimming" {
+    assert cleaned("  spaced out  ") == "spaced out"
+    // Both ends, and nowhere else. What is between two words is the program's
+    // business rather than this function's.
+    assert cleaned("  a  b  ") == "a  b"
+    // Whitespace is four characters, written down rather than deferred to a
+    // table nobody reading the signature can see.
+    assert cleaned(" \t\r\nboth ends\n\r\t ") == "both ends"
+    // The reason it exists: a line off the end of a file written on Windows.
+    assert cleaned(at(split("first\r\nsecond\r\n", "\n"), 0)?) == "first"
 }

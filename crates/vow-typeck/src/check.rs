@@ -209,8 +209,12 @@ impl<'a> Checker<'a> {
         // `to_int`. Each pair is here because a program that cannot take its
         // input apart or put its output together cannot read or print
         // anything, which is most of what a program does.
+        //
+        // `trim` is the one text operation that cannot be written in the
+        // language, which is the test for whether something belongs in the
+        // prelude at all.
         let lines = Ty::List(Box::new(Ty::Str));
-        let functions: [(&str, Vec<Ty>, Ty, Guarantee); 5] = [
+        let functions: [(&str, Vec<Ty>, Ty, Guarantee); 6] = [
             (
                 "length",
                 vec![Ty::Str],
@@ -224,6 +228,7 @@ impl<'a> Checker<'a> {
                 Guarantee::any(),
             ),
             ("join", vec![lines, Ty::Str], Ty::Str, Guarantee::any()),
+            ("trim", vec![Ty::Str], Ty::Str, Guarantee::any()),
             ("to_string", vec![Ty::Int], Ty::Str, Guarantee::any()),
             (
                 "to_int",

@@ -581,14 +581,15 @@ fn the_todo_example_reads_a_real_file_and_reports_on_it() {
     assert_eq!(code(&output), 0, "{}", stdout(&output));
 
     let text = stdout(&output);
-    assert!(text.contains("4 of 5 done"), "{text}");
+    assert!(text.contains("5 of 6 done"), "{text}");
     assert!(
         text.contains("still open: work out what a trait is"),
         "{text}"
     );
     // A `\r` left on the end of a title would print the rest of the line over
     // the top of itself, which is how the line endings in the data file were
-    // found in the first place.
+    // found in the first place. `trim` is what takes it off now, so this holds
+    // whatever the file on disk happens to end its lines with.
     assert!(!text.contains('\r'), "a carriage return survived:\n{text}");
 }
 
@@ -632,7 +633,7 @@ fn arguments_after_a_double_dash_go_to_the_program() {
     // separator rather than "whatever is left over", because a program's
     // arguments can look exactly like this tool's.
     let scratch = Scratch::new("todo-add");
-    scratch.write("todo.txt", "x|one\n-|two\n");
+    scratch.write("todo.txt", "[x] one\n[ ] two\n");
     let dir = scratch.path().to_str().unwrap().to_string();
 
     let output = run(&["run", TODO, "--dir", &dir, "--", "buy", "milk"]);
@@ -645,7 +646,7 @@ fn arguments_after_a_double_dash_go_to_the_program() {
 
     assert_eq!(
         std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
-        "x|one\n-|two\n-|buy milk\n"
+        "[x] one\n[ ] two\n[ ] buy milk\n"
     );
 }
 
@@ -655,7 +656,7 @@ fn a_program_given_no_arguments_leaves_the_file_alone() {
     // and a to-do list whose timestamp moves for no reason is one nobody
     // trusts.
     let scratch = Scratch::new("todo-noop");
-    scratch.write("todo.txt", "x|one\n-|two\n");
+    scratch.write("todo.txt", "[x] one\n[ ] two\n");
     let dir = scratch.path().to_str().unwrap().to_string();
 
     let before = std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap();
@@ -666,6 +667,26 @@ fn a_program_given_no_arguments_leaves_the_file_alone() {
         std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
         before
     );
+}
+
+#[test]
+fn a_file_written_on_windows_reads_the_same_as_one_written_anywhere_else() {
+    // The example used to print its own output backwards over itself, because
+    // splitting on a newline leaves the carriage return on every piece and
+    // there was no way to take one off. The only thing stopping it was the
+    // repository forcing LF, which is a program depending on how the
+    // repository holding it is configured.
+    let scratch = Scratch::new("todo-crlf");
+    scratch.write("todo.txt", "[x] one\r\n[ ] two\r\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let output = run(&["run", TODO, "--dir", &dir]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("1 of 2 done"), "{text}");
+    assert!(text.contains("still open: two"), "{text}");
+    assert!(!text.contains('\r'), "a carriage return survived:\n{text}");
 }
 
 // -- formatting ------------------------------------------------------------

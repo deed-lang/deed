@@ -52,6 +52,12 @@ use crate::exports::{ExportKind, Universe};
 /// get from neither to the other. Nothing could take input apart, put output
 /// together, or print a count, which is most of what a program does.
 ///
+/// `trim` is here on a narrower argument: it is the one text operation that
+/// cannot be written in the language. `contains` is `length(split(a, b)) > 1`
+/// and `replace` is `join(split(a, from), to)`, but deciding what whitespace
+/// is needs to look at characters and dropping it off the ends needs a walk
+/// that stops early, which a fold does not do.
+///
 /// The prelude is a place names go to become unavailable to everyone else, so
 /// it stays small and every addition to it is argued for rather than assumed.
 pub const PRELUDE: &[&str] = &[
@@ -67,6 +73,7 @@ pub const PRELUDE: &[&str] = &[
     "push",
     "split",
     "join",
+    "trim",
     "to_string",
     "to_int",
     "System",
