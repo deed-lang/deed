@@ -36,7 +36,7 @@ examples/transfer.vow
 
 ```
 $ cargo run -p vow-cli -- check examples/transfer.vow --obligations
-obligations: 4 proven, 0 tested, 6 guarded
+obligations: 7 proven, 0 tested, 6 guarded
   guarded  examples/transfer.vow:94:5  transfer ensures ok
   ...
   proven   examples/transfer.vow:202:76  Positive
@@ -282,12 +282,28 @@ default is zero and up, because there is no list with fewer than no things in it
 there. Two lists are two terms, and `length(f(items))` is not a term at all, since two calls
 could hand back two different lists.
 
-That was prompted by `todo.vow`, which marks a task by position now and cannot say no to
-`done 9` before running. It does not finish the job: `at` still returns a `Result` whatever is
-known about its index, and a `where` clause is a runtime check on the callee rather than an
-obligation on the caller, so the bound can be proved and nothing at the boundary is any
-cheaper for it. Preconditions being provable at a call site is a bigger change than a term,
-and it is the one that would close this.
+That was prompted by `todo.vow`, which marks a task by position now and could not say no to
+`done 9` before running. What made the fact worth having is the other half of the same
+change: a `where` clause is read at the call site now. It was not before. A precondition was
+a fact for the callee's body and a check inside the callee at runtime, and nothing ever
+looked at it from where the call was written, so `halve(0 - 5)` against `where n >= 0` passed
+the checker in silence. The design doc had described the call-site check for months. Now a
+call that plainly breaks a clause is an error where the call is, a caller that can show the
+clause holds is `Proven`, and a caller that cannot is `Guarded` with the runtime check still
+standing. `proven.vow` went from four proven obligations to thirty-seven that way, and most
+of them are calls rather than values.
+
+What crosses into a clause is the caller's facts said in the callee's parameter names: each
+argument's range, how long it is, and the differences between them. That last part is what
+settles `index < length(items)`, which is the clause the whole detour was about. A predicate
+does not cross a module boundary, the same as a refinement's does not, so a caller in another
+file answers for a precondition at runtime and the checker says nothing either way.
+
+It still does not finish the job. `at` returns a `Result` whatever is known about its index,
+so a caller that proved the bound still writes a `match` for a failure that cannot happen.
+A total indexing form is a precondition on a prelude function, which is a thing the language
+can now express, and whether the prelude should carry one is a question rather than an
+oversight.
 
 It also used to refuse `n + 1` on a `Positive`, and this paragraph used to say that was the
 reasoning working. It was not. Overflow is an error rather than a wrap, so `n + 1` either

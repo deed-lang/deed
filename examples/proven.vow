@@ -213,6 +213,30 @@ fn how_many_after(items: List<Int>, index: Int) -> Positive
     length(items) - index
 }
 
+// A `where` clause is also something the caller answers for, which is where
+// most of the proving in this file happens now. Every call below is checked
+// against what it was handed, so `nth(items, 0)` after a length check proves
+// both of its clauses and `nth(items, 0 - 1)` would be refused outright rather
+// than failing when it ran.
+//
+// The check inside the callee stays either way. The tier says how much was
+// settled ahead of time, not whether the check happens.
+fn nth(items: List<Int>, index: Int) -> Result<Int, String>
+  where
+    index >= 0,
+    index < length(items),
+{
+    at(items, index)
+}
+
+fn head(items: List<Int>) -> Result<Int, String> {
+    if length(items) <= 0 {
+        return err("nothing to index")
+    }
+
+    nth(items, 0)
+}
+
 // Guarded, and it has to be. Two lists are two lengths, so a bound on one says
 // nothing about the other, and an empty `others` makes this negative.
 fn from_the_wrong_list(items: List<Int>, others: List<Int>) -> Result<NonNegative, String> {
@@ -258,6 +282,8 @@ test "how long something is is a fact like any other" {
     assert how_many_after([1, 2, 3], 0) == 3
     assert how_many_after([1, 2, 3], 2) == 1
     assert from_the_wrong_list([1], [1, 2]) == ok(1)
+    assert head([7, 8]) == ok(7)
+    assert head([]) == err("nothing to index")
 }
 
 // A test that only feeds a guard values it accepts proves nothing. This one

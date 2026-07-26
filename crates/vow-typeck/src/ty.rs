@@ -361,6 +361,22 @@ pub struct Obligation {
     pub inside_ok: bool,
 }
 
+/// A `where` clause, answered for where the call was written.
+///
+/// Separate from [`Obligation`] because there is no refinement behind it and
+/// nothing new for the runtime to do: the callee already checks its own
+/// preconditions on every call. What this records is how much the call site
+/// settled, which is the difference between a contract that was read and one
+/// that was only written down.
+#[derive(Clone, Debug)]
+pub struct Precondition {
+    /// The call, not the clause. The clause is in the callee and the mistake
+    /// is here.
+    pub span: Span,
+    pub callee: String,
+    pub tier: Tier,
+}
+
 /// Everything the type checker worked out.
 #[derive(Default)]
 pub struct Types {
@@ -368,6 +384,7 @@ pub struct Types {
     names: HashMap<DefId, String>,
     exprs: HashMap<Span, Ty>,
     obligations: Vec<Obligation>,
+    preconditions: Vec<Precondition>,
     row_required: HashMap<Span, Vec<RowEntry>>,
 }
 
@@ -387,6 +404,16 @@ impl Types {
 
     pub(crate) fn push_obligation(&mut self, obligation: Obligation) {
         self.obligations.push(obligation);
+    }
+
+    pub(crate) fn push_precondition(&mut self, precondition: Precondition) {
+        self.preconditions.push(precondition);
+    }
+
+    /// Every `where` clause answered for at a call, in the order they were
+    /// reached.
+    pub fn preconditions(&self) -> &[Precondition] {
+        &self.preconditions
     }
 
     /// Notes that the value at `span` may perform no more than `allowed`.
