@@ -492,6 +492,58 @@ impl Types {
         }
     }
 
+    /// What can be written after a `.` on a value of this type.
+    ///
+    /// The fields of a record, with what each one is, and nothing for anything
+    /// else. A capability has no readable fields except `System`'s, which is
+    /// the root of all authority and is where every program starts.
+    ///
+    /// Best effort and for tooling, like [`Self::at`]. A type from another
+    /// module has its fields in that module's surface rather than here, so
+    /// this answers nothing for one, and answering nothing is better than
+    /// answering the wrong module's fields.
+    pub fn members_of(&self, ty: &Ty) -> Vec<(String, String)> {
+        let looked_through = match ty {
+            Ty::Named { def, .. } => match self.nominal(*def) {
+                Some(Nominal::Refinement { base, .. }) => base.clone(),
+                _ => ty.clone(),
+            },
+            other => other.clone(),
+        };
+
+        match &looked_through {
+            Ty::Named { def, args } => match self.nominal(*def) {
+                Some(Nominal::Record { fields }) => fields
+                    .iter()
+                    .map(|field| {
+                        (
+                            field.name.clone(),
+                            self.bare(&field.ty.substitute(&bindings_for(args))),
+                        )
+                    })
+                    .collect(),
+                Some(Nominal::Handler { state }) => state
+                    .iter()
+                    .map(|field| (field.name.clone(), self.bare(&field.ty)))
+                    .collect(),
+                _ => Vec::new(),
+            },
+            // The one capability with anything inside it. `sys.console` is
+            // where a program gets permission to print, and a reader of one
+            // has to start there.
+            Ty::External { module, name, .. }
+                if &**module == "<prelude>" && &**name == "System" =>
+            {
+                vec![
+                    ("console".to_string(), "Console".to_string()),
+                    ("files".to_string(), "Dir".to_string()),
+                    ("clock".to_string(), "Clock".to_string()),
+                ]
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn name_of(&self, def: DefId) -> &str {
         self.names.get(&def).map(String::as_str).unwrap_or("?")
     }

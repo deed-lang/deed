@@ -128,7 +128,7 @@ Read them in order. Each one leans on the one before it.
 | `vow-effects` | Every effect row checked against what the body does |
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `vow-fmt` | The one canonical form, with no options for the output |
-| `vow-lsp` | A language server: diagnostics, hover, go to definition, references, rename and formatting |
+| `vow-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion and formatting |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary: `check`, `test`, `run`, `fmt`, `fix` and `lsp` |
 
@@ -138,7 +138,16 @@ expression turned out to be, `Resolutions` can say where a name was declared, an
 formatter has one canonical answer with no options. It publishes diagnostics as you type,
 says the type of whatever is under the cursor, jumps to a declaration in whichever file
 declares it, lists every use of a name across the workspace, renames one everywhere it is
-written, and formats a file.
+written, offers what could be written where the cursor is, and formats a file.
+
+Completion is the only one that is a different shape. Everything else answers a question
+about a name that already exists, and a document does not parse while somebody is typing into
+it, so it answers a narrower question instead: what is in scope here. After a `.` that is the
+fields of whatever is to the left; inside `use a/b.{ }` it is what that module exports, which
+is the one place a name has to match another file exactly; anywhere else it is what the file
+declared, what it imported, and the prelude. Nothing it offers inserts more than a name. No
+snippets, no argument placeholders, no auto-import, because each of those is a decision about
+what somebody meant.
 
 Rename and find references are the same walk with two answers, which is the point of them
 sharing one. A rename that edited the declaration and left the `use` line that brought the
@@ -160,7 +169,8 @@ import, which is exactly the failure a server is not allowed to have.
 
 It rechecks the whole workspace on every keystroke and on every hover. That is fine at this
 size and is the thing that will stop being fine first, which is what P9 is about and what
-nothing has measured yet.
+nothing has measured yet. Completion is where it will show first: a hover is once per pause
+and a completion is once per keystroke in the middle of a word.
 
 It has no dependencies either. The protocol is a `Content-Length` header, a blank line and a
 handful of object shapes, so the JSON reader and the framing are written out. Two parts are
