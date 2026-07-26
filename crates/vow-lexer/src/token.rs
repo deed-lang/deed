@@ -21,11 +21,31 @@ use vow_diagnostics::Span;
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
+    /// Whether a newline came between this token and the one before it.
+    ///
+    /// Statements are separated by nothing, so what ends one is the next token
+    /// not being able to continue it. That works for almost everything and
+    /// silently fails for the tokens that can start an expression and also
+    /// continue one: `(` reads as a call and `-` reads as a subtraction, so
+    /// `let a = 1` followed by `-2` used to become `let a = 1 - 2` with the
+    /// second line gone. A line break is what a reader uses to tell those
+    /// apart, so it is what the parser uses too.
+    pub starts_line: bool,
 }
 
 impl Token {
     pub fn new(kind: TokenKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span,
+            starts_line: false,
+        }
+    }
+
+    #[must_use]
+    pub fn starting_line(mut self, starts_line: bool) -> Self {
+        self.starts_line = starts_line;
+        self
     }
 }
 

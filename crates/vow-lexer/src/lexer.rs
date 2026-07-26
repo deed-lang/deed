@@ -87,7 +87,7 @@ struct Lexer<'a> {
 impl<'a> Lexer<'a> {
     fn run(mut self) -> Lexed {
         loop {
-            self.skip_trivia();
+            let broke = self.skip_trivia();
             let start = self.pos;
             let Some(c) = self.bump() else { break };
 
@@ -162,12 +162,14 @@ impl<'a> Lexer<'a> {
 
             if let Some(kind) = kind {
                 let span = Span::new(start as u32, self.pos as u32);
-                self.tokens.push(Token::new(kind, span));
+                self.tokens
+                    .push(Token::new(kind, span).starting_line(broke));
             }
         }
 
         let eof = Span::at(self.pos as u32);
-        self.tokens.push(Token::new(TokenKind::Eof, eof));
+        self.tokens
+            .push(Token::new(TokenKind::Eof, eof).starting_line(true));
 
         Lexed {
             tokens: self.tokens,
@@ -207,7 +209,13 @@ impl<'a> Lexer<'a> {
 
     // -- trivia ------------------------------------------------------------
 
-    fn skip_trivia(&mut self) {
+    /// Skips whitespace and comments, saying whether a line ended on the way.
+    ///
+    /// Measured over the text rather than counted as it goes, so a block
+    /// comment with a newline inside it counts, which is what a reader would
+    /// say about it.
+    fn skip_trivia(&mut self) -> bool {
+        let start = self.pos;
         loop {
             match (self.peek(), self.peek_second()) {
                 (Some(c), _) if c.is_whitespace() => {
@@ -227,7 +235,7 @@ impl<'a> Lexer<'a> {
                     });
                 }
                 (Some('/'), Some('*')) => self.block_comment(),
-                _ => return,
+                _ => return self.src[start..self.pos].contains('\n'),
             }
         }
     }
