@@ -147,6 +147,114 @@ fn declaring_a_capability_type_of_your_own_is_noticed() {
     );
 }
 
+// -- installing a handler is a decision ------------------------------------
+//
+// A `with` block answers for the effect the handler implements. It does not
+// answer for what the handler does to implement it. Those effects were charged
+// to nobody, so a function holding a `Console` could install a handler that
+// writes to it and still declare an empty row, which is the one claim an empty
+// row is not allowed to make.
+//
+// Found by `rows_at_runtime.rs` on the day that test was written, from a
+// program that checked clean and then wrote to the screen.
+
+/// A `Log` effect and a handler that implements it by writing to a console.
+const LOUD: &str = "effect Log {\n\
+     \x20 fn note(message: String) -> ()\n\
+     }\n\n\
+     handler Loud implements Log {\n\
+     \x20 state out: Console\n\n\
+     \x20 fn note(message) -> ()\n\
+     \x20   uses Io.write,\n\
+     \x20 { Io.write(out, message) }\n\
+     }\n\n\
+     fn talks(n: Int) -> Int uses Log.note {\n\
+     \x20 Log.note(\"hi\")\n\
+     \x20 n\n\
+     }\n\n";
+
+#[test]
+fn installing_a_handler_charges_what_the_handler_performs() {
+    let (sources, checked) = check(&format!(
+        "module a\n\n{LOUD}\
+         fn looks_pure(n: Int, screen: Console) -> Int {{\n\
+         \x20 with Loud {{ out: screen }} {{ talks(n) }}\n\
+         }}\n"
+    ));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(checked.has_errors(), "this should not have been accepted");
+    assert!(text.contains("VOW5001"), "{text}");
+    assert!(text.contains("`Io.write`"), "{text}");
+    assert!(text.contains("looks_pure"), "{text}");
+}
+
+#[test]
+fn declaring_it_is_all_it_takes() {
+    // The effect is still discharged. `Log.note` is what the handler is for,
+    // so nothing has to declare that; `Io.write` is what it costs.
+    check_ok(&format!(
+        "module a\n\n{LOUD}\
+         fn says_so(n: Int, screen: Console) -> Int\n\
+         \x20 uses Io.write,\n\
+         {{\n\
+         \x20 with Loud {{ out: screen }} {{ talks(n) }}\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn a_handler_that_performs_the_effect_it_implements_is_answered_by_itself() {
+    // The handler's own row goes in with the body's row rather than straight
+    // onto the function, so the `with` discharges it the same way. Otherwise a
+    // handler that called its own effect would be uninstallable.
+    check_ok(
+        "module a\n\n\
+         effect Log {\n\
+         \x20 fn note(message: String) -> ()\n\
+         \x20 fn warn(message: String) -> ()\n\
+         }\n\n\
+         handler Chatty implements Log {\n\
+         \x20 fn note(message) -> () uses Log.warn, { Log.warn(message) }\n\
+         \x20 fn warn(message) -> () { }\n\
+         }\n\n\
+         fn talks(n: Int) -> Int uses Log.note {\n\
+         \x20 Log.note(\"hi\")\n\
+         \x20 n\n\
+         }\n\n\
+         fn quiet(n: Int) -> Int {\n\
+         \x20 with Chatty { talks(n) }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_handler_costs_the_same_from_another_module() {
+    // The effect system used to stop at the module boundary, which is where
+    // most calls are. An imported handler carries what it performs in its
+    // export, the same way an imported function carries its row.
+    let mut sources = SourceMap::new();
+    let ids = [
+        sources.add("loud.vow", format!("module loud\n\n{LOUD}").as_str()),
+        sources.add(
+            "app.vow",
+            "module app\n\n\
+             use loud.{Log, Loud, talks}\n\n\
+             fn looks_pure(n: Int, screen: Console) -> Int {\n\
+             \x20 with Loud { out: screen } { talks(n) }\n\
+             }\n",
+        ),
+    ];
+    let checked = vow_driver::check_all(&sources, &ids);
+    let said: Vec<Diagnostic> = checked
+        .iter()
+        .flat_map(|one| one.diagnostics.iter().cloned())
+        .collect();
+    let text = rendered(&sources, &said);
+    assert!(said.iter().any(Diagnostic::is_error), "{text}");
+    assert!(text.contains("VOW5001"), "{text}");
+    assert!(text.contains("`Io.write`"), "{text}");
+}
+
 // -- what it can do --------------------------------------------------------
 
 #[test]

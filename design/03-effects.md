@@ -172,6 +172,32 @@ The types come from the effect now, including one from another module, and a han
 operation that does not line up with the effect is `VOW4021`: an operation the effect never
 declared, or one taking a different number of arguments.
 
+**Installing a handler is a decision, and it costs what the handler costs.** A `with` block
+answers for the effect the handler implements, which is what a handler is for. It says
+nothing about what the handler does to implement it, and a handler that writes to a console
+is a program writing to a console. Those effects go to whoever installed it:
+
+```vow
+fn looks_pure(n: Int, screen: Console) -> Int
+  uses
+    Io.write,
+{
+    with Loud { out: screen } {
+        talks(n)
+    }
+}
+```
+
+`Log.note` is discharged, because that is what `Loud` is for. `Io.write` is not, because
+nothing discharged it, and without the `uses` clause this function holds a console, writes to
+it, and declares an empty row. That was true for a while. It is `VOW5001` now, and it works
+across a module boundary too, because a handler carries what it performs in its export the
+same way a function carries its row.
+
+The handler's own row goes in with the body's row rather than straight onto the enclosing
+function, so a handler whose operations perform the effect it implements is answered by
+itself, and stays installable.
+
 ## What this buys
 
 **Colour-free async.** The `async`/`await` split exists because a language noticed one
@@ -371,8 +397,11 @@ The gap worth naming is a handler operation, which has no declaration of its own
 row to be held to. That is exactly where an effect is implemented, so it is the half of the
 system this does not cover.
 
-The point is not that the check finds something today. It is that the next hole reports
-itself, with a stack, from a real program, instead of waiting to be noticed.
+The check found something on the day it was written, which is the argument for it. A `with`
+block discharged the effect a handler implements and charged what the handler itself performs
+to nobody, so a function holding a `Console` could install a handler that writes to it and
+declare an empty row. That is fixed above, and it is the kind of thing that was never going
+to be found by reading the pass that had the bug.
 
 ## Open questions
 
