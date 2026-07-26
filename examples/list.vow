@@ -1,0 +1,121 @@
+// A list library, written in Vow rather than built into the compiler.
+//
+// This file is the point of the last three changes. Generic functions made
+// `map` writable once instead of once per element type. Generic types made
+// `Option` declarable instead of built in. Row variables make the callback
+// able to do something.
+//
+// Before row variables there were two ways to write `map`, and both were
+// wrong. One took `Fn(A) -> B`, which promises to perform nothing, so the
+// callback could not log or read a file. The other took
+// `Fn(A) uses Log.note -> B`, which works for exactly one effect and needs a
+// second copy for the next one.
+//
+// `uses r` is a row variable: it stands for whatever the callback performs,
+// and `uses r` on the function passes that through to its own row. One `map`,
+// any callback, and a caller that has to declare what its own callback does.
+//
+// Nothing in here is special to the compiler. Every function below could have
+// been written by anybody, which is the first time that has been true of
+// anything in this repository.
+module examples/list
+
+// Turn each element into something else. The classic one, and the one that
+// could not be written until now.
+fn map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> B) -> List<B>
+  uses
+    r,
+{
+    for item in items with out = [] {
+        push(out, step(item))
+    }
+}
+
+// Keep the ones that pass. A `for` is a fold, so this is the accumulator
+// growing or not growing, which is what a filter is.
+fn filter<T, uses r>(items: List<T>, keep: Fn(T) uses r -> Bool) -> List<T>
+  uses
+    r,
+{
+    for item in items with kept = [] {
+        if keep(item) {
+            push(kept, item)
+        } else {
+            kept
+        }
+    }
+}
+
+// The general one, and the one `for` already is. Written out anyway, because
+// a library that has `map` and `filter` and not `fold` is a library that
+// stops working the moment somebody wants a sum.
+fn fold<T, S, uses r>(items: List<T>, start: S, step: Fn(S, T) uses r -> S) -> S
+  uses
+    r,
+{
+    for item in items with total = start {
+        step(total, item)
+    }
+}
+
+fn any<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
+  uses
+    r,
+{
+    for item in items with found = false {
+        if found {
+            true
+        } else {
+            matches(item)
+        }
+    }
+}
+
+fn all<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
+  uses
+    r,
+{
+    for item in items with so_far = true {
+        if so_far {
+            matches(item)
+        } else {
+            false
+        }
+    }
+}
+
+fn count_where<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Int
+  uses
+    r,
+{
+    for item in items with total = 0 {
+        if matches(item) {
+            total + 1
+        } else {
+            total
+        }
+    }
+}
+
+// These two need no callback and so no row variable. Worth having next to the
+// rest so that the row on the others reads as a decision rather than as
+// something every signature in the file happens to carry.
+fn first<T>(items: List<T>) -> Result<T, String> {
+    at(items, 0)
+}
+
+fn last<T>(items: List<T>) -> Result<T, String> {
+    at(items, length(items) - 1)
+}
+
+fn reversed<T>(items: List<T>) -> List<T> {
+    for item in items with out = [] {
+        prepend(out, item)
+    }
+}
+
+fn prepend<T>(items: List<T>, front: T) -> List<T> {
+    for item in items with out = [front] {
+        push(out, item)
+    }
+}

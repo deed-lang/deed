@@ -40,6 +40,13 @@ impl FnRow {
         let (FnRow::Declared(actual), FnRow::Declared(expected)) = (self, expected) else {
             return true;
         };
+        // A row variable stands for whatever the value performs, so a type
+        // that carries one has made room for anything. Which row it turned out
+        // to be, and whether the caller declared it, is settled by the pass
+        // that knows about rows.
+        if expected.iter().any(|entry| entry.variable) {
+            return true;
+        }
         actual.iter().all(|entry| {
             expected.iter().any(|allowed| {
                 allowed == entry

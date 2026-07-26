@@ -256,7 +256,7 @@ impl Printer<'_> {
         self.line_start();
         self.push("record ");
         self.push(&decl.name.name);
-        self.push(&type_params(&decl.generics));
+        self.push(&type_params(&decl.generics, &[]));
         self.fields_block(&decl.fields);
     }
 
@@ -294,7 +294,7 @@ impl Printer<'_> {
         self.line_start();
         self.push("choice ");
         self.push(&decl.name.name);
-        self.push(&type_params(&decl.generics));
+        self.push(&type_params(&decl.generics, &[]));
 
         if decl.variants.is_empty() {
             self.push(" {}");
@@ -422,7 +422,7 @@ impl Printer<'_> {
         let mut text = format!(
             "fn {}{}({})",
             sig.name.name,
-            type_params(&sig.generics),
+            type_params(&sig.generics, &sig.rows),
             params.join(", ")
         );
         if let Some(ret) = &sig.ret {
@@ -459,7 +459,7 @@ impl Printer<'_> {
             let head = format!(
                 "fn {}{}({})",
                 sig.name.name,
-                type_params(&sig.generics),
+                type_params(&sig.generics, &sig.rows),
                 params.join(", ")
             );
             let head_width = self.indent * INDENT.len() + head.len();
@@ -472,7 +472,7 @@ impl Printer<'_> {
                 self.push(&format!(
                     "fn {}{}(",
                     sig.name.name,
-                    type_params(&sig.generics)
+                    type_params(&sig.generics, &sig.rows)
                 ));
                 self.newline();
                 self.indent += 1;
@@ -981,19 +981,24 @@ fn path(segments: &[Ident]) -> String {
         .join(".")
 }
 
-/// `<T, U>`, or nothing at all.
+/// `<T, U>`, or `<A, B, uses r>`, or nothing at all.
+///
+/// Type parameters first and row variables after, whatever order they were
+/// written in. One canonical form, and this is the one that reads: what a call
+/// works out from the arguments, then what it works out from their rows.
 ///
 /// Never broken across lines. A list long enough to need it would be a
 /// declaration with a different problem.
-fn type_params(generics: &[Ident]) -> String {
-    if generics.is_empty() {
+fn type_params(generics: &[Ident], rows: &[Ident]) -> String {
+    if generics.is_empty() && rows.is_empty() {
         return String::new();
     }
-    let names: Vec<&str> = generics
+    let mut written: Vec<String> = generics
         .iter()
-        .map(|parameter| parameter.name.as_str())
+        .map(|parameter| parameter.name.clone())
         .collect();
-    format!("<{}>", names.join(", "))
+    written.extend(rows.iter().map(|row| format!("uses {}", row.name)));
+    format!("<{}>", written.join(", "))
 }
 
 fn effect_ref(effect: &EffectRef) -> String {

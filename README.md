@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-64 passed, 0 failed
+69 passed, 0 failed
 ```
 
 ```
@@ -176,7 +176,8 @@ The examples are [transfer.vow](examples/transfer.vow),
 [closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow),
 [strings.vow](examples/strings.vow), [lists.vow](examples/lists.vow),
 [generics.vow](examples/generics.vow),
-[generic_types.vow](examples/generic_types.vow), and the three that see
+[generic_types.vow](examples/generic_types.vow), [list.vow](examples/list.vow),
+[using_list.vow](examples/using_list.vow), and the three that see
 each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
 `hello.vow`, `config.vow`, `todo.vow` and `journal.vow` have a `main`, and the rest run their
@@ -306,6 +307,24 @@ literal matches its declared field types against the values it was given. A fiel
 at the type it was applied to, and so does a pattern binder, which is the part a test caught:
 `Some { value }` on an `Option<Int>` has to bind an `Int` rather than the `T` the choice was
 declared with.
+
+`list.vow` and `using_list.vow` are the point of the three changes above. `list.vow` is a
+list library written in Vow: `map`, `filter`, `fold`, `any`, `all`, `count_where`, none of
+them known to the compiler, no builtin, no special case, no name in the prelude. It is the
+first thing in this repository anybody else could have written.
+
+What it needed last was a row variable. Before that there were two ways to write `map` and
+both were wrong: `Fn(A) -> B` promises to perform nothing, so the callback could not log or
+read a file, and `Fn(A) uses Log.note -> B` works for one effect and needs a second copy for
+the next one. `uses r` stands for whatever the callback performs and passes it through to the
+function's own row, so `map(ns, |n| n + n)` performs nothing and
+`map(ns, |n| { Log.note(..); n })` performs `Log.note`, and the second caller has to say so.
+The library says "whatever you gave me" and the caller says what that was.
+
+Inside the body a row variable is an ordinary entry: calling the callback performs `r`, the
+contract says `uses r`, and the same two rules that check every other function check that
+one. Which is why a variable that reaches no parameter was already an error before anything
+was written for it, since nothing can fill it, so nothing performs it, so the row is too wide.
 
 The worst one so far was found the same afternoon. The `Guarded` tier did not guard a return
 value. `vow check` printed "so it becomes a runtime check" and there was no check: the

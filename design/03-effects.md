@@ -193,15 +193,18 @@ Effect systems have been understood for decades and keep failing to escape resea
 reason is almost never expressiveness, it is that annotations propagate and real programs
 end up drowning in rows nobody wants to maintain.
 
-Vow does not have a solution to that yet. The ideas on the table are:
+Vow does not have a complete solution to that yet. The ideas on the table are:
 
 - Infer rows everywhere except at module boundaries, so most functions never write one
 - Effect aliases, so `uses Storage` expands to a named group
-- Polymorphic rows, so a `map` does not need to enumerate what its callback might do
 
-Row polymorphism is the one that worries me, because it is where the type system gets big,
-and P2 is watching. If the annotation burden cannot be made to disappear for ordinary code,
-this whole design fails on ergonomics, exactly like its predecessors.
+Row polymorphism was the third one and it was the one that worried me, because it is where
+the type system gets big and P2 is watching. It is built now and it cost less than expected:
+one more kind of definition, one more item in a row, and one substitution at a call site. See
+the section below.
+
+If the annotation burden cannot be made to disappear for ordinary code, this whole design
+fails on ergonomics, exactly like its predecessors.
 
 ## Closures
 
@@ -281,15 +284,61 @@ What is still unwritable is a function type that is polymorphic in its row, so a
 name what its callback may do rather than passing it through. That is the row polymorphism
 question above, and rows on function types are what makes it possible to ask.
 
+### Row variables
+
+A row on a function type names an effect. What a combinator needs is to name *whichever* row
+its callback has and pass it through to its own:
+
+```vow
+fn map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> B) -> List<B>
+  uses
+    r,
+{
+    for item in items with out = [] {
+        push(out, step(item))
+    }
+}
+```
+
+Before this there were two ways to write that and both were wrong. `Fn(A) -> B` promises to
+perform nothing, so the callback could not log or read a file. `Fn(A) uses Log.note -> B`
+works for exactly one effect and needs a second copy for the next one.
+
+**A row variable is declared, not inferred from where it turns up.** `<A, B, uses r>` is one
+list holding everything a call has to work out, and `uses` says which kind each entry is. A
+name that meant one thing in one position and something else elsewhere would be a thing a
+reader has to work out, and `uses` is already a keyword so this costs the grammar nothing.
+
+**Inside the body it is an ordinary row entry.** Calling `step` performs `r`, the contract
+says `uses r`, and the same two rules that check every other function check this one. That is
+why a variable that reaches no parameter is already an error: nothing can fill it, so nothing
+performs it, so the row is too wide and `VOW5002` says so with no new code behind it.
+
+**At a call site it is replaced by what was passed.** The variable is dropped, because it
+names nothing a caller could declare, and the row of whatever went in at that parameter goes
+in instead. So `map(ns, |n| n + n)` performs nothing and `map(ns, |n| { Log.note(..); n })`
+performs `Log.note`, and the second caller has to say so. The library says "whatever you gave
+me" and the caller says what that was.
+
+**It crosses a module boundary as a position.** Which parameter a variable comes from is what
+travels, for the same reason a type parameter travels as a position: a `DefId` is an index
+into one module's table. `examples/list.vow` is a list library written in Vow and
+`examples/using_list.vow` imports it, which is the test for whether any of this worked.
+
+What is deliberately absent is row subtraction, or anything that says "this row minus `Log`".
+A `with` block already handles an effect; saying that in a type is a much larger thing.
+
 ## Open questions
 
-- Row variables, so a `map` could pass its callback's row through to its own rather than
-  naming one. Concrete rows are enough to write a callback that logs; they are not enough to
-  write a combinator that works for every callback.
 - Charging a closure's effects to the call site rather than to its author. Now that a
   closure's row can be written down where it crosses a boundary, the conservative rule is
   doing less work than it used to. Changing it changes the soundness argument above, which is
   worth its own change rather than a line in someone else's.
+- Whether a row variable should be able to appear in two parameters. Today the second one is
+  checked against the first, the same way a type parameter's second occurrence is, so
+  `fn both<uses r>(f: Fn() uses r -> (), g: Fn() uses r -> ())` forces two callbacks to have
+  the same row. The useful version is a union, and a union is a different thing from a
+  variable that stands for one row.
 - Can rows be inferred well enough that most functions carry none, and does that then
   undermine the review argument, which depends on the signature being complete?
 - How do effects interact with data structures. Does a `Map` holding closures need a row?

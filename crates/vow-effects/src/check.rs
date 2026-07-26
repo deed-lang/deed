@@ -89,6 +89,8 @@ pub fn analyse(
         declared_sites: HashMap::new(),
         recursive: HashSet::new(),
         row_required: row_required.clone(),
+        checked_rows: HashSet::new(),
+        row_from: HashMap::new(),
         closure_rows: HashMap::new(),
     };
 
@@ -122,6 +124,19 @@ struct Checker<'a> {
     /// What each expression handing over a function value is allowed to
     /// perform, as the type it is crossing into wrote it.
     row_required: HashMap<Span, Vec<RowEntry>>,
+    /// Expressions already complained about, so that walking one twice does
+    /// not say the same thing twice.
+    ///
+    /// A closure argument is walked once as an argument and once as the value
+    /// a row variable stands for, which are two questions about one piece of
+    /// code and deserve one answer.
+    checked_rows: HashSet<Span>,
+    /// Which parameters' rows flow into each local function's own row.
+    ///
+    /// Positions, the same way they cross a module boundary. A call charges
+    /// itself with whatever it passed at each of these, which is what makes a
+    /// row variable mean anything outside the declaration that wrote it.
+    row_from: HashMap<DefId, Vec<usize>>,
     /// The row of each local bound to a closure, within the body being checked.
     ///
     /// A closure is the one value in the language that holds code, and a name
@@ -181,6 +196,10 @@ impl<'a> Checker<'a> {
                     }
                     self.effects.declared.insert(def, row);
                     self.declared_sites.insert(def, sites);
+                    self.row_from.insert(
+                        def,
+                        vow_resolve::exports::row_sources(&function.sig, &function.contract),
+                    );
                 }
                 _ => {}
             }
@@ -338,6 +357,18 @@ impl<'a> Checker<'a> {
             };
 
             match self.kind_of(def) {
+                // A row variable, which stands for whatever the callback it is
+                // attached to performs. Carried as an item like any other, so
+                // that the body of the function that declared it is checked
+                // the ordinary way: calling the callback performs `r`, and the
+                // contract has to say `uses r`. What `r` turned out to be is a
+                // question for the call site, and it is answered there.
+                DefKind::RowParam => {
+                    let item = EffectItem::whole(def);
+                    row.insert(item.clone());
+                    sites.push((item, entry.span));
+                }
+
                 DefKind::Effect => {
                     let item = match (&entry.operation, entry.all) {
                         (Some(operation), _) => EffectItem::operation(def, operation.name.clone()),
@@ -641,7 +672,7 @@ impl<'a> Checker<'a> {
             Expr::Field { receiver, .. } => row.extend(&self.infer_expr(receiver)),
 
             Expr::Call { callee, args, .. } => {
-                if let Some(performed) = self.call_effects(callee) {
+                if let Some(performed) = self.call_effects(callee, args) {
                     row.extend(&performed);
                 } else {
                     row.extend(&self.infer_expr(callee));
@@ -806,6 +837,9 @@ impl<'a> Checker<'a> {
     /// Leaving a row off cannot mean "any row": a value carrying an unstated
     /// effect through a signature would undo the point of having rows.
     fn check_row(&mut self, expr: &Expr, allowed: &[RowEntry]) {
+        if !self.checked_rows.insert(expr.span()) {
+            return;
+        }
         let row = self.function_value_row(expr);
         if row.is_empty() {
             return;
@@ -857,7 +891,11 @@ impl<'a> Checker<'a> {
     ///
     /// `None` means the callee is not something with a known row, and the
     /// caller should walk it as an ordinary expression instead.
-    fn call_effects(&mut self, callee: &Expr) -> Option<Row> {
+    ///
+    /// `args` is what makes a row variable mean something. A declared row
+    /// holding one is a row with a hole in it, and the hole is filled by
+    /// whatever was passed at the parameter the variable came from.
+    fn call_effects(&mut self, callee: &Expr, args: &[Expr]) -> Option<Row> {
         let def = match callee {
             Expr::Ident(ident) => self.resolutions.resolution(ident.span),
             Expr::Field { name, .. } => self.resolutions.resolution(name.span),
@@ -874,7 +912,11 @@ impl<'a> Checker<'a> {
             // A function's declared row is its contract. Using the declaration
             // rather than the inferred row keeps this modular and means
             // recursion needs no fixpoint.
-            DefKind::Function => Some(self.effects.declared.get(&def).cloned().unwrap_or_default()),
+            DefKind::Function => {
+                let declared = self.effects.declared.get(&def).cloned().unwrap_or_default();
+                let sources = self.row_from.get(&def).cloned().unwrap_or_default();
+                Some(self.fill_row(declared, &sources, args))
+            }
             // A function from another module. Its row is its contract too, and
             // it is in the export, so a call into another file is no longer
             // free. It used to be, which meant the effect system stopped at
@@ -884,7 +926,15 @@ impl<'a> Checker<'a> {
                 if export.kind != vow_resolve::ExportKind::Function {
                     return None;
                 }
-                let entries = export.row.clone();
+                let entries: Vec<RowEntry> = export
+                    .row
+                    .iter()
+                    // A row variable names nothing on the far side. What it
+                    // stood for is the argument, and that is filled in below.
+                    .filter(|entry| !entry.variable)
+                    .cloned()
+                    .collect();
+                let sources = export.row_from.clone();
                 let complete = export.row_complete;
                 let span = callee.span();
 
@@ -907,7 +957,8 @@ impl<'a> Checker<'a> {
                     );
                 }
 
-                Some(self.translate(&entries, span))
+                let translated = self.translate(&entries, span);
+                Some(self.fill_row(translated, &sources, args))
             }
             // A name bound to a function value: a parameter whose type wrote a
             // row, or a local bound to a closure. Calling it performs what it
@@ -915,6 +966,37 @@ impl<'a> Checker<'a> {
             DefKind::Param | DefKind::Local => self.closure_rows.get(&def).cloned(),
             _ => None,
         }
+    }
+
+    /// A declared row with its variables replaced by what was passed.
+    ///
+    /// A row variable is a hole in a row: the declaration said "whatever the
+    /// callback does", and only the call site knows what that was. So the
+    /// variable itself is dropped, because it names nothing a caller could
+    /// declare, and the row of whatever was passed at each of `sources` goes
+    /// in instead.
+    ///
+    /// This is what makes one `map` work for a callback that logs, a callback
+    /// that reads a file and a callback that does neither, rather than there
+    /// being three of them.
+    fn fill_row(&mut self, declared: Row, sources: &[usize], args: &[Expr]) -> Row {
+        if sources.is_empty() {
+            return declared;
+        }
+
+        let mut row: Row = declared
+            .iter()
+            .filter(|item| self.kind_of(item.effect) != DefKind::RowParam)
+            .cloned()
+            .collect();
+
+        for index in sources {
+            if let Some(arg) = args.get(*index) {
+                let passed = self.function_value_row(arg);
+                row.extend(&passed);
+            }
+        }
+        row
     }
 
     /// This module's own way of saying one entry of a row from elsewhere.

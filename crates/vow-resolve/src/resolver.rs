@@ -779,6 +779,10 @@ impl Resolver<'_> {
         // and the body can all name one and none of them can be resolved
         // without it.
         self.declare_type_params(&function.sig.generics);
+        for variable in &function.sig.rows {
+            let def = self.declare_local(variable, DefKind::RowParam);
+            self.used.insert(def);
+        }
 
         for param in &function.sig.params {
             if let Some(ty) = &param.ty {

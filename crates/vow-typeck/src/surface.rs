@@ -166,6 +166,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 // generic function arrives with its parameters still in it and
                 // the call site does the same substitution it does at home.
                 lowerer.type_params = positions(&decl.sig.generics, resolutions);
+                lowerer.rows.declaring(&decl.sig.rows);
 
                 let declared = match &decl.sig.ret {
                     Some(Type::Named { name, .. }) => predicates

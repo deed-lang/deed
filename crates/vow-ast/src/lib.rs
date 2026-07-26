@@ -189,6 +189,15 @@ pub struct FnSig {
     /// removes the need to write type arguments at a call site and with them
     /// the `f<a>(b)` versus `f < a > (b)` ambiguity. See `design/02-syntax.md`.
     pub generics: Vec<Ident>,
+    /// `uses r` in `fn map<A, B, uses r>(..)`, written in the same list.
+    ///
+    /// A row variable stands for whatever a callback performs, so that a
+    /// combinator can pass it through to its own row rather than naming one
+    /// effect and being useful for that effect only. Declared rather than
+    /// inferred from where it appears, because a name that means one thing in
+    /// one position and another thing elsewhere is a thing a reader has to
+    /// work out.
+    pub rows: Vec<Ident>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
     pub span: Span,

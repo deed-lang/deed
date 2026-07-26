@@ -10,7 +10,7 @@
 //! module to have been resolved first, which is what keeps the whole thing a
 //! single pass and, as it turns out, makes import cycles a non-problem.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use vow_ast::{Item, Module};
 
@@ -60,6 +60,12 @@ pub struct RowEntry {
     pub effect: String,
     /// `None` means every operation of the effect.
     pub operation: Option<String>,
+    /// Whether this is a row variable rather than an effect.
+    ///
+    /// A variable stands for whatever a callback performs, so it names nothing
+    /// on its own and a reader on the far side has to be told that rather than
+    /// left to look for an effect that is not there.
+    pub variable: bool,
 }
 
 /// One exported name.
@@ -87,6 +93,46 @@ pub struct Export {
     /// make every caller look pure, so the loophole would move rather than
     /// close.
     pub row_complete: bool,
+    /// Which parameters' rows flow into this function's own.
+    ///
+    /// Positions rather than names, for the same reason a type parameter
+    /// crosses as a position: a `DefId` means nothing outside the table it
+    /// came from and a name would need one to be looked up. A caller charges
+    /// itself with whatever it passed at each of these, which is what makes a
+    /// row variable mean anything at a call site.
+    pub row_from: Vec<usize>,
+}
+
+/// Which parameters carry a row variable that the declaration passes through.
+///
+/// Syntax alone, like everything else in this file. A parameter counts when
+/// its type is a function type whose row names one of the declaration's row
+/// variables, and the declaration's own row names it too. Both halves are
+/// needed: a callback whose row goes nowhere is one the function may not call.
+pub fn row_sources(sig: &vow_ast::FnSig, contract: &vow_ast::Contract) -> Vec<usize> {
+    let passed: Vec<&str> = sig
+        .rows
+        .iter()
+        .map(|variable| variable.name.as_str())
+        .filter(|name| {
+            contract
+                .uses
+                .iter()
+                .any(|entry| entry.effect.name == *name && entry.operation.is_none())
+        })
+        .collect();
+
+    sig.params
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| match &param.ty {
+            Some(vow_ast::Type::Fn { row, .. }) => row
+                .iter()
+                .any(|entry| passed.contains(&entry.effect.name.as_str())),
+            _ => false,
+        })
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// Turns a `uses` clause into the portable form, from syntax alone.
@@ -99,6 +145,10 @@ pub struct Export {
 pub struct RowLowering {
     here: String,
     origins: BTreeMap<String, String>,
+    /// The row variables of the declaration being lowered, and nothing else.
+    /// Replaced per declaration, because one means nothing outside the
+    /// signature that declared it.
+    variables: BTreeSet<String>,
 }
 
 impl RowLowering {
@@ -117,7 +167,19 @@ impl RowLowering {
             }
         }
 
-        Self { here, origins }
+        Self {
+            here,
+            origins,
+            variables: BTreeSet::new(),
+        }
+    }
+
+    /// Points this at one declaration's row variables, for the rows inside it.
+    pub fn declaring(&mut self, variables: &[vow_ast::Ident]) {
+        self.variables = variables
+            .iter()
+            .map(|variable| variable.name.clone())
+            .collect();
     }
 
     /// The entries, and whether they are the whole story.
@@ -132,6 +194,7 @@ impl RowLowering {
             .filter(|entry| !entry.all && !entry.effect.name.is_empty())
             .map(|entry| RowEntry {
                 module: match self.origins.get(entry.effect.name.as_str()) {
+                    _ if self.variables.contains(&entry.effect.name) => self.here.clone(),
                     Some(path) => path.clone(),
                     // The language provides it, so every module can name it
                     // and no import is involved anywhere.
@@ -142,6 +205,7 @@ impl RowLowering {
                 },
                 effect: entry.effect.name.clone(),
                 operation: entry.operation.as_ref().map(|op| op.name.clone()),
+                variable: self.variables.contains(&entry.effect.name),
             })
             .collect();
         (entries, complete)
@@ -178,7 +242,7 @@ impl Exports {
         // Where each imported name came from, so a row naming an imported
         // effect can say which module declared it. Straight off the `use`
         // lines, so nothing has to be resolved first.
-        let rows = RowLowering::of(module);
+        let mut rows = RowLowering::of(module);
 
         for item in &module.items {
             // A choice's variants are usable unqualified inside the module
@@ -196,24 +260,36 @@ impl Exports {
                             members: Vec::new(),
                             row: Vec::new(),
                             row_complete: true,
+                            row_from: Vec::new(),
                         },
                     );
                 }
             }
 
-            let (name, kind, members, row, row_complete) = match item {
-                Item::TypeAlias(decl) => {
-                    (&decl.name, ExportKind::Type, Vec::new(), Vec::new(), true)
-                }
-                Item::Record(decl) => {
-                    (&decl.name, ExportKind::Record, Vec::new(), Vec::new(), true)
-                }
+            let (name, kind, members, row, row_complete, row_from) = match item {
+                Item::TypeAlias(decl) => (
+                    &decl.name,
+                    ExportKind::Type,
+                    Vec::new(),
+                    Vec::new(),
+                    true,
+                    Vec::new(),
+                ),
+                Item::Record(decl) => (
+                    &decl.name,
+                    ExportKind::Record,
+                    Vec::new(),
+                    Vec::new(),
+                    true,
+                    Vec::new(),
+                ),
                 Item::Choice(decl) => (
                     &decl.name,
                     ExportKind::Choice,
                     decl.variants.iter().map(|v| v.name.name.clone()).collect(),
                     Vec::new(),
                     true,
+                    Vec::new(),
                 ),
                 Item::Effect(decl) => (
                     &decl.name,
@@ -224,6 +300,7 @@ impl Exports {
                         .collect(),
                     Vec::new(),
                     true,
+                    Vec::new(),
                 ),
                 Item::Handler(decl) => (
                     &decl.name,
@@ -231,8 +308,10 @@ impl Exports {
                     vec![decl.effect.name.clone()],
                     Vec::new(),
                     true,
+                    Vec::new(),
                 ),
                 Item::Function(decl) => {
+                    rows.declaring(&decl.sig.rows);
                     let (row, complete) = rows.row(&decl.contract.uses);
                     (
                         &decl.sig.name,
@@ -240,6 +319,7 @@ impl Exports {
                         Vec::new(),
                         row,
                         complete,
+                        row_sources(&decl.sig, &decl.contract),
                     )
                 }
                 // A `test` is not part of the surface, and an error node is
@@ -254,6 +334,7 @@ impl Exports {
                     members,
                     row,
                     row_complete,
+                    row_from,
                 },
             );
         }
