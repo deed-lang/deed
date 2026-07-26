@@ -293,6 +293,46 @@ fn the_clock_is_deterministic() {
     assert_eq!(one, two);
 }
 
+/// The default is the right one and it is not the only one anybody needs. A
+/// program that wants the actual time says so, and what it says is a row entry
+/// rather than a second kind of clock, which is the same answer `save` and
+/// `read` get about the same `Dir`.
+#[test]
+fn the_real_clock_is_a_different_entry_in_the_row() {
+    let (sources, checked) = check(
+        "module a\n\nfn ticking(clock: Clock) -> Int\n  uses Io.now,\n{\n  Io.epoch(clock)\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("performs `Io.epoch` without declaring it"),
+        "{text}"
+    );
+
+    // And the other way round, since a split that only holds in one direction
+    // is not a split.
+    let (sources, checked) = check(
+        "module a\n\nfn stamped(clock: Clock) -> Int\n  uses Io.epoch,\n{\n  Io.now(clock)\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("performs `Io.now` without declaring it"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_real_clock_reads_the_machine() {
+    // Any machine whose clock is set after 2020. Asserting on the number
+    // itself would be asserting on when the test was run, which is the whole
+    // reason this is a separate entry from `now`.
+    let (_, run) = run(
+        "module a\n\nfn main(sys: System) -> Int\n  uses Io.epoch,\n{\n  Io.epoch(sys.clock)\n}\n",
+    );
+    let stamped = run.result.expect("should run").to_string();
+    let millis: i64 = stamped.parse().expect("milliseconds");
+    assert!(millis > 1_577_836_800_000, "{millis}");
+}
+
 #[test]
 fn contracts_still_apply_to_main() {
     let (sources, run) = run(

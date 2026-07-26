@@ -108,8 +108,17 @@ pub const PRELUDE: &[&str] = &[
 /// `list` means you may find out what is there, which is strictly more. The
 /// row is what separates them, and that is the same split that already stops a
 /// reader from writing.
+///
+/// `now` and `epoch` are that split again, about something other than
+/// authority. `now` counts calls, because P8 says the default is
+/// deterministic and a wall clock would make every run different. `epoch`
+/// reads the machine's clock, which is the right answer for a program that
+/// needs the actual time and the wrong one for anything that has to give the
+/// same answer twice. Holding a `Clock` says nothing about which of the two a
+/// function may do, so the row does, and a signature saying `uses Io.epoch` is
+/// a function whose output can change between two runs of the same program.
 pub const IO_OPERATIONS: &[&str] = &[
-    "write", "now", "open", "read", "save", "remove", "make", "list", "args",
+    "write", "now", "epoch", "open", "read", "save", "remove", "make", "list", "args",
 ];
 
 /// The effects the language provides, available in every module without an

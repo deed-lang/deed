@@ -128,6 +128,22 @@ fn refusal_inside(files: Dir) -> String
     refusal(files, "..")
 }
 
+// The same split about something other than authority. `Io.now` counts calls,
+// because P8 says the default is deterministic and a wall clock would make
+// every run different. `Io.epoch` reads the machine's clock, and it is a
+// separate entry in the row on the same `Clock`. Take `Io.epoch` out and this
+// does not compile; put `Io.now` in instead and it still does not.
+//
+// What the row buys here is not narrower authority. It is that this function
+// is one whose answer changes between two runs of the same program, and the
+// signature says so without anybody reading the body.
+fn stamped(clock: Clock, line: String) -> String
+  uses
+    Io.epoch,
+{
+    to_string(Io.epoch(clock)) + " " + line
+}
+
 fn main(sys: System) -> Int
   uses
     Io.write,
@@ -135,10 +151,11 @@ fn main(sys: System) -> Int
     Io.save,
     Io.make,
     Io.list,
+    Io.epoch,
 {
     let out = sys.console
 
-    match note(sys.files, "journal.txt", "wrote a file for the first time") {
+    match note(sys.files, "journal.txt", stamped(sys.clock, "wrote a file for the first time")) {
         ok(nothing) => Io.write(out, "saved"),
         err(why) => Io.write(out, why),
     }

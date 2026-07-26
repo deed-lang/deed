@@ -1414,6 +1414,24 @@ impl<'a> Interp<'a> {
                 self.ticks += 1;
                 Ok(Value::Int(self.ticks))
             }
+            // The machine's clock, in milliseconds since 1970. Separate from
+            // `now` for the same reason `save` is separate from `read`: the
+            // capability says which resource, the row says what is being done
+            // to it, and the difference here is whether the program can give
+            // the same answer twice.
+            //
+            // Negative before 1970 rather than an error. A clock set that far
+            // back is a machine that is wrong, and the honest number for it is
+            // a negative one; refusing to answer would be the operation
+            // deciding it knows better than the machine it was asked about.
+            ("epoch", Capability::Clock) => {
+                let now = std::time::SystemTime::now();
+                let millis = match now.duration_since(std::time::UNIX_EPOCH) {
+                    Ok(since) => since.as_millis() as i64,
+                    Err(before) => -(before.duration().as_millis() as i64),
+                };
+                Ok(Value::Int(millis))
+            }
             // Data rather than authority, which is why it hands back a list
             // instead of something opaque. It takes the root capability all
             // the same, so a function that wants the arguments has to have

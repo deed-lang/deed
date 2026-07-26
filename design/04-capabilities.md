@@ -8,7 +8,8 @@ capability is the value that answers that, and it can only be obtained by being 
 
 That sentence, and the `Fs` and `Net` effects in the illustrations further down, are the
 shape of the argument rather than the state of the compiler. What exists is one built-in
-effect, `Io`, with `write`, `now`, `open`, `read`, `save` and `args`, and a `System` carrying `console`,
+effect, `Io`, with `write`, `now`, `epoch`, `open`, `read`, `save`, `remove`, `make`, `list`
+and `args`, and a `System` carrying `console`,
 `clock` and `files`. The next section is the part that runs.
 
 ## What actually exists
@@ -328,10 +329,16 @@ The list is longer than I would like, and this is the least settled document her
   not worked out.
 - **Time and memory are also resources.** Nothing here bounds them. A function with an empty
   row can still allocate forever.
-- **The clock is a lie.** `Io.now` counts calls rather than reading a wall clock, because P8
-  says the default is deterministic and a real clock would make every run different. That is
-  the right default for testing and the wrong answer for a program that needs the actual
-  time, and there is currently no way to ask for the real one.
+- **The clock is a lie, and now it says which one.** `Io.now` counts calls rather than
+  reading a wall clock, because P8 says the default is deterministic and a real clock would
+  make every run different. That is the right default for testing and the wrong answer for a
+  program that needs the actual time, so `Io.epoch` reads the machine's clock and is a
+  separate entry in the row. Holding a `Clock` says nothing about which of the two a function
+  may do, which is the same split `read` and `save` get about the same `Dir`, applied to
+  something other than authority: a signature saying `uses Io.epoch` is a function whose
+  output can change between two runs of the same program. What is still missing is anything
+  above milliseconds since 1970. A calendar is a library rather than a capability, and the
+  language has no way to write one yet.
 
 ## Prior art worth reading
 
