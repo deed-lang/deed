@@ -127,12 +127,29 @@ given and no string it could build that would get it back out.
 That holds because narrowing is the only operation. `Io.open` goes down, nothing goes up,
 and a `Dir` carries a canonical path the program can neither read nor compare.
 
-### Reading and writing are different authorities over the same capability
+### Reading, writing and listing are different authorities over the same capability
 `Io.save(files, name, contents)` writes a file, and it takes the same `Dir` `Io.read` does.
 What separates them is not the type but the row: a function that declares `uses Io.read` and
 is handed `sys.files` cannot write to it, because performing an operation it did not declare
 is an error. So there are two authorities over one capability, and which one a caller is
 handing over is written in the signature it is handing it to.
+
+`Io.list(files)` is the third, and it is the one that tests the claim rather than
+illustrating it. Reading means: you may read the file I told you about. Listing means: you
+may find out what is here. That is strictly more, and in the shapes people actually write it
+is a lot more, because a directory handed over for one purpose usually has other things in
+it. It needed nothing new: it is a third entry in the row over the same `Dir`, and a function
+that did not declare it cannot enumerate whatever it happens to be holding.
+
+It takes no name, which is the whole operation, so there is nothing for the sandbox to refuse
+and nothing to refuse it with. Authority still only shrinks on the way down: listing a `Dir`
+that came out of `Io.open` sees inside that one and nothing above it.
+
+The answer is files only, and sorted. Sorted because a caller that depends on the order the
+filesystem felt like today is a caller with a bug that appears on somebody else's machine.
+Files only because a list holding two kinds of thing with no way to tell them apart is the
+sort of thing that turns into a bug in the caller, and `Io.open` already needs a name from
+somewhere.
 
 That is the split this document keeps claiming: the row says what kind of operation, the
 argument says which resource. It is also why there is no separate write capability type. A
@@ -189,9 +206,11 @@ argument about how much of the P2 budget capabilities get to spend.
 write is a function that did not declare `Io.save`, and that is a row rather than a type. It
 starts to matter the moment a row can be a wildcard, and `sys.*` already is one.
 
-Deleting a file, listing what is in a directory and creating one are not there. Listing is
-the interesting absence: it is the operation that turns a `Dir` from a thing you can name
-into a thing you can enumerate, and those are different amounts of authority.
+Deleting a file and creating a directory are not there. Both are destructive in a way reading
+and listing are not, so they want their own argument about what a `Dir` means rather than
+being carried along with something else. Recursive listing is not there either, and does not
+need to be: it is a third amount of authority that a caller can build out of `Io.list` and
+`Io.open` if it declares both, which is the model working.
 
 `examples/journal.vow` is the file to argue with. It reads a journal, appends a line and
 saves it, and everything it is refused is refused in front of you.

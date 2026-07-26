@@ -102,7 +102,13 @@ pub const PRELUDE: &[&str] = &[
 /// was invoked is input from outside and every other way of getting input from
 /// outside says so in a signature. A program that reads its arguments behaves
 /// differently depending on them, and that is worth writing down.
-pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read", "save", "args"];
+///
+/// `list` is the one that tests the whole model. Holding a `Dir` and declaring
+/// `read` means you may read the file somebody told you about; declaring
+/// `list` means you may find out what is there, which is strictly more. The
+/// row is what separates them, and that is the same split that already stops a
+/// reader from writing.
+pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read", "save", "list", "args"];
 
 /// The effects the language provides, available in every module without an
 /// import.

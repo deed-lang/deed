@@ -168,12 +168,20 @@ impl<'a> Checker<'a> {
         // reason a disk has.
         let io_error = |ok: Ty| Ty::Result(Box::new(ok), Box::new(Ty::Str));
 
-        let operations: [(&str, Vec<Ty>, Ty); 6] = [
+        let operations: [(&str, Vec<Ty>, Ty); 7] = [
             ("write", vec![console, Ty::Str], Ty::Unit),
             ("now", vec![clock], Ty::Int),
             ("open", vec![dir.clone(), Ty::Str], io_error(dir.clone())),
             ("read", vec![dir.clone(), Ty::Str], io_error(Ty::Str)),
             ("save", vec![dir, Ty::Str, Ty::Str], io_error(Ty::Unit)),
+            // Enumerating rather than naming, which is why it takes the
+            // directory and nothing else: there is no name to give, and
+            // finding out what the names are is the whole operation.
+            (
+                "list",
+                vec![capability("Dir")],
+                io_error(Ty::List(Box::new(Ty::Str))),
+            ),
             // The arguments a program was invoked with, which cannot fail to
             // exist: a program with none was given an empty list.
             (

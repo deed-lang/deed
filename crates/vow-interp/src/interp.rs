@@ -1305,6 +1305,32 @@ impl<'a> Interp<'a> {
                     .map(|argument| Value::Str(Rc::clone(argument)))
                     .collect(),
             )),
+            // Enumerating rather than naming. A `Dir` plus `read` lets a
+            // program read the file somebody told it about; a `Dir` plus
+            // `list` lets it find out what is there, which is strictly more
+            // and is why it is a separate entry in the row rather than
+            // something `read` happens to allow.
+            //
+            // Files only, and sorted. Sorted because a caller that depends on
+            // the order the filesystem felt like today is a caller with a bug
+            // that appears on somebody else's machine. Files only because a
+            // list holding two kinds of thing with no way to tell them apart
+            // is the sort of thing that turns into a bug in the caller, and
+            // nothing has yet needed to discover a subdirectory.
+            ("list", Capability::Dir(root)) => Ok(match std::fs::read_dir(&*root) {
+                Ok(entries) => {
+                    let mut names: Vec<String> = entries
+                        .filter_map(|entry| {
+                            let entry = entry.ok()?;
+                            entry.file_type().ok()?.is_file().then_some(())?;
+                            entry.file_name().into_string().ok()
+                        })
+                        .collect();
+                    names.sort();
+                    Value::ok(Value::list(names.into_iter().map(Value::str).collect()))
+                }
+                Err(error) => Value::err(Value::str(format!("{error}"))),
+            }),
             // Narrowing. The `Dir` that comes back reaches strictly less than
             // the one that went in, and there is no operation that goes the
             // other way, so authority only ever shrinks on the way down.

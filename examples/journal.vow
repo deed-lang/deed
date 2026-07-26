@@ -24,6 +24,13 @@
 // path, and so is a symlink pointing out of the directory. Those are the same
 // rules reading obeys, because it is the same check and not a second one that
 // happens to agree today.
+//
+// There are three authorities over one `Dir` here, and they are three row
+// entries rather than three types. `Io.read` lets a function read the file
+// somebody told it about. `Io.save` lets it write one. `Io.list` lets it find
+// out what is there, which is strictly more than reading and is the one most
+// easily given away by accident: a directory handed over for one purpose
+// usually has other things in it.
 
 module examples/journal
 
@@ -58,6 +65,20 @@ fn note(files: Dir, name: String, line: String) -> Result<(), String>
     Io.save(files, name, render(entries_in(existing), line))
 }
 
+// Enumerating, which is the third thing a `Dir` can be used for and the one
+// that is not reading. Nothing was told which files are here; this is how a
+// program finds out. Take `Io.list` out of the row and this does not compile,
+// even though the `Dir` it is holding has not changed at all.
+fn what_is_here(files: Dir) -> String
+  uses
+    Io.list,
+{
+    match Io.list(files) {
+        ok(names) => join(names, ", "),
+        err(why) => why,
+    }
+}
+
 // Handed a real `Dir` and a name it must not be able to use. Every one of
 // these comes back as an error naming the rule it hit, and the first three
 // never reach the filesystem at all.
@@ -76,6 +97,7 @@ fn main(sys: System) -> Int
     Io.write,
     Io.read,
     Io.save,
+    Io.list,
 {
     let out = sys.console
 
@@ -87,13 +109,18 @@ fn main(sys: System) -> Int
     Io.write(out, refusal(sys.files, ".."))
     Io.write(out, refusal(sys.files, "../escape.txt"))
     Io.write(out, refusal(sys.files, "/etc/passwd"))
+    Io.write(out, "here: " + what_is_here(sys.files))
 
     0
 }
 
-// What is still missing: deleting, listing what is in a directory, creating
-// one, and `read_only()`. The last is the interesting one. Nothing here needs
-// it, because a function that cannot write is a function that did not declare
+// What is still missing: deleting a file and creating a directory. Both are
+// destructive in a way reading and listing are not, so they want their own
+// argument about what a `Dir` means rather than being carried along with
+// something else.
+//
+// Also `read_only()`, and it is the interesting one. Nothing here needs it,
+// because a function that cannot write is a function that did not declare
 // `Io.save`, and that is a row rather than a type. It starts to matter the
 // moment a row can be a wildcard, which `sys.*` already is.
 
