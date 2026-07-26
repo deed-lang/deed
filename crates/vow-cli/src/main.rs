@@ -2,6 +2,7 @@
 
 mod args;
 
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -107,6 +108,15 @@ fn run_check(args: CheckArgs) -> ExitCode {
         return run_fix(&files, args.check_only);
     }
 
+    // What was named is the subject; what an import needed is context. So the
+    // library a program uses is compiled alongside it and checked, and its
+    // tests and its `main` are not the ones you asked about.
+    let subject = files.len();
+    if let Err(error) = resolve_imports(&mut files) {
+        eprintln!("error: {error}");
+        return ExitCode::from(EXIT_USAGE);
+    }
+
     let mut sources = SourceMap::new();
     let mut ids = Vec::new();
 
@@ -146,7 +156,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     if args.mode == Mode::Test {
         // Running code that does not check would be answering a question
         // nobody asked, and the failure would be about the wrong thing.
-        match run_tests(&mut out, &sources, &checks) {
+        match run_tests(&mut out, &sources, &checks, subject) {
             Ok(true) => {}
             Ok(false) => return ExitCode::FAILURE,
             Err(error) => {
@@ -161,6 +171,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
             &mut out,
             &sources,
             &checks,
+            subject,
             args.dir.as_deref(),
             &args.arguments,
         ) {
@@ -340,6 +351,7 @@ fn run_main(
     out: &mut impl Write,
     sources: &SourceMap,
     checks: &[Checked],
+    subject: usize,
     dir: Option<&Path>,
     arguments: &[String],
 ) -> io::Result<Option<bool>> {
@@ -354,7 +366,9 @@ fn run_main(
     let program = program_of(checks);
 
     let mut runs = Vec::new();
-    for checked in checks {
+    // Only the files that were named. A library pulled in because an import
+    // needed it is not an answer to "which program did you mean".
+    for checked in &checks[..subject.min(checks.len())] {
         if let Some(run) = vow_interp::run_main(&program, checked.file, &root, arguments) {
             runs.push((sources.file(checked.file).name().to_string(), run));
         }
@@ -383,13 +397,23 @@ fn run_main(
     }
 }
 
-/// Runs every test in every checked file. Returns whether they all passed.
-fn run_tests(out: &mut impl Write, sources: &SourceMap, checks: &[Checked]) -> io::Result<bool> {
+/// Runs every test in every file that was named. Returns whether they all
+/// passed.
+///
+/// Named, rather than every file compiled: a library pulled in because an
+/// import needed it has its own tests and they are not the ones you asked to
+/// run.
+fn run_tests(
+    out: &mut impl Write,
+    sources: &SourceMap,
+    checks: &[Checked],
+    subject: usize,
+) -> io::Result<bool> {
     let mut passed = 0usize;
     let mut failed = Vec::new();
     let program = program_of(checks);
 
-    for checked in checks {
+    for checked in &checks[..subject.min(checks.len())] {
         let outcomes = vow_interp::run_tests(&program, checked.file);
         let properties = vow_interp::run_properties(
             &program,
@@ -612,6 +636,96 @@ fn plural(count: usize, noun: &str) -> String {
     } else {
         format!("{count} {noun}s")
     }
+}
+
+/// Adds the files an import needs, working out where they are from what they
+/// are called.
+///
+/// A module's name says where it lives: a module named `a/b` is at
+/// `<root>/a/b.vow`. The root is not configured anywhere and there is no
+/// search path. It comes from a file that was named on the command line: take
+/// its own module path off the end of its own file path, and what is left is
+/// the root. `examples/todo.vow` saying `module examples/todo` puts the root
+/// at the directory holding `examples`.
+///
+/// That rule is not new. Every file in this repository has always been laid
+/// out that way, and until now nothing said so out loud, so a program that
+/// imported anything could not be run by naming its own file.
+///
+/// This is not a package manager. Nothing is fetched, nothing is versioned,
+/// and the search stops at the root the named files imply.
+fn resolve_imports(files: &mut Vec<PathBuf>) -> io::Result<()> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut have: HashSet<String> = HashSet::new();
+    let mut wanted: Vec<String> = Vec::new();
+
+    let mut next = 0usize;
+    loop {
+        // Read what has arrived since the last pass, which on the first pass
+        // is everything that was named.
+        while next < files.len() {
+            let path = files[next].clone();
+            next += 1;
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Some((module, uses)) = vow_driver::imports_of(&text) else {
+                continue;
+            };
+
+            if let Some(root) = root_of(&path, &module)
+                && !roots.contains(&root)
+            {
+                roots.push(root);
+            }
+            have.insert(module);
+            wanted.extend(uses);
+        }
+
+        let mut added = false;
+        for module in std::mem::take(&mut wanted) {
+            if have.contains(&module) {
+                continue;
+            }
+            for root in &roots {
+                let mut candidate = root.clone();
+                for segment in module.split('/') {
+                    candidate.push(segment);
+                }
+                candidate.set_extension("vow");
+
+                if candidate.is_file() && !files.contains(&candidate) {
+                    files.push(candidate);
+                    added = true;
+                    break;
+                }
+            }
+        }
+
+        // A `use` naming a module that is nowhere is left alone. The resolver
+        // has the message for that, and it can point at the line.
+        if !added {
+            return Ok(());
+        }
+    }
+}
+
+/// The directory a module path is relative to, when the file is where its name
+/// says it should be.
+///
+/// `None` when it is not, which is a file that cannot say where anything else
+/// lives and so is not asked.
+fn root_of(path: &Path, module: &str) -> Option<PathBuf> {
+    let mut root = path.to_path_buf();
+    root.set_extension("");
+
+    for segment in module.split('/').rev() {
+        if root.file_name()?.to_str()? != segment {
+            return None;
+        }
+        root.pop();
+    }
+    Some(root)
 }
 
 /// Forward slashes everywhere, so output does not depend on the platform.

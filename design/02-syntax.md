@@ -33,6 +33,25 @@ use ledger.{Ledger, Entry}
 Imports are explicit and named. No wildcards, no re-exports, no ambient prelude beyond a
 small fixed set of primitives. If a name is in scope, some line in this file put it there.
 
+**A module's name says where it lives.** A module named `a/b` is at `<root>/a/b.vow`, and the
+root is worked out from a file that was named on the command line: take its own module path
+off the end of its own file path, and what is left is the root. So `vow run examples/todo.vow`
+finds `examples/list.vow` for a `use examples/list`, and nothing has to be listed twice.
+
+There is no search path, no config file and no manifest. One layout, and the `use` line
+already says where to look. That rule had been true of every file in this repository since
+the first one and nothing said it out loud, which meant a program that imported anything
+could not be run by naming its own file.
+
+What was named on the command line is the subject, and what an import needed is context. So
+`vow test app.vow` does not run the tests of a library it happens to import, and
+`vow check app.vow` does report an error in that library, because a program that cannot
+compile its own dependency does not compile. It is the same split the language server makes
+between the workspace and the open document.
+
+This is not a package manager. Nothing is fetched, nothing is versioned, and the search stops
+at the root the named files imply.
+
 ## Types
 
 ```vow

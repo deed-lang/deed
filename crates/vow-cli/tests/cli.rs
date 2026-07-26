@@ -689,6 +689,121 @@ fn a_file_written_on_windows_reads_the_same_as_one_written_anywhere_else() {
     assert!(!text.contains('\r'), "a carriage return survived:\n{text}");
 }
 
+// -- finding the files an import needs ---------------------------------------
+
+#[test]
+fn a_program_that_imports_can_be_run_by_naming_its_own_file() {
+    // The compiler only looks at the files it was handed, which is a rule
+    // worth having. A module's name says where it lives, so the files it was
+    // handed can say which other ones to pick up.
+    //
+    // Without this, `examples/todo.vow` could not be run at all once it
+    // started using `examples/list.vow`, and the workaround was to name every
+    // file the program transitively needs.
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+    let output = run(&["run", TODO, "--dir", dir]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("done"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_library_found_this_way_is_context_and_not_the_subject() {
+    // `vow test` on a program should not run the tests of a library it
+    // happens to import. You asked about one file.
+    let scratch = Scratch::new("imports-subject");
+    scratch.write(
+        "lib.vow",
+        "module lib\n\n\
+         fn twice(n: Int) -> Int { n + n }\n\n\
+         test \"the library has its own tests\" {\n\
+         \x20 assert twice(2) == 4\n\
+         }\n",
+    );
+    let app = scratch.write(
+        "app.vow",
+        "module app\n\n\
+         use lib.{twice}\n\n\
+         fn four() -> Int { twice(2) }\n\n\
+         test \"the program has its own\" {\n\
+         \x20 assert four() == 4\n\
+         }\n",
+    );
+
+    let output = run(&["test", app.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("the program has its own"), "{text}");
+    assert!(
+        !text.contains("the library has its own tests"),
+        "a library's tests are not the ones you asked to run:\n{text}"
+    );
+    assert!(text.contains("1 passed"), "{text}");
+}
+
+#[test]
+fn an_error_in_a_library_is_still_an_error_in_the_program() {
+    // The other half. A program that cannot compile its own dependency does
+    // not compile, so hiding the library's diagnostics would be hiding the
+    // reason.
+    let scratch = Scratch::new("imports-errors");
+    scratch.write(
+        "lib.vow",
+        "module lib\n\nfn twice(n: Int) -> String { n + n }\n",
+    );
+    let app = scratch.write(
+        "app.vow",
+        "module app\n\nuse lib.{twice}\n\nfn f() -> String { twice(2) }\n",
+    );
+
+    let output = run(&["check", app.to_str().unwrap()]);
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(stdout(&output).contains("lib.vow"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_file_somewhere_its_name_does_not_say_finds_nothing() {
+    // The root comes from taking a file's module path off the end of its own
+    // file path. A file that is not where its name says cannot say where
+    // anything else is, and the resolver has the message for the import that
+    // then fails.
+    let scratch = Scratch::new("imports-misplaced");
+    scratch.write(
+        "lib.vow",
+        "module lib\n\nfn twice(n: Int) -> Int { n + n }\n",
+    );
+    let app = scratch.write(
+        "elsewhere.vow",
+        "module app\n\nuse lib.{twice}\n\nfn f() -> Int { twice(2) }\n",
+    );
+
+    let output = run(&["check", app.to_str().unwrap()]);
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(stdout(&output).contains("VOW3007"), "{}", stdout(&output));
+}
+
+#[test]
+fn an_import_is_followed_as_far_as_it_goes() {
+    let scratch = Scratch::new("imports-deep");
+    scratch.write("bottom.vow", "module bottom\n\nfn one() -> Int { 1 }\n");
+    scratch.write(
+        "middle.vow",
+        "module middle\n\nuse bottom.{one}\n\nfn two() -> Int { one() + one() }\n",
+    );
+    let top = scratch.write(
+        "top.vow",
+        "module top\n\n\
+         use middle.{two}\n\n\
+         test \"all three\" {\n\
+         \x20 assert two() == 2\n\
+         }\n",
+    );
+
+    let output = run(&["test", top.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
+}
+
 // -- formatting ------------------------------------------------------------
 
 #[test]

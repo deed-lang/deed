@@ -41,11 +41,28 @@
 //    repository configuration to be correct. `trim` is the reason that is no
 //    longer true, and it is the better half of what #108 was for.
 //
+// 5. Nine of its functions were three walks and six helpers, and every one of
+//    the walks was the same walk with a different body. There was no way to
+//    say so. Writing `map` once rather than once per element type needed a
+//    generic function (#113); writing it once rather than once per effect
+//    needed a row variable (#117). Those two are what
+//    `examples/list.vow` is made of, and the section below is four functions
+//    now, three of them one line.
+//
+// 6. Pointing this file at that library found the last one. The compiler only
+//    looks at the files it was handed, so `vow run examples/todo.vow` could
+//    not find `examples/list` and the workaround was to name every file the
+//    program needs. A library nobody can use without knowing its file layout
+//    is not a library. A module's name says where it lives now (#118), which
+//    is a rule every file here already followed and nothing said out loud.
+//
 // What it still cannot do is mark a task done, which wants a way to say which
 // one, which wants either an index or a search. Both are writable now; neither
 // is written, because the point of this file is what it found rather than how
 // complete it is.
 module examples/todo
+
+use examples/list.{map, filter, count_where}
 
 record Task {
     done: Bool,
@@ -69,65 +86,39 @@ fn parse(line: String) -> Result<Task, String> {
 }
 
 // The three walks, which used to be three recursive functions and three
-// `Diverge` declarations. A `for` walks a list that is already there, so it
-// stops, so it has nothing to declare.
+// `Diverge` declarations. They became three `for` loops, and they are three
+// calls into `examples/list.vow` now, which is a library written in Vow rather
+// than built into the compiler.
+//
+// That is the fifth thing this file found, and it took the longest to fix.
+// Every walk here was the same walk with a different body and there was no way
+// to say so. Writing `map` once instead of once per element type needed a
+// generic function. Writing it once instead of once per effect needed a row
+// variable. The nine functions this section used to hold are four now, and
+// three of them are one line.
 //
 // A blank line is not a task and not an error worth reporting. A file that
 // ends in a newline has one, which is the sort of thing you only find out by
 // running the program.
-fn walk(lines: List<String>) -> Int {
-    for line in lines with total = 0 {
-        total + counts(line)
+fn tasks(lines: List<String>) -> List<Task> {
+    for line in lines with found = [] {
+        match parse(line) {
+            ok(task) => push(found, task),
+            err(why) => found,
+        }
     }
+}
+
+fn walk(lines: List<String>) -> Int {
+    length(tasks(lines))
 }
 
 fn count_done(lines: List<String>) -> Int {
-    for line in lines with total = 0 {
-        total + finished(line)
-    }
+    count_where(tasks(lines), |task: Task| task.done)
 }
 
 fn open_titles(lines: List<String>) -> List<String> {
-    for line in lines with found = [] {
-        keep_open(found, line)
-    }
-}
-
-fn counts(line: String) -> Int {
-    match parse(line) {
-        ok(task) => 1,
-        err(why) => 0,
-    }
-}
-
-fn finished(line: String) -> Int {
-    match parse(line) {
-        ok(task) => done_or_not(task),
-        err(why) => 0,
-    }
-}
-
-fn done_or_not(task: Task) -> Int {
-    if task.done {
-        1
-    } else {
-        0
-    }
-}
-
-fn keep_open(found: List<String>, line: String) -> List<String> {
-    match parse(line) {
-        ok(task) => unless_done(found, task),
-        err(why) => found,
-    }
-}
-
-fn unless_done(found: List<String>, task: Task) -> List<String> {
-    if task.done {
-        found
-    } else {
-        push(found, task.title)
-    }
+    map(filter(tasks(lines), |task: Task| !task.done), |task: Task| task.title)
 }
 
 fn report(lines: List<String>) -> String {
