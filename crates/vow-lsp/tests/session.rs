@@ -5,6 +5,7 @@
 //! it, and get told the squiggles are gone.
 
 use std::io::BufReader;
+use std::path::{Path, PathBuf};
 
 use vow_lsp::{Json, json, serve};
 
@@ -92,6 +93,83 @@ fn published(message: &Json) -> Option<&[Json]> {
         return None;
     }
     message.at(&["params", "diagnostics"])?.as_array()
+}
+
+/// The last diagnostics published for one document.
+///
+/// Last, because a change to one file republishes every open one, and what
+/// matters is what the editor is left showing.
+fn published_for<'a>(sent: &'a [Json], uri: &str) -> &'a [Json] {
+    sent.iter()
+        .rev()
+        .find(|message| {
+            message.at(&["params", "uri"]).and_then(Json::as_str) == Some(uri)
+                && published(message).is_some()
+        })
+        .and_then(published)
+        .unwrap_or_else(|| panic!("nothing was published for {uri}"))
+}
+
+/// A directory with files in it, removed when the test ends.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("vow-lsp-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn write(&self, name: &str, contents: &str) -> String {
+        let path = self.0.join(name);
+        std::fs::write(&path, contents).unwrap();
+        file_uri(&path)
+    }
+
+    fn uri(&self) -> String {
+        file_uri(&self.0)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The URI an editor would send for a path.
+///
+/// Written out here rather than shared with the crate, because a test that
+/// used the same code as the thing it is testing would agree with it by
+/// construction.
+fn file_uri(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    let mut out = String::from("file://");
+    if !text.starts_with('/') {
+        out.push('/');
+    }
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                out.push(byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// `initialize`, with a workspace folder the way an editor sends one.
+fn initialize_in(id: i64, scratch: &Scratch) -> String {
+    let uri = scratch.uri();
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"initialize\",\"params\":\
+         {{\"workspaceFolders\":[{{\"uri\":\"{uri}\",\"name\":\"scratch\"}}]}}}}"
+    ))
 }
 
 const URI: &str = "file:///work/a.vow";
@@ -414,6 +492,136 @@ fn formatting_a_file_that_does_not_parse_leaves_it_alone() {
             .len(),
         0
     );
+}
+
+// -- the workspace ----------------------------------------------------------
+
+/// Two modules that see each other, which is the case the server used to get
+/// wrong.
+const EXPORTER: &str = "module scratch/one\n\nfn double(n: Int) -> Int {\n    n + n\n}\n";
+const IMPORTER: &str =
+    "module scratch/two\n\nuse scratch/one.{double}\n\nfn f() -> Int {\n    double(2)\n}\n";
+
+#[test]
+fn a_file_that_imports_another_one_is_fine_when_the_workspace_has_it() {
+    // The bug this fixes. Every file with a `use` in it used to get a red line
+    // under the import, because the module it names was not among the files
+    // being compiled. A server that reports errors on a working program is
+    // worse than one that reports nothing.
+    let scratch = Scratch::new("imports");
+    scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[initialize_in(1, &scratch), did_open(&two, IMPORTER)]);
+
+    assert_eq!(published_for(&sent, &two).len(), 0, "{sent:?}");
+}
+
+#[test]
+fn without_a_workspace_folder_an_import_still_has_nothing_behind_it() {
+    // An editor that names no folder gets the single file behaviour, which is
+    // honest for a server that has been handed one file. Guessing at a
+    // directory would be inventing the set of files being compiled.
+    let sent = session(&[request(1, "initialize"), did_open(URI, IMPORTER)]);
+
+    let diagnostics = published_for(&sent, URI);
+    assert_eq!(
+        diagnostics[0].at(&["code"]).and_then(Json::as_str),
+        Some("VOW3007"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn the_open_document_is_not_checked_twice() {
+    // It is in the workspace and it is open, and adding both copies would be
+    // two files claiming one `module` line, which is an error about a program
+    // that is fine.
+    let scratch = Scratch::new("twice");
+    let one = scratch.write("one.vow", EXPORTER);
+
+    let sent = session(&[initialize_in(1, &scratch), did_open(&one, EXPORTER)]);
+
+    assert_eq!(published_for(&sent, &one).len(), 0, "{sent:?}");
+}
+
+#[test]
+fn an_unsaved_change_in_one_file_is_seen_by_the_other() {
+    // The reason the editor's buffer has to win over the file on disk. Both
+    // files are open, one of them stops exporting what the other imports, and
+    // nothing has been saved.
+    let scratch = Scratch::new("unsaved");
+    let one = scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&one, EXPORTER),
+        did_open(&two, IMPORTER),
+        did_change(
+            &one,
+            "module scratch/one\n\nfn halve(n: Int) -> Int {\n    n\n}\n",
+        ),
+    ]);
+
+    let diagnostics = published_for(&sent, &two);
+    assert_eq!(
+        diagnostics[0].at(&["code"]).and_then(Json::as_str),
+        Some("VOW3008"),
+        "the importer should have noticed: {diagnostics:?}"
+    );
+
+    // And what is on disk is still fine, which is the point: nothing was
+    // saved, so the file behind the buffer has not changed.
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("one.vow")).unwrap(),
+        EXPORTER
+    );
+}
+
+#[test]
+fn a_change_republishes_every_open_document_and_not_just_the_one_typed_in() {
+    // Otherwise the other file keeps showing squiggles about a version of the
+    // workspace that no longer exists.
+    let scratch = Scratch::new("republish");
+    let one = scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&one, EXPORTER),
+        did_open(&two, IMPORTER),
+        did_change(
+            &one,
+            "module scratch/one\n\nfn halve(n: Int) -> Int {\n    n\n}\n",
+        ),
+        did_change(&one, EXPORTER),
+    ]);
+
+    assert_eq!(
+        published_for(&sent, &two).len(),
+        0,
+        "putting the export back should have cleared the importer"
+    );
+}
+
+#[test]
+fn hover_reaches_across_a_module_boundary() {
+    // The type of an imported function is only knowable if the other file was
+    // checked alongside this one.
+    let scratch = Scratch::new("hover-across");
+    scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, IMPORTER),
+        // The `double` on the last line of `two.vow`.
+        at(2, "textDocument/hover", &two, 5, 6),
+    ]);
+
+    let text = hover_text(sent.last().unwrap());
+    assert!(text.contains("`Fn(Int) -> Int`"), "{text}");
 }
 
 #[test]

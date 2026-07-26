@@ -6,14 +6,15 @@
 //! thread or an editor. The loop that owns the streams is in
 //! [`crate::serve`] and is deliberately dull.
 //!
-//! One document at a time is checked on its own, with an empty universe, so a
-//! `use` of another module reports that there is nothing behind it. That is
-//! honest rather than convenient: the unit of compilation is the set of files
-//! handed to the compiler, and the server has been handed one. Checking a
-//! whole project is a real piece of work and pretending otherwise would put
-//! wrong squiggles under correct code.
+//! A document is checked together with every other `.vow` file in the folders
+//! the editor said it has open, with the text of anything open coming from the
+//! editor's buffer rather than from disk. See [`crate::workspace`] for why the
+//! set is that one and not another. An editor that names no folder gets the
+//! single file behaviour, which is honest for a server that has been handed
+//! one file and nothing else.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use vow_diagnostics::{Diagnostic, Severity, SourceMap, Span};
 use vow_driver::Checked;
@@ -21,6 +22,8 @@ use vow_resolve::DefId;
 
 use crate::json::Json;
 use crate::position::{Lines, Position};
+use crate::uri;
+use crate::workspace::{Workspace, canonical};
 
 /// JSON-RPC error codes this server can produce.
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -51,6 +54,8 @@ impl Document {
 pub struct Server {
     /// Keyed by URI, ordered so that anything iterating them is reproducible.
     documents: BTreeMap<String, Document>,
+    /// The folders the editor said it has open, empty until `initialize`.
+    workspace: Workspace,
     initialized: bool,
     shutting_down: bool,
 }
@@ -89,6 +94,7 @@ impl Server {
         match method {
             "initialize" => {
                 self.initialized = true;
+                self.workspace = Workspace::from_initialize(message);
                 result(id, initialize_result())
             }
             "shutdown" => {
@@ -106,8 +112,9 @@ impl Server {
         }
     }
 
-    /// The document a request is about, and the byte offset it points at.
-    fn locate(&self, message: &Json) -> Option<(&Document, u32)> {
+    /// The document a request is about, the byte offset it points at, and what
+    /// the compiler makes of it.
+    fn locate(&self, message: &Json) -> Option<(&Document, u32, Checked)> {
         let uri = text_document_uri(message)?;
         let document = self.documents.get(&uri)?;
         let position = Position::new(
@@ -118,7 +125,8 @@ impl Server {
                 .at(&["params", "position", "character"])
                 .and_then(Json::as_i64)? as u32,
         );
-        Some((document, document.lines.offset(&document.text, position)))
+        let offset = document.lines.offset(&document.text, position);
+        Some((document, offset, self.check_one(&uri)?))
     }
 
     /// What the cursor is on.
@@ -128,10 +136,9 @@ impl Server {
     /// also an expression, because "`total` is a function" and
     /// "`Fn(Int) -> Int`" answer different halves of the same question.
     fn hover(&self, message: &Json) -> Json {
-        let Some((document, offset)) = self.locate(message) else {
+        let Some((document, offset, checked)) = self.locate(message) else {
             return Json::Null;
         };
-        let checked = check(document);
 
         let mut lines: Vec<String> = Vec::new();
         let mut range = None;
@@ -169,12 +176,13 @@ impl Server {
     ///
     /// Only inside this file. A name from another module resolves to the `use`
     /// that brought it in, which is where the reader can see what was imported
-    /// and is the honest answer for a server that has been handed one file.
+    /// and what the other file is called. Jumping across the boundary would
+    /// need a definition in another module's table, and a `DefId` is an index
+    /// into one module's table and means nothing outside it.
     fn definition(&self, message: &Json) -> Json {
-        let Some((document, offset)) = self.locate(message) else {
+        let Some((document, offset, checked)) = self.locate(message) else {
             return Json::Null;
         };
-        let checked = check(document);
 
         let Some((_, def)) = narrowest_name(&checked, offset) else {
             return Json::Null;
@@ -239,7 +247,7 @@ impl Server {
                     .unwrap_or_default()
                     .to_string();
                 self.documents.insert(uri.clone(), Document::new(text));
-                vec![self.diagnostics_for(&uri)]
+                self.published()
             }
             "textDocument/didChange" => {
                 let Some(uri) = text_document_uri(message) else {
@@ -259,7 +267,7 @@ impl Server {
                 };
                 self.documents
                     .insert(uri.clone(), Document::new(text.to_string()));
-                vec![self.diagnostics_for(&uri)]
+                self.published()
             }
             "textDocument/didClose" => {
                 let Some(uri) = text_document_uri(message) else {
@@ -269,26 +277,87 @@ impl Server {
                 // An empty list, not silence. A closed file whose squiggles
                 // stayed behind is a file the editor keeps complaining about
                 // forever.
-                vec![publish(&uri, Vec::new())]
+                let mut sent = vec![publish(&uri, Vec::new())];
+                // What is left may say something different now: the file on
+                // disk takes over from the buffer that just went away.
+                sent.extend(self.published());
+                sent
             }
             _ => Vec::new(),
         }
     }
 
-    /// Checks one document and turns what came back into a notification.
-    fn diagnostics_for(&self, uri: &str) -> Json {
-        let Some(document) = self.documents.get(uri) else {
-            return publish(uri, Vec::new());
-        };
+    /// Diagnostics for every open document.
+    ///
+    /// All of them, not just the one being typed in. A change in one file
+    /// changes what another says: adding an export fixes an import somewhere
+    /// else and removing one breaks it, and squiggles left describing a
+    /// version of the workspace that no longer exists are worse than none.
+    fn published(&self) -> Vec<Json> {
+        self.check_workspace()
+            .into_iter()
+            .map(|(uri, checked)| {
+                let document = &self.documents[uri];
+                let reported = checked
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| self.render(document, diagnostic, uri))
+                    .collect();
+                publish(uri, reported)
+            })
+            .collect()
+    }
 
-        let checked = check(document);
-        let reported = checked
-            .diagnostics
-            .iter()
-            .map(|diagnostic| self.render(document, diagnostic, uri))
-            .collect();
+    /// Checks every open document together with the rest of the workspace.
+    ///
+    /// One pass rather than one per document. They are all in the same set of
+    /// files, so checking them separately would be the same work several times
+    /// over and could produce two answers that disagree about the same import.
+    ///
+    /// An open document's text comes from the editor rather than from disk,
+    /// because the buffer is what the person is looking at and the file behind
+    /// it may not have been saved.
+    fn check_workspace(&self) -> Vec<(&str, Checked)> {
+        let mut sources = SourceMap::new();
+        let mut ids = Vec::new();
+        let mut open: Vec<Option<PathBuf>> = Vec::new();
 
-        publish(uri, reported)
+        for (uri, document) in &self.documents {
+            ids.push(sources.add(uri.as_str(), document.text.clone()));
+            open.push(uri::to_path(uri).map(|path| canonical(&path)));
+        }
+
+        for path in self.workspace.files() {
+            let path = canonical(&path);
+            // Already in, as the editor's copy. Adding the file behind it as
+            // well would be two files claiming one `module` line, which is an
+            // error about a program that is fine.
+            if open.iter().any(|other| other.as_ref() == Some(&path)) {
+                continue;
+            }
+            // A file that cannot be read is not a reason to stop saying
+            // anything about the one on the screen.
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            ids.push(sources.add(path.display().to_string(), text));
+        }
+
+        let mut checked = vow_driver::check_all(&sources, &ids);
+        checked.truncate(self.documents.len());
+        self.documents
+            .keys()
+            .map(String::as_str)
+            .zip(checked)
+            .collect()
+    }
+
+    /// The same, for one document.
+    fn check_one(&self, uri: &str) -> Option<Checked> {
+        self.check_workspace()
+            .into_iter()
+            .find(|(other, _)| *other == uri)
+            .map(|(_, checked)| checked)
     }
 
     fn render(&self, document: &Document, diagnostic: &Diagnostic, uri: &str) -> Json {
@@ -365,18 +434,6 @@ fn initialize_result() -> Json {
             ("documentFormattingProvider", Json::Bool(true)),
         ]),
     )])
-}
-
-/// Checks one document on its own.
-///
-/// A whole check per request, and per keystroke. P9 is about the edit loop and
-/// nothing here has measured it yet, so this does the simple thing first on
-/// files small enough for it not to matter. When it stops being small enough,
-/// that is the measurement that says what to cache.
-fn check(document: &Document) -> Checked {
-    let mut sources = SourceMap::new();
-    let file = sources.add("<document>", document.text.clone());
-    vow_driver::check(&sources, file)
 }
 
 /// The innermost name covering an offset, and what it refers to.
