@@ -3,8 +3,9 @@
 //! Testing the library behind a command line tool and calling it done is how
 //! tools ship with broken argument handling. These spawn the binary.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 const VOW: &str = env!("CARGO_BIN_EXE_vow");
 const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/transfer.vow");
@@ -307,6 +308,53 @@ fn no_arguments_at_all_explains_itself() {
     let output = run(&[]);
     assert_eq!(code(&output), 2);
     assert!(stderr(&output).contains("vow check"));
+}
+
+// -- the language server ---------------------------------------------------
+
+#[test]
+fn lsp_speaks_the_protocol_on_stdin_and_stdout() {
+    // The library has the session tests. This one is about the wiring: that
+    // the subcommand exists, that it reads stdin, and that nothing else the
+    // binary prints ends up on stdout, which is the protocol.
+    let body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}";
+    let input = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+
+    let mut child = Command::new(VOW)
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the vow binary should run");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("it should finish");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.starts_with("Content-Length: "), "{text}");
+    assert!(text.contains("\"textDocumentSync\":1"), "{text}");
+}
+
+#[test]
+fn lsp_takes_no_arguments() {
+    // An editor starts it with no arguments. A path on the line means somebody
+    // typed it by hand expecting `check`, and doing nothing about it would
+    // look like a hang.
+    let output = run(&["lsp", EXAMPLE]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("takes no arguments"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 // -- running tests ---------------------------------------------------------

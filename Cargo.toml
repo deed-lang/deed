@@ -9,6 +9,7 @@ members = [
     "crates/vow-fmt",
     "crates/vow-interp",
     "crates/vow-lexer",
+    "crates/vow-lsp",
     "crates/vow-parser",
     "crates/vow-resolve",
     "crates/vow-typeck",
