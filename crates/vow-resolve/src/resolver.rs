@@ -80,7 +80,12 @@ pub const PRELUDE: &[&str] = &[
 /// Each takes the capability it acts on. The row says what kind of operation,
 /// the argument says which resource, which is the split `04-capabilities.md`
 /// describes.
-pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read"];
+///
+/// `save` writes a file and `write` writes to a console, and by that split they
+/// should be one name with the resource in the argument. They are two because
+/// a signature here is one list of types per name and there is no overloading,
+/// so the limitation shows through the design rather than the other way round.
+pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read", "save"];
 
 /// The effects the language provides, available in every module without an
 /// import.

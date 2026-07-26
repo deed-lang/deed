@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-48 passed, 0 failed
+51 passed, 0 failed
 ```
 
 ```
@@ -153,12 +153,13 @@ Turkish.
 The examples are [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),
 [config.vow](examples/config.vow), [todo.vow](examples/todo.vow),
-[proven.vow](examples/proven.vow), [closures.vow](examples/closures.vow),
-[diverge.vow](examples/diverge.vow), [strings.vow](examples/strings.vow),
-[lists.vow](examples/lists.vow), and the three that see each other:
-[names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
+[journal.vow](examples/journal.vow), [proven.vow](examples/proven.vow),
+[closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow),
+[strings.vow](examples/strings.vow), [lists.vow](examples/lists.vow), and the three that see
+each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
-`hello.vow`, `config.vow` and `todo.vow` have a `main`, and the rest run their own tests.
+`hello.vow`, `config.vow`, `todo.vow` and `journal.vow` have a `main`, and the rest run their
+own tests.
 
 `todo.vow` is the one written to find out what is missing rather than to show what is there.
 It reads a list of tasks out of a directory it was handed, counts them, and prints the ones
@@ -172,6 +173,17 @@ than `[x] title` because splitting is all there is, so the data got bent to fit 
 the first run printed its own output backwards over itself, because splitting on `\n` leaves
 a carriage return on every line of a file written on Windows and there is nothing that trims
 one off. None of those were obvious from inside the compiler.
+
+`journal.vow` is the half `todo.vow` could not write. `Io` could read a file and open a
+directory and there was no operation that wrote one, so `Dir` was a read capability wearing a
+more general name. `Io.save` is that operation, and the thing worth looking at is what stops
+it writing anywhere else. Two separate things do. The row: a function that does not declare
+`uses Io.save` cannot write, whatever it is holding, so reading and writing are different
+authorities over the same capability and which one a caller is handing over is written in the
+signature. The capability: `Io.save` takes the `Dir` it writes into and there is no way to
+construct one, and the name goes through the same check reading goes through, so `..`, an
+absolute path, a separator and a symlink pointing out are refused for writing exactly as they
+are for reading. Not a second implementation that agrees today.
 
 `proven.vow` is the one that argues with itself. Every function in it either proves its
 postcondition or explains, in a comment, why the checker cannot, and the file is written so
