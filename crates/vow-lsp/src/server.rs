@@ -126,6 +126,7 @@ impl Server {
             // edit with nothing in it" reports success and changes nothing.
             "textDocument/rename" => self.rename(id, message),
             "textDocument/formatting" => result(id, self.formatting(message)),
+            "textDocument/completion" => result(id, self.completion(message)),
             _ => error(
                 id,
                 METHOD_NOT_FOUND,
@@ -139,14 +140,7 @@ impl Server {
     fn locate(&self, message: &Json) -> Option<(&Document, u32, Checked)> {
         let uri = text_document_uri(message)?;
         let document = self.documents.get(&uri)?;
-        let position = Position::new(
-            message
-                .at(&["params", "position", "line"])
-                .and_then(Json::as_i64)? as u32,
-            message
-                .at(&["params", "position", "character"])
-                .and_then(Json::as_i64)? as u32,
-        );
+        let position = position_of(message)?;
         let offset = document.lines.offset(&document.text, position);
         Some((document, offset, self.check_one(&uri)?))
     }
@@ -192,6 +186,135 @@ impl Server {
             ),
             ("range", self.range(document, range)),
         ])
+    }
+
+    /// What could be written where the cursor is.
+    ///
+    /// Every other question this server answers is about a name that already
+    /// exists. This one is about one that does not yet, and the document does
+    /// not parse while somebody is typing into it, so the honest thing is to
+    /// answer a narrower question: what is in scope here.
+    ///
+    /// Three shapes, and between them they are most of the value:
+    ///
+    /// - after a `.`, the fields of whatever is to the left of it
+    /// - inside `use a/b.{ }`, what that module exports
+    /// - anywhere else, what this file declared, what it imported, and the
+    ///   prelude
+    ///
+    /// Nothing here inserts anything but a name. No snippets, no argument
+    /// placeholders, no auto-import. Each of those is a decision about what
+    /// somebody meant, and this server has been getting by on answering only
+    /// what it was asked.
+    fn completion(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Array(Vec::new());
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Array(Vec::new());
+        };
+        let Some(position) = position_of(message) else {
+            return Json::Array(Vec::new());
+        };
+        let offset = document.lines.offset(&document.text, position) as usize;
+        let before = &document.text[..offset.min(document.text.len())];
+
+        // A `use` line is answered from the exporting module and needs no
+        // types, so it is settled before anything is checked.
+        if let Some(module) = importing_from(before) {
+            return self.exported_names(&module);
+        }
+
+        let Some(checked) = self.check_one(&uri) else {
+            return Json::Array(Vec::new());
+        };
+
+        match receiver_of(before) {
+            Some(receiver) => self.fields_of(&checked, receiver),
+            None => self.names_in_scope(&checked, offset as u32),
+        }
+    }
+
+    /// The fields of whatever ends at `receiver`.
+    ///
+    /// The receiver's type is what a hover already answers, so this is the
+    /// hover machinery with a different question at the end.
+    fn fields_of(&self, checked: &Checked, receiver: u32) -> Json {
+        let Some((_, ty)) = checked.types.at(receiver) else {
+            return Json::Array(Vec::new());
+        };
+
+        let mut items = Vec::new();
+        for (name, described) in checked.types.members_of(ty) {
+            items.push(item(&name, FIELD, &described));
+        }
+        Json::Array(items)
+    }
+
+    /// What the module at `path` offers, for a `use` line.
+    ///
+    /// The one place a name has to match another file exactly, and so the one
+    /// most likely to be wrong when it is typed by hand.
+    fn exported_names(&self, path: &str) -> Json {
+        let (_, entries) = self.check_workspace();
+        let Some(entry) = entries.iter().find(|entry| {
+            entry
+                .checked
+                .module
+                .name
+                .as_ref()
+                .is_some_and(|name| name.to_string_path() == path)
+        }) else {
+            return Json::Array(Vec::new());
+        };
+
+        let mut items = Vec::new();
+        for (_, data) in entry.checked.resolutions.defs() {
+            if !declares(data.kind) || data.span.is_empty() {
+                continue;
+            }
+            items.push(item(&data.name, kind_of(data.kind), data.kind.describe()));
+        }
+        items.sort_by_key(label_of);
+        items.dedup_by_key(|item| label_of(item));
+        Json::Array(items)
+    }
+
+    /// Everything nameable at `offset`.
+    ///
+    /// Module level declarations and imports are in scope everywhere in the
+    /// file. A local is offered when it was declared inside the item the
+    /// cursor is in and before the cursor, which is an approximation of scope
+    /// rather than the real thing: the resolver does not keep its scopes once
+    /// it is done, and rebuilding them to rank a list would be a second
+    /// resolver.
+    fn names_in_scope(&self, checked: &Checked, offset: u32) -> Json {
+        let enclosing = enclosing_item(checked, offset);
+        let mut items = Vec::new();
+
+        for (_, data) in checked.resolutions.defs() {
+            if data.name.is_empty() {
+                continue;
+            }
+            let visible = match data.kind {
+                DefKind::Builtin => true,
+                kind if declares(kind) => true,
+                DefKind::Import => true,
+                // A `let`, a parameter, a type parameter, handler state.
+                _ => match enclosing {
+                    Some(item) => item.contains(data.span.start) && data.span.start <= offset,
+                    None => false,
+                },
+            };
+            if !visible {
+                continue;
+            }
+            items.push(item(&data.name, kind_of(data.kind), data.kind.describe()));
+        }
+
+        items.sort_by_key(label_of);
+        items.dedup_by_key(|item| label_of(item));
+        Json::Array(items)
     }
 
     /// Where the name under the cursor was declared.
@@ -779,6 +902,98 @@ fn is_identifier(text: &str) -> bool {
     )
 }
 
+/// LSP completion item kinds, by the numbers the protocol gives them.
+const FUNCTION: i64 = 3;
+const FIELD: i64 = 5;
+const VARIABLE: i64 = 6;
+const INTERFACE: i64 = 8;
+const ENUM: i64 = 13;
+const ENUM_MEMBER: i64 = 20;
+const STRUCT: i64 = 22;
+const TYPE_PARAMETER: i64 = 25;
+
+fn item(label: &str, kind: i64, detail: &str) -> Json {
+    Json::object(vec![
+        ("label", Json::string(label)),
+        ("kind", Json::number(kind)),
+        ("detail", Json::string(detail)),
+    ])
+}
+
+fn label_of(item: &Json) -> String {
+    item.at(&["label"])
+        .and_then(Json::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// What an editor should draw next to a name.
+///
+/// The protocol's own list, so a record looks like a struct and a choice looks
+/// like an enum wherever the editor already has an icon for one.
+fn kind_of(kind: DefKind) -> i64 {
+    match kind {
+        DefKind::Function | DefKind::EffectOp | DefKind::Builtin => FUNCTION,
+        DefKind::Record | DefKind::Handler => STRUCT,
+        DefKind::Choice => ENUM,
+        DefKind::Variant => ENUM_MEMBER,
+        DefKind::Effect => INTERFACE,
+        DefKind::TypeParam | DefKind::RowParam | DefKind::Type => TYPE_PARAMETER,
+        // An import is whatever it imported, and saying so would mean reading
+        // the other module. The name is what somebody is typing.
+        DefKind::Import => VARIABLE,
+        DefKind::Param | DefKind::Local | DefKind::State => VARIABLE,
+    }
+}
+
+/// The end of the expression a `.` was typed after.
+///
+/// `None` when the text does not end in a name preceded by a dot, which is
+/// every other position. The offset points one before the dot, which is inside
+/// the receiver, because that is what the type table is keyed by.
+fn receiver_of(before: &str) -> Option<u32> {
+    let trimmed = before.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
+    let dot = trimmed.strip_suffix('.')?;
+    // `1.` is not a receiver, it is a number somebody is still typing, and
+    // there are no float literals to make it one.
+    let last = dot.chars().next_back()?;
+    if !last.is_alphanumeric() && last != '_' && last != ')' && last != ']' {
+        return None;
+    }
+    Some(dot.len() as u32 - 1)
+}
+
+/// The module path of a `use` line the cursor is inside the braces of.
+///
+/// Read off the text rather than the tree, because a `use a/b.{ }` with
+/// nothing in it yet is exactly the shape that does not parse.
+fn importing_from(before: &str) -> Option<String> {
+    let line = before.rsplit('\n').next()?;
+    let rest = line.trim_start().strip_prefix("use ")?;
+    let (path, names) = rest.split_once(".{")?;
+    // A closed brace means the cursor is past the list, so this is not it.
+    if names.contains('}') {
+        return None;
+    }
+    let path = path.trim();
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+/// The span of the declaration the cursor is inside.
+///
+/// Used to decide which locals to offer. An offset outside every item, such as
+/// a blank line between two functions, has none, and nothing local is in scope
+/// there anyway.
+fn enclosing_item(checked: &Checked, offset: u32) -> Option<Span> {
+    checked
+        .module
+        .items
+        .iter()
+        .map(|item| item.span())
+        .filter(|span| span.contains(offset))
+        .min_by_key(|span| span.end - span.start)
+}
+
 fn position(position: Position) -> Json {
     Json::object(vec![
         ("line", Json::number(position.line as i64)),
@@ -791,6 +1006,17 @@ fn text_document_uri(message: &Json) -> Option<String> {
         .at(&["params", "textDocument", "uri"])
         .and_then(Json::as_str)
         .map(str::to_string)
+}
+
+fn position_of(message: &Json) -> Option<Position> {
+    Some(Position::new(
+        message
+            .at(&["params", "position", "line"])
+            .and_then(Json::as_i64)? as u32,
+        message
+            .at(&["params", "position", "character"])
+            .and_then(Json::as_i64)? as u32,
+    ))
 }
 
 fn initialize_result() -> Json {
@@ -810,6 +1036,16 @@ fn initialize_result() -> Json {
                 Json::object(vec![("prepareProvider", Json::Bool(true))]),
             ),
             ("documentFormattingProvider", Json::Bool(true)),
+            // A dot is the one character that changes the answer completely,
+            // and a brace is what opens a `use` list. Everything else an
+            // editor asks about on its own schedule.
+            (
+                "completionProvider",
+                Json::object(vec![(
+                    "triggerCharacters",
+                    Json::Array(vec![Json::string("."), Json::string("{")]),
+                )]),
+            ),
         ]),
     )])
 }

@@ -231,7 +231,7 @@ fn a_method_nobody_implemented_is_an_error_rather_than_silence() {
     // A request with no reply is a request the editor waits on forever.
     let sent = session(&[
         request(1, "initialize"),
-        request(2, "textDocument/completion"),
+        request(2, "textDocument/codeAction"),
     ]);
     assert_eq!(
         sent[1].at(&["error", "code"]).and_then(Json::as_i64),
@@ -986,6 +986,161 @@ fn prepare_rename_refuses_what_rename_would_refuse() {
         "{:?}",
         sent.last().unwrap()
     );
+}
+
+// -- completion ---------------------------------------------------------------
+
+fn completion(id: i64, uri: &str, line: u32, character: u32) -> String {
+    at(id, "textDocument/completion", uri, line, character)
+}
+
+/// The labels a completion request came back with, in the order it gave them.
+fn labels(message: &Json) -> Vec<String> {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("expected completions, got {message:?}"))
+        .iter()
+        .filter_map(|item| item.at(&["label"]).and_then(Json::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn a_bare_name_offers_what_the_file_declared() {
+    let source =
+        "module a\n\nfn double(n: Int) -> Int {\n    n + n\n}\n\nfn go() -> Int {\n    d\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // Just after the `d` on the last line but one.
+        completion(2, URI, 7, 5),
+    ]);
+
+    let found = labels(sent.last().unwrap());
+    assert!(found.contains(&"double".to_string()), "{found:?}");
+    assert!(found.contains(&"go".to_string()), "{found:?}");
+    // The prelude is in scope everywhere and nothing else put it there.
+    assert!(found.contains(&"length".to_string()), "{found:?}");
+}
+
+#[test]
+fn a_local_is_offered_inside_its_own_declaration_and_not_outside_it() {
+    let source =
+        "module a\n\nfn one(here: Int) -> Int {\n    here\n}\n\nfn two() -> Int {\n    0\n}\n";
+
+    let inside = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        completion(2, URI, 3, 8),
+    ]);
+    assert!(
+        labels(inside.last().unwrap()).contains(&"here".to_string()),
+        "{:?}",
+        labels(inside.last().unwrap())
+    );
+
+    let outside = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        completion(2, URI, 7, 5),
+    ]);
+    assert!(
+        !labels(outside.last().unwrap()).contains(&"here".to_string()),
+        "a parameter of another function is not in scope here"
+    );
+}
+
+#[test]
+fn a_dot_offers_the_fields_of_what_is_to_the_left_of_it() {
+    let source = "module a\n\nrecord Task {\n    done: Bool,\n    title: String,\n}\n\nfn f(task: Task) -> Bool {\n    task.\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // Just after the dot.
+        completion(2, URI, 8, 9),
+    ]);
+
+    let found = labels(sent.last().unwrap());
+    assert_eq!(found, vec!["done".to_string(), "title".to_string()]);
+}
+
+#[test]
+fn a_dot_offers_nothing_for_something_with_no_fields() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    n.\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        completion(2, URI, 3, 6),
+    ]);
+    assert!(labels(sent.last().unwrap()).is_empty());
+}
+
+#[test]
+fn a_use_line_offers_what_the_other_module_exports() {
+    // The one place a name has to match another file exactly, and so the one
+    // most likely to be wrong when it is typed by hand.
+    let scratch = Scratch::new("completion-use");
+    scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let typing = "module scratch/two\n\nuse scratch/one.{\n";
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, typing),
+        // Inside the braces, with nothing written yet.
+        completion(2, &two, 2, 17),
+    ]);
+
+    let found = labels(sent.last().unwrap());
+    assert!(found.contains(&"double".to_string()), "{found:?}");
+}
+
+#[test]
+fn a_use_line_that_is_already_closed_is_not_one() {
+    let scratch = Scratch::new("completion-use-closed");
+    scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    // Past the closing brace, so this is ordinary code and the answer should
+    // be the ordinary one rather than the other module's names.
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, IMPORTER),
+        completion(2, &two, 5, 6),
+    ]);
+
+    let found = labels(sent.last().unwrap());
+    assert!(found.contains(&"length".to_string()), "{found:?}");
+}
+
+#[test]
+fn a_number_followed_by_a_dot_is_not_a_receiver() {
+    // There are no float literals, which is what makes `40.try` unambiguous,
+    // and it is also what stops this from being a receiver with fields.
+    let source = "module a\n\nfn f() -> Int {\n    1.\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        completion(2, URI, 3, 6),
+    ]);
+    assert!(labels(sent.last().unwrap()).is_empty());
+}
+
+#[test]
+fn every_name_appears_once() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    n + n + n\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        completion(2, URI, 3, 13),
+    ]);
+
+    let found = labels(sent.last().unwrap());
+    let mut sorted = found.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(found, sorted, "the list should be sorted and unique");
 }
 
 #[test]
