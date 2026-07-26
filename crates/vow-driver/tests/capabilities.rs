@@ -309,6 +309,96 @@ fn a_function_holding_only_a_dir_cannot_write() {
     assert!(text.contains("expected `Console`, found `Dir`"), "{text}");
 }
 
+// -- writing ---------------------------------------------------------------
+
+#[test]
+fn a_dir_writes_a_file_inside_it() {
+    let scratch = Scratch::new("save");
+
+    let (_, run) = run_in(
+        &report(
+            &["write", "save"],
+            "  match Io.save(sys.files, \"note.txt\", \"the contents\") {\n    ok(nothing) => Io.write(sys.console, \"saved\"),\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        scratch.path(),
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["saved".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("note.txt")).unwrap(),
+        "the contents"
+    );
+}
+
+#[test]
+fn every_way_out_of_a_dir_is_refused_for_writing_too() {
+    // The same list as the reading case, because writing goes through the same
+    // check. A second implementation that agreed today would stop agreeing the
+    // first time one of them was edited.
+    let scratch = Scratch::new("save-escape");
+    let outside = scratch.path().parent().unwrap().to_path_buf();
+
+    for attempt in [
+        "..",
+        ".",
+        "../escaped.txt",
+        "/etc/passwd",
+        "C:\\\\Windows\\\\System32",
+        "a/b",
+        "a\\\\b",
+        "",
+    ] {
+        let (_, run) = run_in(
+            &report(
+                &["write", "save"],
+                &format!(
+                    "  match Io.save(sys.files, \"{attempt}\", \"escaped\") {{\n    ok(nothing) => Io.write(sys.console, \"WROTE IT\"),\n    err(why) => Io.write(sys.console, why),\n  }}"
+                ),
+            ),
+            scratch.path(),
+        );
+        assert!(run.result.is_ok());
+        assert_ne!(
+            run.output,
+            vec!["WROTE IT".to_string()],
+            "`{attempt}` got out of the directory"
+        );
+    }
+
+    assert!(
+        !outside.join("escaped.txt").exists(),
+        "something was written beside the directory"
+    );
+}
+
+#[test]
+fn saving_without_declaring_it_is_an_effect_error() {
+    // Holding a `Dir` is not permission to write to it. The row has to say so,
+    // which is what keeps `Io.read` and `Io.save` different authorities over
+    // the same capability.
+    let (sources, checked) = check(
+        "module a\n\nfn sneak(files: Dir) -> Result<(), String>\n  uses Io.read,\n{\n  Io.save(files, \"note.txt\", \"hello\")\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn a_function_with_no_dir_has_nothing_to_save_into() {
+    let (sources, checked) = check(
+        "module a\n\nfn sneak() -> Result<(), String>\n  uses Io.save,\n{\n  Io.save(Dir, \"note.txt\", \"hello\")\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_typeck::codes::NOT_A_VALUE),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
 // -- the examples ----------------------------------------------------------
 
 #[test]

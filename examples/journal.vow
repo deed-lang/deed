@@ -1,0 +1,114 @@
+// Writing a file, which until now the language could not do at all.
+//
+// `examples/todo.vow` reads a list of tasks and reports on them, and the thing
+// it could not do was add one. `Io` could read a file and open a directory and
+// there was no operation that wrote one, so half of the smallest useful
+// program was missing and `Dir` was a read capability wearing a more general
+// name.
+//
+// This one appends a line to a journal and saves it. It writes into whichever
+// directory it was handed, so point it somewhere you do not mind:
+//
+//   vow run examples/journal.vow --dir /tmp/journal
+//
+// The part worth reading is what stops it writing anywhere else. Two separate
+// things do, and they are separate on purpose.
+//
+// The row. `note` declares `uses Io.save`, and a function that does not
+// declare it cannot write, whatever it happens to be holding. `render` and
+// `entries_in` declare nothing at all, so they cannot touch anything, and that
+// is checked rather than hoped for.
+//
+// The capability. `Io.save` takes the `Dir` it writes into as an argument, and
+// there is no way to construct one. Naming `..` is refused, so is an absolute
+// path, and so is a symlink pointing out of the directory. Those are the same
+// rules reading obeys, because it is the same check and not a second one that
+// happens to agree today.
+
+module examples/journal
+
+// A file with nothing in it has no entries, rather than one empty entry.
+// Splitting is honest about the edges, which is what makes it the inverse of
+// joining, and this is where somebody has to decide what an empty file means.
+fn entries_in(text: String) -> List<String> {
+    if length(text) == 0 {
+        []
+    } else {
+        split(text, "\n")
+    }
+}
+
+fn render(entries: List<String>, line: String) -> String {
+    join(push(entries, line), "\n")
+}
+
+// The only function here that can write. Everything above it is pure and stays
+// that way, which is the ordinary shape: deciding what to write is not the
+// same job as writing it.
+fn note(files: Dir, name: String, line: String) -> Result<(), String>
+  uses
+    Io.read,
+    Io.save,
+{
+    let existing = match Io.read(files, name) {
+        ok(text) => text,
+        err(why) => "",
+    }
+
+    Io.save(files, name, render(entries_in(existing), line))
+}
+
+// Handed a real `Dir` and a name it must not be able to use. Every one of
+// these comes back as an error naming the rule it hit, and the first three
+// never reach the filesystem at all.
+fn refusal(files: Dir, name: String) -> String
+  uses
+    Io.save,
+{
+    match Io.save(files, name, "this should never be written") {
+        ok(nothing) => "allowed, which is a bug: " + name,
+        err(why) => why,
+    }
+}
+
+fn main(sys: System) -> Int
+  uses
+    Io.write,
+    Io.read,
+    Io.save,
+{
+    let out = sys.console
+
+    match note(sys.files, "journal.txt", "wrote a file for the first time") {
+        ok(nothing) => Io.write(out, "saved"),
+        err(why) => Io.write(out, why),
+    }
+
+    Io.write(out, refusal(sys.files, ".."))
+    Io.write(out, refusal(sys.files, "../escape.txt"))
+    Io.write(out, refusal(sys.files, "/etc/passwd"))
+
+    0
+}
+
+// What is still missing: deleting, listing what is in a directory, creating
+// one, and `read_only()`. The last is the interesting one. Nothing here needs
+// it, because a function that cannot write is a function that did not declare
+// `Io.save`, and that is a row rather than a type. It starts to matter the
+// moment a row can be a wildcard, which `sys.*` already is.
+
+test "a line is added to whatever was there" {
+    assert render([], "first") == "first"
+    assert render(["one"], "two") == "one\ntwo"
+    assert render(["one", "two"], "three") == "one\ntwo\nthree"
+}
+
+test "an empty file has no entries rather than one empty one" {
+    assert entries_in("") == []
+    assert entries_in("one") == ["one"]
+    assert entries_in("one\ntwo") == ["one", "two"]
+}
+
+test "reading back what was rendered gives the same entries" {
+    assert entries_in(render(["one"], "two")) == ["one", "two"]
+}

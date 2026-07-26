@@ -1248,6 +1248,29 @@ impl<'a> Interp<'a> {
                     Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
                 })
             }
+            // Writing goes through the same rules about names as reading, and
+            // through a resolver that allows a file which is not there yet
+            // without allowing one that is somewhere else.
+            ("save", Capability::Dir(root)) => {
+                let name_arg = self.io_name(args.get(1), span)?;
+                let contents = match args.get(2) {
+                    Some((Value::Str(text), _)) => text.to_string(),
+                    Some((other, at)) => {
+                        return Err(self.not_runnable(
+                            *at,
+                            &format!("a file's contents that are {}", other.describe()),
+                        ));
+                    }
+                    None => return Err(self.not_runnable(span, "a save with nothing to save")),
+                };
+                Ok(match sandbox::resolve_new(&root, &name_arg) {
+                    Ok(path) => match std::fs::write(&path, contents) {
+                        Ok(()) => Value::ok(Value::Unit),
+                        Err(error) => Value::err(Value::str(format!("`{name_arg}`: {error}"))),
+                    },
+                    Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
+                })
+            }
             (_, held) => Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,

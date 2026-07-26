@@ -139,14 +139,16 @@ impl<'a> Checker<'a> {
 
         // `open` hands back a narrower `Dir` and `read` hands back the file's
         // contents. Both can fail, because a path that is not there is not a
-        // bug in the caller.
+        // bug in the caller. So can `save`, for the same reason and for every
+        // reason a disk has.
         let io_error = |ok: Ty| Ty::Result(Box::new(ok), Box::new(Ty::Str));
 
-        let operations: [(&str, Vec<Ty>, Ty); 4] = [
+        let operations: [(&str, Vec<Ty>, Ty); 5] = [
             ("write", vec![console, Ty::Str], Ty::Unit),
             ("now", vec![clock], Ty::Int),
             ("open", vec![dir.clone(), Ty::Str], io_error(dir.clone())),
-            ("read", vec![dir, Ty::Str], io_error(Ty::Str)),
+            ("read", vec![dir.clone(), Ty::Str], io_error(Ty::Str)),
+            ("save", vec![dir, Ty::Str, Ty::Str], io_error(Ty::Unit)),
         ];
 
         for (name, params, ret) in operations {

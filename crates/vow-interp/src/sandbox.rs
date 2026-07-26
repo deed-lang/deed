@@ -111,6 +111,31 @@ pub fn resolve(root: &Path, name: &str) -> Result<PathBuf, Refused> {
     Ok(canonical)
 }
 
+/// Resolves `name` inside `root` for something that may not be there yet.
+///
+/// Writing has to be able to name a file that does not exist, so this cannot
+/// lean on `canonicalize` the way [`resolve`] does. It still leans on it when
+/// there is something at the name already, which is what catches a symlink
+/// pointing out of the directory, and falls back to joining when there is not.
+///
+/// Joining is safe only because of what has already happened: `check_name` has
+/// established that the name is one ordinary component, and `root` is
+/// canonical. There is no traversal left in the name and nothing to follow, so
+/// the result is inside the root by construction rather than by inspection.
+pub fn resolve_new(root: &Path, name: &str) -> Result<PathBuf, Refused> {
+    check_name(name)?;
+
+    let joined = root.join(name);
+    match joined.canonicalize() {
+        Ok(canonical) if canonical.starts_with(root) => Ok(canonical),
+        // Something is there and it points out of the directory. A symlink is
+        // the way this happens and it is the reason the check exists.
+        Ok(_) => Err(Refused::Outside),
+        // Nothing is there, which is the ordinary case for a new file.
+        Err(_) => Ok(joined),
+    }
+}
+
 /// Canonicalizes a path so it can be used as the root of a `Dir`.
 pub fn root(path: &Path) -> Result<PathBuf, Refused> {
     path.canonicalize().map_err(|_| Refused::Missing)
@@ -189,6 +214,54 @@ mod tests {
             Err(Refused::Outside),
             "a symlink walked out of the directory"
         );
+
+        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(outside).ok();
+    }
+
+    #[test]
+    fn a_name_that_is_not_there_yet_still_resolves_for_writing() {
+        // The whole difference between this and `resolve`. A file that does
+        // not exist is the ordinary case for writing one.
+        let dir = scratch("new");
+        let root = root(&dir).unwrap();
+
+        let resolved = resolve_new(&root, "fresh.txt").unwrap();
+        assert_eq!(resolved, root.join("fresh.txt"));
+        assert!(!resolved.exists());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn writing_obeys_the_same_rules_about_names() {
+        // A second path into the filesystem is a second chance to get this
+        // wrong, so it goes through the same check rather than its own.
+        let dir = scratch("new-rules");
+        let root = root(&dir).unwrap();
+
+        assert_eq!(resolve_new(&root, ""), Err(Refused::Empty));
+        assert_eq!(resolve_new(&root, ".."), Err(Refused::Traversal));
+        assert_eq!(resolve_new(&root, "a/b"), Err(Refused::NotOneComponent));
+        assert_eq!(
+            resolve_new(&root, "../escape.txt"),
+            Err(Refused::NotOneComponent)
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn writing_through_a_symlink_pointing_out_is_refused() {
+        // The one that would matter. A name that is already there is followed
+        // before it is trusted, so a symlink cannot be used to write outside
+        // the directory any more than to read outside it.
+        let Some((dir, outside)) = symlink_escape("symlink-write") else {
+            return;
+        };
+
+        let root = root(&dir).unwrap();
+        assert_eq!(resolve_new(&root, "escape"), Err(Refused::Outside));
 
         std::fs::remove_dir_all(dir).ok();
         std::fs::remove_dir_all(outside).ok();

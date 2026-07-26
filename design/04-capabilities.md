@@ -8,7 +8,7 @@ capability is the value that answers that, and it can only be obtained by being 
 
 That sentence, and the `Fs` and `Net` effects in the illustrations further down, are the
 shape of the argument rather than the state of the compiler. What exists is one built-in
-effect, `Io`, with `write`, `now`, `open` and `read`, and a `System` carrying `console`,
+effect, `Io`, with `write`, `now`, `open`, `read` and `save`, and a `System` carrying `console`,
 `clock` and `files`. The next section is the part that runs.
 
 ## What actually exists
@@ -127,6 +127,32 @@ given and no string it could build that would get it back out.
 That holds because narrowing is the only operation. `Io.open` goes down, nothing goes up,
 and a `Dir` carries a canonical path the program can neither read nor compare.
 
+### Reading and writing are different authorities over the same capability
+
+`Io.save(files, name, contents)` writes a file, and it takes the same `Dir` `Io.read` does.
+What separates them is not the type but the row: a function that declares `uses Io.read` and
+is handed `sys.files` cannot write to it, because performing an operation it did not declare
+is an error. So there are two authorities over one capability, and which one a caller is
+handing over is written in the signature it is handing it to.
+
+That is the split this document keeps claiming: the row says what kind of operation, the
+argument says which resource. It is also why there is no separate write capability type. A
+second type would say the same thing twice and would have to be threaded through every
+signature that already carries a `Dir`.
+
+By that argument `Io.save` and `Io.write` should be one name, since writing to a console and
+writing to a file are the same kind of operation on different resources. They are two names
+because a signature is one list of types per name and there is no overloading. That is a
+limitation showing through the design rather than a decision, and it is worth writing down
+as one.
+
+Writing goes through the same name check reading does, in the same function, so `..`, an
+absolute path, a separator and a symlink pointing out are refused for writing exactly as
+they are for reading. The one difference is that a file being written does not have to exist
+yet, which means the check cannot lean on canonicalising an existing path and has to be
+correct by construction instead: the name has already been established to be one ordinary
+component, and the root is canonical, so there is no traversal left and nothing to follow.
+
 ### The part that has to be right
 
 Refusing `..` is the obvious half and the useless half on its own. The rules, in
@@ -152,21 +178,24 @@ means two different things on two platforms is not something to hand to a securi
 `err` naming the rule it hit. That is deliberate: the name usually comes from data, and a
 path that arrived in a request is not a bug in the program that received it. It does mean a
 program can write `Io.read(files, "..")` and get a runtime answer to a question that could
-have been settled earlier, which is a real cost and the alternative was worse.
+have been settled earlier, which is a real cost and the alternative was worse. `Io.save`
+answers the same way, for the same reason.
 
 The error being a `String` is a placeholder. A real `IoError` in the prelude is its own
 argument about how much of the P2 budget capabilities get to spend.
 
 ### Still missing
 
-`read_only()`. Returning the same `Dir` type from it would mean nothing, and doing it
-properly needs a second type. Writing files, listing a directory and creating one are also
-not there, so `Dir` is currently a read capability wearing a more general name.
+`read_only()`. It is less obviously needed than it looks, because a function that cannot
+write is a function that did not declare `Io.save`, and that is a row rather than a type. It
+starts to matter the moment a row can be a wildcard, and `sys.*` already is one.
 
-`examples/todo.vow` is where that stops being theoretical. It reads a list of tasks out of a
-directory it was handed and reports on them, and it cannot add one, because there is no
-operation that writes a file. Half of the smallest useful program is missing, and the missing
-half is the half that needs the authority to be narrower rather than wider.
+Deleting a file, listing what is in a directory and creating one are not there. Listing is
+the interesting absence: it is the operation that turns a `Dir` from a thing you can name
+into a thing you can enumerate, and those are different amounts of authority.
+
+`examples/journal.vow` is the file to argue with. It reads a journal, appends a line and
+saves it, and everything it is refused is refused in front of you.
 
 ### Where the root comes from
 

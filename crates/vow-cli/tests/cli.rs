@@ -13,6 +13,7 @@ const RUNNABLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/coun
 const HELLO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/hello.vow");
 const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/config.vow");
 const TODO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/todo.vow");
+const JOURNAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/journal.vow");
 const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 
 fn run(args: &[&str]) -> Output {
@@ -589,6 +590,40 @@ fn the_todo_example_reads_a_real_file_and_reports_on_it() {
     // the top of itself, which is how the line endings in the data file were
     // found in the first place.
     assert!(!text.contains('\r'), "a carriage return survived:\n{text}");
+}
+
+#[test]
+fn the_journal_example_writes_a_file_and_cannot_write_outside_the_directory() {
+    // The other half of the capability story. `config.vow` shows that reading
+    // cannot escape a `Dir`; this shows that writing cannot either, and that
+    // it is the same check rather than a second one that agrees today.
+    let scratch = Scratch::new("journal");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let output = run(&["run", JOURNAL, "--dir", &dir]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("saved"), "{text}");
+    assert!(text.contains("no way out of a `Dir`"), "{text}");
+    assert!(!text.contains("which is a bug"), "{text}");
+
+    let written = std::fs::read_to_string(scratch.path().join("journal.txt")).unwrap();
+    assert_eq!(written, "wrote a file for the first time");
+
+    // Running it again appends rather than replacing, which is the only thing
+    // that makes it a journal.
+    let output = run(&["run", JOURNAL, "--dir", &dir]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let written = std::fs::read_to_string(scratch.path().join("journal.txt")).unwrap();
+    assert_eq!(
+        written,
+        "wrote a file for the first time\nwrote a file for the first time"
+    );
+
+    // Nothing landed beside the directory it was given.
+    let beside = scratch.path().parent().unwrap().join("escape.txt");
+    assert!(!beside.exists(), "something was written outside the `Dir`");
 }
 
 // -- formatting ------------------------------------------------------------
