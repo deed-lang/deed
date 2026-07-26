@@ -8,6 +8,12 @@
 //! cannot be functions: `old(e)` evaluates `e` in the state on entry, and
 //! `unchanged(E)` takes an effect rather than a value. Neither is expressible
 //! as a normal call, so both are keywords.
+//!
+//! `state` is not one, and used to be. It means something in exactly one
+//! position, at the start of a member of a `handler` body, where the only
+//! alternative is `fn`. Reserving a word that common everywhere for one
+//! position is a cost, and it came due the first time a program wanted to call
+//! an accumulator `state`.
 
 use vow_diagnostics::Span;
 
@@ -142,7 +148,6 @@ pub enum Keyword {
     Effect,
     Handler,
     Implements,
-    State,
     Fn,
 
     // Contract block
@@ -180,7 +185,6 @@ impl Keyword {
             "effect" => Keyword::Effect,
             "handler" => Keyword::Handler,
             "implements" => Keyword::Implements,
-            "state" => Keyword::State,
             "fn" => Keyword::Fn,
             "where" => Keyword::Where,
             "uses" => Keyword::Uses,
@@ -214,7 +218,6 @@ impl Keyword {
             Keyword::Effect => "effect",
             Keyword::Handler => "handler",
             Keyword::Implements => "implements",
-            Keyword::State => "state",
             Keyword::Fn => "fn",
             Keyword::Where => "where",
             Keyword::Uses => "uses",
@@ -252,7 +255,6 @@ mod tests {
             "effect",
             "handler",
             "implements",
-            "state",
             "fn",
             "where",
             "uses",

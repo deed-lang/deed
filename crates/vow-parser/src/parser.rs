@@ -160,6 +160,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consumes an ordinary name when it is the one expected.
+    ///
+    /// For a word that means something in one position and is a name
+    /// everywhere else. Reserving such a word for the whole language costs a
+    /// name people want, and the position it matters in has nothing else it
+    /// could be.
+    fn eat_named(&mut self, name: &str) -> bool {
+        if matches!(self.kind(), TokenKind::Ident(found) if found == name) {
+            self.bump();
+            true
+        } else {
+            false
+        }
+    }
+
     fn emit(&mut self, diagnostic: Diagnostic) {
         // One mistake should produce one diagnostic. Everything derived from it
         // is noise that buries the line actually needing an edit.
@@ -635,7 +650,11 @@ impl<'a> Parser<'a> {
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            if self.eat_kw(Keyword::State) {
+            // A name rather than a keyword. `state` means something here and
+            // nowhere else, and the only other thing a member can start with
+            // is `fn`, so there is nothing to disambiguate and no reason to
+            // reserve the word for the rest of the language.
+            if self.eat_named("state") {
                 if let Some(field_name) = self.expect_ident("handler state") {
                     if self.expect(TokenKind::Colon, "handler state").is_some() {
                         let ty = self.parse_type();

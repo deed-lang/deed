@@ -56,13 +56,24 @@
 //    is not a library. A module's name says where it lives now (#118), which
 //    is a rule every file here already followed and nothing said out loud.
 //
-// What it still cannot do is mark a task done, which wants a way to say which
-// one, which wants either an index or a search. Both are writable now; neither
-// is written, because the point of this file is what it found rather than how
-// complete it is.
+// 7. Marking a task done, which is what this file said for months it could
+//    not do, is one `map` over the tasks with one of them replaced. It took
+//    generic functions, generic types and a row variable to be able to write
+//    that `map` once, and once those existed the feature was four lines.
+//
+//    Writing it found one more thing, and a small one: `state` used to be a
+//    keyword, so `with state = ..` did not parse. It means something inside a
+//    `handler` and nowhere else, and reserving a word that common for one
+//    position is a cost nobody had paid until somebody wanted the word. The
+//    fold below is that word being wanted, so it is a name again (#128).
+//
+// What it still cannot do is say which task when two have the same title.
+// That wants an index, and an index into a list nothing bounds is exactly the
+// sort of thing the refinement tier exists to argue about, so it is worth its
+// own conversation rather than a quick answer.
 module examples/todo
 
-use examples/list.{map, filter, count_where}
+use examples/list.{map, filter, any, count_where}
 
 record Task {
     done: Bool,
@@ -125,6 +136,39 @@ fn report(lines: List<String>) -> String {
     to_string(count_done(lines)) + " of " + to_string(walk(lines)) + " done"
 }
 
+// Turning a task back into a line, which is `parse` run backwards. Worth
+// having next to it: a program that reads a format and writes it in two
+// different places is a program with two formats.
+fn render(task: Task) -> String {
+    if task.done {
+        "[x] " + task.title
+    } else {
+        "[ ] " + task.title
+    }
+}
+
+// The thing this file could not do for most of its life, and the reason it
+// could not was never the marking. It was that there was no way to say "the
+// same list with one element changed" without writing the walk out by hand,
+// and there was no way to write that walk once for every element type.
+//
+// It is one `map` now. The library that `map` comes from is written in Vow.
+fn marked(lines: List<String>, title: String) -> List<String> {
+    map(tasks(lines), |task: Task| render(finish(task, title)))
+}
+
+fn finish(task: Task, title: String) -> Task {
+    if task.title == title {
+        Task { done: true, title: task.title }
+    } else {
+        task
+    }
+}
+
+fn holds(lines: List<String>, title: String) -> Bool {
+    any(tasks(lines), |task: Task| task.title == title)
+}
+
 // A file that is not there is not a crash. The capability says which directory
 // this may read from and nothing says what is in it.
 fn read_or(files: Dir, name: String, fallback: String) -> String
@@ -137,15 +181,83 @@ fn read_or(files: Dir, name: String, fallback: String) -> String
     }
 }
 
+// What the command line asked for. One verb and the rest is a title, so
+// `-- done buy milk` finishes "buy milk" and `-- buy milk` adds it.
+//
+// A choice rather than a string compared three times, because the three
+// answers are the whole set and a `match` on them is exhaustive. That is the
+// difference between a program that handles a new case and one that forgets
+// to.
+choice Asked {
+    Nothing,
+    Add { title: String },
+    Finish { title: String },
+}
+
+fn asked_for(arguments: List<String>) -> Asked {
+    if length(arguments) == 0 {
+        Nothing
+    } else {
+        match at(arguments, 0) {
+            ok(first) => rest_of(first, arguments),
+            err(why) => Nothing,
+        }
+    }
+}
+
+fn rest_of(first: String, arguments: List<String>) -> Asked {
+    let title = join(after_first(arguments), " ")
+
+    if first == "done" {
+        if length(title) == 0 {
+            Nothing
+        } else {
+            Finish { title }
+        }
+    } else {
+        Add { title: join(arguments, " ") }
+    }
+}
+
+// Dropping the first element, which is an indexed walk and so a `for` with a
+// record accumulator. Worth writing out once here rather than putting it in
+// the library: what a caller usually wants is `filter`, and a list library
+// with a `drop` in it invites index arithmetic that nothing in this language
+// makes safe.
+record Walking {
+    seen: Int,
+    kept: List<String>,
+}
+
+fn after_first(items: List<String>) -> List<String> {
+    let walked = for item in items with state = Walking { seen: 0, kept: [] } {
+        if state.seen == 0 {
+            Walking { seen: 1, kept: state.kept }
+        } else {
+            Walking { seen: state.seen + 1, kept: push(state.kept, item) }
+        }
+    }
+
+    walked.kept
+}
+
 // Everything given on the command line becomes one task, so `vow run ... --
 // buy milk` adds "buy milk" rather than two tasks nobody asked for. The
 // trailing newline goes back on, because a text file without one is its own
 // small wart and this is the only place that decides.
-fn added(text: String, titles: List<String>) -> String {
-    if length(titles) == 0 {
-        text
+fn written(text: String, asked: Asked) -> String {
+    match asked {
+        Nothing => text,
+        Add { title } => lines_of(push(entries_in(text), "[ ] " + title)),
+        Finish { title } => lines_of(marked(entries_in(text), title)),
+    }
+}
+
+fn lines_of(entries: List<String>) -> String {
+    if length(entries) == 0 {
+        ""
     } else {
-        join(push(entries_in(text), "[ ] " + join(titles, " ")), "\n") + "\n"
+        join(entries, "\n") + "\n"
     }
 }
 
@@ -179,14 +291,19 @@ fn main(sys: System) -> Int
 {
     let out = sys.console
     let before = read_or(sys.files, "todo.txt", "")
-    let after = added(before, Io.args(sys))
+    let asked = asked_for(Io.args(sys))
+    let after = written(before, asked)
+
+    // Saying so when a `done` named nothing that is there. Silently doing
+    // nothing is how somebody finds out a week later that they misspelled it.
+    Io.write(out, said(before, asked))
 
     // Saving only when something changed. A program that rewrote the file on
     // every run would touch it even when asked to do nothing, and a to-do list
     // whose timestamp moves for no reason is a to-do list nobody trusts.
     if before != after {
         match Io.save(sys.files, "todo.txt", after) {
-            ok(nothing) => Io.write(out, "added"),
+            ok(nothing) => Io.write(out, "saved"),
             err(why) => Io.write(out, why),
         }
     }
@@ -197,6 +314,22 @@ fn main(sys: System) -> Int
     Io.write(out, "still open: " + join(open_titles(lines), ", "))
 
     0
+}
+
+fn said(text: String, asked: Asked) -> String {
+    match asked {
+        Nothing => "nothing asked for",
+        Add { title } => "added: " + title,
+        Finish { title } => finished_or_not(text, title),
+    }
+}
+
+fn finished_or_not(text: String, title: String) -> String {
+    if holds(entries_in(text), title) {
+        "done: " + title
+    } else {
+        "no task called: " + title
+    }
 }
 
 test "a line becomes a task" {
@@ -228,4 +361,46 @@ test "an empty list is not a special case anywhere" {
     assert count_done([]) == 0
     assert open_titles([]) == []
     assert report([]) == "0 of 0 done"
+}
+
+test "marking one done leaves the others alone" {
+    let lines = ["[x] one", "[ ] two", "[ ] three"]
+
+    assert marked(lines, "two") == ["[x] one", "[x] two", "[ ] three"]
+    assert marked(lines, "one") == lines
+    assert marked(lines, "nope") == lines
+    assert marked([], "two") == []
+}
+
+test "a task that is not there is said so rather than ignored" {
+    let lines = ["[ ] two"]
+
+    assert holds(lines, "two") == true
+    assert holds(lines, "nope") == false
+    assert holds([], "two") == false
+}
+
+test "one verb and the rest is a title" {
+    assert asked_for([]) == Nothing
+    assert asked_for(["buy", "milk"]) == Add { title: "buy milk" }
+    assert asked_for(["done", "buy", "milk"]) == Finish { title: "buy milk" }
+    // `done` on its own names nothing, so it asks for nothing rather than
+    // finishing a task with an empty title.
+    assert asked_for(["done"]) == Nothing
+}
+
+test "what gets written back" {
+    let text = "[ ] two\n"
+
+    assert written(text, Nothing) == text
+    assert written(text, Add { title: "three" }) == "[ ] two\n[ ] three\n"
+    assert written(text, Finish { title: "two" }) == "[x] two\n"
+    assert written("", Add { title: "first" }) == "[ ] first\n"
+    assert written("", Nothing) == ""
+}
+
+test "rendering is parsing run backwards" {
+    assert render(Task { done: true, title: "one" }) == "[x] one"
+    assert render(Task { done: false, title: "one" }) == "[ ] one"
+    assert parse(render(Task { done: true, title: "one" })) == ok(Task { done: true, title: "one" })
 }
