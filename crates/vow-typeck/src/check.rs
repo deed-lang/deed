@@ -2255,6 +2255,7 @@ impl<'a> Checker<'a> {
     fn check_for(
         &mut self,
         binder: &'a Ident,
+        index: Option<&'a Ident>,
         iterable: &'a Expr,
         accumulator: Option<&'a Accumulator>,
         body: &'a Block,
@@ -2285,6 +2286,26 @@ impl<'a> Checker<'a> {
 
         if let Some(def) = self.def_of(binder) {
             self.def_types.insert(def, element);
+        }
+
+        // Where in the list the element was. Not negative, and below however
+        // long the list is, which is the fact that makes it worth binding
+        // rather than counting by hand: a walk that indexes something with it
+        // can say so.
+        if let Some(index) = index
+            && let Some(def) = self.def_of(index)
+        {
+            self.def_types.insert(def, Ty::Int);
+            self.facts.set(def, Range::between(0, i64::MAX));
+            if let Some(walked) = self.term_of(iterable)
+                && let facts::Term::Name(walked) = walked
+            {
+                self.facts.narrow_difference(
+                    facts::Term::Name(def),
+                    facts::Term::Length(walked),
+                    Range::between(i64::MIN, -1),
+                );
+            }
         }
 
         // What the accumulator starts as is worked out before the loop, so it
@@ -2450,11 +2471,19 @@ impl<'a> Checker<'a> {
 
             Expr::For {
                 binder,
+                index,
                 iterable,
                 accumulator,
                 body,
                 span,
-            } => self.check_for(binder, iterable, accumulator.as_ref(), body, *span),
+            } => self.check_for(
+                binder,
+                index.as_ref(),
+                iterable,
+                accumulator.as_ref(),
+                body,
+                *span,
+            ),
 
             Expr::Block(block) => self.check_block(block),
 

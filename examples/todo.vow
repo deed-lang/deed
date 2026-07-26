@@ -73,11 +73,12 @@
 //    language had to change, and what it took is the interesting part.
 //
 //    A position is a fact about where an element is, and a callback is only
-//    ever handed the element. So `map` and `filter` stop being enough the
-//    moment position matters, and the walk goes back to being written out by
-//    hand with a counter in a record. There are three of those in this file
-//    now, all the same shape, and one of them replaced a `map(filter(..))`
-//    that used to be a single line. `filter` is not imported here any more.
+//    ever handed the element. So `map` and `filter` stopped being enough the
+//    moment position mattered, and the walk went back to being written out by
+//    hand with a counter in a record. There were three of those in this file,
+//    all the same shape, and one of them replaced a `map(filter(..))` that
+//    used to be a single line. `filter` is not imported here any more. That is
+//    what item 9 below came out of.
 //
 //    Nothing bounds the number. `done 9` on a file with two tasks walks both,
 //    marks neither and hands back the list it started with, so whether it
@@ -90,6 +91,17 @@
 //    finished by title, because `done` has to decide what its argument is and
 //    a `String` has nowhere to record which of the two it was. That is the
 //    same mistake as using a title for a name, one level up.
+//
+// 9. Those three walks are one line each again. A `for` says where in the list
+//    it is now, so `for task at here in tasks` binds the position and the
+//    record that existed to smuggle a counter alongside the answer is gone,
+//    along with the branches that only existed to keep it right.
+//
+//    That is the fifth thing this file decided about the language, and the
+//    argument for putting it in the language rather than in the library is the
+//    library itself: everything in `examples/list.vow` is written with a
+//    `for`, so `map` could not hand a callback something the walk never knew.
+//    `map_at` is four lines of Vow now and nothing here grew a second `map`.
 module examples/todo
 
 use examples/list.{map, any, count_where}
@@ -149,28 +161,24 @@ fn count_done(lines: List<String>) -> Int {
 
 // The open ones, numbered by where they are in the file.
 //
-// This used to be `map(filter(..))` and one line. It is a walk carrying a
-// counter now, and that is the first thing marking by position cost: `map` and
-// `filter` hand the callback an element and nothing else, so the moment a
-// position matters they stop being enough and the walk goes back to being
-// written out by hand. The counter has to count every task rather than every
-// open one, because the number a user types has to mean the same thing here
-// and in `marked_at`.
+// This used to be `map(filter(..))` and one line, then a walk carrying a
+// counter in a record, and it is a `for` again because a `for` says where it
+// is now. The counter has to count every task rather than every open one,
+// because the number a user types has to mean the same thing here and in
+// `marked_at`, and the walk that gets that right is the one that never had a
+// choice about it.
+//
+// `here` counts from zero and the file counts from one, so the number printed
+// is one more. That is a decision this file makes about what to show a person,
+// which is where it belongs.
 fn open_titles(lines: List<String>) -> List<String> {
-    let walked = for task in tasks(lines) with state = Walking { seen: 0, kept: [] } {
-        let here = state.seen + 1
-
+    for task at here in tasks(lines) with kept = [] {
         if task.done {
-            Walking { seen: here, kept: state.kept }
+            kept
         } else {
-            Walking {
-                seen: here,
-                kept: push(state.kept, to_string(here) + ". " + task.title),
-            }
+            push(kept, to_string(here + 1) + ". " + task.title)
         }
     }
-
-    walked.kept
 }
 
 fn report(lines: List<String>) -> String {
@@ -201,31 +209,21 @@ fn marked(lines: List<String>, title: String) -> List<String> {
 // The same thing by position rather than by title, which is what this file
 // said for its whole life it could not do.
 //
-// It is not one `map`. A position is a fact about where an element is and a
-// callback is only handed the element, so this is a walk carrying a counter,
-// the same shape as `after_first` and `open_titles`. Three of them in one file
-// is the language saying something.
+// It is not one `map`. A callback is only ever handed the element, so a
+// library function written in Vow cannot tell one where it is. A `for` can,
+// which is why the walk is here and stays here.
 //
-// Nothing here bounds `position`. `done 9` on a file with two tasks walks
-// both, marks neither, and comes back with the list it started with, so the
-// answer to "was there anything there" has to be asked separately by
-// `holds_at`. An index into a list nothing bounds is the thing to argue about;
-// this is what writing it without that argument looks like.
+// Nothing bounds `position`. `done 9` on a file with two tasks walks both,
+// marks neither, and comes back with the list it started with, so the answer
+// to "was there anything there" has to be asked separately by `holds_at`.
 fn marked_at(lines: List<String>, position: Int) -> List<String> {
-    let walked = for task in tasks(lines) with state = Walking { seen: 0, kept: [] } {
-        let here = state.seen + 1
-
-        if here == position {
-            Walking {
-                seen: here,
-                kept: push(state.kept, render(done(task))),
-            }
+    for task at here in tasks(lines) with kept = [] {
+        if here + 1 == position {
+            push(kept, render(done(task)))
         } else {
-            Walking { seen: here, kept: push(state.kept, render(task)) }
+            push(kept, render(task))
         }
     }
-
-    walked.kept
 }
 
 fn done(task: Task) -> Task {
@@ -311,31 +309,24 @@ fn rest_of(first: String, arguments: List<String>) -> Asked {
     }
 }
 
-// Dropping the first element, which is an indexed walk and so a `for` with a
-// record accumulator. Worth writing out once here rather than putting it in
-// the library: what a caller usually wants is `filter`, and a list library
-// with a `drop` in it invites index arithmetic that nothing in this language
-// makes safe.
+// Dropping the first element. Worth writing out once here rather than putting
+// it in the library: what a caller usually wants is `filter`, and a list
+// library with a `drop` in it invites index arithmetic that nothing in this
+// language makes safe.
 //
-// Three walks in this file carry this record now, which is what happened when
-// position started mattering. It is not a `drop`, a `map` and a `filter`
-// wearing different names; it is the same counter written out three times
-// because there is no way to hand a callback where it is.
-record Walking {
-    seen: Int,
-    kept: List<String>,
-}
-
+// This was the third walk in this file carrying a counter in a record. All
+// three had the same shape and the record existed to smuggle a number
+// alongside the answer, which every branch then had to remember to bump. A
+// `for` says where it is now, so the record is gone and so are the branches
+// that only existed to keep it right.
 fn after_first(items: List<String>) -> List<String> {
-    let walked = for item in items with state = Walking { seen: 0, kept: [] } {
-        if state.seen == 0 {
-            Walking { seen: 1, kept: state.kept }
+    for item at here in items with kept = [] {
+        if here == 0 {
+            kept
         } else {
-            Walking { seen: state.seen + 1, kept: push(state.kept, item) }
+            push(kept, item)
         }
     }
-
-    walked.kept
 }
 
 // Everything given on the command line becomes one task, so `vow run ... --

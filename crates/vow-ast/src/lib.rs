@@ -513,6 +513,13 @@ pub enum Expr {
     For {
         /// The element, bound once per turn.
         binder: Ident,
+        /// Where in the list that element was, bound once per turn as well.
+        ///
+        /// `None` for a walk that does not care, which is most of them. A
+        /// `for` that never says where it is means every walk that does care
+        /// has to carry a counter in a record and remember to bump it in every
+        /// branch, which is three walks in `examples/todo.vow` alone.
+        index: Option<Ident>,
         iterable: Box<Expr>,
         /// The accumulator and what it starts as, when there is one.
         accumulator: Option<Accumulator>,

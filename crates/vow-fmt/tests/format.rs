@@ -185,6 +185,15 @@ fn a_for_keeps_its_head_on_one_line() {
 }
 
 #[test]
+fn a_for_that_says_where_it_is_keeps_that_in_the_head() {
+    let formatted = fmt("module a\n\nfn f() -> Int {\nfor n at i in ns with sum=0 {sum+i}\n}\n");
+    assert!(
+        formatted.contains("    for n at i in ns with sum = 0 {\n"),
+        "{formatted}"
+    );
+}
+
+#[test]
 fn a_trailing_comment_stays_on_its_line() {
     let formatted = fmt("module a\n\nfn f() -> Int {\n    let x = 1 // why\n    x\n}\n");
     assert!(formatted.contains("let x = 1 // why"), "{formatted}");
@@ -271,6 +280,7 @@ const SOURCES: &[&str] = &[
     "module a\n\nfn f() -> Int { g(1)? + h(2)? }\n",
     "module a\n\nfn f() -> List<Int> { [1, 2, 3] }\n",
     "module a\n\nfn f(ns: List<Int>) -> Int {\n    for n in ns with sum = 0 {\n        sum + n\n    }\n}\n",
+    "module a\n\nfn f(ns: List<Int>) -> Int {\n    for n at i in ns with sum = 0 {\n        sum + n * i\n    }\n}\n",
     "module a\n\nfn f(ns: List<Int>) -> () {\n    for n in ns {\n        g(n)\n    }\n}\n",
     "module a\n\nfn f() -> List<List<Int>> { [[], [1]] }\n",
     "module a\n\nfn f() -> Int { (1 + 2) * (3 - 4) / (5 % 6) }\n",

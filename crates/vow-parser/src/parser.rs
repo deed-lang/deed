@@ -1559,6 +1559,12 @@ impl<'a> Parser<'a> {
 
     /// `for n in numbers with sum = 0 { ... }`, with `for` still to be read.
     ///
+    /// `for n at i in numbers` binds where in the list the element was. `at`
+    /// is a name everywhere else in the language, and it is the name of the
+    /// prelude function that indexes a list, so it stays one: the only thing
+    /// that can follow a `for` binder is `at` or `in`, so there is nothing for
+    /// it to be confused with here and nothing to reserve.
+    ///
     /// The iterable and the initial value are parsed with struct literals
     /// held back, for the same reason an `if` condition is: the brace after
     /// them opens the body, and a name followed by one would otherwise read as
@@ -1569,6 +1575,14 @@ impl<'a> Parser<'a> {
         let binder = self
             .expect_ident("a `for` loop")
             .unwrap_or_else(|| Ident::new("", self.span()));
+        let index = if self.eat_named("at") {
+            Some(
+                self.expect_ident("a `for` index")
+                    .unwrap_or_else(|| Ident::new("", self.span())),
+            )
+        } else {
+            None
+        };
         self.expect(TokenKind::Keyword(Keyword::In), "a `for` loop");
 
         let saved = std::mem::replace(&mut self.struct_lit, StructLit::RequireColon);
@@ -1595,6 +1609,7 @@ impl<'a> Parser<'a> {
         Expr::For {
             span: start.to(body.span),
             binder,
+            index,
             iterable: Box::new(iterable),
             accumulator,
             body,
