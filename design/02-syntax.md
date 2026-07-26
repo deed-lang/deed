@@ -621,8 +621,8 @@ they name has no other way to be written down.
 
 **The prelude is eighteen names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
 `err`, `length`, `List`, `at`, `push`, `split`, `join`, `to_string`, `to_int`, `System`,
-`Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`, `now`, `open`, `read`
-and `save` operations, and `Diverge`. Everything else is imported. Each prelude entry is a name that
+`Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`, `now`, `open`, `read`,
+`save` and `args` operations, and `Diverge`. Everything else is imported. Each prelude entry is a name that
 cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
 is short on purpose. The four capability types are there because a capability that could be
 imported would not be a capability.

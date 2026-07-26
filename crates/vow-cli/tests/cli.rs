@@ -626,6 +626,48 @@ fn the_journal_example_writes_a_file_and_cannot_write_outside_the_directory() {
     assert!(!beside.exists(), "something was written outside the `Dir`");
 }
 
+#[test]
+fn arguments_after_a_double_dash_go_to_the_program() {
+    // The to-do example, finally able to do the other half of its job. A
+    // separator rather than "whatever is left over", because a program's
+    // arguments can look exactly like this tool's.
+    let scratch = Scratch::new("todo-add");
+    scratch.write("todo.txt", "x|one\n-|two\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let output = run(&["run", TODO, "--dir", &dir, "--", "buy", "milk"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("added"), "{text}");
+    assert!(text.contains("1 of 3 done"), "{text}");
+    assert!(text.contains("still open: two, buy milk"), "{text}");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
+        "x|one\n-|two\n-|buy milk\n"
+    );
+}
+
+#[test]
+fn a_program_given_no_arguments_leaves_the_file_alone() {
+    // Rewriting a file on every run touches it even when asked to do nothing,
+    // and a to-do list whose timestamp moves for no reason is one nobody
+    // trusts.
+    let scratch = Scratch::new("todo-noop");
+    scratch.write("todo.txt", "x|one\n-|two\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let before = std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap();
+    let output = run(&["run", TODO, "--dir", &dir]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("added"), "{}", stdout(&output));
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
+        before
+    );
+}
+
 // -- formatting ------------------------------------------------------------
 
 #[test]

@@ -186,8 +186,11 @@ pub struct Run {
 /// `root` is the directory `sys.files` is rooted at, and the program can reach
 /// nothing outside it. The caller supplies it rather than the runtime picking
 /// one, because how much of the filesystem a program gets is a decision and
-/// decisions belong at the call site.
-pub fn run_main(program: &Program, file: FileId, root: &Path) -> Option<Run> {
+/// decisions belong at the call site. `arguments` arrives the same way and for
+/// the same reason: the runtime does not read the process's own command line,
+/// so nothing about how the compiler was invoked can leak into the program it
+/// is running.
+pub fn run_main(program: &Program, file: FileId, root: &Path, arguments: &[String]) -> Option<Run> {
     let main = program
         .module(file)?
         .items
@@ -199,6 +202,10 @@ pub fn run_main(program: &Program, file: FileId, root: &Path) -> Option<Run> {
 
     let mut interp = Interp::new(program, file);
     interp.root = sandbox::root(root).ok().map(Rc::from);
+    interp.arguments = arguments
+        .iter()
+        .map(|argument| Rc::from(&**argument))
+        .collect();
 
     let span = main.sig.name.span;
     let args = main
@@ -378,6 +385,12 @@ pub(crate) struct Interp<'a> {
     /// the case for `test` blocks: a test that could reach the filesystem
     /// would be a test of the filesystem.
     root: Option<Rc<Path>>,
+    /// What the program was invoked with, for `Io.args`.
+    ///
+    /// Empty for a `test` block, for the same reason as `root`: a test whose
+    /// answer depended on how the test runner was invoked would be a test of
+    /// the test runner.
+    arguments: Vec<Rc<str>>,
 }
 
 impl<'a> Interp<'a> {
@@ -403,6 +416,7 @@ impl<'a> Interp<'a> {
             output: Vec::new(),
             ticks: 0,
             root: None,
+            arguments: Vec::new(),
         }
     }
 
@@ -1272,6 +1286,17 @@ impl<'a> Interp<'a> {
                 self.ticks += 1;
                 Ok(Value::Int(self.ticks))
             }
+            // Data rather than authority, which is why it hands back a list
+            // instead of something opaque. It takes the root capability all
+            // the same, so a function that wants the arguments has to have
+            // been handed everything, and everything below `main` gets the
+            // values passed down like any other input.
+            ("args", Capability::System) => Ok(Value::list(
+                self.arguments
+                    .iter()
+                    .map(|argument| Value::Str(Rc::clone(argument)))
+                    .collect(),
+            )),
             // Narrowing. The `Dir` that comes back reaches strictly less than
             // the one that went in, and there is no operation that goes the
             // other way, so authority only ever shrinks on the way down.

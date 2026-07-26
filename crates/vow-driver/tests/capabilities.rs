@@ -48,8 +48,13 @@ fn run(src: &str) -> (SourceMap, Run) {
 }
 
 fn run_in(src: &str, root: &Path) -> (SourceMap, Run) {
+    run_with(src, root, &[])
+}
+
+fn run_with(src: &str, root: &Path, arguments: &[String]) -> (SourceMap, Run) {
     let (sources, checked) = check_ok(src);
-    let run = run_main(&program_of(&checked), checked.file, root).expect("there should be a main");
+    let run = run_main(&program_of(&checked), checked.file, root, arguments)
+        .expect("there should be a main");
     (sources, run)
 }
 
@@ -399,6 +404,68 @@ fn a_function_with_no_dir_has_nothing_to_save_into() {
     );
 }
 
+// -- arguments -------------------------------------------------------------
+
+#[test]
+fn a_program_reads_what_it_was_invoked_with() {
+    let (_, run) = run_with(
+        &report(
+            &["write", "args"],
+            "  Io.write(sys.console, join(Io.args(sys), \" and \"))",
+        ),
+        nowhere(),
+        &["one".to_string(), "two".to_string()],
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["one and two".to_string()]);
+}
+
+#[test]
+fn a_program_invoked_with_nothing_gets_an_empty_list() {
+    // Not a `Result` and not an error. Being given no arguments is an ordinary
+    // way to invoke a program, so there is nothing to fail about.
+    let (_, run) = run_in(
+        &report(
+            &["write", "args"],
+            "  Io.write(sys.console, to_string(length(Io.args(sys))))",
+        ),
+        nowhere(),
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["0".to_string()]);
+}
+
+#[test]
+fn reading_the_arguments_without_declaring_it_is_an_effect_error() {
+    // Arguments are not authority, but they are input from outside, and every
+    // other way of getting input from outside says so in the signature.
+    let (sources, checked) =
+        check("module a\n\nfn peek(sys: System) -> List<String> {\n  Io.args(sys)\n}\n");
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn reading_the_arguments_takes_the_root_capability() {
+    // A narrower capability is not enough, which keeps `Io.args` where it
+    // belongs: near `main`, with everything below it handed the values rather
+    // than the means to read them again.
+    let (sources, checked) = check(
+        "module a\n\nfn peek(files: Dir) -> List<String>\n  uses Io.args,\n{\n  Io.args(files)\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_typeck::codes::TYPE_MISMATCH),
+        "{text}"
+    );
+    assert!(text.contains("expected `System`, found `Dir`"), "{text}");
+}
+
 // -- the examples ----------------------------------------------------------
 
 #[test]
@@ -414,8 +481,8 @@ fn the_hello_example_runs() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    let run =
-        run_main(&program_of(&checked), checked.file, nowhere()).expect("the example has a main");
+    let run = run_main(&program_of(&checked), checked.file, nowhere(), &[])
+        .expect("the example has a main");
     assert!(run.result.is_ok());
     assert!(run.output.iter().any(|line| line.contains("world")));
 }
@@ -434,7 +501,7 @@ fn the_config_example_reads_itself_and_nothing_else() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    let run = run_main(&program_of(&checked), checked.file, Path::new(dir))
+    let run = run_main(&program_of(&checked), checked.file, Path::new(dir), &[])
         .expect("the example has a main");
     assert!(run.result.is_ok());
     assert_eq!(run.output[0], "found it");
@@ -448,7 +515,7 @@ fn the_config_example_reads_itself_and_nothing_else() {
 #[test]
 fn a_file_with_no_main_is_not_runnable() {
     let (_, checked) = check_ok("module a\n\nfn f() -> Int { 0 }\n");
-    assert!(run_main(&program_of(&checked), checked.file, nowhere()).is_none());
+    assert!(run_main(&program_of(&checked), checked.file, nowhere(), &[]).is_none());
 }
 
 /// A scratch directory, named so parallel tests do not collide.
