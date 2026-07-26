@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-75 passed, 0 failed
+79 passed, 0 failed
 ```
 
 ```
@@ -221,6 +221,21 @@ out, a small one. `state` was a keyword, so `with state = ..` did not parse, and
 means something in exactly one position where the only alternative is `fn`. Reserving a word
 that common for one position is a cost nobody had paid until a program wanted the word, so it
 is a name again and the parser recognises it where it matters.
+
+The last thing on its list was two tasks with the same title, where `done buy milk` finishes
+both because a title is being used as a name and it is not one. `done 2` finishes the second
+task now, and no part of the language changed to allow it, which is what makes it worth
+reporting. A position is a fact about where an element is and a callback is only ever handed
+the element, so `map` and `filter` stop being enough the moment position matters and the walk
+goes back to a counter in a record written out by hand. There are three of those in that file
+now, one of them replacing a `map(filter(..))` that used to be a single line.
+
+And nothing bounds the number. `done 9` on a file with two tasks walks both, marks neither
+and hands back the list it started with, so whether it meant anything has to be asked again
+by a second function comparing it against the length. That is the shape an index has when the
+type system cannot hold "in range", and it is the argument for the refinement tier made by a
+program rather than by a design document. What to do about it is the next question rather
+than this one.
 
 `for` is a fold with syntax rather than a loop with a variable in it:
 

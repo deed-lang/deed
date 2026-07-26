@@ -974,6 +974,20 @@ using an effect to get around not having a loop.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
   `Option` already is. What holds `List` in place is `[1, 2, 3]`, which is a literal with
   syntax of its own, so moving it out means deciding what that literal builds.
+- An index into a list has nowhere to say it is in range. `examples/todo.vow` marks a task by
+  position now, and the walk that does it cannot fail, so `done 9` on a file with two tasks
+  changes nothing and a separate function has to compare the number against the length after
+  the fact. The interval domain already knows a `length` is not negative and does not know it
+  as a name, so `position < length(items)` is not a relation it can hold. Making it one is
+  the smaller half. The larger half is what would consume the fact: `at` returns a `Result`
+  whatever is known about its index, and something that does not is a precondition relating
+  two arguments rather than a refinement on one value, which is a different shape from every
+  refinement in this document.
+- Position is not something a callback can be handed. `map` and `filter` give the callback an
+  element, so the moment where an element is matters the walk goes back to a counter in a
+  record. There are three of those in `examples/todo.vow` and they are the same three lines
+  each time. An indexed form of each is the obvious answer and the obvious answer doubles the
+  library, so it is worth knowing whether the counter is the cost of not having one.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
