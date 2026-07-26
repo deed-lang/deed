@@ -194,6 +194,16 @@ fn a_for_that_says_where_it_is_keeps_that_in_the_head() {
 }
 
 #[test]
+fn a_for_that_stops_early_keeps_that_in_the_head_too() {
+    let formatted =
+        fmt("module a\n\nfn f() -> Bool {\nfor n in ns with hit=false while !hit {n>2}\n}\n");
+    assert!(
+        formatted.contains("    for n in ns with hit = false while !hit {\n"),
+        "{formatted}"
+    );
+}
+
+#[test]
 fn a_trailing_comment_stays_on_its_line() {
     let formatted = fmt("module a\n\nfn f() -> Int {\n    let x = 1 // why\n    x\n}\n");
     assert!(formatted.contains("let x = 1 // why"), "{formatted}");
@@ -281,6 +291,7 @@ const SOURCES: &[&str] = &[
     "module a\n\nfn f() -> List<Int> { [1, 2, 3] }\n",
     "module a\n\nfn f(ns: List<Int>) -> Int {\n    for n in ns with sum = 0 {\n        sum + n\n    }\n}\n",
     "module a\n\nfn f(ns: List<Int>) -> Int {\n    for n at i in ns with sum = 0 {\n        sum + n * i\n    }\n}\n",
+    "module a\n\nfn f(ns: List<Int>) -> Bool {\n    for n in ns with hit = false while !hit {\n        n > 2\n    }\n}\n",
     "module a\n\nfn f(ns: List<Int>) -> () {\n    for n in ns {\n        g(n)\n    }\n}\n",
     "module a\n\nfn f() -> List<List<Int>> { [[], [1]] }\n",
     "module a\n\nfn f() -> Int { (1 + 2) * (3 - 4) / (5 % 6) }\n",

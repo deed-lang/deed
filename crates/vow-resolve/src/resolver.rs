@@ -1064,6 +1064,7 @@ impl Resolver<'_> {
                 index,
                 iterable,
                 accumulator,
+                keep,
                 body,
                 ..
             } => {
@@ -1077,12 +1078,19 @@ impl Resolver<'_> {
                 }
 
                 self.push_scope(ScopeKind::Local);
+                if let Some(accumulator) = accumulator {
+                    self.declare_local(&accumulator.name, DefKind::Local);
+                }
+                // Before the element and the index, because the condition
+                // decides whether to take the turn those belong to. `while
+                // item` is a name that does not resolve rather than a value
+                // from a turn that has not happened.
+                if let Some(keep) = keep {
+                    self.resolve_expr(keep);
+                }
                 self.declare_local(binder, DefKind::Local);
                 if let Some(index) = index {
                     self.declare_local(index, DefKind::Local);
-                }
-                if let Some(accumulator) = accumulator {
-                    self.declare_local(&accumulator.name, DefKind::Local);
                 }
                 self.resolve_block(body);
                 self.pop_scope();

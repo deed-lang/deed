@@ -538,6 +538,20 @@ pub enum Expr {
         iterable: Box<Expr>,
         /// The accumulator and what it starts as, when there is one.
         accumulator: Option<Accumulator>,
+        /// `while so_far` in `for x in xs with so_far = true while so_far`.
+        ///
+        /// Read before each turn, with the accumulator in scope and the
+        /// element not, since the element belongs to the turn this is deciding
+        /// whether to take. Stopping early rather than looping longer: the
+        /// list still bounds how many turns there can be, so this cannot bring
+        /// back the termination problem that keeps `while` out of the language
+        /// as a statement.
+        ///
+        /// Needs an accumulator. The condition is about what the walk has
+        /// worked out so far, and a condition that can only read things the
+        /// walk never changes either stops it before it starts or never stops
+        /// it at all.
+        keep: Option<Box<Expr>>,
         body: Block,
         span: Span,
     },

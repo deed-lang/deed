@@ -678,6 +678,7 @@ impl Printer<'_> {
                 index,
                 iterable,
                 accumulator,
+                keep,
                 body,
                 ..
             } => {
@@ -693,6 +694,9 @@ impl Printer<'_> {
                         accumulator.name.name,
                         self.expr(&accumulator.init)
                     );
+                }
+                if let Some(keep) = keep {
+                    let _ = write!(head, " while {}", self.expr(keep));
                 }
                 format!("{head} {}", self.rendered_block(body))
             }

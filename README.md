@@ -481,6 +481,17 @@ list library written in Vow: `map`, `map_at`, `filter`, `fold`, `any`, `all`, `c
 `filtered_with`, none of them known to the compiler, no builtin, no special case, no name in
 the prelude. It is the first thing in this repository anybody else could have written.
 
+It is also what got the language a way to stop a walk. `any` and `all` in it both used to
+open with a branch whose only job was to notice that the answer was already in, which is
+control flow inside a fold, which is the thing a fold exists to not have, and the branch could
+skip the work but not the turn. The design doc said `break` and `continue` had not come up in
+a program written here, and this file was the counterexample sitting in the repository. So a
+`for` takes a `while` now, read before each turn with the accumulator in scope and the element
+out of it, since the element belongs to the turn the condition is deciding whether to take.
+Both functions lost their branch. It is not `break`: nothing is abandoned, the value of the
+loop is the accumulator it stopped holding, and the list still bounds how many turns there can
+be, so the termination argument that keeps a `while` statement out is untouched.
+
 Pointing `todo.vow` at it found the last thing missing. The compiler only looks at the files
 it was handed, which is a rule worth having, and it meant `vow run examples/todo.vow` could
 not find `examples/list` and the workaround was to name every file the program transitively

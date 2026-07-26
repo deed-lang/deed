@@ -131,3 +131,11 @@ pub const BROKEN_PRECONDITION: &str = "VOW4025";
 /// that was meant to continue the one above it. The second became possible to
 /// tell apart when an expression started ending at the end of a line.
 pub const DISCARDED_VALUE: &str = "VOW4026";
+
+/// A `for ... while ...` with nothing to be about.
+///
+/// The condition is read before each turn and sees the accumulator, so a walk
+/// without one gives it nothing that changes. Such a condition either stops
+/// the walk before the first turn or never stops it, and neither is a thing
+/// anybody meant to write.
+pub const WHILE_WITHOUT_ACCUMULATOR: &str = "VOW4027";

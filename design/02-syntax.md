@@ -272,10 +272,43 @@ with branches that existed only to remember to bump it.
 What can be walked is a `List`, and nothing else. A `for` over a `String` or a `Result` would
 need a way to say what walking one means, which is a trait system, which does not exist.
 
-What is deliberately absent is `while`, `break` and `continue`. A `while` cannot be shown to
-terminate, so it would bring `Diverge` back with it and undo the reason for having `for`.
-`break` and `continue` want a loop with control flow in it rather than a fold, and neither
-has come up yet in a program written here.
+**A `for` can stop early, and it does it in the head rather than in the body.**
+
+```vow
+fn any<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
+  uses
+    r,
+{
+    for item in items with found = false while !found {
+        matches(item)
+    }
+}
+```
+
+`while` is read before each turn with the accumulator in scope and the element out of it,
+since the element belongs to the turn the condition is deciding whether to take. It is not
+`break`: nothing is abandoned, and the value of the loop is the accumulator it stopped
+holding. The list still bounds how many turns there can be, so this cannot bring back the
+termination problem that keeps a `while` statement out.
+
+It needs a `with`. The condition is about what the walk has worked out so far, and one that
+can only read what the walk never changes either stops it before it starts or never stops it
+at all, so a `for ... while` with no accumulator is `VOW4027`.
+
+`while` stays a name everywhere else. The only thing that can come between an accumulator and
+the body is this, so there is nothing here for it to be confused with, which is the same
+reasoning that kept `at` out of the keyword list and took `state` back out of it.
+
+This document said for a while that `break` and `continue` had not come up in a program
+written here. They had. `any` and `all` in `examples/list.vow` both opened with a branch whose
+only job was to notice that the answer was already in, which is control flow inside a fold,
+which is the thing a fold exists to not have. And the branch could skip the work but not the
+turn, so `any` over a thousand elements took a thousand turns to find the first one.
+
+What is still deliberately absent is `while` as a statement, `break` and `continue`. A `while`
+statement cannot be shown to terminate, so it would bring `Diverge` back with it and undo the
+reason for having `for`. `break` and `continue` want a loop with control flow in it rather
+than a fold, and the one thing they were wanted for is the clause above.
 
 What is deliberately absent from lists: slicing, searching, and any operation that takes a
 function. The last one is now writable, and `examples/list.vow` is a list library written in
@@ -1157,10 +1190,12 @@ using an effect to get around not having a loop.
   to run over several lines a pair of parentheses it would not otherwise need. Nothing
   written so far wants that, and the moment something does the answer is probably to let a
   line break inside an unclosed bracket keep going rather than to special case operators.
-- Whether a `for` should be able to stop early. There is no `break`, so a search over a list
-  walks all of it, and a fold cannot say it has seen enough. The honest version is probably a
-  `for` whose accumulator is a `Result`, which stops meaning "done" and starts meaning
-  "failed", so it needs its own answer rather than a reused one.
+- Whether a `for` should be able to stop early. It can: `while` is read before each turn with
+  the accumulator in scope, and it is a fold rather than a loop with control flow in it. What
+  is left of the question is the shape nobody has needed yet, which is a walk that wants to
+  stop on something about the element rather than on what has been worked out so far. Today
+  that means folding the answer into the accumulator and asking about it next turn, which is
+  one turn later than the element that settled it.
 - Generic types on an alias. A `record` and a `choice` may carry type parameters and a `type`
   may not, because an alias with no predicate is expanded away and one with a predicate is a
   refinement, and a generic refinement is a different question. Higher-kinded types are
