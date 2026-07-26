@@ -5,17 +5,19 @@
 //! structure rather than something a machine does. This is the part that does
 //! it.
 //!
-//! What it can apply is what a single span and a replacement can express,
-//! which is where every fix in the compiler comes from today: the lexer, the
-//! parser and the resolver. The type checker and the effect checker have none,
-//! and the second one is the one that hurts, because those diagnostics already
-//! say the words. `VOW5001` names the effect, names the function and tells the
-//! reader to add it to the `uses` clause, and then does not add it. A span
-//! cannot say that: removing an entry has to take its comma and its line with
-//! it, adding one has to match the indentation, and adding one where there is
-//! no clause at all has to invent the whole block. The pass that knows what
-//! the repair is does not know how to write it, and the passes that know how
-//! to write it are this one and the printer. See issue #159.
+//! A fix is a span and a replacement, so most of them are written where the
+//! problem is found: the lexer, the parser and the resolver each hand one over
+//! with the diagnostic. The row diagnostics cannot, and they are the ones that
+//! would pay, because they already say the words. `VOW5001` names the effect,
+//! names the function and tells the reader to add it to the `uses` clause.
+//! Saying that as a span means knowing about commas, about indentation, and
+//! about a clause that may not exist yet, and the effect checker has the answer
+//! and no business knowing any of that. So [`crate::rows`] writes those, where
+//! the text, the tree and the one canonical layout are all in scope at once.
+//!
+//! The type checker still has none. There is no obvious repair for a type that
+//! does not fit, which is the difference between a fix that is missing and a
+//! fix that is not there to be had.
 //!
 //! Only [`Applicability::MachineApplicable`] fixes are applied. There is no
 //! flag to apply the others, because a fix that is a guess is a fix a person

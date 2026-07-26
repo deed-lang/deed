@@ -93,6 +93,142 @@ fn a_file_with_nothing_to_fix_is_left_alone() {
     assert_eq!(result.source, source);
 }
 
+// -- rows ------------------------------------------------------------------
+//
+// The row diagnostics say what to type and, for a long time, did not type it.
+// A `SuggestedEdit` is a span and a replacement, and writing one means knowing
+// about commas, indentation and a clause that may not exist yet, none of which
+// the effect checker has any business knowing. The driver does, so it writes
+// them there.
+
+/// Two effects and nothing else, for the row cases.
+const EFFECTS: &str = "module a\n\n\
+     effect Log {\n\
+     \x20   fn note(message: String) -> ()\n\
+     }\n\n\
+     effect Bell {\n\
+     \x20   fn ring() -> ()\n\
+     }\n\n";
+
+#[test]
+fn a_row_that_is_too_narrow_is_written_out() {
+    let source = format!(
+        "{EFFECTS}fn talks() -> Int {{\n\
+         \x20   Log.note(\"hi\")\n\
+         \x20   Bell.ring()\n\
+         \x20   1\n\
+         }}\n"
+    );
+    let result = fixed(&source);
+
+    // Sorted, because a generated row has no written order to preserve and the
+    // same program has to produce the same text.
+    assert!(
+        result.contains("fn talks() -> Int\n  uses\n    Bell.ring,\n    Log.note,\n{\n"),
+        "{result}"
+    );
+    assert!(diagnose(&result).is_empty(), "{result}");
+}
+
+#[test]
+fn a_row_that_is_too_wide_loses_what_it_does_not_use() {
+    let source = format!(
+        "{EFFECTS}fn quiet() -> Int\n\
+         \x20 uses\n\
+         \x20   Log.note,\n\
+         {{\n\
+         \x20   1\n\
+         }}\n"
+    );
+    let result = fixed(&source);
+
+    assert!(result.contains("fn quiet() -> Int {\n"), "{result}");
+    assert!(!result.contains("uses"), "{result}");
+    assert!(diagnose(&result).is_empty(), "{result}");
+}
+
+#[test]
+fn a_row_that_is_wrong_in_both_directions_is_one_repair() {
+    // Too narrow and too wide at once. Two edits over the same span would be
+    // dropped as overlapping, so there is one fix and it says the whole row.
+    let source = format!(
+        "{EFFECTS}fn talks() -> Int\n\
+         \x20 uses\n\
+         \x20   Bell.ring,\n\
+         {{\n\
+         \x20   Log.note(\"hi\")\n\
+         \x20   1\n\
+         }}\n"
+    );
+    let result = fix(&source, diagnose);
+
+    assert_eq!(result.applied, 1);
+    assert!(
+        result
+            .source
+            .contains("fn talks() -> Int\n  uses\n    Log.note,\n{\n"),
+        "{}",
+        result.source
+    );
+    assert!(diagnose(&result.source).is_empty(), "{}", result.source);
+}
+
+#[test]
+fn what_it_writes_is_what_the_formatter_would_have() {
+    let source = format!(
+        "{EFFECTS}fn talks() -> Int {{\n\
+         \x20   Log.note(\"hi\")\n\
+         \x20   1\n\
+         }}\n"
+    );
+    let result = fixed(&source);
+
+    let mut sources = SourceMap::new();
+    let file = sources.add("fixed.vow", result.clone());
+    let formatted = vow_fmt::format(file, &result).expect("it should parse");
+    assert_eq!(formatted, result);
+}
+
+#[test]
+fn a_comment_in_the_clause_stops_it() {
+    // Rewriting the region between a signature and its body would eat the
+    // comment, and a machine-applicable fix that deletes a comment is a fix
+    // nobody should have applied.
+    let source = format!(
+        "{EFFECTS}fn quiet() -> Int\n\
+         \x20 uses\n\
+         \x20   // why\n\
+         \x20   Log.note,\n\
+         {{\n\
+         \x20   1\n\
+         }}\n"
+    );
+    let result = fix(&source, diagnose);
+
+    assert!(!result.changed());
+    assert!(result.source.contains("// why"), "{}", result.source);
+}
+
+#[test]
+fn a_contract_with_more_than_a_row_in_it_is_left_alone() {
+    // The region holds `where`, `uses` and `ensures`, and nothing in the tree
+    // says where one stops and the next starts, so rewriting it would be a
+    // guess about the other two.
+    let source = format!(
+        "{EFFECTS}fn checked(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n > 0,\n\
+         {{\n\
+         \x20   Log.note(\"hi\")\n\
+         \x20   n\n\
+         }}\n"
+    );
+    let result = fix(&source, diagnose);
+
+    assert!(!result.changed());
+    assert!(!diagnose(&result.source).is_empty(), "still an error");
+}
+
 // -- what it declines to do ------------------------------------------------
 
 #[test]

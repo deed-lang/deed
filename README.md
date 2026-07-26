@@ -557,14 +557,20 @@ whether that patch is certain or a guess, and nothing applied them, so what P7 d
 a data structure. `vow fix` applies the certain ones and refuses the guesses, with no flag to
 override that.
 
-It does not go as far as the comment above it used to claim. The fixes that exist are the
-ones a single span and a replacement can express, and they come from the lexer, the parser
-and the resolver. The effect checker has none, which is the one that costs something: a row
-error names the effect, names the function and tells you to add it to the `uses` clause, and
-then does not add it. A span cannot say that, because removing an entry has to take its comma
-and its line with it and adding one has to invent a clause that may not be there. The pass
-that knows what the repair is does not know how to write it, and that is a change to what a
-fix is rather than one more call.
+It writes rows now, which is the part that costs something day to day. A fix is a span and a
+replacement, so most of them are handed over where the problem is found, and the row
+diagnostics could not: `VOW5001` names the effect, names the function and tells you to add it
+to the `uses` clause, and saying that as a span means knowing about commas, about indentation,
+and about a clause that may not be there yet. The effect checker has the answer and no
+business knowing any of that, so the driver writes those, where the text, the tree and the one
+canonical layout are all in scope. `vow fix` fills in a row that is too narrow, takes out an
+entry that is never performed, and what it writes is exactly what `vow fmt` would have.
+
+It declines twice, and both are the point. A contract holding a `where` or an `ensures` is
+left alone, since the region between a signature and its body holds all three and nothing in
+the tree says where one stops and the next starts. And a comment anywhere in that region stops
+it, because rewriting the block would eat the comment, and a machine-applicable fix that
+deletes a comment is a fix nobody should have applied.
 
 `vow check --timings` is the same move for P9, which said check latency is budgeted and had
 never been measured. The guard is not a wall clock budget, since a test that fails on a busy

@@ -18,6 +18,7 @@
 //! and `vow-typeck` asserting exactly that.
 
 pub mod fix;
+mod rows;
 
 use std::time::{Duration, Instant};
 
@@ -222,6 +223,7 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
             Parsed {
                 file: *file,
                 module: parsed.module,
+                trivia: lexed.trivia,
                 diagnostics: lexed
                     .diagnostics
                     .into_iter()
@@ -274,7 +276,8 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
         .into_iter()
         .zip(resolutions)
         .map(|(entry, (resolved, resolve_time))| {
-            let mut checked = check_parsed(entry, resolved, resolve_time, &world);
+            let text = sources.file(entry.file).text();
+            let mut checked = check_parsed(entry, resolved, resolve_time, &world, text);
             for (file, span, path) in &duplicates {
                 if *file == checked.file {
                     checked.diagnostics.push(
@@ -303,6 +306,9 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
 struct Parsed {
     file: FileId,
     module: Module,
+    /// The comments, kept so that a fix can decline to rewrite a region that
+    /// has one in it rather than quietly eating it.
+    trivia: Vec<vow_lexer::Trivia>,
     diagnostics: Vec<Diagnostic>,
     timings: Timings,
 }
@@ -312,10 +318,12 @@ fn check_parsed(
     resolved: vow_resolve::Resolved,
     resolve_time: Duration,
     world: &World,
+    source: &str,
 ) -> Checked {
     let Parsed {
         file,
         module,
+        trivia,
         diagnostics: mut collected,
         mut timings,
     } = parsed;
@@ -345,6 +353,18 @@ fn check_parsed(
     // noticed a problem is an implementation detail they should not have to
     // reassemble in their head.
     diagnostics.sort_by_key(|diagnostic| diagnostic.primary.span.start);
+
+    // The row diagnostics say what to type. This is where the text, the tree
+    // and the one canonical layout are all in scope, so it is where they get
+    // to type it.
+    rows::attach_fixes(
+        &mut diagnostics,
+        &module,
+        &resolved.resolutions,
+        &analysed.effects,
+        source,
+        &trivia,
+    );
 
     let parsed_module = module;
     let mut obligations: Vec<ObligationReport> = checked
