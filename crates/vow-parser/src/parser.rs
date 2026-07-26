@@ -56,9 +56,11 @@ enum StructLit {
     Allow,
     /// Condition and scrutinee position. A brace always starts a block.
     Deny,
-    /// Handler position in `with`. A brace is a struct literal only if it is
-    /// followed by `name:`, which is enough to tell `InMemoryLedger { a: 1 }`
-    /// from the block that follows the handler list.
+    /// Handler position in `with`, and the iterable and accumulator of a
+    /// `for`. A brace is a struct literal when it is followed by `name:`,
+    /// which tells `InMemoryLedger { a: 1 }` from the block that comes after
+    /// the handler list, or when it is an empty pair with a block behind it,
+    /// which is the only way a record with no fields can be written here.
     RequireColon,
 }
 
@@ -1334,8 +1336,24 @@ impl<'a> Parser<'a> {
             StructLit::Allow => true,
             StructLit::Deny => false,
             StructLit::RequireColon => {
-                matches!(self.nth_kind(1), TokenKind::Ident(_))
+                if matches!(self.nth_kind(1), TokenKind::Ident(_))
                     && matches!(self.nth_kind(2), TokenKind::Colon)
+                {
+                    return true;
+                }
+
+                // `Empty { }`. A record is allowed to have no fields, so a
+                // literal is allowed to have no fields either, and the rule
+                // above cannot see one because there is no name to look at.
+                //
+                // `{ } {` decides it. An empty block is the value `()`, and
+                // nothing in this language puts a block straight after a
+                // value, so the only reading left is a literal with the block
+                // that follows the handler list behind it. `with H { }` on its
+                // own still reads as a handler and an empty body, which is
+                // what it looks like.
+                matches!(self.nth_kind(1), TokenKind::RBrace)
+                    && matches!(self.nth_kind(2), TokenKind::LBrace)
             }
         }
     }
