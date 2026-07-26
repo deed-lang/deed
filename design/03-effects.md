@@ -393,9 +393,13 @@ declaration whose row holds a row variable is not asked, because the variable st
 whatever the caller passed and the declaration alone does not say what that was. The caller's
 own frame is where that question has an answer, and it is still asked.
 
-The gap worth naming is a handler operation, which has no declaration of its own and so no
-row to be held to. That is exactly where an effect is implemented, so it is the half of the
-system this does not cover.
+A handler operation is included, and it has to be handled carefully in both directions. It is
+held to its own row, which matters because that is where an effect is implemented. But what
+it performs is charged to whoever installed the handler and not to the frames in between: a
+function calling `Log.note` does not choose the handler and cannot know what that handler
+does, so asking it to declare that would be asking it to know something it has no way to
+find out. The walk goes innermost first for exactly this reason, and stops asking at the
+`with` block that installed the operation it is inside.
 
 The check found something on the day it was written, which is the argument for it. A `with`
 block discharged the effect a handler implements and charged what the handler itself performs

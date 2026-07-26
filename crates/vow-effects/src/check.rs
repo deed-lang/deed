@@ -44,6 +44,11 @@ impl Analysis {
 #[derive(Default)]
 pub struct Effects {
     declared: HashMap<DefId, Row>,
+    /// The same, keyed by where the name was written.
+    ///
+    /// A handler operation has no definition of its own, so it is not in
+    /// `declared` and cannot be. A span is what both halves of it have.
+    declared_at: HashMap<Span, Row>,
     performed: HashMap<DefId, Row>,
     unverifiable: HashSet<DefId>,
 }
@@ -63,8 +68,11 @@ impl Effects {
     /// actually happens can be compared against what was promised. The rows
     /// are the point of the language, and until this existed the only thing
     /// checking them was the pass that produced them.
-    pub fn declarations(&self) -> impl Iterator<Item = (DefId, &Row)> {
-        self.declared.iter().map(|(def, row)| (*def, row))
+    ///
+    /// Keyed by where the name was written, because a handler operation has no
+    /// definition of its own and is the half worth checking.
+    pub fn declarations(&self) -> impl Iterator<Item = (Span, &Row)> {
+        self.declared_at.iter().map(|(span, row)| (*span, row))
     }
 
     /// Whether the row for this function could not be checked at all.
@@ -609,6 +617,15 @@ impl<'a> Checker<'a> {
             ),
             None => self.lower_row(&function.contract.uses),
         };
+
+        // Keyed by where the name was written, so that a handler operation is
+        // in the table too. It has no definition of its own, which is why the
+        // row is lowered here, and it is exactly the place an effect gets
+        // implemented, so leaving it out of what crosses to the runtime would
+        // leave the interesting half unchecked.
+        self.effects
+            .declared_at
+            .insert(function.sig.name.span, declared.clone());
 
         // A parameter of function type carries its row in its type, and
         // calling it performs whatever that row says. Without this the row

@@ -112,7 +112,12 @@ pub struct RowItem {
     pub operation: Option<String>,
 }
 
-/// What each function in a module declared it performs.
+/// What each function in a module declared it performs, by where its name was
+/// written.
+///
+/// A span rather than a definition, because a handler operation has neither a
+/// definition nor a name of its own outside the handler, and a handler
+/// operation is where an effect is actually implemented.
 ///
 /// The rows are the argument this language is making, and until this existed
 /// the only thing that ever looked at one was the pass that produced it. With
@@ -122,7 +127,7 @@ pub struct RowItem {
 ///
 /// Not optional, for the same reason `Guards` is not. A caller that could
 /// leave it out would be one that could turn the check off by forgetting.
-pub type DeclaredRows = HashMap<DefId, Vec<RowItem>>;
+pub type DeclaredRows = HashMap<Span, Vec<RowItem>>;
 
 impl<'a> Program<'a> {
     pub fn new() -> Self {
@@ -382,10 +387,28 @@ struct Code<'a> {
 /// caller's business. So only effects answered from further out are this
 /// frame's to declare, which is the same rule the checker uses and the reason
 /// a `with` block does not have to be mentioned in a row.
+///
+/// `handler` is set when the call is a handler operation, and says which
+/// instance it belongs to. What such an operation performs is charged to
+/// whoever installed the handler rather than to whoever happened to be on the
+/// stack in between, because installing it is the decision that caused it.
+/// Without this a function calling `Log.note` would owe whatever the handler
+/// the caller chose does, which it cannot know and did not decide.
+///
+/// `promise` is `None` when the declaration's row holds a row variable. That
+/// stands for whatever the caller passed, so the declaration alone does not say
+/// what this call may perform, and the caller's own frame is where the question
+/// has an answer. Such a frame is not held to anything and does not stop the
+/// frames around it being held to theirs.
 struct RowFrame {
+    handled: usize,
+    handler: Option<usize>,
+    promise: Option<Promise>,
+}
+
+struct Promise {
     name: String,
     allowed: Vec<(Origin, Option<String>)>,
-    handled: usize,
 }
 
 /// A closure expression, kept where a [`Value`] can point at it.
@@ -410,7 +433,7 @@ pub(crate) struct Interp<'a> {
     frames: Vec<HashMap<DefId, Value>>,
     /// What each active call is allowed to perform, and what was already
     /// handled when it started. See [`Interp::check_row`].
-    rows: Vec<Option<RowFrame>>,
+    rows: Vec<RowFrame>,
     /// How deep inside a contract clause the running code is.
     ///
     /// Contracts do not contribute to a row, so performing an effect while
@@ -461,7 +484,7 @@ impl<'a> Interp<'a> {
             modules,
             by_path,
             frames: vec![HashMap::new()],
-            rows: vec![None],
+            rows: Vec::new(),
             in_contract: 0,
             handlers: Vec::new(),
             inside_handler: Vec::new(),
@@ -1536,7 +1559,7 @@ impl<'a> Interp<'a> {
         }
 
         self.frames.push(frame);
-        self.rows.push(self.row_frame(function));
+        self.rows.push(self.row_frame(function, handler));
         if let Some(handler) = handler {
             self.inside_handler.push(handler);
         }
@@ -1553,17 +1576,19 @@ impl<'a> Interp<'a> {
         result
     }
 
-    /// What the function about to run promised, when that is known.
-    ///
-    /// `None` for a handler operation, which has no declaration of its own and
-    /// so no row in the table, and for anything the effect checker did not
-    /// reach. A frame with no row is not held to one, and it does not stop the
-    /// frames around it being held to theirs, so the gap costs coverage rather
-    /// than correctness. It is worth naming: a handler operation is exactly the
-    /// place an effect is implemented, and nothing here checks that half.
-    fn row_frame(&self, function: &'a FnDecl) -> Option<RowFrame> {
-        let def = self.def_of(&function.sig.name)?;
-        let items = self.code().rows.get(&def)?;
+    /// What the function about to run promised.
+    fn row_frame(&self, function: &'a FnDecl, handler: Option<usize>) -> RowFrame {
+        RowFrame {
+            handled: self.handlers.len(),
+            handler,
+            promise: self.promise_of(function),
+        }
+    }
+
+    /// The row a declaration wrote down, when it says something a call can be
+    /// held to.
+    fn promise_of(&self, function: &'a FnDecl) -> Option<Promise> {
+        let items = self.code().rows.get(&function.sig.name.span)?;
         // A row variable stands for whatever the caller passed, so the
         // declaration alone does not say what this call may perform and there
         // is nothing here to hold it to. The caller's own frame is where that
@@ -1578,10 +1603,9 @@ impl<'a> Interp<'a> {
             .iter()
             .filter_map(|item| Some((self.effect_id(item.effect)?, item.operation.clone())))
             .collect();
-        Some(RowFrame {
+        Some(Promise {
             name: function.sig.name.name.clone(),
             allowed,
-            handled: self.handlers.len(),
         })
     }
 
@@ -1592,6 +1616,13 @@ impl<'a> Interp<'a> {
     /// program itself disagreeing: an effect just happened, and here is a
     /// function on the stack that said it would not do that.
     ///
+    /// Walked innermost first, because the two things that end the walk are
+    /// both about how far out the effect reaches. A `with` block inside a frame
+    /// answers for what is under it, so that frame and everything outside it
+    /// are done with. And a handler operation charges what it performs to
+    /// whoever installed the handler, so the frames between the `with` and here
+    /// are not asked, which is what `barrier` is for.
+    ///
     /// `answered_by` is the handler that took the operation, or `None` for the
     /// built-in effect, which nothing installs and every frame therefore owes.
     fn check_row(
@@ -1600,17 +1631,31 @@ impl<'a> Interp<'a> {
         operation: &str,
         answered_by: Option<usize>,
     ) -> Option<String> {
-        let handled = answered_by.map(|index| index + 1).unwrap_or(0);
-        for frame in self.rows.iter().flatten() {
-            // A `with` block inside this call already answered for it.
-            if frame.handled < handled {
-                continue;
+        let mut barrier = usize::MAX;
+        for frame in self.rows.iter().rev() {
+            // The `with` that answered this is inside the frame, so the frame
+            // discharged it, and so did everything further out.
+            if let Some(index) = answered_by
+                && frame.handled <= index
+            {
+                return None;
             }
-            let covered = frame.allowed.iter().any(|(declared, op)| {
-                declared == effect && op.as_deref().is_none_or(|name| name == operation)
-            });
-            if !covered {
-                return Some(frame.name.clone());
+
+            if frame.handled <= barrier
+                && let Some(promise) = &frame.promise
+            {
+                let covered = promise.allowed.iter().any(|(declared, op)| {
+                    declared == effect && op.as_deref().is_none_or(|name| name == operation)
+                });
+                if !covered {
+                    return Some(promise.name.clone());
+                }
+            }
+
+            // A handler operation. What it performs belongs to the `with` that
+            // installed it, so nothing between here and there is asked.
+            if let Some(index) = frame.handler {
+                barrier = barrier.min(index);
             }
         }
         None

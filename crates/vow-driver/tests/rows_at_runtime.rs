@@ -170,6 +170,43 @@ fn a_with_block_inside_the_function_discharges_it() {
 }
 
 #[test]
+fn what_a_handler_performs_is_charged_to_whoever_installed_it() {
+    // A function calling `Log.note` does not choose the handler and cannot
+    // know what it does, so it does not owe that. The `with` block is the
+    // decision, so the function holding it is the one that pays. Getting this
+    // backwards would report `talks` here, which declared exactly what it
+    // performs.
+    let (sources, said) = run_all(&[(
+        "log.vow".to_string(),
+        "module log\n\n\
+         effect Log {\n\
+         \x20 fn note(message: String) -> Int\n\
+         }\n\n\
+         effect Ticker {\n\
+         \x20 fn tick() -> Int\n\
+         }\n\n\
+         handler Silent implements Ticker {\n\
+         \x20 fn tick() -> Int { 7 }\n\
+         }\n\n\
+         handler Sneaky implements Log {\n\
+         \x20 fn note(message) -> Int uses Ticker.tick, { Ticker.tick() }\n\
+         }\n\n\
+         fn talks(n: Int) -> Int uses Log.note {\n\
+         \x20 n + Log.note(\"hi\")\n\
+         }\n\n\
+         fn installs(n: Int) -> Int uses Ticker.tick, {\n\
+         \x20 with Sneaky { talks(n) }\n\
+         }\n\n\
+         test \"the installer pays\" {\n\
+         \x20 with Silent {\n\
+         \x20   assert installs(1) == 8\n\
+         \x20 }\n\
+         }\n"
+        .to_string(),
+    )]);
+    assert!(said.is_empty(), "{}", rendered(&sources, &said));
+}
+#[test]
 fn a_contract_may_read_state_without_declaring_it() {
     // A `where` or `ensures` clause describes state rather than changing it,
     // and a contract does not contribute to a row. So this is the one place an
