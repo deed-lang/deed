@@ -128,17 +128,21 @@ Read them in order. Each one leans on the one before it.
 | `vow-effects` | Every effect row checked against what the body does |
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `vow-fmt` | The one canonical form, with no options for the output |
-| `vow-lsp` | A language server: framing, a small JSON reader, and diagnostics as you type |
+| `vow-lsp` | A language server: diagnostics, hover, go to definition and formatting |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary: `check`, `test`, `run`, `fmt`, `fix` and `lsp` |
 
 `vow lsp` is a language server, and most of it is plumbing over things that already existed:
-the compiler produces structured diagnostics with spans, and it did before there was anything
-to send them to. What it does today is one file at a time, checked on its own, republished on
-every keystroke. What it does not do yet is hover, go to definition, or formatting, and it
-checks one file rather than a project, so a `use` of another module reports that there is
-nothing behind it. That is honest rather than convenient: the unit of compilation is the set
-of files handed to the compiler, and the server has been handed one.
+the compiler produces structured diagnostics with spans, `Types::type_of` can say what an
+expression turned out to be, `Resolutions` can say where a name was declared, and the
+formatter has one canonical answer with no options. It publishes diagnostics as you type,
+says the type of whatever is under the cursor, jumps to a declaration, and formats a file.
+
+What it does not do is check a project. One file at a time, on its own, so a `use` of another
+module reports that there is nothing behind it. That is honest rather than convenient: the
+unit of compilation is the set of files handed to the compiler, and the server has been
+handed one. It also rechecks the whole file on every keystroke, which is fine at this size
+and is the thing that will stop being fine first.
 
 It has no dependencies either. The protocol is a `Content-Length` header, a blank line and a
 handful of object shapes, so the JSON reader and the framing are written out. The part worth

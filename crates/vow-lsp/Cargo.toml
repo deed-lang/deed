@@ -10,6 +10,8 @@ rust-version.workspace = true
 [dependencies]
 vow-diagnostics = { path = "../vow-diagnostics" }
 vow-driver = { path = "../vow-driver" }
+vow-fmt = { path = "../vow-fmt" }
+vow-resolve = { path = "../vow-resolve" }
 
 [lints]
 workspace = true
