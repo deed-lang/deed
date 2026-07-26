@@ -1,9 +1,21 @@
 //! Applying the fixes diagnostics carry.
 //!
 //! P7 says a diagnostic carries an applicable patch where the fix is
-//! unambiguous, and every diagnostic in this compiler already does. Nothing
-//! applied them, so what P7 described was a data structure rather than
-//! something a machine does.
+//! unambiguous. Nothing applied them, so what P7 described was a data
+//! structure rather than something a machine does. This is the part that does
+//! it.
+//!
+//! What it can apply is what a single span and a replacement can express,
+//! which is where every fix in the compiler comes from today: the lexer, the
+//! parser and the resolver. The type checker and the effect checker have none,
+//! and the second one is the one that hurts, because those diagnostics already
+//! say the words. `VOW5001` names the effect, names the function and tells the
+//! reader to add it to the `uses` clause, and then does not add it. A span
+//! cannot say that: removing an entry has to take its comma and its line with
+//! it, adding one has to match the indentation, and adding one where there is
+//! no clause at all has to invent the whole block. The pass that knows what
+//! the repair is does not know how to write it, and the passes that know how
+//! to write it are this one and the printer. See issue #159.
 //!
 //! Only [`Applicability::MachineApplicable`] fixes are applied. There is no
 //! flag to apply the others, because a fix that is a guess is a fix a person
