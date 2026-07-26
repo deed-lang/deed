@@ -9,7 +9,7 @@ use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_driver::{Checked, check_text};
 use vow_typeck::Tier;
 
-const POSITIVE: &str = "module a\n\ntype Positive = Int where value > 0\n\ntype NonEmpty = String where length(value) > 0\n\n";
+const POSITIVE: &str = "module a\n\ntype Positive = Int where value > 0\n\ntype NonEmpty = String where length(value) > 0\n\ntype NonEmptyList = List<Int> where length(value) > 0\n\n";
 
 fn check(body: &str) -> (SourceMap, Checked) {
     let mut sources = SourceMap::new();
@@ -40,7 +40,7 @@ fn expect(tier: Tier, body: &str) {
         .filter(|obligation| {
             matches!(
                 obligation.subject.as_str(),
-                "Positive" | "Percent" | "Negative" | "NonNegative" | "NonEmpty"
+                "Positive" | "Percent" | "Negative" | "NonNegative" | "NonEmpty" | "NonEmptyList"
             )
         })
         .map(|obligation| obligation.tier)
@@ -173,6 +173,70 @@ fn a_length_of_something_a_call_returned_is_not_a_term() {
              \x20   }}\n\
              }}\n"
         ),
+    );
+}
+
+// -- a refinement over a list ----------------------------------------------
+
+const TAKES_LIST: &str = "fn take_list(items: NonEmptyList) -> Int {\n    length(items)\n}\n\n";
+
+#[test]
+fn a_list_written_on_the_spot_says_its_own_length() {
+    expect(
+        Tier::Proven,
+        &format!("{TAKES_LIST}fn f() -> Int {{\n    take_list([1, 2, 3])\n}}\n"),
+    );
+}
+
+#[test]
+fn a_guard_on_a_list_length_proves_a_refinement_about_it() {
+    expect(
+        Tier::Proven,
+        &format!(
+            "{TAKES_LIST}fn f(items: List<Int>) -> Int {{\n\
+             \x20   if length(items) > 0 {{\n\
+             \x20       take_list(items)\n\
+             \x20   }} else {{\n\
+             \x20       0\n\
+             \x20   }}\n\
+             }}\n"
+        ),
+    );
+}
+
+/// The empty list is a `List<unknown>` and fits a `List<Int>`, so it fits the
+/// base of a refinement over one. What is wrong with it is the predicate. The
+/// refinement branch used to ask for the base type exactly, so this came back
+/// as "expected `NonEmptyList`, found `List<_>`", which is a true sentence
+/// about the wrong problem.
+#[test]
+fn an_empty_list_is_refused_by_the_predicate_rather_than_by_the_type() {
+    let (sources, checked) = check(&format!(
+        "{TAKES_LIST}fn f() -> Int {{\n    take_list([])\n}}\n"
+    ));
+    assert!(checked.has_errors());
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("does not satisfy `NonEmptyList`"), "{text}");
+    assert!(!text.contains("found `List<_>`"), "{text}");
+}
+
+/// A parameter already of a refined type is a fact without a `where` clause
+/// repeating the type in prose. That held for what the value is worth and not
+/// for how long it is, so a `NonEmptyList` knew nothing about its own length
+/// inside the body that declared it.
+#[test]
+fn a_parameter_refined_over_its_length_knows_it() {
+    expect(
+        Tier::Proven,
+        "fn f(items: NonEmptyList) -> Positive {\n    length(items)\n}\n",
+    );
+}
+
+#[test]
+fn the_same_holds_for_a_string() {
+    expect(
+        Tier::Proven,
+        "fn f(s: NonEmpty) -> Positive {\n    length(s)\n}\n",
     );
 }
 
@@ -1248,8 +1312,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Forty-three proven and two guarded, and the file explains both. If
+    // Forty-five proven and two guarded, and the file explains both. If
     // either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 43);
+    assert_eq!(checked.obligations_at(Tier::Proven), 45);
     assert_eq!(checked.obligations_at(Tier::Guarded), 2);
 }

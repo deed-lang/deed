@@ -1434,7 +1434,13 @@ impl<'a> Checker<'a> {
             && let Some(Nominal::Refinement { base, .. }) = self.types.nominal(*def)
         {
             let base = base.clone();
-            if self.widen(actual) == base || actual.absorbs() {
+            // The same question the base type would have been asked, rather
+            // than equality. `[]` is a `List<unknown>` and fits a `List<Int>`,
+            // so it fits the base of a refinement over one, and the thing
+            // wrong with `first_of([])` is the predicate rather than the type.
+            // Asking for equality here said "expected NonEmptyList, found
+            // List<_>", which is a true sentence about the wrong problem.
+            if self.compatible(&self.widen(actual), &base) {
                 let subject = match expr {
                     Some(expr) => Some(self.subject_of(expr)),
                     None => carried.range.map(facts::Subject::of),
@@ -1478,23 +1484,41 @@ impl<'a> Checker<'a> {
     /// making the author write `where n > 0` next to it would be asking them
     /// to repeat the type in prose.
     fn declared_range(&self, def: DefId) -> Range {
+        self.declared_facts(def).range
+    }
+
+    /// Everything a definition's declared type admits, if it is refined.
+    fn declared_facts(&self, def: DefId) -> facts::Subject {
         let Some(Ty::Named {
             def: refinement, ..
         }) = self.def_types.get(&def)
         else {
-            return Range::ANY;
+            return facts::Subject::of(Range::ANY);
         };
-        self.refinement_range(*refinement)
+        self.refinement_facts(*refinement)
     }
 
     /// The range a refinement admits, when its predicate is simple enough.
     fn refinement_range(&self, refinement: DefId) -> Range {
+        self.refinement_facts(refinement).range
+    }
+
+    /// The same, for everything the predicate pins down.
+    fn refinement_facts(&self, refinement: DefId) -> facts::Subject {
         let Some(alias) = self.aliases.get(&refinement) else {
-            return Range::ANY;
+            return facts::Subject::of(Range::ANY);
         };
         match &alias.refinement {
-            Some(predicate) => facts::range_admitted_by(predicate),
-            None => Range::ANY,
+            Some(predicate) => {
+                let (def_of, call) = self.env();
+                let env = facts::Env {
+                    def_of: &def_of,
+                    length: self.resolutions.builtin("length"),
+                    call: &call,
+                };
+                facts::admitted_by(predicate, &env)
+            }
+            None => facts::Subject::of(Range::ANY),
         }
     }
 
@@ -1940,9 +1964,17 @@ impl<'a> Checker<'a> {
         self.facts = Facts::new();
         for param in &function.sig.params {
             if let Some(def) = self.def_of(&param.name) {
-                let range = self.declared_range(def);
-                if !range.is_any() {
-                    self.facts.set(def, range);
+                let admitted = self.declared_facts(def);
+                if !admitted.range.is_any() {
+                    self.facts.set(def, admitted.range);
+                }
+                // A refinement about how long something is is as much a fact
+                // as one about what it is worth, and it belongs on the term
+                // everything else reads. Without this a `NonEmptyList`
+                // parameter knew nothing about its own length inside the body
+                // that declared it.
+                if !admitted.length.is_any() {
+                    self.facts.note(facts::Term::Length(def), admitted.length);
                 }
             }
         }

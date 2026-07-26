@@ -587,6 +587,14 @@ spot says how long it is out loud, and refusing to count that would be refusing 
 of somewhere to put it, which also means `""` where a non-empty string is wanted is now refused
 rather than left to a check at runtime.
 
+The same gap was in both of the other directions. A parameter already of a refined type is a
+fact without a `where` clause repeating it in prose, and that held for what the value is worth
+and not for how long it is, so a `NonEmptyList` knew nothing about its own length inside the
+body that declared it. And narrowing into a refinement asked for the base type exactly rather
+than asking the question the base type would have been asked, so `[]` where a `NonEmptyList` is
+wanted came back as a type mismatch. An empty list fits a `List<Int>` perfectly well; what is
+wrong with it is the predicate, which is what it says now.
+
 The relation is the difference between two names. An interval has nowhere to put `low < high`,
 so every contract that says how two arguments relate used to be thrown away, and that is half
 of what a `where` clause is for. A range per pair of names holds exactly the orderings, which

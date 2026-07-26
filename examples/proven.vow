@@ -22,6 +22,8 @@ type NonNegative = Int where value >= 0
 
 type NonEmpty = String where length(value) > 0
 
+type NonEmptyList = List<Int> where length(value) > 0
+
 record Order {
     quantity: Positive,
 }
@@ -293,6 +295,16 @@ fn shout(s: NonEmpty) -> String {
     s + "!"
 }
 
+// A refinement over a list is the same machinery again: how long something is
+// is a term, and `value` stands for the thing being described whether that
+// thing is a number or not. Proven twice over. The parameter's own type says
+// its length is at least one, without a `where` clause repeating it in prose,
+// and `take_list([1, 2, 3])` at the bottom is proven from a length the source
+// says out loud.
+fn size_of(items: NonEmptyList) -> Positive {
+    length(items)
+}
+
 test "the proven ones still hold at runtime" {
     assert order_of(3).quantity == 3
     assert as_count(4) == 4
@@ -323,6 +335,7 @@ test "a refinement is something anyone can convert into" {
     assert try_nonempty("hi") == ok("hi")
     assert try_nonempty("") == err("empty")
     assert shout("hi") == "hi!"
+    assert size_of([1, 2, 3]) == 3
 }
 
 // A test that only feeds a guard values it accepts proves nothing. This one
