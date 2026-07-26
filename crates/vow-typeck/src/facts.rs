@@ -306,9 +306,55 @@ pub struct Facts {
     /// orders keeps that answer where it belongs, on the order that could not
     /// be worked out, instead of on every lookup.
     differences: HashMap<(Term, Term), Range>,
-    /// The range `value` stands for, while a refinement predicate is being
-    /// evaluated. `value` has no definition of its own.
-    subject: Option<Range>,
+    /// What `value` stands for, while a refinement predicate is being read.
+    subject: Option<Subject>,
+}
+
+/// What is known about the thing a refinement predicate is about.
+///
+/// `value` has no definition of its own, so for a long time it was a range and
+/// nothing else. That answers `value > 0` and cannot answer
+/// `length(value) > 0`, which is a question about a term, and a term needs
+/// something to be keyed by. So a subject carries what is known three ways and
+/// each shape in the predicate reads the one that fits.
+#[derive(Clone, Copy, Debug)]
+pub struct Subject {
+    /// The range the value itself lands in.
+    pub range: Range,
+    /// How long it is, for a predicate that asks. A string written on the spot
+    /// has a length nobody has to work out, and refusing to count it would be
+    /// refusing a fact for want of somewhere to put it.
+    pub length: Range,
+    /// The name the value was given, when it has one.
+    ///
+    /// Stronger than either range, because a name is a term the body has been
+    /// narrowing all along: `if length(s) > 0` and `length(value) > 0` end up
+    /// asking about the same entry, which is why a refinement and a `where`
+    /// clause saying the same thing now agree.
+    pub name: Option<DefId>,
+}
+
+impl Subject {
+    /// A subject known only by the range it lands in.
+    pub fn of(range: Range) -> Subject {
+        Subject {
+            range,
+            length: Range::between(0, i64::MAX),
+            name: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_length(mut self, length: Range) -> Subject {
+        self.length = length;
+        self
+    }
+
+    #[must_use]
+    pub fn with_name(mut self, name: Option<DefId>) -> Subject {
+        self.name = name;
+        self
+    }
 }
 
 impl Facts {
@@ -454,11 +500,11 @@ impl Facts {
         changed
     }
 
-    pub fn with_subject(&self, range: Range) -> Facts {
+    pub fn with_subject(&self, subject: Subject) -> Facts {
         Facts {
             known: self.known.clone(),
             differences: self.differences.clone(),
-            subject: Some(range),
+            subject: Some(subject),
         }
     }
 
@@ -821,6 +867,46 @@ pub fn length_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
     }
 }
 
+/// Whether an expression is the `value` a refinement predicate is about.
+fn is_subject(expr: &Expr) -> bool {
+    matches!(expr, Expr::Ident(ident) if ident.name == "value")
+}
+
+/// The term `value` stands for in a predicate, when it stands for one.
+///
+/// `value` itself is the name the value was given, and `length(value)` is that
+/// name's length. Both are entries the body has been narrowing all along,
+/// which is the whole reason for looking.
+fn subject_term(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Term> {
+    let name = facts.subject.and_then(|subject| subject.name)?;
+    match expr {
+        _ if is_subject(expr) => Some(Term::Name(name)),
+        Expr::Call { callee, args, .. }
+            if is_length_call(callee, args, env) && is_subject(&args[0]) =>
+        {
+            Some(Term::Length(name))
+        }
+        _ => None,
+    }
+}
+
+/// What the predicate is asking about `value`, for a subject with no name.
+///
+/// A range for `value`, and the length for `length(value)`. A literal has no
+/// term to hang either on and both are still known.
+fn subject_range(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Range> {
+    let subject = facts.subject?;
+    match expr {
+        _ if is_subject(expr) => Some(subject.range),
+        Expr::Call { callee, args, .. }
+            if is_length_call(callee, args, env) && is_subject(&args[0]) =>
+        {
+            Some(subject.length)
+        }
+        _ => None,
+    }
+}
+
 /// Whether an expression is a call to the `length` the language provides.
 fn is_length_call(callee: &Expr, args: &[Expr], env: &Env<'_>) -> bool {
     env.length.is_some() && args.len() == 1 && (env.def_of)(callee) == env.length
@@ -949,12 +1035,15 @@ impl Linear {
 
 /// Reads `expr` as names and an offset, as far as it goes.
 fn linear(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Linear {
+    // `value` stands for whatever is being described. When that is a name it
+    // is a term like any other, and when it is not it is a range.
+    if let Some(term) = subject_term(expr, facts, env) {
+        return Linear::name(term);
+    }
+    if let Some(range) = subject_range(expr, facts, env) {
+        return Linear::constant(range);
+    }
     match expr {
-        // `value` stands for whatever is being described and has no definition,
-        // so it is a range and never a name.
-        Expr::Ident(ident) if ident.name == "value" => {
-            Linear::constant(facts.subject.unwrap_or(Range::ANY))
-        }
         Expr::Ident(_) => match term_of(expr, env) {
             Some(term) => Linear::name(term),
             None => Linear::constant(interval_of(expr, facts, env)),
@@ -1119,9 +1208,21 @@ fn related(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Range> {
 
 /// The range an expression can take, from the ranges of the names in it alone.
 fn interval_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
+    // The same fact from two directions: what the caller worked out about the
+    // value it is handing over, and what the body knows about the name it gave
+    // it. Both are true, so they meet.
+    if let Some(term) = subject_term(expr, facts, env) {
+        let known = facts.get(term);
+        return match subject_range(expr, facts, env) {
+            Some(range) => known.meet(range),
+            None => known,
+        };
+    }
+    if let Some(range) = subject_range(expr, facts, env) {
+        return range;
+    }
     match expr {
         Expr::Int { value, .. } => Range::exactly(*value),
-        Expr::Ident(ident) if ident.name == "value" => facts.subject.unwrap_or(Range::ANY),
         Expr::Ident(_) => match term_of(expr, env) {
             Some(term) => facts.get(term),
             None => Range::ANY,
@@ -1499,7 +1600,10 @@ pub fn range_of_subject(condition: &Expr, subject: &str) -> Range {
     let mut narrowed = Facts::new();
     let env = Env::blind();
     apply_subject_narrowing(condition, &mut narrowed, &env, subject, true);
-    narrowed.subject.unwrap_or(Range::ANY)
+    narrowed
+        .subject
+        .map(|subject| subject.range)
+        .unwrap_or(Range::ANY)
 }
 
 /// The same walk as [`apply_narrowing`], for a subject with no definition.
@@ -1568,8 +1672,11 @@ fn narrow_subject(
         _ => return,
     };
 
-    let current = facts.subject.unwrap_or(Range::ANY);
-    facts.subject = Some(current.meet(narrowed));
+    let current = facts.subject.unwrap_or(Subject::of(Range::ANY));
+    facts.subject = Some(Subject {
+        range: current.range.meet(narrowed),
+        ..current
+    });
 }
 
 #[cfg(test)]

@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-83 passed, 0 failed
+84 passed, 0 failed
 ```
 
 ```
@@ -331,7 +331,7 @@ looked at it from where the call was written, so `halve(0 - 5)` against `where n
 the checker in silence. The design doc had described the call-site check for months. Now a
 call that plainly breaks a clause is an error where the call is, a caller that can show the
 clause holds is `Proven`, and a caller that cannot is `Guarded` with the runtime check still
-standing. `proven.vow` went from four proven obligations to thirty-seven that way, and most
+standing. `proven.vow` went from four proven obligations to forty-three that way, and most
 of them are calls rather than values.
 
 What crosses into a clause is the caller's facts said in the callee's parameter names: each
@@ -339,6 +339,27 @@ argument's range, how long it is, and the differences between them. That last pa
 settles `index < length(items)`, which is the clause the whole detour was about. A predicate
 does not cross a module boundary, the same as a refinement's does not, so a caller in another
 file answers for a precondition at runtime and the checker says nothing either way.
+
+A refinement could say the same thing about a length and could not be settled, which is the
+kind of gap you only find by writing the two side by side. `value` has no declaration of its
+own, so it travelled as a range, and a range answers `value > 0` and cannot answer
+`length(value) > 0`: that is a question about a term and a term needs something to be keyed
+by. So `if length(s) > 0` proved a `where` clause saying `length(s) > 0` and left a refinement
+saying the same thing Guarded, over the same fact, two lines apart. A value being checked now
+carries what is known about it three ways, the range it lands in, how long it is, and the name
+it was given when it has one. The name is the strongest of the three, since it is the entry
+the body has been narrowing all along. The length covers the case with no name to give, so
+`""` where a non-empty string is wanted is refused outright instead of being left to a check
+at runtime, and a string written on the spot proves the refinement it is being passed into.
+
+That also answered a question the design doc had listed as open. A refinement has no
+conversion form, and it turns out not to need one: `try_positive(n)` returning a `Result` is
+what `Positive.try(n)` would have been, it is ordinary code, and the `ok` is Proven because
+the guard above it says what the predicate wants. What a built-in form would buy is the
+predicate living in one place rather than being restated at every converter, and a
+restatement weaker than the predicate is the mistake it would rule out. That one is still
+accepted today with a runtime check rather than refused, which is honest and is not the same
+thing as catching it.
 
 It still does not finish the job. `at` returns a `Result` whatever is known about its index,
 so a caller that proved the bound still writes a `match` for a failure that cannot happen.

@@ -9,7 +9,7 @@ use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_driver::{Checked, check_text};
 use vow_typeck::Tier;
 
-const POSITIVE: &str = "module a\n\ntype Positive = Int where value > 0\n\n";
+const POSITIVE: &str = "module a\n\ntype Positive = Int where value > 0\n\ntype NonEmpty = String where length(value) > 0\n\n";
 
 fn check(body: &str) -> (SourceMap, Checked) {
     let mut sources = SourceMap::new();
@@ -40,7 +40,7 @@ fn expect(tier: Tier, body: &str) {
         .filter(|obligation| {
             matches!(
                 obligation.subject.as_str(),
-                "Positive" | "Percent" | "Negative" | "NonNegative"
+                "Positive" | "Percent" | "Negative" | "NonNegative" | "NonEmpty"
             )
         })
         .map(|obligation| obligation.tier)
@@ -56,6 +56,123 @@ fn expect(tier: Tier, body: &str) {
             .map(|o| (&o.subject, o.tier))
             .collect::<Vec<_>>(),
         rendered(&sources, &checked.diagnostics)
+    );
+}
+
+// -- how long the thing is -------------------------------------------------
+//
+// A predicate about a length used to be unsettleable. `value` had no
+// definition, so it was carried as a range, and a range answers `value > 0`
+// and cannot answer `length(value) > 0`, which is a question about a term. So
+// a `where` clause and a refinement saying the same thing gave two different
+// answers about the same guard.
+
+/// Takes a string that has to be non-empty, and a `where` clause saying it a
+/// second way, so the two can be compared on the same guard.
+const TAKES: &str = "fn take(s: NonEmpty) -> Int {\n    length(s)\n}\n\n\
+     fn required(s: String) -> Int\n\
+     \x20 where\n\
+     \x20   length(s) > 0,\n\
+     {\n\
+     \x20   length(s)\n\
+     }\n\n";
+
+#[test]
+fn a_guard_on_a_length_proves_a_refinement_about_it() {
+    expect(
+        Tier::Proven,
+        &format!(
+            "{TAKES}fn f(s: String) -> Int {{\n\
+             \x20   if length(s) > 0 {{\n\
+             \x20       take(s)\n\
+             \x20   }} else {{\n\
+             \x20       0\n\
+             \x20   }}\n\
+             }}\n"
+        ),
+    );
+}
+
+#[test]
+fn a_length_nothing_settled_is_still_guarded() {
+    expect(
+        Tier::Guarded,
+        &format!("{TAKES}fn f(s: String) -> Int {{\n    take(s)\n}}\n"),
+    );
+}
+
+/// The whole point. A `where` clause and a refinement say the same thing about
+/// the same guard, and they used to disagree: the call site read the caller's
+/// facts for one and a bare range for the other.
+#[test]
+fn a_where_clause_and_a_refinement_agree_about_a_length() {
+    let (sources, checked) = check(&format!(
+        "{TAKES}fn f(s: String) -> Int {{\n\
+         \x20   if length(s) > 0 {{\n\
+         \x20       required(s) + take(s)\n\
+         \x20   }} else {{\n\
+         \x20       0\n\
+         \x20   }}\n\
+         }}\n"
+    ));
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    let tiers: Vec<Tier> = checked
+        .obligations
+        .iter()
+        .map(|obligation| obligation.tier)
+        .collect();
+    assert!(
+        tiers.iter().all(|tier| *tier == Tier::Proven),
+        "{:?}",
+        checked
+            .obligations
+            .iter()
+            .map(|o| (&o.subject, o.tier))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A string written on the spot has a length nobody has to work out, and
+/// refusing to count it would be refusing a fact for want of somewhere to put
+/// it. That was the other half of the same gap: a literal has no name either.
+#[test]
+fn a_string_written_on_the_spot_says_its_own_length() {
+    expect(
+        Tier::Proven,
+        &format!("{TAKES}fn f() -> Int {{\n    take(\"hi\")\n}}\n"),
+    );
+}
+
+#[test]
+fn a_string_written_on_the_spot_that_cannot_satisfy_it_is_refused() {
+    // Not guarded. The checker can see this one fail, and a runtime check for
+    // something already known is a check nobody should have had to run.
+    let (sources, checked) = check(&format!("{TAKES}fn f() -> Int {{\n    take(\"\")\n}}\n"));
+    assert!(checked.has_errors());
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("does not satisfy `NonEmpty`"), "{text}");
+}
+
+/// Only a bare name. `f(x)` produces a value nothing names, and two calls that
+/// looked like one term would be worse than no term.
+#[test]
+fn a_length_of_something_a_call_returned_is_not_a_term() {
+    expect(
+        Tier::Guarded,
+        &format!(
+            "{TAKES}fn twice(s: String) -> String {{\n    s + s\n}}\n\n\
+             fn f(s: String) -> Int {{\n\
+             \x20   if length(twice(s)) > 0 {{\n\
+             \x20       take(twice(s))\n\
+             \x20   }} else {{\n\
+             \x20       0\n\
+             \x20   }}\n\
+             }}\n"
+        ),
     );
 }
 
@@ -1131,8 +1248,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Thirty-eight proven and two guarded, and the file explains both. If
+    // Forty-three proven and two guarded, and the file explains both. If
     // either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 38);
+    assert_eq!(checked.obligations_at(Tier::Proven), 43);
     assert_eq!(checked.obligations_at(Tier::Guarded), 2);
 }

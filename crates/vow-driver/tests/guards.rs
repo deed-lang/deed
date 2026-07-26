@@ -296,15 +296,21 @@ fn a_relationship_that_does_not_prove_it_is_guarded() {
 
 #[test]
 fn a_refinement_over_a_string_is_guarded() {
-    // Nothing proves anything about a length, so this check is real. It also
-    // needs `length(value)` to be runnable inside a predicate, which it was
-    // not: predicates used to be walked by a small interpreter of their own.
+    // Nothing is known about how long a parameter is, so this check is real.
+    // It also needs `length(value)` to be runnable inside a predicate, which
+    // it was not: predicates used to be walked by a small interpreter of their
+    // own.
+    //
+    // Through a parameter rather than straight from `""`, because a string
+    // written on the spot says its own length and the checker refuses that one
+    // outright now.
     let (sources, failure) = expect_refused(
         "module a\n\n\
          type NonEmpty = String where length(value) > 0\n\n\
          fn shout(s: NonEmpty) -> String { s + \"!\" }\n\n\
+         fn passed(s: String) -> String { shout(s) }\n\n\
          test \"empty is refused\" {\n\
-         \x20 assert shout(\"\") == \"!\"\n\
+         \x20 assert passed(\"\") == \"!\"\n\
          }\n",
     );
     assert!(render_human(&sources, &failure).contains("NonEmpty"));
