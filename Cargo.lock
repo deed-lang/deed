@@ -83,10 +83,12 @@ dependencies = [
 name = "vow-lsp"
 version = "0.0.0"
 dependencies = [
+ "vow-ast",
  "vow-diagnostics",
  "vow-driver",
  "vow-fmt",
  "vow-lexer",
+ "vow-parser",
  "vow-resolve",
 ]
 

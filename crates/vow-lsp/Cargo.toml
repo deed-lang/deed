@@ -8,10 +8,12 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+vow-ast = { path = "../vow-ast" }
 vow-diagnostics = { path = "../vow-diagnostics" }
 vow-driver = { path = "../vow-driver" }
 vow-fmt = { path = "../vow-fmt" }
 vow-lexer = { path = "../vow-lexer" }
+vow-parser = { path = "../vow-parser" }
 vow-resolve = { path = "../vow-resolve" }
 
 [lints]

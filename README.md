@@ -128,7 +128,7 @@ Read them in order. Each one leans on the one before it.
 | `vow-effects` | Every effect row checked against what the body does |
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `vow-fmt` | The one canonical form, with no options for the output |
-| `vow-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, quick fixes and formatting |
+| `vow-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, quick fixes, an outline and formatting |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary: `check`, `test`, `run`, `fmt`, `fix` and `lsp` |
 
@@ -139,7 +139,7 @@ formatter has one canonical answer with no options. It publishes diagnostics as 
 says the type of whatever is under the cursor, jumps to a declaration in whichever file
 declares it, lists every use of a name across the workspace, renames one everywhere it is
 written, offers what could be written where the cursor is, offers the patch a diagnostic is
-already carrying, and formats a file.
+already carrying, says what the file declares, and formats a file.
 
 That last one was data with nowhere to go. A diagnostic carries the edit that resolves it
 where the repair is unambiguous, and the only thing that could reach one was `vow fix` on a
@@ -158,6 +158,16 @@ is the one place a name has to match another file exactly; anywhere else it is w
 declared, what it imported, and the prelude. Nothing it offers inserts more than a name. No
 snippets, no argument placeholders, no auto-import, because each of those is a decision about
 what somebody meant.
+
+The outline is the one answer that does not go through a check. Everything else this server
+says is about a name that resolved; an outline is about what is written, and half a
+declaration is still worth drawing while somebody is typing the rest of it, so it reads the
+parse tree of the one file and nothing else. What belongs to a declaration is nested under it,
+because a variant belongs to its choice and a handler operation belongs to its handler and a
+list that said otherwise would be a worse version of scrolling. The protocol has fewer kinds
+than this language has declarations, so a `type` and an `effect` share one: both are a named
+thing declared by its shape, and picking a different icon for one of them would be picking it
+for how it looks rather than for what it is.
 
 Rename and find references are the same walk with two answers, which is the point of them
 sharing one. A rename that edited the declaration and left the `use` line that brought the
