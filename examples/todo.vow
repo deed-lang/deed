@@ -1,11 +1,15 @@
 // A real program, written to find out what is missing rather than to show off
 // what is there. `vow run examples/todo.vow --dir examples`
 //
-// It reads a list of tasks out of a file it was handed access to, counts them,
-// and prints the ones that are not done. That is the smallest thing anybody
-// would call a program, and until recently none of it could be written down:
-// there was no way to hold four tasks, and no way to turn a count into
-// something you could print.
+// It reads a list of tasks out of a file it was handed access to, adds one if
+// it was given anything on the command line, counts them, and prints the ones
+// that are not done:
+//
+//   vow run examples/todo.vow --dir examples -- buy milk
+//
+// That is the smallest thing anybody would call a program, and until recently
+// none of it could be written down: there was no way to hold four tasks, no way
+// to turn a count into something you could print, and no way to write a file.
 //
 // What it found, in the order it found it:
 //
@@ -33,10 +37,10 @@
 //    reason. The repository forces LF, which is a thing a program should not
 //    have to depend on.
 //
-// What it still cannot do is add a task and save it. `Io.save` exists now, so
-// that is a missing `main` rather than a missing operation, and the reason it
-// is missing is that a program has no way to read an argument.
-
+// What it still cannot do is mark a task done, which wants a way to say which
+// one, which wants either an index or a search. Both are writable now; neither
+// is written, because the point of this file is what it found rather than how
+// complete it is.
 module examples/todo
 
 record Task {
@@ -133,13 +137,54 @@ fn read_or(files: Dir, name: String, fallback: String) -> String
     }
 }
 
+// Everything given on the command line becomes one task, so `vow run ... --
+// buy milk` adds "buy milk" rather than two tasks nobody asked for. The
+// trailing newline goes back on, because a text file without one is its own
+// small wart and this is the only place that decides.
+fn added(text: String, titles: List<String>) -> String {
+    if length(titles) == 0 {
+        text
+    } else {
+        join(push(entries_in(text), "-|" + join(titles, " ")), "\n") + "\n"
+    }
+}
+
+// A `for` used as a filter, which is what there is: the accumulator either
+// grows or does not. A file that ends in a newline has a blank entry at the
+// end of it, and writing that back out would put a blank line in the middle of
+// the file the next time something was added.
+fn entries_in(text: String) -> List<String> {
+    for line in split(text, "\n") with kept = [] {
+        if length(line) == 0 {
+            kept
+        } else {
+            push(kept, line)
+        }
+    }
+}
+
 fn main(sys: System) -> Int
   uses
     Io.write,
     Io.read,
+    Io.save,
+    Io.args,
 {
     let out = sys.console
-    let lines = split(read_or(sys.files, "todo.txt", ""), "\n")
+    let before = read_or(sys.files, "todo.txt", "")
+    let after = added(before, Io.args(sys))
+
+    // Saving only when something changed. A program that rewrote the file on
+    // every run would touch it even when asked to do nothing, and a to-do list
+    // whose timestamp moves for no reason is a to-do list nobody trusts.
+    if before != after {
+        match Io.save(sys.files, "todo.txt", after) {
+            ok(nothing) => Io.write(out, "added"),
+            err(why) => Io.write(out, why),
+        }
+    }
+
+    let lines = entries_in(after)
 
     Io.write(out, report(lines))
     Io.write(out, "still open: " + join(open_titles(lines), ", "))

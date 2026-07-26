@@ -12,7 +12,7 @@ vow, a contract-first language
 Usage:
   vow check [options] <path>...
   vow test  [options] <path>...
-  vow run   [options] <path>...
+  vow run   [options] <path>... [-- <argument>...]
   vow fmt   [--check] <path>...
   vow fix   [--check] <path>...
   vow lsp
@@ -32,6 +32,7 @@ Paths may be files or directories. A directory is searched for `.vow` files.
 
 `vow test` refuses to run anything that does not check.
 `vow run` calls `main`, handing it the one `System` capability there is.
+Everything after `--` goes to the program, which reads it with `Io.args`.
 `vow fmt` has no options for the output. There is one canonical form.
 `vow fix` applies the fixes that are certain and leaves the guesses alone.
 `vow lsp` speaks the language server protocol on stdin and stdout. It is for an
@@ -74,6 +75,12 @@ pub struct CheckArgs {
     pub dir: Option<PathBuf>,
     /// With `fmt`, report rather than rewrite.
     pub check_only: bool,
+    /// Everything after `--`, handed to the program rather than read here.
+    ///
+    /// A separator rather than "whatever is left over", because a program's
+    /// arguments can look exactly like this tool's and guessing which is which
+    /// is how a flag ends up being eaten by the wrong reader.
+    pub arguments: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -120,9 +127,16 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut timings = false;
     let mut dir = None;
     let mut check_only = false;
+    let mut arguments = Vec::new();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            // Everything after this belongs to the program being run, and
+            // nothing here looks at it again.
+            "--" => {
+                arguments.extend(args.by_ref());
+                break;
+            }
             "-h" | "--help" => return Ok(Command::Help),
             "--obligations" => obligations = true,
             "--timings" => timings = true,
@@ -173,6 +187,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         timings,
         dir,
         check_only,
+        arguments,
     }))
 }
 

@@ -85,7 +85,14 @@ pub const PRELUDE: &[&str] = &[
 /// should be one name with the resource in the argument. They are two because
 /// a signature here is one list of types per name and there is no overloading,
 /// so the limitation shows through the design rather than the other way round.
-pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read", "save"];
+///
+/// `args` is the odd one. It hands back data rather than doing anything, and
+/// it takes the whole `System` rather than a narrower capability, so it reads
+/// like it does not belong. It goes in the row anyway, because how a program
+/// was invoked is input from outside and every other way of getting input from
+/// outside says so in a signature. A program that reads its arguments behaves
+/// differently depending on them, and that is worth writing down.
+pub const IO_OPERATIONS: &[&str] = &["write", "now", "open", "read", "save", "args"];
 
 /// The effects the language provides, available in every module without an
 /// import.

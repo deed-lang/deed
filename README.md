@@ -171,18 +171,19 @@ each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 own tests.
 
 `todo.vow` is the one written to find out what is missing rather than to show what is there.
-It reads a list of tasks out of a directory it was handed, counts them, and prints the ones
-that are not done, which is the smallest thing anybody would call a program and was not
-writable at all a week ago. It found four things. Three of its functions were the same
-function: start at zero, look at each element, stop when the index runs out, and declare
-`Diverge` for the privilege. An accumulator had to be threaded through as a parameter,
-because handler state is the only mutable thing in the language and reaching for a handler to
-collect strings would be using an effect to avoid a loop. Those two are what decided what a
-loop looks like here, and the three walks are `for` loops now with nothing declared. The file
-format is `x|title` rather than `[x] title` because splitting is all there is, so the data got
-bent to fit the tool. And the first run printed its own output backwards over itself, because
-splitting on `\n` leaves a carriage return on every line of a file written on Windows and
-there is nothing that trims one off. None of those were obvious from inside the compiler.
+It reads a list of tasks out of a directory it was handed, adds one if it was given anything
+on the command line, counts them, and prints the ones that are not done. That is the smallest
+thing anybody would call a program and it was not writable at all a week ago. It found four
+things. Three of its functions were the same function: start at zero, look at each element,
+stop when the index runs out, and declare `Diverge` for the privilege. An accumulator had to
+be threaded through as a parameter, because handler state is the only mutable thing in the
+language and reaching for a handler to collect strings would be using an effect to avoid a
+loop. Those two are what decided what a loop looks like here, and the three walks are `for`
+loops now with nothing declared. The file format is `x|title` rather than `[x] title` because
+splitting is all there is, so the data got bent to fit the tool. And the first run printed its
+own output backwards over itself, because splitting on `\n` leaves a carriage return on every
+line of a file written on Windows and there is nothing that trims one off. None of those were
+obvious from inside the compiler.
 
 `for` is a fold with syntax rather than a loop with a variable in it:
 

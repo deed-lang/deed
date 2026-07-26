@@ -8,7 +8,7 @@ capability is the value that answers that, and it can only be obtained by being 
 
 That sentence, and the `Fs` and `Net` effects in the illustrations further down, are the
 shape of the argument rather than the state of the compiler. What exists is one built-in
-effect, `Io`, with `write`, `now`, `open`, `read` and `save`, and a `System` carrying `console`,
+effect, `Io`, with `write`, `now`, `open`, `read`, `save` and `args`, and a `System` carrying `console`,
 `clock` and `files`. The next section is the part that runs.
 
 ## What actually exists
@@ -128,7 +128,6 @@ That holds because narrowing is the only operation. `Io.open` goes down, nothing
 and a `Dir` carries a canonical path the program can neither read nor compare.
 
 ### Reading and writing are different authorities over the same capability
-
 `Io.save(files, name, contents)` writes a file, and it takes the same `Dir` `Io.read` does.
 What separates them is not the type but the row: a function that declares `uses Io.read` and
 is handed `sys.files` cannot write to it, because performing an operation it did not declare
@@ -204,6 +203,25 @@ pick one on its own: a program given no directory gets no `sys.files` rather tha
 fallback to wherever the process happens to be. Defaulting to the working directory at all
 is not obviously right, and the reason it is not `--dir` or nothing is that a flag people
 have to type every time is a flag people type without reading.
+
+Arguments arrive the same way. Everything after `--` on the command line goes to the program
+and nothing else does, so the runtime never reads its own invocation on the program's behalf.
+
+### Arguments are input, not authority
+
+`Io.args(sys)` hands back a `List<String>`. It is the odd operation of the six: it does
+nothing, it returns data rather than something opaque, and it takes the whole `System` rather
+than a narrower capability. It reads like it does not belong.
+
+It is in the row anyway, for a reason that is not about authority. How a program was invoked
+is input from outside, every other way of getting input from outside says so in a signature,
+and a program that behaves differently depending on its arguments should not be able to hide
+that in a body. `uses Io.args` in a row is a claim worth being able to read.
+
+Taking the root capability rather than a narrower one is deliberate too, and it is the part
+that keeps the shape honest. Only code that was handed everything can read the arguments, so
+they are read near `main` and passed down as ordinary values. A function three levels in that
+wanted them would have to be handed a `System`, which its own signature would then admit to.
 
 ## What this changes
 
