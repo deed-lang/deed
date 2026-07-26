@@ -47,6 +47,13 @@ pub enum Ty {
     /// absorb. That is what lets `ok(x)` produce `Result<T, unknown>` and still
     /// fit where a `Result<T, E>` was wanted, with no unification anywhere.
     Result(Box<Ty>, Box<Ty>),
+    /// `List<T>`, which the language provides.
+    ///
+    /// Built in for the same reason `Result` is, and compared the same way:
+    /// componentwise, with an unknown element type absorbing. That is what
+    /// lets `[]` be a `List<unknown>` and still fit where a `List<Int>` was
+    /// wanted, with no unification anywhere.
+    List(Box<Ty>),
     Fn {
         params: Vec<Ty>,
         ret: Box<Ty>,
@@ -238,6 +245,7 @@ impl Types {
                 }
             }
             Ty::Result(ok, err) => format!("`Result<{}, {}>`", self.bare(ok), self.bare(err)),
+            Ty::List(element) => format!("`List<{}>`", self.bare(element)),
             Ty::Fn { params, ret } => {
                 let params: Vec<String> = params.iter().map(|p| self.describe(p)).collect();
                 format!(
@@ -265,6 +273,7 @@ impl Types {
             Ty::Named(def) => self.name_of(*def).to_string(),
             Ty::External { name, .. } => name.to_string(),
             Ty::Result(ok, err) => format!("Result<{}, {}>", self.bare(ok), self.bare(err)),
+            Ty::List(element) => format!("List<{}>", self.bare(element)),
             Ty::Fn { params, ret } => {
                 format!("Fn({}) -> {}", params.len(), self.bare(ret))
             }

@@ -587,6 +587,18 @@ impl Printer<'_> {
                 self.broken_list(&format!("{callee}("), &rendered, ")")
             }
 
+            Expr::List { elements, .. } => {
+                if elements.is_empty() {
+                    return "[]".to_string();
+                }
+                let rendered: Vec<String> = elements.iter().map(|e| self.expr(e)).collect();
+                let one_line = format!("[{}]", rendered.join(", "));
+                if self.fits(&one_line) {
+                    return one_line;
+                }
+                self.broken_list("[", &rendered, "]")
+            }
+
             Expr::StructLit { path, fields, .. } => {
                 let path = self.postfix_base(path);
                 let rendered: Vec<String> =

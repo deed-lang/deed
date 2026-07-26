@@ -384,6 +384,50 @@ fn postfix_chains_compose() {
 }
 
 #[test]
+fn a_list_literal_takes_a_trailing_comma_or_no_elements() {
+    for (src, count) in [
+        ("let x = []", 0),
+        ("let x = [1]", 1),
+        ("let x = [1, 2, 3]", 3),
+        ("let x = [1, 2, 3,]", 3),
+    ] {
+        let stmts = body_of(src);
+        let Stmt::Let { init, .. } = &stmts[0] else {
+            panic!("expected a let");
+        };
+        let Expr::List { elements, .. } = init else {
+            panic!("expected a list, got {init:?}");
+        };
+        assert_eq!(elements.len(), count, "in `{src}`");
+    }
+}
+
+#[test]
+fn a_struct_literal_is_allowed_inside_a_list() {
+    // The restriction that keeps `if x { }` from reading as a literal is
+    // lifted inside brackets, the same as inside an argument list.
+    let stmts = body_of("let x = [Point { x: 1 }]");
+    let Stmt::Let { init, .. } = &stmts[0] else {
+        panic!("expected a let");
+    };
+    let Expr::List { elements, .. } = init else {
+        panic!("expected a list, got {init:?}");
+    };
+    assert!(matches!(elements[0], Expr::StructLit { .. }));
+}
+
+#[test]
+fn a_statement_can_start_with_a_list() {
+    // Statements have no terminator, so separation relies on nothing being
+    // able to continue the line above. `[` was on the list of characters that
+    // would break that if anything ever started with one, and now something
+    // does. It still holds only because there is no indexing operator.
+    let stmts = body_of("let x = f()\n[1, 2]");
+    assert_eq!(stmts.len(), 2, "got {stmts:?}");
+    assert!(matches!(stmts[1], Stmt::Expr(Expr::List { .. })));
+}
+
+#[test]
 fn a_brace_after_an_if_condition_is_a_block_not_a_struct_literal() {
     let stmts = body_of("if available < amount {\n  return err(x)\n}");
     let Stmt::Expr(Expr::If { condition, .. }) = &stmts[0] else {

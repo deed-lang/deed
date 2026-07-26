@@ -150,6 +150,21 @@ fn a_parameter_the_generator_cannot_produce_stops_it() {
     assert!(outcomes.is_empty());
 }
 
+#[test]
+fn a_list_parameter_is_generated() {
+    // A parameter the generator cannot produce silently costs the function its
+    // property, so every type the language gains has to be taught here at the
+    // same time or the contract stops being tested.
+    let (_, outcome) = only(
+        "module a\n\n\
+         fn size(items: List<Int>) -> Int\n\
+         \x20 ensures ok => result >= 0,\n\
+         { length(items) }\n",
+    );
+    assert!(outcome.passed(), "{:?}", outcome.failure.map(|f| f.message));
+    assert_eq!(outcome.cases, 100);
+}
+
 // -- catching a wrong contract ---------------------------------------------
 
 #[test]

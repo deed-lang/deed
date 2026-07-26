@@ -1277,6 +1277,36 @@ impl<'a> Parser<'a> {
         (fields, end)
     }
 
+    /// `[1, 2, 3]`, with the `[` still to be read.
+    ///
+    /// A struct literal is allowed inside, the same as inside an argument
+    /// list. The restriction exists to keep `if x { }` from reading as a
+    /// literal, and a bracket has already committed to being an expression.
+    fn parse_list(&mut self) -> Expr {
+        let start = self.bump().span;
+        let saved = std::mem::replace(&mut self.struct_lit, StructLit::Allow);
+        let mut elements = Vec::new();
+
+        while !self.at(&TokenKind::RBracket) && !self.at_eof() {
+            let before = self.pos;
+            elements.push(self.parse_expr());
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+            if self.pos == before {
+                break;
+            }
+        }
+
+        let end = self.span();
+        self.expect(TokenKind::RBracket, "a list literal");
+        self.struct_lit = saved;
+        Expr::List {
+            elements,
+            span: start.to(end),
+        }
+    }
+
     fn parse_primary(&mut self) -> Expr {
         let span = self.span();
 
@@ -1313,6 +1343,7 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::RParen, "a parenthesised expression");
                 inner
             }
+            TokenKind::LBracket => self.parse_list(),
             TokenKind::LBrace => Expr::Block(self.parse_block()),
             TokenKind::Pipe | TokenKind::PipePipe => self.parse_closure(),
             TokenKind::Keyword(Keyword::If) => self.parse_if(),

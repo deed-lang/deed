@@ -25,6 +25,12 @@ pub enum Value {
     Bool(bool),
     Record(Rc<Fields>),
     Variant(Rc<VariantValue>),
+    /// `[1, 2, 3]`
+    ///
+    /// Immutable like everything else here. `push` hands back a new list
+    /// rather than changing this one, which is what keeps handler state the
+    /// only thing in the language that can change.
+    List(Rc<Vec<Value>>),
     /// `ok(v)` or `err(e)`.
     Result {
         ok: bool,
@@ -150,6 +156,10 @@ impl Value {
         Value::Str(Rc::from(text.as_ref()))
     }
 
+    pub fn list(elements: Vec<Value>) -> Self {
+        Value::List(Rc::new(elements))
+    }
+
     /// The value inside, when this is an `ok`.
     ///
     /// An `err` carries something too, and it is not this, which is why the
@@ -184,6 +194,7 @@ impl Value {
             Value::Bool(_) => "a Bool",
             Value::Record(_) => "a record",
             Value::Variant(_) => "a variant",
+            Value::List(_) => "a List",
             Value::Result { .. } => "a Result",
             Value::Capability(_) => "a capability",
             Value::Closure(_) => "a closure",
@@ -206,6 +217,16 @@ impl fmt::Display for Value {
                 } else {
                     write_fields(f, &variant.name, &variant.fields)
                 }
+            }
+            Value::List(elements) => {
+                write!(f, "[")?;
+                for (index, element) in elements.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{element}")?;
+                }
+                write!(f, "]")
             }
             Value::Result { ok, value } => {
                 write!(f, "{}({value})", if *ok { "ok" } else { "err" })

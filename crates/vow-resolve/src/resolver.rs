@@ -36,11 +36,22 @@ use crate::exports::{ExportKind, Universe};
 /// anything.
 ///
 /// `length` is here because a `String` you cannot measure is a `String` you
-/// cannot check. Deliberately the only one of its kind: the prelude is a place
-/// names go to become unavailable to everyone else, so it stays small and every
-/// addition to it is argued for rather than assumed.
+/// cannot check. It measures a `List` too, for the same reason.
+///
+/// `List` is built in rather than declared because there is no way to declare
+/// a generic type yet. Nothing else in the language can hold more than one of
+/// something, and a language where the only way to have two of a thing is to
+/// name two variables is not one anybody can write a program in. `at` and
+/// `push` come with it: a list you cannot read out of and cannot extend is a
+/// literal, not a collection. `at` hands back a `Result` rather than the
+/// element, because an index that is not there is not a bug in the caller and
+/// nothing in this language traps.
+///
+/// The prelude is a place names go to become unavailable to everyone else, so
+/// it stays small and every addition to it is argued for rather than assumed.
 pub const PRELUDE: &[&str] = &[
-    "Int", "String", "Bool", "Result", "ok", "err", "length", "System", "Console", "Clock", "Dir",
+    "Int", "String", "Bool", "Result", "ok", "err", "length", "List", "at", "push", "System",
+    "Console", "Clock", "Dir",
 ];
 
 /// Operations of the built-in `Io` effect.
@@ -823,6 +834,12 @@ impl Resolver<'_> {
                 self.resolve_expr(callee);
                 for arg in args {
                     self.resolve_expr(arg);
+                }
+            }
+
+            Expr::List { elements, .. } => {
+                for element in elements {
+                    self.resolve_expr(element);
                 }
             }
 

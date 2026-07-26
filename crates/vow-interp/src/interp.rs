@@ -629,6 +629,14 @@ impl<'a> Interp<'a> {
 
             Expr::Call { callee, args, span } => self.call_expr(callee, args, *span),
 
+            Expr::List { elements, .. } => {
+                let mut values = Vec::with_capacity(elements.len());
+                for element in elements {
+                    values.push(self.eval(element)?);
+                }
+                Ok(Value::list(values))
+            }
+
             Expr::StructLit { path, fields, span } => self.build(path, fields, *span),
 
             Expr::Unary {
@@ -1005,6 +1013,34 @@ impl<'a> Interp<'a> {
                     // letters happened to be in the string.
                     ("length", Some(Value::Str(text))) => {
                         Ok(Value::Int(text.chars().count() as i64))
+                    }
+                    ("length", Some(Value::List(elements))) => {
+                        Ok(Value::Int(elements.len() as i64))
+                    }
+                    // An index nobody promised is there. Nothing in this
+                    // language stops a program, so it comes back as an error
+                    // value and the caller has to say what to do about it.
+                    ("at", Some(Value::List(elements))) => {
+                        let index = values.get(1).and_then(|(value, _)| value.as_int());
+                        let found = index
+                            .filter(|index| *index >= 0)
+                            .and_then(|index| elements.get(index as usize));
+                        Ok(match found {
+                            Some(value) => Value::ok(value.clone()),
+                            None => Value::err(Value::str(format!(
+                                "index {} is outside a list of {}",
+                                index.unwrap_or(0),
+                                elements.len()
+                            ))),
+                        })
+                    }
+                    ("push", Some(Value::List(elements))) => {
+                        let Some((value, _)) = values.get(1) else {
+                            return Err(self.not_runnable(callee.span(), "this call"));
+                        };
+                        let mut extended = (*elements).clone();
+                        extended.push(value.clone());
+                        Ok(Value::list(extended))
                     }
                     _ => Err(self.not_runnable(callee.span(), "this call")),
                 }

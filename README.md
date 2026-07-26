@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-37 passed, 0 failed
+42 passed, 0 failed
 ```
 
 ```
@@ -135,8 +135,8 @@ The examples are [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),
 [config.vow](examples/config.vow), [proven.vow](examples/proven.vow),
 [closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow),
-[strings.vow](examples/strings.vow), and the three that see each other:
-[names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
+[strings.vow](examples/strings.vow), [lists.vow](examples/lists.vow), and the three that see
+each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
 `hello.vow` and `config.vow` have a `main`, and the rest run their own tests.
 
@@ -187,6 +187,18 @@ decision here was untested. Fixing it turned up the same bug from the other side
 accepted on anything as long as both sides had the same type, so comparing two records passed
 the type checker and failed at runtime with a message blaming the interpreter for not
 implementing something that has nothing to implement.
+
+`lists.vow` is the same complaint one size up. Until it, nothing in the language could hold
+more than one of something, so every program was one that worked on a fixed number of named
+variables. `List` is built in rather than declared, because there is still no way to declare
+a generic type, and it is the same shortcut `Result` takes: element types are compared
+componentwise and an unknown one absorbs, so `[]` fits wherever a list was wanted and no
+unification was needed anywhere. Whether that shortcut can carry a third type is the question
+that decides whether generics get written. What the file is honest about is iteration: there
+is no `for`, so walking a list is recursion and every walk declares `Diverge`. That is not an
+oversight. An accumulator loop wants mutation or a fold, and mutation here is supposed to be
+handler state and nothing else, so the shape of `for` is an argument about the central claim
+of the language rather than a piece of syntax to add.
 
 The worst one so far was found the same afternoon. The `Guarded` tier did not guard a return
 value. `vow check` printed "so it becomes a runtime check" and there was no check: the

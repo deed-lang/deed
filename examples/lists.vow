@@ -1,0 +1,108 @@
+// Holding more than one of something, which until now the language could not
+// do at all.
+//
+// Every program written in Vow before this file worked on a fixed number of
+// named variables. There was no way to say "these things", so there was no way
+// to read input, no way to build a report, and no way to write down almost any
+// problem worth writing down. That is a bigger hole than any of the ones the
+// type checker had.
+//
+// `List` is built in rather than declared, because there is still no way to
+// declare a generic type. It is the same shortcut `Result` takes: the checker
+// compares the element types componentwise and lets an unknown one absorb, so
+// none of this needed unification. Whether that shortcut can carry a third
+// type is the question that decides whether generics get written.
+
+module examples/lists
+
+// The first element decides the element type. There is nothing to meet two
+// candidates with, so the rule is the one that fits in a sentence.
+fn digits() -> List<Int> {
+    [1, 2, 3]
+}
+
+// `[]` is a list of nothing in particular, which is what lets it stand in for
+// a list of anything. Same trick as `ok(x)` saying nothing about the error.
+fn nothing() -> List<String> {
+    []
+}
+
+// `length` measures a list for the same reason it measures a string, and it is
+// still never negative, so this is settled ahead of time rather than checked
+// again when it runs.
+type Counted = Int where value >= 0
+
+fn count(items: List<Int>) -> Counted {
+    length(items)
+}
+
+// `at` hands back a `Result` rather than the element. An index nobody promised
+// is there is not a mistake in the caller, and nothing in this language stops
+// a program, so it is an error value like every other thing that can fail.
+fn first(items: List<String>) -> Result<String, String> {
+    at(items, 0)
+}
+
+// `push` does not change the list it was given. Handler state is the only
+// mutable thing in Vow, and a collection that could be written through would
+// quietly be a second one.
+fn with_item(items: List<String>, item: String) -> List<String> {
+    push(items, item)
+}
+
+// Vow has no loop syntax, so walking a list is recursion, and a function that
+// can reach itself says so in its row.
+fn sum_from(numbers: List<Int>, index: Int) -> Int
+  uses
+    Diverge,
+{
+    match at(numbers, index) {
+        ok(n) => n + sum_from(numbers, index + 1),
+        err(why) => 0,
+    }
+}
+
+fn total(numbers: List<Int>) -> Int
+  uses
+    Diverge,
+{
+    sum_from(numbers, 0)
+}
+
+// What is deliberately missing: `for`, a way to declare `List<T>` yourself,
+// maps, sets, and any operation that takes a function. Iteration is not left
+// out because it is hard to parse. The thesis of this language is that handler
+// state is the only mutable thing in it, and an accumulator loop wants either
+// mutation or a fold, so the shape of `for` is a decision about that claim
+// rather than a feature to add. Recursion is what there is until that decision
+// is made, and it is honest about the cost: every walk over a list declares
+// `Diverge`.
+
+test "a literal decides its element type" {
+    assert digits() == [1, 2, 3]
+    assert count(digits()) == 3
+    assert count([]) == 0
+}
+
+test "an empty list fits where any list was wanted" {
+    assert nothing() == []
+    assert with_item([], "milk") == ["milk"]
+}
+
+test "reading past the end is a value, not a crash" {
+    assert first(["a", "b"]) == ok("a")
+    assert first([]) == err("index 0 is outside a list of 0")
+}
+
+test "push leaves the original alone" {
+    let start = ["milk"]
+    let longer = with_item(start, "bread")
+
+    assert start == ["milk"]
+    assert longer == ["milk", "bread"]
+}
+
+test "walking one takes recursion" {
+    assert total([1, 2, 3]) == 6
+    assert total([]) == 0
+}

@@ -90,3 +90,6 @@ pub const NOT_ORDERED: &str = "VOW4020";
 /// with everything, so a handler was the least checked code in the language
 /// while being the piece that holds the state and talks to the outside world.
 pub const OPERATION_MISMATCH: &str = "VOW4021";
+
+/// A list operation applied to something that is not a list.
+pub const NOT_A_LIST: &str = "VOW4022";

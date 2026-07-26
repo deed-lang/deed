@@ -168,6 +168,21 @@ fn the_payload_of_ok_is_guarded() {
 }
 
 #[test]
+fn an_element_of_a_list_is_guarded() {
+    // A list has no range and nothing to check, so the obligation belongs on
+    // each element. Putting it on the list would have produced a guard that
+    // ran the predicate against a collection and refused everything.
+    let (sources, failure) = expect_refused(&format!(
+        "{POSITIVE}\
+         fn make(n: Int) -> List<Positive> {{ [1, n] }}\n\n\
+         test \"a list is a boundary too\" {{\n\
+         \x20 assert make(0) == [1, 1]\n\
+         }}\n"
+    ));
+    assert!(render_human(&sources, &failure).contains("0 does not satisfy `Positive`"));
+}
+
+#[test]
 fn an_annotated_let_is_guarded() {
     expect_refused(&format!(
         "{POSITIVE}\

@@ -92,11 +92,46 @@ Strings order by character. For text in one script that is the order anyone expe
 text that mixes them it is a decision that needs a locale, which is not something an operator
 should be guessing at.
 
-The prelude carries one function, `length`, which measures a `String` in characters rather
-than bytes. Otherwise a refinement written against it would mean something different
-depending on which letters turned up. It is in the prelude because a `String` you cannot
-measure is a `String` you cannot check, and the prelude stays small enough that every entry
-can be argued for.
+The prelude carries one function for measuring, `length`, which counts a `String` in
+characters rather than bytes. Otherwise a refinement written against it would mean something
+different depending on which letters turned up. It is in the prelude because a `String` you
+cannot measure is a `String` you cannot check, and the prelude stays small enough that every
+entry can be argued for.
+
+## Lists
+
+```vow
+let names: List<String> = ["ada", "grace"]
+let none: List<Int> = []
+
+length(names)          // 2
+at(names, 0)           // ok("ada")
+at(names, 9)           // err("index 9 is outside a list of 2")
+push(names, "katherine")
+```
+
+`List` is built in, and that is not where it should end up. There is no way to declare a
+generic type yet, so it is the same shortcut `Result` takes: the checker compares element
+types componentwise and lets an unknown one absorb, which is why `[]` fits wherever a list
+was wanted with nothing written on the literal itself. The first element of a literal decides
+the element type, because with no unification there is nothing to meet two candidates with.
+
+It is built in at all because nothing else in the language could hold more than one of
+something. Every program written before it worked on a fixed number of named variables,
+which ruled out reading input, building a report, and almost anything else worth writing.
+
+`at` hands back a `Result` rather than the element. An index nobody promised is there is not
+a mistake in the caller, and nothing in this language stops a program, so it is an error
+value like everything else that can fail. `push` returns a new list: handler state is meant
+to be the only mutable thing here, and a collection that could be written through would
+quietly be a second one.
+
+What is missing is iteration, and it is missing on purpose rather than by omission. Walking a
+list today is recursion, which means `Diverge` in the row every time. An accumulator loop
+wants either mutation or a fold, so the shape of `for` is a decision about the claim that
+handler state is the only mutable thing, not a feature to bolt on. That decision is an open
+question below, and until it is made the cost is paid in rows.
+
 
 What is deliberately absent: slicing, searching, splitting, case, and turning a number into a
 string. All of those want a standard library, and Vow does not have a story for one yet.
@@ -514,12 +549,12 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is eleven names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `length`, `System`, `Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`,
-`now`, `open` and `read` operations, and `Diverge`. Everything else is imported. Each prelude
-entry is a name that cannot be looked up in any file, which is the kind of thing P2 is a
-budget for, so the list is short on purpose. The four capability types are there because a
-capability that could be imported would not be a capability.
+**The prelude is fourteen names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `length`, `List`, `at`, `push`, `System`, `Console`, `Clock`, `Dir`, and the effects
+`Io`, with its `write`, `now`, `open` and `read` operations, and `Diverge`. Everything else
+is imported. Each prelude entry is a name that cannot be looked up in any file, which is the
+kind of thing P2 is a budget for, so the list is short on purpose. The four capability types
+are there because a capability that could be imported would not be a capability.
 **A module is named by its own `module` line, not by where it sits on disk.** `use
 payments/ledger` is answered by looking for the file that says `module payments/ledger`
 among the files handed to the compiler. The unit of compilation is that set of files, so
@@ -614,7 +649,13 @@ and the error types must line up.
 **`ok(x)` and `err(e)` each say nothing about the other side.** `ok(x)` has type
 `Result<T, _>` and the unknown half agrees with whatever the expected error type turns out to
 be. That is what makes them work with no unification anywhere, and it is the whole reason the
-unknown type absorbs rather than unifies.
+unknown type absorbs rather than unifies. `[]` is the same trick with one hole instead of
+two.
+
+**A refinement inside a list is discharged element by element.** `fn f() -> List<Positive>`
+with a literal body puts an obligation on each element, because the list itself has no range
+and nothing to check. A list that came back from a call has nothing naming its elements, so
+that is a type mismatch rather than a guard: there is no expression to attach the check to.
 
 **Importing or declaring a prelude name is a warning.** The list is above, under the naming
 rules. Silently shadowing a builtin would put everything that depends on it quietly back to
@@ -672,9 +713,16 @@ yet, so that bill has not arrived.
   it is not a rule anyone should have to know. One concrete symptom: `with H { } { ... }`,
   a handler with no state, cannot be parsed at all. Better ideas welcome.
 - Statement separation relies on no statement being able to start with `(`, `-`, `[` or `.`.
-  That holds today and nothing enforces it. Either the grammar should guarantee it or
-  statements need a real terminator.
-- Generics: how much is needed before P2 breaks. Higher-kinded types are almost certainly out.
+  List literals made `[` a real case rather than a hypothetical one, and it still holds only
+  because there is no indexing operator. That is a coincidence, not a rule. Either the
+  grammar should guarantee it or statements need a real terminator.
+- Iteration. Recursion is the only way to walk a list, so every walk declares `Diverge`. A
+  `for` loop wants an accumulator, an accumulator wants mutation or a fold, and mutation is
+  supposed to be handler state and nothing else. Whichever way that goes is a statement about
+  the central claim of the language rather than a piece of syntax.
+- Generics: how much is needed before P2 breaks. `Result` and `List` are both built in
+  because there is no way to declare one, and a third would be the point where the shortcut
+  has clearly stopped paying. Higher-kinded types are almost certainly out.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
