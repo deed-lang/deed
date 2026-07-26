@@ -636,6 +636,62 @@ fn with_tells_a_handler_literal_from_the_body_block() {
 }
 
 #[test]
+fn with_tells_an_empty_handler_literal_from_the_body_block() {
+    // A record is allowed to have no fields, so a literal is allowed to have
+    // none either, and the rule that looks for `name:` cannot see one because
+    // there is no name to look at. `{ } {` decides it: an empty block is the
+    // value `()` and nothing in this language puts a block straight after a
+    // value.
+    let stmts = body_of(
+        "with Quiet { }\n\
+         {\n\
+         \x20   let x = 1\n\
+         }",
+    );
+    let Stmt::Expr(Expr::With { handlers, body, .. }) = &stmts[0] else {
+        panic!("expected a with, got {:?}", stmts[0]);
+    };
+    assert_eq!(handlers.len(), 1);
+    assert!(matches!(handlers[0], Expr::StructLit { .. }));
+    assert_eq!(body.stmts.len(), 1);
+}
+
+#[test]
+fn a_handler_with_no_state_still_needs_no_braces() {
+    // The spelling everything in the repository uses, and the one that has to
+    // keep working: a brace with statements behind it is the body.
+    let stmts = body_of(
+        "with Quiet {\n\
+         \x20   let x = 1\n\
+         }",
+    );
+    let Stmt::Expr(Expr::With { handlers, body, .. }) = &stmts[0] else {
+        panic!("expected a with, got {:?}", stmts[0]);
+    };
+    assert_eq!(handlers.len(), 1);
+    assert!(matches!(handlers[0], Expr::Ident(_)));
+    assert_eq!(body.stmts.len(), 1);
+}
+
+#[test]
+fn a_for_accumulator_can_start_as_an_empty_record() {
+    let stmts = body_of("for n in ns with seen = Empty { } {\n  seen\n}");
+    let Stmt::Expr(Expr::For {
+        accumulator, body, ..
+    }) = &stmts[0]
+    else {
+        panic!("expected a for, got {:?}", stmts[0]);
+    };
+    let accumulator = accumulator.as_ref().expect("an accumulator");
+    assert!(
+        matches!(&*accumulator.init, Expr::StructLit { .. }),
+        "{:?}",
+        accumulator.init
+    );
+    assert_eq!(body.stmts.len(), 0);
+}
+
+#[test]
 fn a_trailing_expression_is_the_block_value() {
     let parsed = parse_ok("module a\n\nfn f() -> Int {\n  let x = 1\n  x + 1\n}\n");
     let Item::Function(function) = &parsed.module.items[0] else {

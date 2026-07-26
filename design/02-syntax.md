@@ -1067,10 +1067,13 @@ using an effect to get around not having a loop.
 - Capitalisation carrying meaning in patterns is a wart, even though it earns its place.
   Explicit variant syntax would avoid it and would cost more to write everywhere else.
 - The `with` handler list is disambiguated by a lookahead hack: a brace opens a struct
-  literal only when followed by `name:`, which is what separates `with H { a: 1 }, Other`
-  from the block that follows the handler list. It works for everything written so far and
-  it is not a rule anyone should have to know. One concrete symptom: `with H { } { ... }`,
-  a handler with no state, cannot be parsed at all. Better ideas welcome.
+  literal when followed by `name:`, which is what separates `with H { a: 1 }, Other` from the
+  block that follows the handler list, or when it is `{ }` with a block behind it, which is
+  the only way a record with no fields can be written there. The second half was added after
+  the first turned out not to cover `with H { } { .. }` or a `for` whose accumulator starts
+  as an empty record: a literal with no fields has no name to look at. It works for
+  everything written so far and it is still not a rule anyone should have to know. Better
+  ideas welcome.
 - Statement separation relies on no statement being able to start with `(`, `-`, `[` or `.`.
   List literals made `[` a real case rather than a hypothetical one, and it still holds only
   because there is no indexing operator. That is a coincidence, not a rule. Either the

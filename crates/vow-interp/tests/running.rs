@@ -518,6 +518,40 @@ fn a_handler_missing_an_initial_value_says_which() {
     assert!(render_human(&sources, &failure).contains("initial value for `limit`"));
 }
 
+#[test]
+fn a_handler_with_no_state_can_be_installed_either_way() {
+    // `with Quiet { }` used to be unparseable, because the rule that tells a
+    // handler literal from the block after it looks for `name:` and there is
+    // no name in an empty one. Both spellings run now, and they are the same
+    // handler.
+    expect_pass(
+        "module a\n\n\
+         effect Counter {\n\
+         \x20 fn value() -> Int\n\
+         \x20 fn bump(by: Int) -> ()\n\
+         }\n\n\
+         handler Frozen implements Counter {\n\
+         \x20 fn value() -> Int { 0 }\n\
+         \x20 fn bump(by) -> () { () }\n\
+         }\n\n\
+         fn counted() -> Int\n\
+         \x20 uses Counter.value,\n\
+         {\n\
+         \x20 Counter.value()\n\
+         }\n\n\
+         test \"no braces\" {\n\
+         \x20 with Frozen {\n\
+         \x20   assert counted() == 0\n\
+         \x20 }\n\
+         }\n\n\
+         test \"empty braces\" {\n\
+         \x20 with Frozen { } {\n\
+         \x20   assert counted() == 0\n\
+         \x20 }\n\
+         }\n",
+    );
+}
+
 // -- contracts -------------------------------------------------------------
 
 #[test]
