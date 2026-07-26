@@ -285,6 +285,16 @@ is three tests of the same claim now, and the third was the one meant to break i
 can say `clear`, and the function that does the deleting declares `uses Io.remove` and
 nothing else, so it cannot read the file it is about to delete.
 
+`Io.make` is the fourth test and the one that looks like it breaks the rule that authority
+only ever shrinks. It hands back a `Dir`, and a `Dir` is authority, so this document said for
+a while that creating a directory was authority being made rather than narrowed. That was
+wrong. A `Dir` reaches everything under its root and which of those paths happen to exist is
+not part of what it grants, which is why `Io.save` writing a file that was not there is not
+authority creation either. What `Io.make` returns is rooted inside what it was given, so it
+reaches strictly less, and there is a test that makes a directory and then fails to climb out
+of the result. Nothing may already be at the name: "I made it" and "it was already there" are
+different answers.
+
 `proven.vow` is the one that argues with itself. Every function in it either proves its
 postcondition or explains, in a comment, why the checker cannot, and the file is written so
 that the two halves sit next to each other. The `Proven` tier used to hold constant

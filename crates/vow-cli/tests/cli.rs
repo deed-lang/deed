@@ -609,6 +609,13 @@ fn the_journal_example_writes_a_file_and_cannot_write_outside_the_directory() {
     assert!(text.contains("no way out of a `Dir`"), "{text}");
     assert!(!text.contains("which is a bug"), "{text}");
 
+    // Making a directory hands back authority over somewhere the caller could
+    // already reach, and what comes back is narrower rather than wider: `..`
+    // out of the new one is refused by the same check that refuses it out of
+    // the old one.
+    assert!(text.contains("made a shelf, and"), "{text}");
+    assert!(scratch.path().join("shelf").is_dir(), "{text}");
+
     let written = std::fs::read_to_string(scratch.path().join("journal.txt")).unwrap();
     assert_eq!(written, "wrote a file for the first time");
 
@@ -620,6 +627,14 @@ fn the_journal_example_writes_a_file_and_cannot_write_outside_the_directory() {
     assert_eq!(
         written,
         "wrote a file for the first time\nwrote a file for the first time"
+    );
+
+    // And the shelf is still there rather than made again. "I made it" and "it
+    // was already there" are different answers.
+    assert!(
+        stdout(&output).contains("`shelf` is already there"),
+        "{}",
+        stdout(&output)
     );
 
     // Nothing landed beside the directory it was given.

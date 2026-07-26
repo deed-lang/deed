@@ -127,7 +127,7 @@ given and no string it could build that would get it back out.
 That holds because narrowing is the only operation. `Io.open` goes down, nothing goes up,
 and a `Dir` carries a canonical path the program can neither read nor compare.
 
-### Reading, writing, listing and deleting are different authorities over the same capability
+### Reading, writing, listing, deleting and making are different authorities over the same capability
 `Io.save(files, name, contents)` writes a file, and it takes the same `Dir` `Io.read` does.
 What separates them is not the type but the row: a function that declares `uses Io.read` and
 is handed `sys.files` cannot write to it, because performing an operation it did not declare
@@ -175,6 +175,24 @@ different answers and a program that cannot tell them apart has a bug waiting. I
 through the same name check as everything else, so a symlink pointing out of the directory is
 refused rather than followed out of it.
 
+`Io.make(files, name)` is the fifth, and it is the one that looks like it breaks the rule
+above. It hands back a `Dir`, and a `Dir` is authority, so it reads like authority being made
+rather than narrowed. This document said exactly that for as long as the operation was
+missing, and it was wrong.
+
+Work out what a caller holds. A `Dir` reaches everything under its root, and which of those
+paths happen to exist is not part of what it grants: `Io.save` already writes files that were
+not there a moment ago and nobody calls that authority creation. `Io.make(files, "notes")`
+hands back a `Dir` rooted at `<root>/notes`, which is inside the one that went in. The set of
+reachable paths did not grow; the set of things that exist inside a place the caller could
+already reach did. Narrowing is still the only operation, and there is a test that makes a
+directory and then fails to climb out of the result.
+
+Nothing may already be at the name, file or directory. "I made it" and "it was already
+there" are different answers, which is the same reason a missing file is an error for
+removing. It is not recursive and there is no "make it if it is not there", because both hide
+which of the two answers you got.
+
 By that argument `Io.save` and `Io.write` should be one name, since writing to a console and
 writing to a file are the same kind of operation on different resources. They are two names
 because a signature is one list of types per name and there is no overloading. That is a
@@ -213,8 +231,8 @@ means two different things on two platforms is not something to hand to a securi
 `err` naming the rule it hit. That is deliberate: the name usually comes from data, and a
 path that arrived in a request is not a bug in the program that received it. It does mean a
 program can write `Io.read(files, "..")` and get a runtime answer to a question that could
-have been settled earlier, which is a real cost and the alternative was worse. `Io.save`
-answers the same way, for the same reason.
+have been settled earlier, which is a real cost and the alternative was worse. `Io.save`,
+`Io.remove` and `Io.make` answer the same way, for the same reason.
 
 The error being a `String` is a placeholder. A real `IoError` in the prelude is its own
 argument about how much of the P2 budget capabilities get to spend.
@@ -225,12 +243,9 @@ argument about how much of the P2 budget capabilities get to spend.
 write is a function that did not declare `Io.save`, and that is a row rather than a type. It
 starts to matter the moment a row can be a wildcard, and `sys.*` already is one.
 
-Creating a directory is not there. It is not destructive and it is not the same question:
-what it hands back is a `Dir` that did not exist a moment ago, which is authority being made
-rather than narrowed, and that is the first thing in this document that would go the other
-way. Recursive listing is not there either, and does not need to be: it is a third amount of
-authority that a caller can build out of `Io.list` and `Io.open` if it declares both, which
-is the model working.
+Recursive listing is not there, and does not need to be: it is a third amount of authority
+that a caller can build out of `Io.list` and `Io.open` if it declares both, which is the
+model working.
 
 `examples/journal.vow` is the file to argue with. It reads a journal, appends a line and
 saves it, and everything it is refused is refused in front of you.
