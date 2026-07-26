@@ -518,6 +518,120 @@ fn a_file_with_no_main_is_not_runnable() {
     assert!(run_main(&program_of(&checked), checked.file, nowhere(), &[]).is_none());
 }
 
+// -- listing, which is not reading -------------------------------------------
+
+#[test]
+fn listing_needs_its_own_entry_in_the_row() {
+    // The claim `design/04-capabilities.md` makes, tested at the first place
+    // it can be. Holding a `Dir` and declaring `Io.read` means you may read
+    // the file somebody told you about. Finding out what is there is strictly
+    // more, and the row is what separates them.
+    let (sources, checked) = check(
+        "module a\n\n\
+         fn sneak(files: Dir) -> Int\n\
+         \x20 uses Io.read,\n\
+         {\n\
+         \x20 match Io.list(files) {\n\
+         \x20   ok(found) => length(found),\n\
+         \x20   err(why) => 0,\n\
+         \x20 }\n\
+         }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("performs `Io.list` without declaring it"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_program_that_declares_it_can_see_what_is_there() {
+    let scratch = Scratch::new("list");
+    scratch.write("one.txt", "1");
+    scratch.write("two.txt", "2");
+
+    let (_, run) = run_in(
+        "module a\n\n\
+         fn main(sys: System) -> Int\n\
+         \x20 uses Io.list, Io.write,\n\
+         {\n\
+         \x20 match Io.list(sys.files) {\n\
+         \x20   ok(names) => Io.write(sys.console, join(names, \",\")),\n\
+         \x20   err(why) => Io.write(sys.console, why),\n\
+         \x20 }\n\
+         \x20 0\n\
+         }\n",
+        scratch.path(),
+    );
+
+    // Sorted, because a caller that depends on the order the filesystem felt
+    // like today is a caller with a bug that appears on somebody else's
+    // machine.
+    assert_eq!(run.output, vec!["one.txt,two.txt".to_string()]);
+}
+
+#[test]
+fn listing_sees_only_what_is_directly_in_the_directory() {
+    // Files only. A list holding two kinds of thing with no way to tell them
+    // apart is the sort of thing that turns into a bug in the caller, and
+    // `Io.open` already needs a name from somewhere.
+    let scratch = Scratch::new("list-nested");
+    scratch.write("top.txt", "1");
+    std::fs::create_dir_all(scratch.path().join("inner")).unwrap();
+    std::fs::write(scratch.path().join("inner").join("deep.txt"), "2").unwrap();
+
+    let (_, run) = run_in(
+        "module a\n\n\
+         fn main(sys: System) -> Int\n\
+         \x20 uses Io.list, Io.write,\n\
+         {\n\
+         \x20 match Io.list(sys.files) {\n\
+         \x20   ok(names) => Io.write(sys.console, join(names, \",\")),\n\
+         \x20   err(why) => Io.write(sys.console, why),\n\
+         \x20 }\n\
+         \x20 0\n\
+         }\n",
+        scratch.path(),
+    );
+
+    assert_eq!(run.output, vec!["top.txt".to_string()]);
+}
+
+#[test]
+fn listing_a_narrowed_directory_sees_only_that_one() {
+    // `Io.open` narrows, and listing the result sees inside the narrower one
+    // and nothing above it. Authority only ever shrinks on the way down, and
+    // enumerating does not go back up.
+    let scratch = Scratch::new("list-narrowed");
+    scratch.write("outside.txt", "1");
+    std::fs::create_dir_all(scratch.path().join("inner")).unwrap();
+    std::fs::write(scratch.path().join("inner").join("deep.txt"), "2").unwrap();
+
+    let (_, run) = run_in(
+        "module a\n\n\
+         fn main(sys: System) -> Int\n\
+         \x20 uses Io.open, Io.list, Io.write,\n\
+         {\n\
+         \x20 match Io.open(sys.files, \"inner\") {\n\
+         \x20   ok(inner) => show(sys.console, inner),\n\
+         \x20   err(why) => Io.write(sys.console, why),\n\
+         \x20 }\n\
+         \x20 0\n\
+         }\n\n\
+         fn show(out: Console, files: Dir) -> ()\n\
+         \x20 uses Io.list, Io.write,\n\
+         {\n\
+         \x20 match Io.list(files) {\n\
+         \x20   ok(names) => Io.write(out, join(names, \",\")),\n\
+         \x20   err(why) => Io.write(out, why),\n\
+         \x20 }\n\
+         }\n",
+        scratch.path(),
+    );
+
+    assert_eq!(run.output, vec!["deep.txt".to_string()]);
+}
+
 /// A scratch directory, named so parallel tests do not collide.
 struct Scratch(PathBuf);
 
