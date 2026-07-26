@@ -138,17 +138,25 @@ expression turned out to be, `Resolutions` can say where a name was declared, an
 formatter has one canonical answer with no options. It publishes diagnostics as you type,
 says the type of whatever is under the cursor, jumps to a declaration, and formats a file.
 
-What it does not do is check a project. One file at a time, on its own, so a `use` of another
-module reports that there is nothing behind it. That is honest rather than convenient: the
-unit of compilation is the set of files handed to the compiler, and the server has been
-handed one. It also rechecks the whole file on every keystroke, which is fine at this size
-and is the thing that will stop being fine first.
+It checks a document together with every other `.vow` file in the folders the editor said it
+has open, and an open file's text comes from the buffer rather than from disk, so removing an
+export in one file puts a squiggle on the import in another before either is saved. The set
+of files is the workspace rather than a guess: `initialize` carries it, and taking what the
+editor says is the same answer `vow check src/` gives when a person says which directory they
+mean. An editor that names no folder gets the single file behaviour. That was the only
+behaviour until recently, and it meant every file with a `use` in it had a red line under the
+import, which is exactly the failure a server is not allowed to have.
+
+It rechecks the whole workspace on every keystroke and on every hover. That is fine at this
+size and is the thing that will stop being fine first, which is what P9 is about and what
+nothing has measured yet.
 
 It has no dependencies either. The protocol is a `Content-Length` header, a blank line and a
-handful of object shapes, so the JSON reader and the framing are written out. The part worth
-reading is the position conversion: the protocol counts UTF-16 code units and the compiler
-counts bytes, which agree for ASCII and stop agreeing the moment somebody writes a comment in
-Turkish.
+handful of object shapes, so the JSON reader and the framing are written out. Two parts are
+worth reading. Positions: the protocol counts UTF-16 code units and the compiler counts
+bytes, which agree for ASCII and stop agreeing the moment somebody writes a comment in
+Turkish. And URIs: a space arrives as `%20`, a Windows drive as `/c%3A/`, and a Turkish
+letter as two escapes that are bytes rather than characters. Getting either wrong is silent.
 
 The examples are [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),

@@ -36,6 +36,8 @@ pub mod json;
 pub mod position;
 pub mod protocol;
 mod server;
+pub mod uri;
+pub mod workspace;
 
 use std::io::{BufRead, Write};
 
