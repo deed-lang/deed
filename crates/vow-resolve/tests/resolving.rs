@@ -479,6 +479,31 @@ fn a_leading_underscore_says_it_was_meant() {
     assert!(resolved.diagnostics.is_empty());
 }
 
+/// A guess, and about intent rather than spelling: the other answer is that
+/// something was supposed to read this and reads the wrong thing instead.
+#[test]
+fn the_underscore_is_offered_as_a_fix_and_never_applied() {
+    let (_, _, resolved) = resolve_source("module a\n\nfn f() -> Int {\n  let spare = 1\n  2\n}\n");
+    let fix = resolved.diagnostics[0]
+        .fix
+        .as_ref()
+        .expect("the warning should carry a fix");
+    assert_eq!(
+        fix.applicability,
+        vow_diagnostics::Applicability::MaybeIncorrect
+    );
+    assert_eq!(fix.edits.len(), 1);
+    assert_eq!(fix.edits[0].replacement, "_spare");
+    assert_eq!(
+        span_of(
+            "module a\n\nfn f() -> Int {\n  let spare = 1\n  2\n}\n",
+            "spare",
+            0
+        ),
+        fix.edits[0].span
+    );
+}
+
 #[test]
 fn a_binding_read_once_is_read() {
     let (_, _, resolved) = resolve_source("module a\n\nfn f() -> Int {\n  let n = 1\n  n\n}\n");

@@ -884,6 +884,37 @@ fn a_statement_that_produces_a_value_says_nobody_reads_it() {
     assert!(text.contains("write `let _ = ...`"), "{text}");
 }
 
+/// The first fix the type checker has ever carried. A type that does not fit
+/// has no obvious repair, which is why there were none; this one has exactly
+/// one mechanical answer and it is still a guess, because the other way to
+/// arrive here is a value that was supposed to be read.
+#[test]
+fn saying_you_meant_it_is_offered_as_a_fix_and_never_applied() {
+    let source = "module a\n\n\
+         fn twice(n: Int) -> Int { n + n }\n\n\
+         fn f(n: Int) -> Int {\n\
+         \x20 twice(n)\n\
+         \x20 n\n\
+         }\n";
+    let (_, checked) = check_source(source);
+    let fix = checked.diagnostics[0]
+        .fix
+        .as_ref()
+        .expect("the warning should carry a fix");
+    assert_eq!(
+        fix.applicability,
+        vow_diagnostics::Applicability::MaybeIncorrect
+    );
+    assert_eq!(fix.edits.len(), 1);
+    assert_eq!(fix.edits[0].replacement, "let _ = ");
+    // An insertion, so the span has no width and takes nothing out.
+    assert_eq!(fix.edits[0].span.start, fix.edits[0].span.end);
+    assert_eq!(
+        fix.edits[0].span.start as usize,
+        source.rfind("twice(n)").expect("the statement is in there")
+    );
+}
+
 #[test]
 fn a_line_that_was_meant_to_continue_the_one_above_says_so() {
     // The reason this is worth having. `let a = 1` with `- 2` under it is two

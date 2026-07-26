@@ -672,6 +672,48 @@ fn a_certain_fix_is_preferred_and_a_guess_is_not() {
     assert_eq!(certain.at(&["isPreferred"]), Some(&Json::Bool(true)));
 }
 
+/// The two warnings about something going nowhere both carry a guess, and a
+/// guess used to have no consumer at all. This is the one it has.
+#[test]
+fn a_warning_about_something_going_nowhere_offers_a_way_to_mean_it() {
+    let source = "module a\n\nfn twice(n: Int) -> Int {\n    n + n\n}\n\nfn f(n: Int) -> Int {\n    let spare = 1\n    twice(n)\n    n\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // `let spare = 1` on line 7, `twice(n)` on line 8.
+        code_action(2, URI, 7, 9),
+        code_action(3, URI, 8, 6),
+    ]);
+
+    let unused = actions(&sent[2]);
+    assert_eq!(unused.len(), 1, "{:?}", sent[2]);
+    assert_eq!(
+        unused[0].at(&["title"]).and_then(Json::as_str),
+        Some("call it `_spare`")
+    );
+    assert_eq!(unused[0].at(&["isPreferred"]), Some(&Json::Bool(false)));
+
+    let discarded = actions(&sent[3]);
+    assert_eq!(discarded.len(), 1, "{:?}", sent[3]);
+    assert_eq!(
+        discarded[0].at(&["title"]).and_then(Json::as_str),
+        Some("say the value is being dropped")
+    );
+    let edits = discarded[0]
+        .at(&["edit", "changes", URI])
+        .and_then(Json::as_array)
+        .unwrap();
+    assert_eq!(
+        edits[0].at(&["newText"]).and_then(Json::as_str),
+        Some("let _ = ")
+    );
+    // An insertion, so the range has no width.
+    assert_eq!(
+        edits[0].at(&["range", "start"]),
+        edits[0].at(&["range", "end"])
+    );
+}
+
 #[test]
 fn a_diagnostic_with_no_patch_offers_nothing() {
     // `BAD` returns an `Int` from a function declared to return a `String`.

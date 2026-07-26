@@ -645,6 +645,14 @@ behind the blank that used to sit beside them, so the file ends up with a gap th
 separates anything. Rewriting the block once has neither problem, and what it writes is what
 `vow fmt` would have.
 
+The two warnings about something going nowhere carry a guess each, and a guess is what the
+editor is for. `VOW3009` offers `_spare`, `VOW4026` offers `let _ = ` in front of the line,
+and neither is ever applied in bulk, because the other way to arrive at either one is a value
+that was supposed to be read and papering over that is the single thing they must not do.
+`VOW4026` is also the first fix the type checker has ever carried. A type that does not fit
+has no obvious repair, which is why there were none, and this one has exactly one mechanical
+answer that is still not certain to be what was meant.
+
 `vow check --timings` is the same move for P9, which said check latency is budgeted and had
 never been measured. The guard is not a wall clock budget, since a test that fails on a busy
 machine is a test people learn to rerun. It is the shape of the curve: ten times the input

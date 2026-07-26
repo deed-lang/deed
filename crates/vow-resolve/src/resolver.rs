@@ -632,7 +632,18 @@ impl Resolver<'_> {
                 .with_primary_label("this name is never used")
                 .with_note(format!(
                     "a name cannot be shadowed, so this one is read nowhere; write `_{name}` if the value is meant to be dropped"
-                )),
+                ))
+                // A guess, and the guess is about intent rather than about
+                // spelling. The other answer is that something was supposed to
+                // read this and reads the wrong thing instead, which is a bug
+                // that renaming would bury. So an editor offers it and
+                // `vow fix` leaves it alone.
+                .with_fix(
+                    format!("call it `_{name}`"),
+                    span,
+                    format!("_{name}"),
+                    Applicability::MaybeIncorrect,
+                ),
             );
         }
     }

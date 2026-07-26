@@ -17,9 +17,11 @@
 //! [`crate::imports`] is the same shape one pass earlier: the resolver knows
 //! which import is unused and nothing about the comma beside it.
 //!
-//! The type checker still has none. There is no obvious repair for a type that
-//! does not fit, which is the difference between a fix that is missing and a
-//! fix that is not there to be had.
+//! The type checker has one, and only one. There is no obvious repair for a
+//! type that does not fit, which is the difference between a fix that is
+//! missing and a fix that is not there to be had. `VOW4026` is the exception:
+//! a statement whose value nobody reads has exactly one mechanical answer,
+//! which is to say out loud that it is being dropped.
 //!
 //! Only [`Applicability::MachineApplicable`] fixes are applied. There is no
 //! flag to apply the others, because a fix that is a guess is a fix a person
@@ -27,7 +29,10 @@
 //! once and then forgets about. Where a person looks at one is the editor:
 //! `vow-lsp` offers every fix as a quick fix and marks the certain ones
 //! preferred, which is the same distinction spelled the way an editor reads
-//! it.
+//! it. The two warnings about something going nowhere, `VOW3009` and
+//! `VOW4026`, are guesses for the same reason as each other: the other way to
+//! arrive at either is a value that was supposed to be read, and papering over
+//! that in bulk is the one thing they must not do.
 
 use vow_diagnostics::{Applicability, Diagnostic, SourceMap, Span, SuggestedEdit};
 

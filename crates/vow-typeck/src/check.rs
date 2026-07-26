@@ -21,7 +21,7 @@ use vow_ast::{
     Accumulator, BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item,
     MatchArm, Module, Outcome, Pattern, Stmt, Type, TypeAlias, UnaryOp,
 };
-use vow_diagnostics::{Diagnostic, FileId, Span};
+use vow_diagnostics::{Applicability, Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions, RowLowering};
 
 use crate::codes;
@@ -2368,7 +2368,20 @@ impl<'a> Checker<'a> {
                 format!("this produces {found} and nothing reads it"),
             )
             .with_primary_label("the value goes nowhere")
-            .with_note(advice),
+            .with_note(advice)
+            // The first fix the type checker has ever carried, and it is not
+            // the shape the others are. A type that does not fit has no
+            // obvious repair, which is why there were none. This one has
+            // exactly one mechanical answer, and it is still a guess, because
+            // the other way to arrive here is a value that was supposed to be
+            // read and `let _ =` would bury that. An editor offers it and
+            // `vow fix` leaves it alone.
+            .with_fix(
+                "say the value is being dropped",
+                Span::new(expr.span().start, expr.span().start),
+                "let _ = ",
+                Applicability::MaybeIncorrect,
+            ),
         );
     }
 
