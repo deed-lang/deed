@@ -31,7 +31,7 @@
 //!
 //! // Nothing here hands a function around, so no value owes a row. The type
 //! // checker is what works out which ones do.
-//! let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashMap::new());
+//! let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashMap::new(), &HashMap::new());
 //!
 //! assert!(!analysis.has_errors());
 //! ```

@@ -40,3 +40,17 @@ pub const EFFECT_NOT_IMPORTED: &str = "VOW5006";
 /// off cannot mean "any row": a value that carried an unstated effect through
 /// a signature would undo the point of having rows at all.
 pub const IMPURE_FUNCTION_VALUE: &str = "VOW5007";
+
+/// A row variable written somewhere a call site could not fill it in.
+///
+/// A row variable stands for whatever a callback performs, and the only thing
+/// that knows what that was is the call that supplied the callback. So it has
+/// to be readable off an argument: the row of a parameter whose type is a
+/// function type, and the declaration's own `uses` clause. Written anywhere
+/// else, such as a return type, it leaves the call site holding a value whose
+/// row names something no caller has a word for, and an effect nobody can name
+/// is an effect nobody declares.
+///
+/// The same shape as VOW4023, where a type parameter has to appear in a
+/// parameter's type so that every call knows what it is.
+pub const MISPLACED_ROW_VARIABLE: &str = "VOW5008";

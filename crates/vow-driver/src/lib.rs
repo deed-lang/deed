@@ -305,6 +305,7 @@ fn check_parsed(
         &module,
         &resolved.resolutions,
         checked.types.row_required(),
+        &checked.types.function_rows(),
     );
     timings.effects = start.elapsed();
 

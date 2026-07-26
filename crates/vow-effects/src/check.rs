@@ -69,11 +69,16 @@ impl Effects {
 /// function value cross into a function type, which effects that type left
 /// room for. Deciding which values owe a row needs types and settling whether
 /// one is kept needs rows, so the two passes each answer the half they can.
+///
+/// `function_rows` is the same handoff the other way round: for each expression
+/// whose type is a function type with a row, what calling it performs. A row is
+/// part of a type, so the pass that works out types is the one that knows.
 pub fn analyse(
     file: FileId,
     module: &Module,
     resolutions: &Resolutions,
     row_required: &HashMap<Span, Vec<RowEntry>>,
+    function_rows: &HashMap<Span, Vec<RowEntry>>,
 ) -> Analysis {
     let mut checker = Checker {
         file,
@@ -89,6 +94,7 @@ pub fn analyse(
         declared_sites: HashMap::new(),
         recursive: HashSet::new(),
         row_required: row_required.clone(),
+        function_rows: function_rows.clone(),
         checked_rows: HashSet::new(),
         row_from: HashMap::new(),
         closure_rows: HashMap::new(),
@@ -124,6 +130,14 @@ struct Checker<'a> {
     /// What each expression handing over a function value is allowed to
     /// perform, as the type it is crossing into wrote it.
     row_required: HashMap<Span, Vec<RowEntry>>,
+    /// What calling the function value at each span performs, as its own type
+    /// wrote it.
+    ///
+    /// The answer for every function value that did not come from a closure
+    /// written on the spot. Deriving it from the shape of the expression
+    /// instead used to leave four routes out, and each of those routes was a
+    /// function that performed an effect and declared nothing.
+    function_rows: HashMap<Span, Vec<RowEntry>>,
     /// Expressions already complained about, so that walking one twice does
     /// not say the same thing twice.
     ///
@@ -187,6 +201,7 @@ impl<'a> Checker<'a> {
                     }
                 }
                 Item::Function(function) => {
+                    self.check_row_variables(&function.sig);
                     let Some(def) = self.resolutions.resolution(function.sig.name.span) else {
                         continue;
                     };
@@ -203,6 +218,58 @@ impl<'a> Checker<'a> {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Checks that every row variable is somewhere a call site can fill in.
+    ///
+    /// The legal positions are the row of a parameter whose type is a function
+    /// type, and the declaration's own `uses` clause. Both are readable from
+    /// the call: the first is the argument, the second is what the call is
+    /// charged with. Everywhere else, the variable arrives at a caller standing
+    /// for something the caller has no way to name, so it would be dropped, and
+    /// a dropped entry in a row is an effect that happens and is not declared.
+    ///
+    /// This is what `row_sources` has always assumed. Saying it out loud turns
+    /// an assumption the code relies on into a rule a reader can check against.
+    fn check_row_variables(&mut self, sig: &vow_ast::FnSig) {
+        if sig.rows.is_empty() {
+            return;
+        }
+        let names: Vec<&str> = sig.rows.iter().map(|row| row.name.as_str()).collect();
+
+        let mut misplaced = Vec::new();
+        for param in &sig.params {
+            // The row of the parameter's own function type is the one place a
+            // variable belongs, so it is skipped and everything under it is not.
+            match &param.ty {
+                Some(Type::Fn { params, ret, .. }) => {
+                    for nested in params {
+                        find_row_variables(nested, &names, &mut misplaced);
+                    }
+                    find_row_variables(ret, &names, &mut misplaced);
+                }
+                Some(ty) => find_row_variables(ty, &names, &mut misplaced),
+                None => {}
+            }
+        }
+        if let Some(ret) = &sig.ret {
+            find_row_variables(ret, &names, &mut misplaced);
+        }
+
+        for (name, span) in misplaced {
+            self.emit(
+                Diagnostic::error(
+                    codes::MISPLACED_ROW_VARIABLE,
+                    self.file,
+                    span,
+                    format!("`{name}` is a row variable, and this is not a place a caller could work out what it stands for"),
+                )
+                .with_primary_label("nothing at the call site says what this is")
+                .with_note(
+                    "a row variable stands for whatever a callback performs, so it belongs in the row of a parameter that is one, and in the `uses` clause; written anywhere else it reaches a caller as an effect that caller has no name for",
+                ),
+            );
         }
     }
 
@@ -792,21 +859,41 @@ impl<'a> Checker<'a> {
         row
     }
 
+    /// The row of the function value at `span`, as its type wrote it.
+    ///
+    /// A row variable is dropped, because it names nothing here: what it stood
+    /// for is decided at the call that supplied it, and a value carrying one
+    /// out of that call is refused where it is declared. See
+    /// [`Checker::check_row_variables`].
+    fn row_from_type(&mut self, span: Span) -> Row {
+        let Some(entries) = self.function_rows.get(&span).cloned() else {
+            return Row::new();
+        };
+        entries
+            .iter()
+            .filter_map(|entry| self.item_for(entry))
+            .collect()
+    }
+
     /// The row of a function value.
     ///
-    /// Two shapes make a function value: a closure written on the spot and a
-    /// function named directly. Everything else is one of those arriving from
-    /// somewhere, and every route one can take was checked where it started. A
-    /// `let` is remembered below, and a parameter, a return type and a field
-    /// are `Fn(..)` themselves, so they were checked at whatever handed them
-    /// over. An expression that is neither shape performs nothing, and that is
-    /// a conclusion rather than a guess.
+    /// A closure written on the spot is the one shape whose row is not in its
+    /// type: the type checker records it as fitting anywhere and leaves working
+    /// out what it does to this pass. Everything else has a row because it has
+    /// a type, and reading it off the type is the whole answer.
+    ///
+    /// This used to match on the shape of the expression and return an empty
+    /// row for anything it did not recognise. An empty row means "performs
+    /// nothing", so the shapes it did not recognise were a function that came
+    /// back from a call, a branch of an `if`, an element of a list and a field
+    /// of a record, each of which could perform an effect through a caller that
+    /// declared none.
     fn function_value_row(&mut self, expr: &Expr) -> Row {
         match expr {
             Expr::Closure { body, .. } => self.infer_expr(body),
             Expr::Ident(ident) => {
                 let Some(def) = self.resolutions.resolution(ident.span) else {
-                    return Row::new();
+                    return self.row_from_type(expr.span());
                 };
                 match self.kind_of(def) {
                     DefKind::Function => {
@@ -822,10 +909,16 @@ impl<'a> Checker<'a> {
                         let entries = export.row.clone();
                         self.translate(&entries, ident.span)
                     }
-                    _ => self.closure_rows.get(&def).cloned().unwrap_or_default(),
+                    // A local bound to a closure has a row this pass worked
+                    // out and the type checker did not. Anything else gets the
+                    // same answer as every other expression.
+                    _ => match self.closure_rows.get(&def).cloned() {
+                        Some(row) => row,
+                        None => self.row_from_type(expr.span()),
+                    },
                 }
             }
-            _ => Row::new(),
+            _ => self.row_from_type(expr.span()),
         }
     }
 
@@ -900,7 +993,13 @@ impl<'a> Checker<'a> {
             Expr::Ident(ident) => self.resolutions.resolution(ident.span),
             Expr::Field { name, .. } => self.resolutions.resolution(name.span),
             _ => None,
-        }?;
+        };
+        // Not a name at all, so there is no declaration to read and the type is
+        // the only thing that knows. `pass(logs)(n)` is this shape.
+        let Some(def) = def else {
+            let row = self.row_from_type(callee.span());
+            return (!row.is_empty()).then_some(row);
+        };
 
         match self.kind_of(def) {
             DefKind::EffectOp => {
@@ -961,9 +1060,16 @@ impl<'a> Checker<'a> {
                 Some(self.fill_row(translated, &sources, args))
             }
             // A name bound to a function value: a parameter whose type wrote a
-            // row, or a local bound to a closure. Calling it performs what it
-            // said it would.
-            DefKind::Param | DefKind::Local => self.closure_rows.get(&def).cloned(),
+            // row, a local bound to a closure, or anything else the type
+            // checker gave a function type. Calling it performs what it said it
+            // would.
+            DefKind::Param | DefKind::Local => match self.closure_rows.get(&def).cloned() {
+                Some(row) => Some(row),
+                None => {
+                    let row = self.row_from_type(callee.span());
+                    (!row.is_empty()).then_some(row)
+                }
+            },
             _ => None,
         }
     }
@@ -1112,5 +1218,37 @@ impl<'a> Checker<'a> {
                 && self.is_imported_effect(id))
             .then_some(id)
         })
+    }
+}
+
+/// Every mention of one of `names` in a row anywhere inside `ty`.
+///
+/// Syntax alone. A row variable is a name in a `uses` list and nothing else
+/// gives it away, so nothing has to be resolved first and this can run during
+/// collection, before anything has been checked.
+fn find_row_variables(ty: &Type, names: &[&str], found: &mut Vec<(String, Span)>) {
+    match ty {
+        Type::Named { args, .. } => {
+            for arg in args {
+                find_row_variables(arg, names, found);
+            }
+        }
+        Type::Fn {
+            params, row, ret, ..
+        } => {
+            for entry in row {
+                if entry.operation.is_none()
+                    && !entry.all
+                    && names.contains(&entry.effect.name.as_str())
+                {
+                    found.push((entry.effect.name.clone(), entry.span));
+                }
+            }
+            for param in params {
+                find_row_variables(param, names, found);
+            }
+            find_row_variables(ret, names, found);
+        }
+        Type::Unit(_) | Type::Error(_) => {}
     }
 }

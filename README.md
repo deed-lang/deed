@@ -370,6 +370,27 @@ contract says `uses r`, and the same two rules that check every other function c
 one. Which is why a variable that reaches no parameter was already an error before anything
 was written for it, since nothing can fill it, so nothing performs it, so the row is too wide.
 
+Looking at that machinery again turned up a hole that had been open the whole time. The
+pass worked out a function value's row by matching on the shape of the expression: it knew a
+closure written on the spot and a bare name, and answered "performs nothing" for everything
+else. An empty row is a claim rather than an absence, so every other shape was a claim nobody
+had checked, and there were five of them. A function that came back from a call, one chosen
+by an `if`, one taken out of a list, one read out of a record field, and a call applied
+straight to the result of another call. Each one ran an effect through a caller that declared
+none, and the argument in the comment for why that was safe confused two different questions:
+whether a value performs more than its type allows, which was checked, and what calling it
+costs the caller, which was not.
+
+The row is part of the type, and the type checker already works out a type for every
+expression, so it hands over the row of every function-typed one and the guessing is gone.
+The rule that had to come with it is where a row variable may be written: the row of a
+parameter that is a function type, and the declaration's own `uses` clause, and nowhere else.
+A variable in a return type reaches a caller standing for something that caller has no word
+for, so it gets dropped, and a dropped entry is an effect that happens and is not declared.
+That is the same rule as the one saying a type parameter has to appear in a parameter's type,
+and for the same reason: a signature whose call sites cannot work out what it means is not a
+signature.
+
 The worst one so far was found the same afternoon. The `Guarded` tier did not guard a return
 value. `vow check` printed "so it becomes a runtime check" and there was no check: the
 interpreter guarded arguments and annotated `let`s, because those were the two places
