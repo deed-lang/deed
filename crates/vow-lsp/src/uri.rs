@@ -13,10 +13,10 @@
 //! is fine. So anything this does not understand is refused rather than
 //! guessed at, and the caller falls back to the one document it was handed.
 //!
-//! There is no path to URI direction, because nothing needs one. Every URI
-//! this server sends back is a URI an editor sent it first.
+//! The other direction exists because a definition can be in a file the editor
+//! has not opened, so the server has to name one it was never handed.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The path a `file://` URI names, if it names one on this machine.
 ///
@@ -42,6 +42,30 @@ pub fn to_path(uri: &str) -> Option<PathBuf> {
 fn drive_letter(path: &str) -> bool {
     let mut chars = path.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic()) && chars.next() == Some(':')
+}
+
+/// The `file://` URI for a path.
+///
+/// Used to name a file the editor has not opened, which is what a jump into
+/// another module produces. Escaping is the conservative direction: anything
+/// outside the unreserved set plus the two separators becomes an escape, and
+/// an editor that receives more escaping than it would have written still
+/// resolves it to the same file.
+pub fn from_path(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    let mut out = String::from("file://");
+    if !text.starts_with('/') {
+        out.push('/');
+    }
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                out.push(byte as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
 }
 
 /// Decodes `%XX` escapes as bytes, then reads the result as UTF-8.
@@ -74,8 +98,30 @@ fn percent_decode(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::to_path;
+    use super::{from_path, to_path};
     use std::path::PathBuf;
+
+    #[test]
+    fn a_path_round_trips_through_a_uri() {
+        // The direction that matters for a jump into another file: the URI the
+        // server sends has to name the file it meant.
+        for path in [
+            "/work/vow/examples/hello.vow",
+            "/work/gün/a.vow",
+            "/work/my files/a.vow",
+        ] {
+            let path = PathBuf::from(path);
+            assert_eq!(to_path(&from_path(&path)), Some(path.clone()), "{path:?}");
+        }
+    }
+
+    #[test]
+    fn a_windows_path_becomes_a_uri_with_forward_slashes() {
+        assert_eq!(
+            from_path(&PathBuf::from("C:\\work\\a.vow")),
+            "file:///C:/work/a.vow"
+        );
+    }
 
     #[test]
     fn a_plain_path_arrives_as_itself() {

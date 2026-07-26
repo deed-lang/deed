@@ -625,6 +625,66 @@ fn hover_reaches_across_a_module_boundary() {
 }
 
 #[test]
+fn definition_reaches_across_a_module_boundary() {
+    // An imported name leads to the file that declares it, not to the `use`
+    // that brought it in. Nothing carries a `DefId` across to do that: what
+    // crosses is the module path and the name, which is what crosses
+    // everywhere else in this compiler.
+    let scratch = Scratch::new("definition-across");
+    let one = scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, IMPORTER),
+        at(2, "textDocument/definition", &two, 5, 6),
+    ]);
+
+    let location = sent.last().unwrap().at(&["result"]).expect("a location");
+    assert_eq!(
+        location.at(&["uri"]).and_then(Json::as_str),
+        Some(one.as_str()),
+        "{location:?}"
+    );
+    // `fn double` is on line 2 of `one.vow`, and the name starts at column 3.
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{location:?}"
+    );
+    assert_eq!(
+        location
+            .at(&["range", "start", "character"])
+            .and_then(Json::as_i64),
+        Some(3)
+    );
+}
+
+#[test]
+fn an_import_with_nothing_behind_it_leads_to_the_use_line() {
+    // The module is not in the workspace, which the editor is already showing
+    // as an error. Answering nothing would be worse than answering with the
+    // line that says what was imported and what the other file is called.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, IMPORTER),
+        at(2, "textDocument/definition", URI, 5, 6),
+    ]);
+
+    let location = sent.last().unwrap().at(&["result"]).expect("a location");
+    assert_eq!(location.at(&["uri"]).and_then(Json::as_str), Some(URI));
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{location:?}"
+    );
+}
+
+#[test]
 fn shutdown_then_exit_ends_it() {
     let sent = session(&[
         request(1, "initialize"),
