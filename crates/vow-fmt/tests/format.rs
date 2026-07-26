@@ -289,4 +289,5 @@ const SOURCES: &[&str] = &[
     "module a\n\nfn apply<A, B>(f: Fn(A) -> B, value: A) -> B { f(value) }\n",
     "module a\n\neffect E {\n    fn op() -> ()\n}\n\nfn f(g: Fn(Int) uses E.op -> Int) -> Int\n  uses\n    E.op,\n{\n    g(1)\n}\n",
     "module a\n\ntest \"a test\" {\n    assert 1 == 1\n}\n",
+    "module a\n\ntest \"a test\" {\n    assert refuses order_of(0)\n}\n",
 ];

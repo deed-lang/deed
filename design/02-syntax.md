@@ -512,6 +512,34 @@ All three tiers exist. `Tested` covers pure functions whose parameters can be ge
 `vow test` runs a hundred generated inputs against the contract and shrinks any
 counterexample it finds. Everything else is `Guarded`, checked on every call.
 
+**A test can say that a contract turns something down.**
+
+```vow
+test "a guard refuses what it should" {
+    assert refuses order_of(0)
+}
+```
+
+`assert refuses e` passes when evaluating `e` fails a `where` clause, an `ensures` clause or
+a refinement, and fails when anything else happens, including `e` producing a value. It is
+the one thing in the language that catches, and it catches those three and nothing else:
+overflow, a missing handler and a run that went too deep are a program going wrong rather
+than a signature doing its job, and catching those would be a `try` with a small vocabulary
+rather than a statement about what was promised.
+
+It exists because the `Guarded` tier was the one thing a Vow program could not test about
+itself. A contract failure ends the run, so a file of examples showing a guard refusing
+something could not pass, and every such test had to be written in Rust against the compiler.
+Then preconditions started being read at the call site, and the checker began refusing those
+files outright, so the better the checking got the further out of reach the check itself
+went. Inside an `assert refuses` the checker is quiet about a contract it can see will break,
+because that is the statement being right rather than a mistake, and nothing is recorded as
+discharged.
+
+`refuses` is a name everywhere else. It is the marker only when an identifier follows it, and
+no statement could ever have been two names in a row, so `assert refuses(x)` is still a call
+to a function somebody called `refuses`. Same reasoning as `state` and as the `at` in a `for`.
+
 ### What `Proven` can decide
 
 Interval reasoning with one relation on top. Each integer in scope has a known range, and

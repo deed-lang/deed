@@ -486,3 +486,100 @@ fn what_the_checker_proved_is_not_checked_again() {
     assert!(!checked.has_errors());
     assert!(checked.guards().is_empty());
 }
+
+// -- saying so from inside the language ------------------------------------
+//
+// Everything above is written in Rust, because a contract failure ends the run
+// and a Vow test that showed one could not pass. That meant the tier this file
+// exists for was the one thing a Vow program could not test about itself, and
+// once preconditions were read at the call site the checker refused such a
+// file outright. `assert refuses` is the statement that closes it.
+
+#[test]
+fn a_test_can_say_a_guard_refuses_something() {
+    expect_pass(&format!(
+        "{POSITIVE}fn make(n: Int) -> Positive {{ n }}\n\n\
+         test \"refused\" {{\n\
+         \x20 assert refuses make(0)\n\
+         \x20 assert make(1) == 1\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn a_test_can_say_a_precondition_refuses_something() {
+    // The checker can see this one will not hold. Inside an `assert refuses`
+    // that is the statement being right rather than `VOW4025`.
+    expect_pass(
+        "module a\n\n\
+         fn halve(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n >= 0,\n\
+         {\n\
+         \x20 n\n\
+         }\n\n\
+         test \"refused\" {\n\
+         \x20 assert refuses halve(0 - 5)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_test_can_say_a_promise_refuses_something() {
+    expect_pass(
+        "module a\n\n\
+         fn wrong(n: Int) -> Int\n\
+         \x20 ensures\n\
+         \x20   ok  => result > n,\n\
+         {\n\
+         \x20 n\n\
+         }\n\n\
+         test \"refused\" {\n\
+         \x20 assert refuses wrong(1)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn nothing_refusing_it_is_the_test_failing() {
+    // The half that makes the other half worth having. A statement that passed
+    // whatever happened would be the same mistake as a test that only feeds a
+    // guard values it accepts.
+    let (sources, mut outcomes) = run(&format!(
+        "{POSITIVE}fn make(n: Int) -> Positive {{ n }}\n\n\
+         test \"not refused\" {{\n\
+         \x20 assert refuses make(1)\n\
+         }}\n"
+    ));
+    let failure = outcomes
+        .remove(0)
+        .failure
+        .expect("nothing refused it, so the test should have failed");
+    assert_eq!(failure.code, codes::ASSERTION_FAILED);
+    let text = render_human(&sources, &failure);
+    assert!(text.contains("supposed to break a contract"), "{text}");
+}
+
+#[test]
+fn something_that_is_not_a_contract_is_not_caught() {
+    // The line this is drawn along. Arithmetic with no answer is a program
+    // going wrong rather than a signature doing its job, and catching it would
+    // be a `try` with a small vocabulary.
+    let (sources, mut outcomes) = run("module a\n\n\
+         fn split_by(n: Int) -> Int {\n\
+         \x20 1 / n\n\
+         }\n\n\
+         test \"not a contract\" {\n\
+         \x20 assert refuses split_by(0)\n\
+         }\n");
+    let failure = outcomes
+        .remove(0)
+        .failure
+        .expect("arithmetic with no answer still ends the run");
+    assert_eq!(
+        failure.code,
+        codes::ARITHMETIC,
+        "{}",
+        render_human(&sources, &failure)
+    );
+}

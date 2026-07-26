@@ -257,11 +257,24 @@ pub fn run_main(program: &Program, file: FileId, root: &Path, arguments: &[Strin
 
 /// Non-local control flow.
 ///
-/// `Return` is ordinary, `Fail` ends the program. There is no catch, because
-/// there is nothing in the language that catches.
+/// `Return` is ordinary, `Fail` ends the program. The one thing that catches
+/// is `assert refuses`, and it catches contract failures and nothing else.
 enum Signal {
     Return(Value),
     Fail(Box<Diagnostic>),
+}
+
+/// Whether a runtime failure is a contract turning a value down.
+///
+/// The three ways a signature can refuse: what a caller had to guarantee, what
+/// a function had to guarantee back, and what a refined type admits. Everything
+/// else that can end a run is a program going wrong rather than a contract
+/// doing its job, which is the line `assert refuses` is drawn along.
+fn is_contract_failure(diagnostic: &Diagnostic) -> bool {
+    matches!(
+        diagnostic.code,
+        codes::PRECONDITION_FAILED | codes::POSTCONDITION_FAILED | codes::REFINEMENT_FAILED
+    )
 }
 
 /// Whether a runtime variant is the one a pattern named.
@@ -2159,6 +2172,36 @@ impl<'a> Interp<'a> {
                 }
                 Err(self.assertion_failed(condition, *span))
             }
+
+            // The one place anything is caught, and it catches one thing.
+            //
+            // A contract failure ends the run, which meant the `Guarded` tier
+            // was the one thing a Vow test could not reach: a file of examples
+            // showing a guard refusing something could not pass. Once
+            // preconditions were read at the call site the checker refused the
+            // file outright, so the better the checking got the further out of
+            // reach the check itself went.
+            //
+            // Contracts only. Overflow, a missing handler and a run that went
+            // too deep are not contracts and are not caught, because catching
+            // them would be a `try` with a small vocabulary rather than a
+            // statement about what a signature promised.
+            Stmt::Refuses { subject, span } => match self.eval(subject) {
+                Err(Signal::Fail(diagnostic)) if is_contract_failure(&diagnostic) => Ok(()),
+                Err(other) => Err(other),
+                Ok(value) => Err(self.fail(
+                    Diagnostic::error(
+                        codes::ASSERTION_FAILED,
+                        self.file(),
+                        *span,
+                        format!("this was supposed to break a contract, and it produced {value}"),
+                    )
+                    .with_primary_label("nothing refused it")
+                    .with_note(
+                        "`assert refuses` passes when a `where` clause, an `ensures` clause or a refinement turns the value down, and nothing else counts",
+                    ),
+                )),
+            },
 
             Stmt::Expr(expr) => {
                 self.eval(expr)?;

@@ -60,6 +60,7 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         alias_stack: Vec::new(),
         returns: Vec::new(),
         facts: Facts::new(),
+        refuting: false,
     };
 
     checker.collect(module);
@@ -162,6 +163,13 @@ struct Checker<'a> {
     /// discharged against a literal, which is a small enough slice of the tier
     /// that almost every refinement in real code became a runtime check.
     facts: Facts,
+    /// Whether the expression being checked is one an `assert refuses` says
+    /// will break its contract.
+    ///
+    /// A contract the checker can see will be broken is that statement being
+    /// right rather than a mistake, so the two diagnostics that would report
+    /// it are silent inside one, and nothing is recorded as discharged.
+    refuting: bool,
 }
 
 impl<'a> Checker<'a> {
@@ -782,6 +790,14 @@ impl<'a> Checker<'a> {
                 };
                 facts::holds(clause, &facts, &env)
             };
+
+            // Inside an `assert refuses`, a clause that will not hold is the
+            // statement being right. Nothing is reported and nothing is
+            // recorded, because a precondition that is meant to fail is not an
+            // obligation anybody discharged.
+            if self.refuting {
+                continue;
+            }
 
             let tier = match outcome {
                 Truth::Always => Tier::Proven,
@@ -1673,6 +1689,9 @@ impl<'a> Checker<'a> {
                 tier: Tier::Proven,
                 inside_ok,
             }),
+            // Inside an `assert refuses`, a value the checker can see will not
+            // satisfy the refinement is the statement being right.
+            Truth::Never if self.refuting => {}
             Truth::Never => {
                 let mut diagnostic = Diagnostic::error(
                     codes::VIOLATED_REFINEMENT,
@@ -2248,6 +2267,22 @@ impl<'a> Checker<'a> {
             Stmt::Assert { condition, .. } => {
                 let ty = self.infer(condition);
                 self.assign(&ty, &Ty::Bool, Some(condition), condition.span(), None);
+            }
+            // The claim is that evaluating this breaks a contract, so the type
+            // of the value it would have produced is not the question and any
+            // type is fine.
+            //
+            // What is checked here is turned off while it runs. A contract the
+            // checker can see will be broken is this statement agreeing with
+            // it, not a mistake, so `VOW4025` and a violated refinement are
+            // both silent inside one. Nothing is recorded either: a
+            // precondition that is meant to fail is not an obligation anybody
+            // discharged.
+            Stmt::Refuses { subject, .. } => {
+                let outer = self.refuting;
+                self.refuting = true;
+                self.infer(subject);
+                self.refuting = outer;
             }
             Stmt::Expr(expr) => {
                 self.infer(expr);

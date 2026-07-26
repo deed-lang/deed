@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-82 passed, 0 failed
+83 passed, 0 failed
 ```
 
 ```
@@ -508,6 +508,17 @@ passes now read the same table, and `crates/vow-driver/tests/guards.rs` has a te
 place a refined value can come into existence, each one handing the guard something it is
 supposed to refuse. The test that should have caught this did exist, and it passed, because
 it only ever handed the guard values it accepts.
+
+Those tests all had to be written in Rust, which was itself a gap and `proven.vow` said so in
+a comment for months. A contract failure ends the run, so a file of examples showing a guard
+refusing something could not pass, and then preconditions started being read at the call site
+and the checker began refusing such a file outright. The better the checking got, the further
+out of reach the check itself went. `assert refuses order_of(0)` says it from inside the
+language now: it passes when a `where` clause, an `ensures` clause or a refinement turns the
+value down, and fails when anything else happens, including the call producing a value. That
+is the one thing in the language that catches, and it catches those three and nothing else,
+because overflow and a missing handler are a program going wrong rather than a signature
+doing its job.
 
 Five of these have now had the same shape: something has no type, the unknown type agrees
 with everything, and checking quietly stops. So there is an invariant for it now. In a file

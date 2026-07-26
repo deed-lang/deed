@@ -342,6 +342,20 @@ pub enum Stmt {
         condition: Expr,
         span: Span,
     },
+    /// `assert refuses order_of(0)`
+    ///
+    /// The claim that evaluating this breaks a contract. A precondition, a
+    /// postcondition or a refinement, and nothing else: overflow and a missing
+    /// handler are not contracts and are not what this is for.
+    ///
+    /// It exists because a test could not reach the `Guarded` tier at all. A
+    /// contract failure ends the run, so a file of examples that tried to show
+    /// one could not pass, and once preconditions were checked at the call
+    /// site the checker refused the file outright.
+    Refuses {
+        subject: Expr,
+        span: Span,
+    },
     Expr(Expr),
 }
 
@@ -351,6 +365,7 @@ impl Stmt {
             Stmt::Let { span, .. }
             | Stmt::Assign { span, .. }
             | Stmt::Return { span, .. }
+            | Stmt::Refuses { span, .. }
             | Stmt::Assert { span, .. } => *span,
             Stmt::Expr(expr) => expr.span(),
         }

@@ -292,13 +292,35 @@ test "how long something is is a fact like any other" {
 // a runtime check" over a check that did not exist, and this test agreed with
 // it.
 //
-// It still only feeds valid values, because a Vow test has no way to say "this
-// must fail" and a file of examples has to pass. The tests that hand a guard
-// something it should refuse are in crates/vow-driver/tests/guards.rs, one for
-// every place a refined value can come into existence. Not being able to write
-// them here is a gap in the test syntax, and worth naming.
+// For a long time it could only feed valid values, because a contract failure
+// ends the run and a file of examples has to pass. That gap is closed:
+// `assert refuses` says that evaluating something breaks a contract, and it
+// passes when a `where` clause, an `ensures` clause or a refinement turns the
+// value down. Nothing else counts, so overflow and a missing handler are still
+// the end of the run.
 test "the guarded ones are checked when they run" {
     assert one_more(1) == 2
     assert unbounded_span(2, 5) == 3
     assert squared(7) == 49
+}
+
+// The half that was missing. Every one of these is a `Guarded` obligation
+// actually guarding something, which is the claim the tier makes and the claim
+// nothing in this file could check.
+test "a guard turns down what it should" {
+    // The refinement, checked on the way out of a call the checker could not
+    // settle.
+    assert refuses squared(0)
+
+    // The precondition, checked on the way in. The checker can see this one
+    // will not hold, and inside an `assert refuses` that is the statement
+    // being right rather than an error.
+    assert refuses order_of(0)
+    assert refuses clamped(0 - 1)
+    assert refuses span(5, 2)
+
+    // The one that reads a length. `nth` wants an index below however long the
+    // list is, and there is no index below zero of them.
+    assert refuses nth([], 0)
+    assert refuses nth([1, 2], 5)
 }
