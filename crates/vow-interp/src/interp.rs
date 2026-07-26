@@ -72,6 +72,7 @@ struct Entry<'a> {
     module: &'a Module,
     resolutions: &'a Resolutions,
     guards: Guards,
+    rows: DeclaredRows,
 }
 
 /// Where the type checker gave up, and on what.
@@ -99,6 +100,30 @@ pub struct Guard {
     pub inside_ok: bool,
 }
 
+/// One entry of a row a function declared, as the module that wrote it sees it.
+///
+/// The same shape as the effect checker's own entry, kept separately so that
+/// running a program does not depend on the pass that checked it. What crosses
+/// is data.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RowItem {
+    pub effect: DefId,
+    /// `None` means every operation of the effect.
+    pub operation: Option<String>,
+}
+
+/// What each function in a module declared it performs.
+///
+/// The rows are the argument this language is making, and until this existed
+/// the only thing that ever looked at one was the pass that produced it. With
+/// it, every `test` block in every file is a check on that pass: the program
+/// runs, and an effect performed inside a function that did not declare it is
+/// reported against the compiler rather than against the program.
+///
+/// Not optional, for the same reason `Guards` is not. A caller that could
+/// leave it out would be one that could turn the check off by forgetting.
+pub type DeclaredRows = HashMap<DefId, Vec<RowItem>>;
+
 impl<'a> Program<'a> {
     pub fn new() -> Self {
         Self::default()
@@ -109,13 +134,15 @@ impl<'a> Program<'a> {
     ///
     /// `guards` is not optional on purpose. A caller that could leave it out
     /// would be a caller that could turn every runtime check off by forgetting
-    /// something, silently, and the warning would still be printed.
+    /// something, silently, and the warning would still be printed. `rows` is
+    /// not optional for the same reason: see [`DeclaredRows`].
     pub fn add(
         &mut self,
         file: FileId,
         module: &'a Module,
         resolutions: &'a Resolutions,
         guards: Guards,
+        rows: DeclaredRows,
     ) {
         let path = match &module.name {
             Some(name) => name.to_string_path(),
@@ -127,6 +154,7 @@ impl<'a> Program<'a> {
             module,
             resolutions,
             guards,
+            rows,
         });
     }
 
@@ -250,6 +278,7 @@ fn index_module<'a>(entry: &Entry<'a>) -> Code<'a> {
         refinements: HashMap::new(),
         subjects: HashMap::new(),
         guards: entry.guards.clone(),
+        rows: entry.rows.clone(),
         state_names: HashMap::new(),
         variant_names: HashMap::new(),
     };
@@ -338,9 +367,25 @@ struct Code<'a> {
     subjects: HashMap<DefId, DefId>,
     /// Expressions the checker could not settle, and what they have to satisfy.
     guards: Guards,
+    /// What each function in this module declared it performs.
+    rows: DeclaredRows,
     /// Handler state definition to the field name it stands for.
     state_names: HashMap<DefId, String>,
     variant_names: HashMap<DefId, String>,
+}
+
+/// What one active call promised, so that what it does can be held to it.
+///
+/// `handled` is how many handlers were installed when the call started. An
+/// effect answered by a handler installed after that was discharged by a `with`
+/// block inside this call, and a `with` block is how an effect stops being the
+/// caller's business. So only effects answered from further out are this
+/// frame's to declare, which is the same rule the checker uses and the reason
+/// a `with` block does not have to be mentioned in a row.
+struct RowFrame {
+    name: String,
+    allowed: Vec<(Origin, Option<String>)>,
+    handled: usize,
 }
 
 /// A closure expression, kept where a [`Value`] can point at it.
@@ -363,6 +408,14 @@ pub(crate) struct Interp<'a> {
     /// One per active call. Bindings are keyed by definition, which resolution
     /// already made unique, so blocks need no scopes of their own.
     frames: Vec<HashMap<DefId, Value>>,
+    /// What each active call is allowed to perform, and what was already
+    /// handled when it started. See [`Interp::check_row`].
+    rows: Vec<Option<RowFrame>>,
+    /// How deep inside a contract clause the running code is.
+    ///
+    /// Contracts do not contribute to a row, so performing an effect while
+    /// evaluating one is not something a signature has to admit to.
+    in_contract: usize,
     handlers: Vec<Instance>,
     /// Which handler instance the running operation belongs to, if any.
     inside_handler: Vec<usize>,
@@ -408,6 +461,8 @@ impl<'a> Interp<'a> {
             modules,
             by_path,
             frames: vec![HashMap::new()],
+            rows: vec![None],
+            in_contract: 0,
             handlers: Vec::new(),
             inside_handler: Vec::new(),
             olds: Vec::new(),
@@ -536,6 +591,11 @@ impl<'a> Interp<'a> {
                 let parent = data.parent?;
                 self.effect_id_in(index, parent)
             }
+            // `Io` is declared by nobody, so it is named by the prelude rather
+            // than by whichever module happened to ask. Two modules asking
+            // about it have to get the same answer, or a row entry written in
+            // one would not be the entry performed in the other.
+            DefKind::Builtin => Some((Rc::from(vow_resolve::PRELUDE_MODULE), data.name.clone())),
             _ => None,
         }
     }
@@ -838,6 +898,21 @@ impl<'a> Interp<'a> {
         value
             .as_bool()
             .ok_or_else(|| self.not_runnable(expr.span(), "a condition that is not a Bool"))
+    }
+
+    /// Runs something that is part of a contract rather than part of the
+    /// program.
+    ///
+    /// A `where` or `ensures` clause reads state to describe it, and a
+    /// contract does not contribute to a row, so a read that happens here is
+    /// not something the signature has to admit to. Marked rather than
+    /// inferred: the alternative is working out afterwards which effects were
+    /// the contract's, which is the same question with less to go on.
+    fn in_a_contract<T>(&mut self, run: impl FnOnce(&mut Self) -> T) -> T {
+        self.in_contract += 1;
+        let result = run(self);
+        self.in_contract -= 1;
+        result
     }
 
     /// What a definition is bound to in the running frame, if anything.
@@ -1213,6 +1288,7 @@ impl<'a> Interp<'a> {
         // the outside world. Which part of it is decided by the capability that
         // was passed in, not by anything in scope.
         if self.resolutions().builtin("Io") == Some(effect) {
+            self.hold_to_row(effect, &name, None, span)?;
             return self.perform_io(&name, &args, span);
         }
 
@@ -1236,6 +1312,7 @@ impl<'a> Interp<'a> {
 
         let handler_def = self.handlers[index].handler;
         let home = self.handlers[index].module;
+        self.hold_to_row(effect, &name, Some(index), span)?;
         let Some(declaration) = self.modules[home].handler_decls.get(&handler_def).copied() else {
             return Err(self.not_runnable(span, "this handler"));
         };
@@ -1459,6 +1536,7 @@ impl<'a> Interp<'a> {
         }
 
         self.frames.push(frame);
+        self.rows.push(self.row_frame(function));
         if let Some(handler) = handler {
             self.inside_handler.push(handler);
         }
@@ -1470,8 +1548,115 @@ impl<'a> Interp<'a> {
         if handler.is_some() {
             self.inside_handler.pop();
         }
+        self.rows.pop();
         self.frames.pop();
         result
+    }
+
+    /// What the function about to run promised, when that is known.
+    ///
+    /// `None` for a handler operation, which has no declaration of its own and
+    /// so no row in the table, and for anything the effect checker did not
+    /// reach. A frame with no row is not held to one, and it does not stop the
+    /// frames around it being held to theirs, so the gap costs coverage rather
+    /// than correctness. It is worth naming: a handler operation is exactly the
+    /// place an effect is implemented, and nothing here checks that half.
+    fn row_frame(&self, function: &'a FnDecl) -> Option<RowFrame> {
+        let def = self.def_of(&function.sig.name)?;
+        let items = self.code().rows.get(&def)?;
+        // A row variable stands for whatever the caller passed, so the
+        // declaration alone does not say what this call may perform and there
+        // is nothing here to hold it to. The caller's own frame is where that
+        // question has an answer, and it is still checked.
+        if items
+            .iter()
+            .any(|item| self.resolutions().def(item.effect).kind == DefKind::RowParam)
+        {
+            return None;
+        }
+        let allowed = items
+            .iter()
+            .filter_map(|item| Some((self.effect_id(item.effect)?, item.operation.clone())))
+            .collect();
+        Some(RowFrame {
+            name: function.sig.name.name.clone(),
+            allowed,
+            handled: self.handlers.len(),
+        })
+    }
+
+    /// Holds every active call to the row it declared.
+    ///
+    /// The rows are the argument this language is making, and the pass that
+    /// produces them used to be the only thing that ever read one. This is the
+    /// program itself disagreeing: an effect just happened, and here is a
+    /// function on the stack that said it would not do that.
+    ///
+    /// `answered_by` is the handler that took the operation, or `None` for the
+    /// built-in effect, which nothing installs and every frame therefore owes.
+    fn check_row(
+        &self,
+        effect: &Origin,
+        operation: &str,
+        answered_by: Option<usize>,
+    ) -> Option<String> {
+        let handled = answered_by.map(|index| index + 1).unwrap_or(0);
+        for frame in self.rows.iter().flatten() {
+            // A `with` block inside this call already answered for it.
+            if frame.handled < handled {
+                continue;
+            }
+            let covered = frame.allowed.iter().any(|(declared, op)| {
+                declared == effect && op.as_deref().is_none_or(|name| name == operation)
+            });
+            if !covered {
+                return Some(frame.name.clone());
+            }
+        }
+        None
+    }
+
+    /// Reports the first active call that did not declare what just happened.
+    ///
+    /// An error rather than a warning, and pointed at the compiler rather than
+    /// at the program: the checker accepted this file, so if an effect got
+    /// through then the check was wrong. Five ways for one to get through were
+    /// found by hand and fixed in #131. This is how the next one announces
+    /// itself.
+    fn hold_to_row(
+        &mut self,
+        effect: DefId,
+        operation: &str,
+        answered_by: Option<usize>,
+        span: Span,
+    ) -> Eval<()> {
+        // A `where` or `ensures` clause describes state rather than changing
+        // it, and an obligation that had to be paid for in permissions is an
+        // obligation people stop writing. So a contract does not contribute to
+        // a row, which means reading one cannot break it either. That is a
+        // decision rather than an oversight; see `design/03-effects.md`.
+        if self.in_contract > 0 {
+            return Ok(());
+        }
+        let Some(id) = self.effect_id(effect) else {
+            return Ok(());
+        };
+        let Some(name) = self.check_row(&id, operation, answered_by) else {
+            return Ok(());
+        };
+        let effect_name = &id.1;
+        Err(self.fail(
+            Diagnostic::error(
+                codes::ROW_NOT_KEPT,
+                self.file(),
+                span,
+                format!("this performs `{effect_name}.{operation}`, and `{name}` is running and did not declare it"),
+            )
+            .with_primary_label("performed here")
+            .with_note(
+                "the file was accepted, so this is a hole in the effect checker rather than a mistake in the program; please report it",
+            ),
+        ))
     }
 
     /// Refuses to go any deeper, rather than letting the host stack decide.
@@ -1503,7 +1688,7 @@ impl<'a> Interp<'a> {
         // Preconditions first. A failure here is the caller's fault, so the
         // diagnostic points at the call and only mentions the clause.
         for requirement in &function.contract.requires {
-            if !self.condition(requirement)? {
+            if !self.in_a_contract(|me| me.condition(requirement))? {
                 let name = function.sig.name.name.clone();
                 return Err(self.fail(
                     Diagnostic::error(
@@ -1519,7 +1704,7 @@ impl<'a> Interp<'a> {
             }
         }
 
-        self.capture_entry_state(&function.contract.ensures)?;
+        self.in_a_contract(|me| me.capture_entry_state(&function.contract.ensures))?;
 
         let outcome = self.eval_block(&function.body);
         let value = match outcome {
@@ -1532,7 +1717,7 @@ impl<'a> Interp<'a> {
             }
         };
 
-        let obligations = self.check_ensures(function, &value, call_span);
+        let obligations = self.in_a_contract(|me| me.check_ensures(function, &value, call_span));
         self.olds.pop();
         self.entry_states.pop();
         obligations?;

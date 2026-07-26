@@ -391,6 +391,17 @@ That is the same rule as the one saying a type parameter has to appear in a para
 and for the same reason: a signature whose call sites cannot work out what it means is not a
 signature.
 
+Five holes in one place, all found by hand, is a bad way to find out. So the interpreter
+holds the program to its own signatures while it runs. Each active call carries the row its
+declaration wrote down, every effect performed is checked against every call on the stack,
+and one nobody declared is an error reported against the compiler rather than the program,
+since the file was accepted and so the check that accepted it was wrong. A `with` block
+discharges what is inside it and a contract does not contribute to a row, so both are exempt,
+which are rules the language already had rather than allowances made here. Pointed at
+`examples/`, it passes, and with the fix above taken back out it fails on the first program
+that used to slip through. The point is not what it finds today. It is that the next one
+reports itself, with a stack, from a real program.
+
 The worst one so far was found the same afternoon. The `Guarded` tier did not guard a return
 value. `vow check` printed "so it becomes a runtime check" and there was no check: the
 interpreter guarded arguments and annotated `let`s, because those were the two places

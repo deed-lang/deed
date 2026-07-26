@@ -44,3 +44,11 @@ pub const NOT_ENOUGH_CASES: &str = "VOW6008";
 /// return, so the runtime needs an answer for the case where it does not, and
 /// the answer is a diagnostic rather than the process dying.
 pub const TOO_DEEP: &str = "VOW6009";
+
+/// An effect was performed inside a function that did not declare it.
+///
+/// Not a mistake in the program. The file was accepted, so this says the
+/// effect checker let something through, and the run is the thing that noticed.
+/// The rows are the argument this language is making, and until this existed
+/// the only thing that ever read one was the pass that wrote it.
+pub const ROW_NOT_KEPT: &str = "VOW6010";

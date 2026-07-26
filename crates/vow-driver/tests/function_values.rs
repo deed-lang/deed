@@ -160,6 +160,7 @@ fn a_function_value_carries_its_contract() {
         &checked.module,
         &checked.resolutions,
         checked.guards(),
+        checked.rows(),
     );
     let mut outcomes = run_tests(&program, checked.file);
     let failure = outcomes
@@ -267,6 +268,7 @@ fn expect_tests_pass(sources: &SourceMap, checked: &Checked) {
         &checked.module,
         &checked.resolutions,
         checked.guards(),
+        checked.rows(),
     );
     let outcomes = run_tests(&program, checked.file);
     assert!(!outcomes.is_empty(), "no tests were found");

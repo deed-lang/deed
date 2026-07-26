@@ -407,6 +407,7 @@ fn run_together(files: &[&str]) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
             &checked.module,
             &checked.resolutions,
             checked.guards(),
+            checked.rows(),
         );
     }
     let outcomes = vow_interp::run_tests(&program, ids[0]);
@@ -565,6 +566,7 @@ fn the_multi_module_example_runs_its_tests() {
             &checked.module,
             &checked.resolutions,
             checked.guards(),
+            checked.rows(),
         );
     }
 
