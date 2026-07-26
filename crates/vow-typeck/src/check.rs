@@ -1436,8 +1436,8 @@ impl<'a> Checker<'a> {
             let base = base.clone();
             if self.widen(actual) == base || actual.absorbs() {
                 let subject = match expr {
-                    Some(expr) => Some(self.range_of(expr)),
-                    None => carried.range,
+                    Some(expr) => Some(self.subject_of(expr)),
+                    None => carried.range.map(facts::Subject::of),
                 };
                 self.discharge(*def, subject, expr, span, carried.inside_ok);
                 return;
@@ -1606,6 +1606,17 @@ impl<'a> Checker<'a> {
         facts::ok_range_of(expr, &self.facts, &env)
     }
 
+    /// What is known about how long an expression is.
+    fn length_of(&self, expr: &Expr) -> Range {
+        let (def_of, call) = self.env();
+        let env = facts::Env {
+            def_of: &def_of,
+            length: self.resolutions.builtin("length"),
+            call: &call,
+        };
+        facts::length_of(expr, &self.facts, &env)
+    }
+
     /// Where the arithmetic in `expr` can have no answer, if anywhere.
     fn overflowing(&self, expr: &Expr) -> Option<Span> {
         let (def_of, call) = self.env();
@@ -1619,10 +1630,10 @@ impl<'a> Checker<'a> {
 
     /// Whether the facts in scope settle a refinement predicate for a value.
     ///
-    /// The value is a range rather than an expression, because the interesting
-    /// case is the one where nothing in the source names it: the number inside
-    /// the `ok` of a call that can fail.
-    fn proves(&self, predicate: &Expr, subject: Option<Range>) -> Truth {
+    /// The value is a [`facts::Subject`] rather than an expression, because
+    /// the interesting case is the one where nothing in the source names it:
+    /// the number inside the `ok` of a call that can fail.
+    fn proves(&self, predicate: &Expr, subject: Option<facts::Subject>) -> Truth {
         let Some(subject) = subject else {
             return Truth::Unknown;
         };
@@ -1634,6 +1645,24 @@ impl<'a> Checker<'a> {
             call: &call,
         };
         facts::holds(predicate, &with_subject, &env)
+    }
+
+    /// Everything known about a value being checked against a refinement.
+    ///
+    /// A range answers `value > 0`. `length(value) > 0` is a question about
+    /// how long the thing is, and it has two better answers than the default:
+    /// a name is a term the body has been narrowing, and a literal says its
+    /// own length out loud. The name only for a bare one, because `f(x)`
+    /// produces a value nothing names and calling it the subject would mean
+    /// two calls looked like one thing.
+    fn subject_of(&self, expr: &Expr) -> facts::Subject {
+        let name = match expr {
+            Expr::Ident(_) => self.resolver()(expr),
+            _ => None,
+        };
+        facts::Subject::of(self.range_of(expr))
+            .with_length(self.length_of(expr))
+            .with_name(name)
     }
 
     /// Records the tier an obligation landed in, and says so when it is not
@@ -1658,7 +1687,7 @@ impl<'a> Checker<'a> {
     fn discharge(
         &mut self,
         refinement: DefId,
-        subject: Option<Range>,
+        subject: Option<facts::Subject>,
         expr: Option<&Expr>,
         span: Span,
         inside_ok: bool,

@@ -575,6 +575,18 @@ are two terms, so a bound on one says nothing about the other, and `length(f(ite
 term at all: two calls could hand back two different lists and a fact about one of them is not
 a fact about the other.
 
+A refinement can say the same thing, and for a while it could not be settled. `value` has no
+declaration of its own, so it travelled as a range, and a range answers `value > 0` and cannot
+answer `length(value) > 0`, which is a question about a term and needs something to be keyed
+by. So a `where` clause and a refinement written about the same guard gave two different
+answers, one Proven and one Guarded, over the same fact. A value being checked now carries
+what is known about it three ways: the range it lands in, how long it is, and the name it was
+given when it has one. The name is the strongest, since it is the same entry the body has been
+narrowing all along. The length covers the case with no name to give: a string written on the
+spot says how long it is out loud, and refusing to count that would be refusing a fact for want
+of somewhere to put it, which also means `""` where a non-empty string is wanted is now refused
+rather than left to a check at runtime.
+
 The relation is the difference between two names. An interval has nowhere to put `low < high`,
 so every contract that says how two arguments relate used to be thrown away, and that is half
 of what a `where` clause is for. A range per pair of names holds exactly the orderings, which
@@ -1111,9 +1123,14 @@ using an effect to get around not having a loop.
 - Property tests only cover pure functions. Running an effectful one needs a handler, and
   inventing a handler means inventing the behaviour the property would then check against
   itself. A module declaring exactly one handler per effect might be a defensible default.
-- Refinements have no conversion form. Real code will need `Positive.try(n)` or something
-  like it, returning a `Result`, rather than relying on the runtime check a `Guarded`
-  obligation leaves behind.
+- Refinements have no conversion form, and it turned out they do not need one to be usable.
+  `try_positive(n)` returning a `Result` is the thing `Positive.try(n)` would have been, it is
+  ordinary code, and the `ok` is Proven because the guard above it says what the predicate
+  wants. What a built-in form would buy is the predicate living in one place instead of being
+  restated at every converter, and the restatement being weaker than the predicate is the
+  mistake it would rule out. Today a converter guarded by `n >= 0` for a `value > 0` refinement
+  is accepted with a runtime check rather than refused, which is honest and is not the same as
+  catching it.
 - Banning shadowing outright may turn out to be more annoying than it is worth. It is easy
   to relax later and hard to tighten, which is the only reason it starts strict.
 - Capitalisation carrying meaning in patterns is a wart, even though it earns its place.

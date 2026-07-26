@@ -20,6 +20,8 @@ type Percent = Int where value >= 0 && value <= 100
 
 type NonNegative = Int where value >= 0
 
+type NonEmpty = String where length(value) > 0
+
 record Order {
     quantity: Positive,
 }
@@ -262,6 +264,35 @@ fn square(n: Percent) -> Int
     n * n
 }
 
+// A refinement has no conversion form and does not need one. `try_positive` is
+// the thing `Positive.try(n)` would have been, written in the language, and
+// the `ok` is Proven: the guard above it says exactly what the predicate wants.
+// What a built-in form would buy is the predicate living in one place instead
+// of being restated here, and the restatement being weaker than the predicate
+// is the mistake it would rule out.
+fn try_positive(n: Int) -> Result<Positive, String> {
+    if n > 0 {
+        ok(n)
+    } else {
+        err("not positive")
+    }
+}
+
+// The same for something whose predicate is about how long it is. This one
+// used to be Guarded and the one above Proven, over the same shape, because a
+// length had nowhere to be looked up while a refinement was being read.
+fn try_nonempty(s: String) -> Result<NonEmpty, String> {
+    if length(s) > 0 {
+        ok(s)
+    } else {
+        err("empty")
+    }
+}
+
+fn shout(s: NonEmpty) -> String {
+    s + "!"
+}
+
 test "the proven ones still hold at runtime" {
     assert order_of(3).quantity == 3
     assert as_count(4) == 4
@@ -284,6 +315,14 @@ test "how long something is is a fact like any other" {
     assert from_the_wrong_list([1], [1, 2]) == ok(1)
     assert head([7, 8]) == ok(7)
     assert head([]) == err("nothing to index")
+}
+
+test "a refinement is something anyone can convert into" {
+    assert try_positive(3) == ok(3)
+    assert try_positive(0) == err("not positive")
+    assert try_nonempty("hi") == ok("hi")
+    assert try_nonempty("") == err("empty")
+    assert shout("hi") == "hi!"
 }
 
 // A test that only feeds a guard values it accepts proves nothing. This one
