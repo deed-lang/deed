@@ -156,10 +156,37 @@ build checking the eleven files in `examples/` takes about 7ms, and a generated 
 functions with contracts on half of them takes about 26ms. Those are numbers from one
 machine and a debug build, not a guarantee.
 
-They are also not the target. There is no incremental checking, so what is measured is a
-full check of a small program, and P9's claim is about the edit loop. Until something
-re-checks only what changed, the target above is a statement of intent and this section is
-the honest version of it.
+They are also not the target. The target is about the edit loop, and the edit loop is what
+the language server does: recheck the workspace, wait for a keystroke, recheck it again.
+`cargo run -p vow-driver --example edit_loop --release` measures that, and on one machine it
+says:
+
+```text
+files    cold      recheck   per file   unchanged
+1        0.1ms     0.1ms     56us       0%
+8        0.7ms     0.6ms     69us       87%
+32       2.1ms     2.1ms     67us       97%
+128      8.2ms     9.2ms     72us       99%
+512      37.8ms    35.8ms    70us       100%
+```
+
+Three things fall out of it, and they are worth having written down.
+
+**It is linear, and the constant is about 70 microseconds per file.** Flat across two orders
+of magnitude, which says there is no accidental quadratic behaviour hiding in the boundary
+between modules, and that is the failure this measurement was most likely to find.
+
+**The target holds today and the shape says when it stops.** At 512 files a keystroke costs
+about 38ms, inside the 100ms budget. A few thousand files is where it leaves. Nobody has
+written a few thousand files of Vow and the honest reading is that this is fine now.
+
+**Essentially all of the work is repeated.** Past a handful of files, 99% of a recheck is
+spent on files that did not change. So a cache would take almost all of it off, and that is
+the number that says a cache is worth writing when the size arrives, rather than a feeling
+that it might be.
+
+What is deliberately not done is the cache. A cache justified by a number is a different
+thing from a cache justified by a feeling, and the number says there is time.
 
 ### What is guarded
 
