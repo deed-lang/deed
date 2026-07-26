@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use vow_diagnostics::{Diagnostic, Severity, SourceMap, Span};
+use vow_diagnostics::{Applicability, Diagnostic, Severity, SourceMap, Span};
 use vow_driver::Checked;
 use vow_resolve::{DefId, DefKind};
 
@@ -126,6 +126,7 @@ impl Server {
             // edit with nothing in it" reports success and changes nothing.
             "textDocument/rename" => self.rename(id, message),
             "textDocument/formatting" => result(id, self.formatting(message)),
+            "textDocument/codeAction" => result(id, self.code_action(message)),
             "textDocument/completion" => result(id, self.completion(message)),
             _ => error(
                 id,
@@ -653,6 +654,95 @@ impl Server {
         ])])
     }
 
+    /// The fixes the diagnostics over a range are carrying.
+    ///
+    /// P7 says a diagnostic carries an applicable patch where the repair is
+    /// unambiguous, and the lexer, the parser, the resolver and the row
+    /// diagnostics all write one. Until now the only thing that could reach
+    /// them was `vow fix` on a command line, which applies the
+    /// machine-applicable ones and skips the rest, so the guesses were data
+    /// nothing could ever read and the certain ones were only offered to
+    /// somebody who had already left the editor. "cannot find `lenght`, did
+    /// you mean `length`" knew the answer and made the reader type it.
+    ///
+    /// Which diagnostics: the ones whose primary span touches the range the
+    /// editor asked about. A zero width range is a cursor, and a cursor
+    /// resting at either end of a span counts, because that is where a cursor
+    /// sits when someone has just finished typing the word.
+    ///
+    /// The diagnostics come from re-checking rather than from
+    /// `context.diagnostics`. The editor's copy is whatever it was last told,
+    /// and a fix whose span was worked out against older text edits the wrong
+    /// bytes.
+    ///
+    /// [`Applicability`] carries straight over. A machine-applicable fix is
+    /// the one `vow fix` would apply without being asked, so it is the
+    /// preferred action; a guess is offered and never preferred. The editor
+    /// already has a word for that distinction and this server already had the
+    /// distinction, so nothing new is being decided here.
+    fn code_action(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Array(Vec::new());
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Array(Vec::new());
+        };
+        if !wants_quickfixes(message) {
+            return Json::Array(Vec::new());
+        }
+        let Some(range) = range_of(message) else {
+            return Json::Array(Vec::new());
+        };
+        let start = document.lines.offset(&document.text, range.0);
+        let end = document.lines.offset(&document.text, range.1);
+        let Some(checked) = self.check_one(&uri) else {
+            return Json::Array(Vec::new());
+        };
+
+        let actions: Vec<Json> = checked
+            .diagnostics
+            .iter()
+            // A diagnostic about another file can be reported here, and its
+            // fix edits bytes this document does not have.
+            .filter(|diagnostic| diagnostic.file == checked.file)
+            .filter(|diagnostic| touches(diagnostic.primary.span, start, end))
+            .filter_map(|diagnostic| {
+                let fix = diagnostic.fix.as_ref()?;
+                let edits: Vec<Json> = fix
+                    .edits
+                    .iter()
+                    .map(|edit| {
+                        Json::object(vec![
+                            ("range", self.range(document, edit.span)),
+                            ("newText", Json::string(&edit.replacement)),
+                        ])
+                    })
+                    .collect();
+                Some(Json::object(vec![
+                    ("title", Json::string(&fix.message)),
+                    ("kind", Json::string("quickfix")),
+                    (
+                        "diagnostics",
+                        Json::Array(vec![self.render(document, diagnostic, &uri)]),
+                    ),
+                    (
+                        "isPreferred",
+                        Json::Bool(fix.applicability == Applicability::MachineApplicable),
+                    ),
+                    (
+                        "edit",
+                        Json::object(vec![(
+                            "changes",
+                            Json::object(vec![(uri.as_str(), Json::Array(edits))]),
+                        )]),
+                    ),
+                ]))
+            })
+            .collect();
+
+        Json::Array(actions)
+    }
+
     fn notification(&mut self, method: &str, message: &Json) -> Vec<Json> {
         match method {
             "textDocument/didOpen" => {
@@ -1019,6 +1109,47 @@ fn position_of(message: &Json) -> Option<Position> {
     ))
 }
 
+/// The start and end of a `range` parameter.
+fn range_of(message: &Json) -> Option<(Position, Position)> {
+    let corner = |which: &str| {
+        Some(Position::new(
+            message.at(&["params", "range", which, "line"])?.as_i64()? as u32,
+            message
+                .at(&["params", "range", which, "character"])?
+                .as_i64()? as u32,
+        ))
+    };
+    Some((corner("start")?, corner("end")?))
+}
+
+/// Whether a quick fix is among what the editor asked for.
+///
+/// `context.only` is how an editor says it wants one kind of action and not
+/// the others. A kind answers for an entry when it is that entry or something
+/// underneath it, and `quickfix` is the whole of what this server produces, so
+/// an editor asking for anything more specific is asking for something that is
+/// not here. Nothing there at all means everything.
+fn wants_quickfixes(message: &Json) -> bool {
+    let Some(only) = message
+        .at(&["params", "context", "only"])
+        .and_then(Json::as_array)
+    else {
+        return true;
+    };
+    only.iter()
+        .filter_map(Json::as_str)
+        .any(|kind| kind == "quickfix")
+}
+
+/// Whether a span is close enough to a range to answer about.
+///
+/// Overlapping counts, and so does touching at either end. A cursor is a range
+/// of width zero, and a cursor sitting immediately after the last character of
+/// a misspelled name is where it is when someone has just finished typing it.
+fn touches(span: Span, start: u32, end: u32) -> bool {
+    span.start <= end && start <= span.end
+}
+
 fn initialize_result() -> Json {
     Json::object(vec![(
         "capabilities",
@@ -1036,6 +1167,16 @@ fn initialize_result() -> Json {
                 Json::object(vec![("prepareProvider", Json::Bool(true))]),
             ),
             ("documentFormattingProvider", Json::Bool(true)),
+            // Quick fixes only. A code action is also how editors offer
+            // refactorings and source-wide commands, and this server has
+            // neither: what it has is the patch a diagnostic already carries.
+            (
+                "codeActionProvider",
+                Json::object(vec![(
+                    "codeActionKinds",
+                    Json::Array(vec![Json::string("quickfix")]),
+                )]),
+            ),
             // A dot is the one character that changes the answer completely,
             // and a brace is what opens a `use` list. Everything else an
             // editor asks about on its own schedule.

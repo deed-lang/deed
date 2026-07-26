@@ -213,6 +213,17 @@ fn initialize_says_what_the_server_can_do() {
             "{capability} should be advertised, or an editor never asks"
         );
     }
+
+    assert_eq!(
+        sent[0].at(&[
+            "result",
+            "capabilities",
+            "codeActionProvider",
+            "codeActionKinds"
+        ]),
+        Some(&Json::Array(vec![Json::string("quickfix")])),
+        "quick fixes are the only kind of action this server has"
+    );
 }
 
 #[test]
@@ -231,7 +242,7 @@ fn a_method_nobody_implemented_is_an_error_rather_than_silence() {
     // A request with no reply is a request the editor waits on forever.
     let sent = session(&[
         request(1, "initialize"),
-        request(2, "textDocument/codeAction"),
+        request(2, "textDocument/documentSymbol"),
     ]);
     assert_eq!(
         sent[1].at(&["error", "code"]).and_then(Json::as_i64),
@@ -505,6 +516,200 @@ fn formatting_a_file_that_does_not_parse_leaves_it_alone() {
             .len(),
         0
     );
+}
+
+// -- code actions -----------------------------------------------------------
+
+/// A code action request over one line and a bit, the way an editor asks about
+/// the line the cursor is on.
+fn code_action(id: i64, uri: &str, line: u32, character: u32) -> String {
+    code_action_only(id, uri, line, character, None)
+}
+
+fn code_action_only(id: i64, uri: &str, line: u32, character: u32, only: Option<&str>) -> String {
+    let only = match only {
+        Some(kind) => format!(",\"only\":[\"{kind}\"]"),
+        None => String::new(),
+    };
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/codeAction\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}},\
+         \"range\":{{\"start\":{{\"line\":{line},\"character\":{character}}},\
+         \"end\":{{\"line\":{line},\"character\":{character}}}}},\
+         \"context\":{{\"diagnostics\":[]{only}}}}}}}"
+    ))
+}
+
+fn actions(message: &Json) -> &[Json] {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("a code action request should answer with a list: {message:?}"))
+}
+
+/// `lenght` on line 4, where `length` is in the prelude.
+const MISSPELLED: &str = "module a\n\nfn f(items: List<Int>) -> Int {\n    lenght(items)\n}\n";
+
+#[test]
+fn the_patch_a_diagnostic_carries_is_offered_as_a_quick_fix() {
+    // "did you mean" already knew the answer. Until this, the only thing that
+    // could reach the patch was `vow fix` from a command line, so the reader
+    // sitting in the editor was told the name and made to type it.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, MISSPELLED),
+        code_action(2, URI, 3, 6),
+    ]);
+
+    let offered = actions(&sent[2]);
+    assert_eq!(offered.len(), 1, "{:?}", sent[2]);
+    assert_eq!(
+        offered[0].at(&["title"]).and_then(Json::as_str),
+        Some("there is a `length` in scope")
+    );
+    assert_eq!(
+        offered[0].at(&["kind"]).and_then(Json::as_str),
+        Some("quickfix")
+    );
+
+    let edits = offered[0]
+        .at(&["edit", "changes", URI])
+        .and_then(Json::as_array)
+        .unwrap();
+    assert_eq!(edits.len(), 1);
+    assert_eq!(
+        edits[0].at(&["newText"]).and_then(Json::as_str),
+        Some("length")
+    );
+    assert_eq!(
+        edits[0]
+            .at(&["range", "start", "character"])
+            .and_then(Json::as_i64),
+        Some(4)
+    );
+    assert_eq!(
+        edits[0]
+            .at(&["range", "end", "character"])
+            .and_then(Json::as_i64),
+        Some(10)
+    );
+}
+
+#[test]
+fn a_quick_fix_names_the_diagnostic_it_answers() {
+    // Without this the editor cannot tell which squiggle the action belongs
+    // to, and it offers every action on the line for every one of them.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, MISSPELLED),
+        code_action(2, URI, 3, 6),
+    ]);
+
+    let attached = actions(&sent[2])[0]
+        .at(&["diagnostics"])
+        .and_then(Json::as_array)
+        .unwrap();
+    assert_eq!(attached.len(), 1);
+    assert_eq!(
+        attached[0].at(&["code"]).and_then(Json::as_str),
+        Some("VOW3001")
+    );
+}
+
+/// A machine-applicable fix is the one `vow fix` applies without being asked,
+/// so it is the one an editor should reach for first. A guess is not.
+#[test]
+fn a_certain_fix_is_preferred_and_a_guess_is_not() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, MISSPELLED),
+        code_action(2, URI, 3, 6),
+    ]);
+    assert_eq!(
+        actions(&sent[2])[0].at(&["isPreferred"]),
+        Some(&Json::Bool(true))
+    );
+
+    // An import of a name the module does not declare. The suggestion is a
+    // guess, because the compiler is matching spelling rather than meaning.
+    let scratch = Scratch::new("guess");
+    scratch.write("one.vow", EXPORTER);
+    let two = scratch.write("two.vow", "module scratch/two\n");
+    let importer = "module scratch/two\n\nuse scratch/one.{doubel}\n\nfn f() -> Int {\n    0\n}\n";
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, importer),
+        code_action(2, &two, 2, 18),
+    ]);
+
+    let offered = actions(sent.last().unwrap());
+    assert_eq!(offered.len(), 1, "{:?}", sent.last().unwrap());
+    assert_eq!(
+        offered[0].at(&["isPreferred"]),
+        Some(&Json::Bool(false)),
+        "a guess should be offered and not preferred"
+    );
+    assert_eq!(
+        offered[0]
+            .at(&["edit", "changes", two.as_str()])
+            .and_then(Json::as_array)
+            .map(|edits| edits[0].at(&["newText"]).and_then(Json::as_str)),
+        Some(Some("double"))
+    );
+}
+
+#[test]
+fn a_diagnostic_with_no_patch_offers_nothing() {
+    // `BAD` returns an `Int` from a function declared to return a `String`.
+    // There is no obvious repair for that and the type checker does not
+    // pretend there is.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, BAD),
+        code_action(2, URI, 3, 4),
+    ]);
+    assert!(actions(&sent[2]).is_empty(), "{:?}", sent[2]);
+}
+
+#[test]
+fn a_cursor_on_another_line_gets_nothing() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, MISSPELLED),
+        code_action(2, URI, 0, 0),
+    ]);
+    assert!(actions(&sent[2]).is_empty(), "{:?}", sent[2]);
+}
+
+/// Where a cursor sits when someone has just finished typing the word.
+#[test]
+fn a_cursor_at_the_end_of_the_name_still_counts() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, MISSPELLED),
+        code_action(2, URI, 3, 10),
+    ]);
+    assert_eq!(actions(&sent[2]).len(), 1, "{:?}", sent[2]);
+}
+
+#[test]
+fn an_editor_asking_only_for_something_else_gets_nothing() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, MISSPELLED),
+        code_action_only(2, URI, 3, 6, Some("refactor")),
+    ]);
+    assert!(actions(&sent[2]).is_empty(), "{:?}", sent[2]);
+}
+
+#[test]
+fn an_editor_asking_only_for_quick_fixes_gets_them() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, MISSPELLED),
+        code_action_only(2, URI, 3, 6, Some("quickfix")),
+    ]);
+    assert_eq!(actions(&sent[2]).len(), 1, "{:?}", sent[2]);
 }
 
 // -- the workspace ----------------------------------------------------------

@@ -22,7 +22,10 @@
 //! Only [`Applicability::MachineApplicable`] fixes are applied. There is no
 //! flag to apply the others, because a fix that is a guess is a fix a person
 //! has to look at, and a flag for applying guesses is a flag someone turns on
-//! once and then forgets about.
+//! once and then forgets about. Where a person looks at one is the editor:
+//! `vow-lsp` offers every fix as a quick fix and marks the certain ones
+//! preferred, which is the same distinction spelled the way an editor reads
+//! it.
 
 use vow_diagnostics::{Applicability, Diagnostic, SourceMap, Span, SuggestedEdit};
 
