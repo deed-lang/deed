@@ -16,6 +16,8 @@
 use std::collections::BTreeMap;
 
 use vow_diagnostics::{Diagnostic, Severity, SourceMap, Span};
+use vow_driver::Checked;
+use vow_resolve::DefId;
 
 use crate::json::Json;
 use crate::position::{Lines, Position};
@@ -93,15 +95,136 @@ impl Server {
                 self.shutting_down = true;
                 result(id, Json::Null)
             }
-            _ => {
-                let _ = message;
-                error(
-                    id,
-                    METHOD_NOT_FOUND,
-                    &format!("`{method}` is not something this server does"),
-                )
-            }
+            "textDocument/hover" => result(id, self.hover(message)),
+            "textDocument/definition" => result(id, self.definition(message)),
+            "textDocument/formatting" => result(id, self.formatting(message)),
+            _ => error(
+                id,
+                METHOD_NOT_FOUND,
+                &format!("`{method}` is not something this server does"),
+            ),
         }
+    }
+
+    /// The document a request is about, and the byte offset it points at.
+    fn locate(&self, message: &Json) -> Option<(&Document, u32)> {
+        let uri = text_document_uri(message)?;
+        let document = self.documents.get(&uri)?;
+        let position = Position::new(
+            message
+                .at(&["params", "position", "line"])
+                .and_then(Json::as_i64)? as u32,
+            message
+                .at(&["params", "position", "character"])
+                .and_then(Json::as_i64)? as u32,
+        );
+        Some((document, document.lines.offset(&document.text, position)))
+    }
+
+    /// What the cursor is on.
+    ///
+    /// The type of the narrowest expression covering it, and failing that, what
+    /// the name under it refers to. Both, when the cursor is on a name that is
+    /// also an expression, because "`total` is a function" and
+    /// "`Fn(Int) -> Int`" answer different halves of the same question.
+    fn hover(&self, message: &Json) -> Json {
+        let Some((document, offset)) = self.locate(message) else {
+            return Json::Null;
+        };
+        let checked = check(document);
+
+        let mut lines: Vec<String> = Vec::new();
+        let mut range = None;
+
+        if let Some((span, ty)) = checked.types.at(offset) {
+            lines.push(checked.types.describe(ty));
+            range = Some(span);
+        }
+
+        if let Some((span, def)) = narrowest_name(&checked, offset) {
+            let data = checked.resolutions.def(def);
+            lines.push(format!("`{}`, {}", data.name, with_article(data.kind)));
+            range = range.or(Some(span));
+        }
+
+        let Some(range) = range else {
+            // Nothing known about this position is not an error, and an editor
+            // shows an empty tooltip rather than nothing when told so.
+            return Json::Null;
+        };
+
+        Json::object(vec![
+            (
+                "contents",
+                Json::object(vec![
+                    ("kind", Json::string("markdown")),
+                    ("value", Json::string(lines.join("\n\n"))),
+                ]),
+            ),
+            ("range", self.range(document, range)),
+        ])
+    }
+
+    /// Where the name under the cursor was declared.
+    ///
+    /// Only inside this file. A name from another module resolves to the `use`
+    /// that brought it in, which is where the reader can see what was imported
+    /// and is the honest answer for a server that has been handed one file.
+    fn definition(&self, message: &Json) -> Json {
+        let Some((document, offset)) = self.locate(message) else {
+            return Json::Null;
+        };
+        let checked = check(document);
+
+        let Some((_, def)) = narrowest_name(&checked, offset) else {
+            return Json::Null;
+        };
+        let declared = checked.resolutions.def(def).span;
+        // Builtins are declared nowhere. There is no file to open and no line
+        // to jump to, and inventing one would land the cursor on whatever
+        // happens to be at the top of the file.
+        if declared.is_empty() {
+            return Json::Null;
+        }
+
+        let uri = text_document_uri(message).unwrap_or_default();
+        Json::object(vec![
+            ("uri", Json::string(uri)),
+            ("range", self.range(document, declared)),
+        ])
+    }
+
+    /// The whole document, replaced by its canonical form.
+    ///
+    /// One edit rather than a minimal diff. The formatter answers with a whole
+    /// file, working out which parts of it changed would be a second
+    /// implementation of the same idea, and an editor collapses a replacement
+    /// that changes nothing into nothing.
+    fn formatting(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Null;
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Null;
+        };
+
+        let mut sources = SourceMap::new();
+        let file = sources.add(uri, document.text.clone());
+        // A file that does not parse is left alone. Reshaping one is guessing
+        // at what was meant, and the guess would land in the working tree the
+        // moment the editor saves.
+        let Ok(formatted) = vow_fmt::format(file, &document.text) else {
+            return Json::Array(Vec::new());
+        };
+        if formatted == document.text {
+            return Json::Array(Vec::new());
+        }
+
+        let whole = Span::new(0, document.text.len() as u32);
+        Json::Array(vec![Json::object(vec![
+            ("range", self.range(document, whole)),
+            ("newText", Json::string(formatted)),
+        ])])
     }
 
     fn notification(&mut self, method: &str, message: &Json) -> Vec<Json> {
@@ -158,10 +281,7 @@ impl Server {
             return publish(uri, Vec::new());
         };
 
-        let mut sources = SourceMap::new();
-        let file = sources.add(uri, document.text.clone());
-        let checked = vow_driver::check(&sources, file);
-
+        let checked = check(document);
         let reported = checked
             .diagnostics
             .iter()
@@ -240,8 +360,50 @@ fn initialize_result() -> Json {
         Json::object(vec![
             // 1 is full sync. See the note in `didChange`.
             ("textDocumentSync", Json::number(1)),
+            ("hoverProvider", Json::Bool(true)),
+            ("definitionProvider", Json::Bool(true)),
+            ("documentFormattingProvider", Json::Bool(true)),
         ]),
     )])
+}
+
+/// Checks one document on its own.
+///
+/// A whole check per request, and per keystroke. P9 is about the edit loop and
+/// nothing here has measured it yet, so this does the simple thing first on
+/// files small enough for it not to matter. When it stops being small enough,
+/// that is the measurement that says what to cache.
+fn check(document: &Document) -> Checked {
+    let mut sources = SourceMap::new();
+    let file = sources.add("<document>", document.text.clone());
+    vow_driver::check(&sources, file)
+}
+
+/// The innermost name covering an offset, and what it refers to.
+///
+/// Innermost for the same reason a hover wants the innermost expression: in
+/// `a.b` the cursor is inside both, and the one under it is the one to answer
+/// about.
+fn narrowest_name(checked: &Checked, offset: u32) -> Option<(Span, DefId)> {
+    checked
+        .resolutions
+        .names()
+        .filter(|(span, _)| span.contains(offset))
+        .min_by_key(|(span, _)| (span.end - span.start, span.start))
+}
+
+/// What kind of thing a name is, as a phrase rather than a word.
+///
+/// `DefKind::describe` hands back a bare noun because its callers write the
+/// sentence around it. A tooltip is the sentence, so it puts the article on.
+fn with_article(kind: vow_resolve::DefKind) -> String {
+    let word = kind.describe();
+    let article = if word.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!("{article} {word}")
 }
 
 fn publish(uri: &str, diagnostics: Vec<Json>) -> Json {

@@ -42,6 +42,22 @@ fn did_close(uri: &str) -> String {
     ))
 }
 
+/// A request about one place in a document.
+fn at(id: i64, method: &str, uri: &str, line: u32, character: u32) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}},\
+         \"position\":{{\"line\":{line},\"character\":{character}}}}}}}"
+    ))
+}
+
+fn format_request(id: i64, uri: &str) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/formatting\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}},\"options\":{{\"tabSize\":4,\"insertSpaces\":true}}}}}}"
+    ))
+}
+
 /// Runs a session and hands back every message the server sent.
 fn session(messages: &[String]) -> Vec<Json> {
     let input = messages.concat();
@@ -97,6 +113,18 @@ fn initialize_says_what_the_server_can_do() {
         // the risk.
         Some(1)
     );
+
+    for capability in [
+        "hoverProvider",
+        "definitionProvider",
+        "documentFormattingProvider",
+    ] {
+        assert_eq!(
+            sent[0].at(&["result", "capabilities", capability]),
+            Some(&Json::Bool(true)),
+            "{capability} should be advertised, or an editor never asks"
+        );
+    }
 }
 
 #[test]
@@ -213,6 +241,178 @@ fn a_note_travels_with_the_message() {
     assert!(
         message.contains("note: it is written `List<Element>`"),
         "{message}"
+    );
+}
+
+// -- hover ------------------------------------------------------------------
+
+/// The markdown a hover came back with.
+fn hover_text(message: &Json) -> String {
+    message
+        .at(&["result", "contents", "value"])
+        .and_then(Json::as_str)
+        .unwrap_or_else(|| panic!("expected a hover, got {message:?}"))
+        .to_string()
+}
+
+#[test]
+fn hovering_over_an_expression_says_what_it_turned_out_to_be() {
+    // `n + n` on line 3. Column 4 is the first `n`, column 8 is the second.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        at(2, "textDocument/hover", URI, 3, 4),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(text.contains("`Int`"), "{text}");
+    assert!(text.contains("`n`, a parameter"), "{text}");
+}
+
+#[test]
+fn hovering_picks_the_innermost_thing_under_the_cursor() {
+    // The cursor is inside the call and inside the argument. The argument is
+    // the thing under it, so its `String` wins over the call's `Int`.
+    let source = "module a\n\nfn f() -> Int {\n    length(\"hello\")\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        at(2, "textDocument/hover", URI, 3, 12),
+    ]);
+
+    assert!(hover_text(&sent[2]).contains("`String`"), "{:?}", sent[2]);
+}
+
+#[test]
+fn hovering_over_a_function_says_its_type_rather_than_its_arity() {
+    // This used to read "a function of 1 returning `Int`", which is a riddle
+    // in a diagnostic and nothing at all in a tooltip.
+    let source = "module a\n\nfn double(n: Int) -> Int {\n    n + n\n}\n\nfn g() -> Int {\n    apply(double)\n}\n\nfn apply(f: Fn(Int) -> Int) -> Int {\n    f(1)\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        at(2, "textDocument/hover", URI, 7, 10),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(text.contains("`Fn(Int) -> Int`"), "{text}");
+}
+
+#[test]
+fn hovering_over_nothing_is_null_rather_than_an_empty_tooltip() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        // The blank line between the module and the function.
+        at(2, "textDocument/hover", URI, 1, 0),
+    ]);
+
+    assert!(sent[2].at(&["result"]).is_some_and(Json::is_null));
+}
+
+// -- go to definition -------------------------------------------------------
+
+#[test]
+fn a_use_of_a_name_leads_back_to_where_it_was_declared() {
+    let source = "module a\n\nfn double(n: Int) -> Int {\n    n + n\n}\n\nfn g() -> Int {\n    double(2)\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // The `double` on line 7.
+        at(2, "textDocument/definition", URI, 7, 6),
+    ]);
+
+    let location = sent[2].at(&["result"]).expect("a location");
+    assert_eq!(location.at(&["uri"]).and_then(Json::as_str), Some(URI));
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{location:?}"
+    );
+    assert_eq!(
+        location
+            .at(&["range", "start", "character"])
+            .and_then(Json::as_i64),
+        Some(3)
+    );
+}
+
+#[test]
+fn a_builtin_has_nowhere_to_go() {
+    // `length` is declared in no file. Jumping to the top of whichever file
+    // happened to be open would be worse than saying there is nowhere.
+    let source = "module a\n\nfn f() -> Int {\n    length(\"hello\")\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        at(2, "textDocument/definition", URI, 3, 5),
+    ]);
+
+    assert!(sent[2].at(&["result"]).is_some_and(Json::is_null));
+}
+
+// -- formatting -------------------------------------------------------------
+
+#[test]
+fn formatting_replaces_the_whole_document_with_the_canonical_form() {
+    let cramped = "module a\nfn   f( n:Int )->Int{n+n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, cramped),
+        format_request(2, URI),
+    ]);
+
+    let edits = sent[2].at(&["result"]).and_then(Json::as_array).unwrap();
+    assert_eq!(edits.len(), 1, "{:?}", sent[2]);
+    assert_eq!(
+        edits[0].at(&["newText"]).and_then(Json::as_str),
+        Some("module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n")
+    );
+    assert_eq!(
+        edits[0]
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(0)
+    );
+}
+
+#[test]
+fn formatting_a_file_that_is_already_canonical_changes_nothing() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        format_request(2, URI),
+    ]);
+
+    assert_eq!(
+        sent[2]
+            .at(&["result"])
+            .and_then(Json::as_array)
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn formatting_a_file_that_does_not_parse_leaves_it_alone() {
+    // Reshaping a broken file is guessing at what was meant, and the guess
+    // lands in the working tree the moment the editor saves.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, "module a\n\nfn f( -> Int {\n"),
+        format_request(2, URI),
+    ]);
+
+    assert_eq!(
+        sent[2]
+            .at(&["result"])
+            .and_then(Json::as_array)
+            .unwrap()
+            .len(),
+        0
     );
 }
 

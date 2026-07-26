@@ -198,6 +198,22 @@ impl Types {
         self.exprs.get(&span)
     }
 
+    /// The narrowest expression covering an offset, and what it turned out to
+    /// be.
+    ///
+    /// Narrowest because an offset inside `f(n)` is inside the call and inside
+    /// the argument, and the argument is the thing under the cursor. This is
+    /// what a hover asks, and asking it by scanning is fine: the number of
+    /// expressions in a file is small and the answer is wanted once per
+    /// keystroke rather than once per node.
+    pub fn at(&self, offset: u32) -> Option<(Span, &Ty)> {
+        self.exprs
+            .iter()
+            .filter(|(span, _)| span.start <= offset && offset < span.end)
+            .min_by_key(|(span, _)| (span.end - span.start, span.start))
+            .map(|(span, ty)| (*span, ty))
+    }
+
     pub fn obligations(&self) -> &[Obligation] {
         &self.obligations
     }
@@ -246,14 +262,7 @@ impl Types {
             }
             Ty::Result(ok, err) => format!("`Result<{}, {}>`", self.bare(ok), self.bare(err)),
             Ty::List(element) => format!("`List<{}>`", self.bare(element)),
-            Ty::Fn { params, ret } => {
-                let params: Vec<String> = params.iter().map(|p| self.describe(p)).collect();
-                format!(
-                    "a function of {} returning {}",
-                    params.len(),
-                    self.describe(ret)
-                )
-            }
+            Ty::Fn { .. } => format!("`{}`", self.bare(ty)),
         }
     }
 
@@ -274,8 +283,13 @@ impl Types {
             Ty::External { name, .. } => name.to_string(),
             Ty::Result(ok, err) => format!("Result<{}, {}>", self.bare(ok), self.bare(err)),
             Ty::List(element) => format!("List<{}>", self.bare(element)),
+            // Written the way the signature that declared it is written. The
+            // arity alone used to be all this said, which reads as a riddle in
+            // a message about two function types not matching, and reads as
+            // nothing at all in a hover.
             Ty::Fn { params, ret } => {
-                format!("Fn({}) -> {}", params.len(), self.bare(ret))
+                let params: Vec<String> = params.iter().map(|p| self.bare(p)).collect();
+                format!("Fn({}) -> {}", params.join(", "), self.bare(ret))
             }
         }
     }

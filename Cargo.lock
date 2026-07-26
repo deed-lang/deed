@@ -84,6 +84,8 @@ version = "0.0.0"
 dependencies = [
  "vow-diagnostics",
  "vow-driver",
+ "vow-fmt",
+ "vow-resolve",
 ]
 
 [[package]]
