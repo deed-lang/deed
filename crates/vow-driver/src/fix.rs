@@ -14,6 +14,8 @@
 //! about a clause that may not exist yet, and the effect checker has the answer
 //! and no business knowing any of that. So [`crate::rows`] writes those, where
 //! the text, the tree and the one canonical layout are all in scope at once.
+//! [`crate::imports`] is the same shape one pass earlier: the resolver knows
+//! which import is unused and nothing about the comma beside it.
 //!
 //! The type checker still has none. There is no obvious repair for a type that
 //! does not fit, which is the difference between a fix that is missing and a

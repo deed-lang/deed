@@ -615,6 +615,15 @@ the tree says where one stops and the next starts. And a comment anywhere in tha
 it, because rewriting the block would eat the comment, and a machine-applicable fix that
 deletes a comment is a fix nobody should have applied.
 
+An unused import goes the same way, one pass earlier. `VOW3003` knows which name nothing uses
+and knows nothing about the comma beside it, and taking the last name out of a list is a
+question about a line and the blank line next to it. One fix for the whole block rather than
+one per name, which is not tidiness: two names out of the same list are two edits over
+overlapping text and both get dropped, and two whole lines removed separately each leave
+behind the blank that used to sit beside them, so the file ends up with a gap that no longer
+separates anything. Rewriting the block once has neither problem, and what it writes is what
+`vow fmt` would have.
+
 `vow check --timings` is the same move for P9, which said check latency is budgeted and had
 never been measured. The guard is not a wall clock budget, since a test that fails on a busy
 machine is a test people learn to rerun. It is the shape of the curve: ten times the input

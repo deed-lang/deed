@@ -18,6 +18,7 @@
 //! and `vow-typeck` asserting exactly that.
 
 pub mod fix;
+mod imports;
 mod rows;
 
 use std::time::{Duration, Instant};
@@ -365,6 +366,7 @@ fn check_parsed(
         source,
         &trivia,
     );
+    imports::attach_fixes(&mut diagnostics, &module, source, &trivia);
 
     let parsed_module = module;
     let mut obligations: Vec<ObligationReport> = checked

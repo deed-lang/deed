@@ -630,8 +630,10 @@ fn a_certain_fix_is_preferred_and_a_guess_is_not() {
         Some(&Json::Bool(true))
     );
 
-    // An import of a name the module does not declare. The suggestion is a
-    // guess, because the compiler is matching spelling rather than meaning.
+    // An import of a name the module does not declare. Two things are wrong
+    // with the same word and the editor gets both: the spelling might have
+    // been meant, which is a guess, and the import is unused either way, which
+    // is not.
     let scratch = Scratch::new("guess");
     scratch.write("one.vow", EXPORTER);
     let two = scratch.write("two.vow", "module scratch/two\n");
@@ -643,19 +645,31 @@ fn a_certain_fix_is_preferred_and_a_guess_is_not() {
     ]);
 
     let offered = actions(sent.last().unwrap());
-    assert_eq!(offered.len(), 1, "{:?}", sent.last().unwrap());
+    let guess = offered
+        .iter()
+        .find(|action| {
+            action.at(&["title"]).and_then(Json::as_str)
+                == Some("`scratch/one` declares a `double`")
+        })
+        .unwrap_or_else(|| panic!("the spelling suggestion should be offered: {offered:?}"));
     assert_eq!(
-        offered[0].at(&["isPreferred"]),
+        guess.at(&["isPreferred"]),
         Some(&Json::Bool(false)),
         "a guess should be offered and not preferred"
     );
     assert_eq!(
-        offered[0]
+        guess
             .at(&["edit", "changes", two.as_str()])
             .and_then(Json::as_array)
             .map(|edits| edits[0].at(&["newText"]).and_then(Json::as_str)),
         Some(Some("double"))
     );
+
+    let certain = offered
+        .iter()
+        .find(|action| action.at(&["title"]).and_then(Json::as_str) == Some("remove `doubel`"))
+        .unwrap_or_else(|| panic!("the unused import should be offered: {offered:?}"));
+    assert_eq!(certain.at(&["isPreferred"]), Some(&Json::Bool(true)));
 }
 
 #[test]
