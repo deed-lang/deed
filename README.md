@@ -520,6 +520,18 @@ is the one thing in the language that catches, and it catches those three and no
 because overflow and a missing handler are a program going wrong rather than a signature
 doing its job.
 
+The `Tested` tier had a quieter version of the same problem. `vow test` generates a hundred
+inputs from a contract and shrinks whatever fails, and for a while it only shrank integers
+and the fields of records. So a counterexample of `[95]` came out when `[1]` says the same
+thing, and a variant would shrink its field to zero and stop rather than becoming the
+`Nothing` sitting next to it. A counterexample built out of something that does not shrink
+looks exactly like a small one that happens to be awkward, and nothing tells you which it
+was. Everything the generator can build shrinks now: lists get shorter before their elements
+get smaller, strings get shorter and then plainer, `true` gives way to `false`, and a variant
+gives way to a sibling that carries no fields. That last one is the only part that cannot be
+read off the value, so the choices are walked once and every variant is told which of its
+siblings are empty.
+
 Five of these have now had the same shape: something has no type, the unknown type agrees
 with everything, and checking quietly stops. So there is an invariant for it now. In a file
 that checks cleanly, no expression is unknown, because an unknown one is an expression nothing
