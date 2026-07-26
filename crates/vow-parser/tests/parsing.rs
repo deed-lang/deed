@@ -5,7 +5,7 @@
 //! attention because that is what decides whether one mistake costs one round
 //! trip or four.
 
-use vow_ast::{BinaryOp, Expr, Item, Outcome, Pattern, Stmt};
+use vow_ast::{BinaryOp, Expr, Item, Outcome, Pattern, Stmt, UnaryOp};
 use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_lexer::tokenize;
 use vow_parser::{Parsed, codes, parse};
@@ -348,6 +348,93 @@ fn a_closure_with_typed_parameters_parses() {
     parse_ok(
         "module a\n\nfn f(a: Int, b: Int) -> Int {\n    let add = |x: Int, y: Int| { x + y }\n    add(a, b)\n}\n",
     );
+}
+
+// -- where one statement stops ---------------------------------------------
+//
+// Statements are separated by nothing, so what ends one is the next token not
+// being able to continue it. That works for almost every token and used to
+// fail silently for the two that can both start an expression and continue
+// one, which is what these are about.
+
+#[test]
+fn a_minus_on_the_next_line_starts_a_statement() {
+    // `let a = 1` followed by `-2` used to be `let a = 1 - 2`, with the second
+    // line gone and nothing saying so.
+    let stmts = body_of("let a = 1\n-2");
+    assert_eq!(stmts.len(), 2, "{stmts:?}");
+
+    let Stmt::Let { init, .. } = &stmts[0] else {
+        panic!("expected a let, got {:?}", stmts[0]);
+    };
+    assert!(matches!(init, Expr::Int { value: 1, .. }), "{init:?}");
+
+    let Stmt::Expr(Expr::Unary { op, .. }) = &stmts[1] else {
+        panic!("expected a negation, got {:?}", stmts[1]);
+    };
+    assert_eq!(*op, UnaryOp::Neg);
+}
+
+#[test]
+fn a_parenthesis_on_the_next_line_starts_a_statement() {
+    // `let a = g()` followed by `(1 + 2)` used to be a call of the result, and
+    // the error landed on `g()` for not being a function.
+    let stmts = body_of("let a = g()\n(1 + 2)");
+    assert_eq!(stmts.len(), 2, "{stmts:?}");
+
+    let Stmt::Expr(Expr::Binary { op, .. }) = &stmts[1] else {
+        panic!("expected the sum on its own, got {:?}", stmts[1]);
+    };
+    assert_eq!(*op, BinaryOp::Add);
+}
+
+#[test]
+fn the_same_line_still_continues() {
+    // The rule has to leave every shape anybody writes alone, and `vow fmt`
+    // never breaks a binary expression or puts a call's parenthesis on a line
+    // of its own.
+    let stmts = body_of("let a = 1 - 2\nlet b = g()(3)\nlet c = a.b.c");
+    assert_eq!(stmts.len(), 3, "{stmts:?}");
+
+    let Stmt::Let { init, .. } = &stmts[0] else {
+        panic!("expected a let");
+    };
+    assert!(matches!(init, Expr::Binary { .. }), "{init:?}");
+
+    let Stmt::Let { init, .. } = &stmts[1] else {
+        panic!("expected a let");
+    };
+    let Expr::Call { callee, .. } = init else {
+        panic!("expected a call, got {init:?}");
+    };
+    assert!(matches!(&**callee, Expr::Call { .. }), "{callee:?}");
+
+    let Stmt::Let { init, .. } = &stmts[2] else {
+        panic!("expected a let");
+    };
+    assert!(matches!(init, Expr::Field { .. }), "{init:?}");
+}
+
+#[test]
+fn a_call_can_still_spread_its_arguments_over_lines() {
+    // The parenthesis stays with the callee, which is where the formatter puts
+    // it, and everything inside it is its own expression again.
+    let stmts = body_of("let a = f(\n    1,\n    2,\n)");
+    let Stmt::Let { init, .. } = &stmts[0] else {
+        panic!("expected a let");
+    };
+    let Expr::Call { args, .. } = init else {
+        panic!("expected a call, got {init:?}");
+    };
+    assert_eq!(args.len(), 2);
+}
+
+#[test]
+fn a_comment_between_the_lines_does_not_join_them() {
+    // The break is measured over the text that was skipped, so a comment with
+    // a newline in it counts the way a reader would count it.
+    let stmts = body_of("let a = 1\n// why\n-2");
+    assert_eq!(stmts.len(), 2, "{stmts:?}");
 }
 
 // -- expressions -----------------------------------------------------------

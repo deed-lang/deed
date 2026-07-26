@@ -880,9 +880,19 @@ with no lookahead. If floats ever arrive, they will need a rule for that, and it
 worth naming now rather than discovering later.
 
 **Statements need no separator.** A newline is enough and `;` is accepted but never
-required. This works because no statement can begin with a token that continues the
-previous expression, which is a property that has to be maintained deliberately rather than
-one that holds by luck. It is listed as an open question below.
+required. It used to be the case that this worked only because no statement could begin
+with a token that continues the previous expression, which was never true: `(` starts a
+parenthesised expression and continues a call, and `-` starts a negation and continues a
+sum. So `let a = 1` with `-2` under it read as `let a = 1 - 2` and the second line was
+gone, with nothing said about it.
+
+The rule now is that **a line break ends an expression**. A binary operator, or a postfix
+`.`, `(`, `?` or `{`, continues what came before it only if it is on the same line. The rule
+is the same inside brackets as outside them, because a rule that switches off somewhere is a
+rule people have to remember. Nothing anyone writes changes shape under it: `vow fmt` never
+breaks a binary expression across lines and never puts a call's `(` or a literal's `{` on a
+line of its own, so an argument list or a record can still spread over as many lines as it
+likes, the opening bracket just has to stay with what it opens.
 
 **Type arguments close with single `>` tokens.** There is no shift operator in Vow, so
 `Map<K, Vec<V>>` needs none of the special handling that costs other languages a real
@@ -1089,10 +1099,11 @@ using an effect to get around not having a loop.
   as an empty record: a literal with no fields has no name to look at. It works for
   everything written so far and it is still not a rule anyone should have to know. Better
   ideas welcome.
-- Statement separation relies on no statement being able to start with `(`, `-`, `[` or `.`.
-  List literals made `[` a real case rather than a hypothetical one, and it still holds only
-  because there is no indexing operator. That is a coincidence, not a rule. Either the
-  grammar should guarantee it or statements need a real terminator.
+- Whether a line break ending an expression should be relaxed inside brackets. It is uniform
+  today, which is the version nobody has to remember, and it costs an expression that wants
+  to run over several lines a pair of parentheses it would not otherwise need. Nothing
+  written so far wants that, and the moment something does the answer is probably to let a
+  line break inside an unclosed bracket keep going rather than to special case operators.
 - Whether a `for` should be able to stop early. There is no `break`, so a search over a list
   walks all of it, and a fold cannot say it has seen enough. The honest version is probably a
   `for` whose accumulator is a `Result`, which stops meaning "done" and starts meaning

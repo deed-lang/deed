@@ -155,6 +155,32 @@ fn spans_are_byte_accurate_after_non_ascii_text() {
     assert_eq!(&source[x.span.as_range()], "x");
 }
 
+// -- where a line ended -----------------------------------------------------
+//
+// The parser needs this to tell a statement that begins with `(` or `-` from a
+// continuation of the line above, which the token kinds alone cannot say.
+
+#[test]
+fn a_token_knows_whether_a_line_ended_before_it() {
+    let (_, lexed) = lex("a b\nc");
+    let starts: Vec<bool> = lexed.tokens.iter().map(|token| token.starts_line).collect();
+
+    // `a`, `b`, `c`, end of file. The first token of the file has nothing
+    // before it, so nothing ended before it either.
+    assert_eq!(starts, vec![false, false, true, true]);
+}
+
+#[test]
+fn a_comment_with_a_newline_in_it_ends_the_line() {
+    // Measured over the text that was skipped rather than counted as it goes,
+    // so a block comment spanning lines counts the way a reader would count it.
+    let (_, lexed) = lex("a /* one\ntwo */ b");
+    assert!(lexed.tokens[1].starts_line, "{:?}", lexed.tokens);
+
+    let (_, lexed) = lex("a /* one two */ b");
+    assert!(!lexed.tokens[1].starts_line, "{:?}", lexed.tokens);
+}
+
 // -- comments --------------------------------------------------------------
 
 #[test]

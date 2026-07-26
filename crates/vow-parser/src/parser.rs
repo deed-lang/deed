@@ -1250,7 +1250,7 @@ impl<'a> Parser<'a> {
         let mut lhs = self.parse_unary();
 
         while let Some((op, bp)) = binary_op(self.kind()) {
-            if bp < min_bp {
+            if bp < min_bp || self.continues_a_new_line() {
                 break;
             }
             let op_span = self.bump().span;
@@ -1293,6 +1293,9 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_primary();
 
         loop {
+            if self.continues_a_new_line() {
+                break;
+            }
             if self.at(&TokenKind::Dot) && matches!(self.nth_kind(1), TokenKind::Ident(_)) {
                 self.bump();
                 let name = self
@@ -1329,6 +1332,26 @@ impl<'a> Parser<'a> {
         }
 
         expr
+    }
+
+    /// Whether the token in hand is on a line of its own.
+    ///
+    /// Statements are separated by nothing, so what ends one is the next token
+    /// not being able to continue the expression before it. That works for
+    /// almost every token and fails silently for the two that can both start
+    /// an expression and continue one. `(` reads as a call, so a statement
+    /// beginning with a parenthesis attached itself to the line above. `-`
+    /// reads as a subtraction, so `let a = 1` followed by `-2` became
+    /// `let a = 1 - 2` and the second line was gone, with nothing to say so.
+    ///
+    /// A line break is what a reader uses to tell those apart, so it is what
+    /// this uses. The rule is the same everywhere rather than switched off
+    /// inside brackets, because "an expression ends at the end of a line" is
+    /// one sentence and the version with an exception in it is three. `vow fmt`
+    /// never breaks a binary expression or puts a call's parenthesis on a line
+    /// of its own, so nothing canonical changes shape.
+    fn continues_a_new_line(&self) -> bool {
+        self.peek().starts_line
     }
 
     fn struct_lit_allowed(&self) -> bool {
