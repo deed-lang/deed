@@ -819,6 +819,7 @@ impl<'a> Interp<'a> {
                 index,
                 iterable,
                 accumulator,
+                keep,
                 body,
                 ..
             } => {
@@ -836,6 +837,27 @@ impl<'a> Interp<'a> {
                 };
 
                 for (position, element) in elements.iter().enumerate() {
+                    // Before the turn, and before the element is bound,
+                    // because this is deciding whether that turn happens at
+                    // all. The accumulator has to be in place first, since
+                    // what the walk has worked out so far is the only thing
+                    // the condition has to go on.
+                    if let Some(keep) = keep {
+                        if let Some(accumulator) = accumulator {
+                            self.rebind(&accumulator.name, carried.clone());
+                        }
+                        match self.eval(keep)? {
+                            Value::Bool(true) => {}
+                            Value::Bool(false) => break,
+                            other => {
+                                return Err(self.not_runnable(
+                                    keep.span(),
+                                    &format!("a `for` condition that is {}", other.describe()),
+                                ));
+                            }
+                        }
+                    }
+
                     self.rebind(binder, element.clone());
                     // Zero-based, like `at`. A `for` that counted from one
                     // while the only way to index counted from zero would be a

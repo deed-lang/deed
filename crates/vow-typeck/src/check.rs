@@ -91,6 +91,17 @@ struct Carried {
     inside_ok: bool,
 }
 
+/// The pieces of a `for`, so checking one takes an argument rather than seven.
+struct Walk<'a> {
+    binder: &'a Ident,
+    index: Option<&'a Ident>,
+    iterable: &'a Expr,
+    accumulator: Option<&'a Accumulator>,
+    keep: Option<&'a Expr>,
+    body: &'a Block,
+    span: Span,
+}
+
 /// What a caller has to guarantee, and the names the clauses talk about.
 ///
 /// The clauses are kept as written rather than lowered to anything, because a
@@ -2434,15 +2445,21 @@ impl<'a> Checker<'a> {
     /// Nothing here is assigned. `sum` is a fresh binding on every turn, which
     /// is what lets the language have iteration without having a second
     /// mutable thing in it.
-    fn check_for(
-        &mut self,
-        binder: &'a Ident,
-        index: Option<&'a Ident>,
-        iterable: &'a Expr,
-        accumulator: Option<&'a Accumulator>,
-        body: &'a Block,
-        span: Span,
-    ) -> Ty {
+    ///
+    /// `while so_far` stops the walk early. It is read before each turn with
+    /// the accumulator in scope, so it needs one: a condition that can only
+    /// read things the walk never changes either stops it before it starts or
+    /// never stops it at all, and neither is a thing anybody meant to write.
+    fn check_for(&mut self, walk: Walk<'a>) -> Ty {
+        let Walk {
+            binder,
+            index,
+            iterable,
+            accumulator,
+            keep,
+            body,
+            span,
+        } = walk;
         let iterable_ty = self.infer(iterable);
         let element = match self.widen(&iterable_ty) {
             Ty::List(element) => *element,
@@ -2507,6 +2524,33 @@ impl<'a> Checker<'a> {
         // what was known before it or what is known after it, and nothing
         // stronger. Same reasoning as an `if` with no `else`.
         let outer = self.facts.clone();
+
+        if let Some(keep) = keep {
+            if accumulator.is_none() {
+                self.emit(
+                    Diagnostic::error(
+                        codes::WHILE_WITHOUT_ACCUMULATOR,
+                        self.file,
+                        keep.span(),
+                        "a `while` on a `for` needs a `with`",
+                    )
+                    .with_primary_label("nothing here changes between turns")
+                    .with_secondary(span, "this walk has no accumulator")
+                    .with_note(
+                        "the condition is about what the walk has worked out so far, and one \
+                         that can only read what the walk never changes either stops it before \
+                         it starts or never stops it at all",
+                    ),
+                );
+            }
+            let ty = self.infer(keep);
+            self.assign(&ty, &Ty::Bool, Some(keep), keep.span(), None);
+            // Read before each turn, so the body knows it held. What is known
+            // after the loop does not, because the walk also ends by running
+            // out of list.
+            self.facts = self.narrowed_by(keep, true);
+        }
+
         let because = match accumulator {
             Some(accumulator) => Some((
                 accumulator.span,
@@ -2656,16 +2700,18 @@ impl<'a> Checker<'a> {
                 index,
                 iterable,
                 accumulator,
+                keep,
                 body,
                 span,
-            } => self.check_for(
+            } => self.check_for(Walk {
                 binder,
-                index.as_ref(),
+                index: index.as_ref(),
                 iterable,
-                accumulator.as_ref(),
+                accumulator: accumulator.as_ref(),
+                keep: keep.as_deref(),
                 body,
-                *span,
-            ),
+                span: *span,
+            }),
 
             Expr::Block(block) => self.check_block(block),
 

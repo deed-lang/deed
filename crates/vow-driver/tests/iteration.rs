@@ -337,6 +337,153 @@ fn a_for_that_does_not_ask_where_it_is_binds_nothing_extra() {
     );
 }
 
+// -- stopping early ---------------------------------------------------------
+//
+// `while` is read before each turn with the accumulator in scope. It is not
+// `break`: nothing is abandoned, the walk just does not take the turn, and the
+// list still bounds how many there can be, so this cannot bring back the
+// termination problem that keeps `while` out as a statement.
+
+/// An effect that counts turns, so "did it stop" is a number rather than a
+/// feeling.
+const COUNTING: &str = "module a\n\n\
+     effect Log {\n\
+     \x20 fn note() -> ()\n\
+     \x20 fn seen() -> Int\n\
+     }\n\n\
+     handler Loud implements Log {\n\
+     \x20 state count: Int\n\n\
+     \x20 fn note() -> () {\n\
+     \x20   count = count + 1\n\
+     \x20 }\n\n\
+     \x20 fn seen() -> Int {\n\
+     \x20   count\n\
+     \x20 }\n\
+     }\n\n";
+
+#[test]
+fn a_turn_the_condition_refuses_is_not_taken() {
+    // The measurement. Both of these answer `true` on the third element. The
+    // one that cannot stop takes a fourth turn to find that out, and a branch
+    // in the body can skip the work but not the turn.
+    expect_pass(&format!(
+        "{COUNTING}\
+         fn stopping(items: List<Int>) -> Bool\n\
+         \x20 uses Log.note,\n\
+         {{\n\
+         \x20 for item in items with found = false while !found {{\n\
+         \x20   Log.note()\n\
+         \x20   item > 2\n\
+         \x20 }}\n\
+         }}\n\n\
+         fn walking(items: List<Int>) -> Bool\n\
+         \x20 uses Log.note,\n\
+         {{\n\
+         \x20 for item in items with found = false {{\n\
+         \x20   Log.note()\n\
+         \x20   if found {{ true }} else {{ item > 2 }}\n\
+         \x20 }}\n\
+         }}\n\n\
+         test \"a turn not taken\" {{\n\
+         \x20 with Loud {{ count: 0 }} {{\n\
+         \x20   assert stopping([1, 2, 3, 4]) == true\n\
+         \x20   assert Log.seen() == 3\n\
+         \x20 }}\n\n\
+         \x20 with Loud {{ count: 0 }} {{\n\
+         \x20   assert walking([1, 2, 3, 4]) == true\n\
+         \x20   assert Log.seen() == 4\n\
+         \x20 }}\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn a_condition_that_is_false_from_the_start_takes_no_turns_at_all() {
+    expect_pass(
+        "module a\n\n\
+         fn none(items: List<Int>) -> Int {\n\
+         \x20 for item in items with total = 0 while total > 0 {\n\
+         \x20   total + item\n\
+         \x20 }\n\
+         }\n\n\
+         test \"the accumulator comes back untouched\" {\n\
+         \x20 assert none([1, 2, 3]) == 0\n\
+         }\n",
+    );
+}
+
+#[test]
+fn the_condition_has_to_be_a_bool() {
+    let (_, checked) = check(
+        "module a\n\n\
+         fn f(items: List<Int>) -> Int {\n\
+         \x20 for item in items with total = 0 while total {\n\
+         \x20   total + item\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![vow_typeck::codes::TYPE_MISMATCH]
+    );
+}
+
+/// The condition is about what the walk has worked out so far. Without an
+/// accumulator there is nothing that changes between turns, so it either stops
+/// the walk before it starts or never stops it, and neither is a thing anybody
+/// meant to write.
+#[test]
+fn a_condition_with_nothing_to_be_about_is_refused() {
+    let (sources, checked) = check(
+        "module a\n\n\
+         fn f(items: List<Int>) -> () {\n\
+         \x20 for item in items while true {\n\
+         \x20   ()\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![vow_typeck::codes::WHILE_WITHOUT_ACCUMULATOR]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("needs a `with`"), "{text}");
+}
+
+/// The element belongs to the turn this is deciding whether to take, so it is
+/// not in scope yet. Nor is the index.
+#[test]
+fn the_element_is_not_in_scope_in_the_condition() {
+    let (_, checked) = check(
+        "module a\n\n\
+         fn f(items: List<Int>) -> Int {\n\
+         \x20 for item at here in items with total = 0 while item > 0 {\n\
+         \x20   total + item\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![vow_resolve::codes::UNKNOWN_NAME]
+    );
+}
+
+/// `while` is a name everywhere else, and the only thing that can come between
+/// an accumulator and the body is this one, so there is nothing to reserve.
+/// Same reasoning that kept `at` and `state` out of the keyword list.
+#[test]
+fn while_is_still_a_name() {
+    expect_pass(
+        "module a\n\n\
+         fn wait(while: Int) -> Int {\n\
+         \x20 while + 1\n\
+         }\n\n\
+         test \"a name is a name\" {\n\
+         \x20 assert wait(1) == 2\n\
+         }\n",
+    );
+}
+
 // -- running ----------------------------------------------------------------
 
 #[test]

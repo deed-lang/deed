@@ -422,12 +422,16 @@ impl<'a> Checker<'a> {
             Expr::For {
                 iterable,
                 accumulator,
+                keep,
                 body,
                 ..
             } => {
                 self.calls_in(iterable, found);
                 if let Some(accumulator) = accumulator {
                     self.calls_in(&accumulator.init, found);
+                }
+                if let Some(keep) = keep {
+                    self.calls_in(keep, found);
                 }
                 self.calls_in_block(body, found);
             }
@@ -857,12 +861,19 @@ impl<'a> Checker<'a> {
             Expr::For {
                 iterable,
                 accumulator,
+                keep,
                 body,
                 ..
             } => {
                 row.extend(&self.infer_expr(iterable));
                 if let Some(accumulator) = accumulator {
                     row.extend(&self.infer_expr(&accumulator.init));
+                }
+                // Read once per turn, so whatever it performs is performed by
+                // the walk. Charged once, like the body, since a row says what
+                // can happen rather than how often.
+                if let Some(keep) = keep {
+                    row.extend(&self.infer_expr(keep));
                 }
                 row.extend(&self.infer_block(body));
             }

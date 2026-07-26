@@ -1685,6 +1685,16 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+
+        // `while` is a name everywhere else, and the only thing that can come
+        // between an accumulator and the body is this, so there is nothing for
+        // it to be confused with and nothing to reserve. Same reasoning that
+        // took `state` back out of the keyword list and kept `at` out of it.
+        let keep = if self.eat_named("while") {
+            Some(Box::new(self.parse_expr()))
+        } else {
+            None
+        };
         self.struct_lit = saved;
 
         let body = self.parse_block();
@@ -1694,6 +1704,7 @@ impl<'a> Parser<'a> {
             index,
             iterable: Box::new(iterable),
             accumulator,
+            keep,
             body,
         }
     }

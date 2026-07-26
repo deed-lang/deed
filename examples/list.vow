@@ -75,16 +75,22 @@ fn fold<T, S, uses r>(items: List<T>, start: S, step: Fn(S, T) uses r -> S) -> S
     }
 }
 
+// The two that wanted to stop. `while` is read before each turn with the
+// accumulator in scope, so these say what they mean in the head of the loop
+// instead of carrying a branch through the body whose only job is to notice
+// that the answer is already in.
+//
+// This is why the language grew it rather than the library working around it.
+// The workaround was writable and it was here: both of these used to open with
+// `if found` or `if so_far`, which is control flow inside a fold, which is the
+// thing a fold exists to not have. The walk also could not stop, so `any` over
+// a thousand elements took a thousand turns to find the first one.
 fn any<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
   uses
     r,
 {
-    for item in items with found = false {
-        if found {
-            true
-        } else {
-            matches(item)
-        }
+    for item in items with found = false while !found {
+        matches(item)
     }
 }
 
@@ -92,12 +98,8 @@ fn all<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
   uses
     r,
 {
-    for item in items with so_far = true {
-        if so_far {
-            matches(item)
-        } else {
-            false
-        }
+    for item in items with so_far = true while so_far {
+        matches(item)
     }
 }
 
