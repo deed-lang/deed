@@ -583,7 +583,7 @@ fn the_todo_example_reads_a_real_file_and_reports_on_it() {
     let text = stdout(&output);
     assert!(text.contains("5 of 6 done"), "{text}");
     assert!(
-        text.contains("still open: work out what a trait is"),
+        text.contains("still open: 6. work out what a trait is"),
         "{text}"
     );
     // A `\r` left on the end of a title would print the rest of the line over
@@ -642,7 +642,7 @@ fn arguments_after_a_double_dash_go_to_the_program() {
     let text = stdout(&output);
     assert!(text.contains("added"), "{text}");
     assert!(text.contains("1 of 3 done"), "{text}");
-    assert!(text.contains("still open: two, buy milk"), "{text}");
+    assert!(text.contains("still open: 2. two, 3. buy milk"), "{text}");
 
     assert_eq!(
         std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
@@ -684,11 +684,59 @@ fn a_task_can_be_marked_done() {
     let text = stdout(&output);
     assert!(text.contains("done: two"), "{text}");
     assert!(text.contains("2 of 3 done"), "{text}");
-    assert!(text.contains("still open: three"), "{text}");
+    assert!(text.contains("still open: 3. three"), "{text}");
 
     assert_eq!(
         std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
         "[x] one\n[x] two\n[ ] three\n"
+    );
+}
+
+#[test]
+fn a_task_can_be_marked_done_by_position() {
+    // Two tasks with the same title, which is the case a title cannot answer
+    // because it is being used as a name and it is not one. The report prints
+    // positions so that there is something to type.
+    let scratch = Scratch::new("todo-done-at");
+    scratch.write("todo.txt", "[ ] buy milk\n[ ] buy milk\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let output = run(&["run", TODO, "--dir", &dir, "--", "done", "2"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("done: 2"), "{text}");
+    assert!(text.contains("1 of 2 done"), "{text}");
+    assert!(text.contains("still open: 1. buy milk"), "{text}");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
+        "[ ] buy milk\n[x] buy milk\n"
+    );
+}
+
+#[test]
+fn a_position_that_is_not_there_says_so_and_writes_nothing() {
+    // Nothing bounds the number, so the walk that marks by position cannot
+    // fail and comes back with the list it started with. Whether that meant
+    // anything is asked separately, which is the whole shape of an index the
+    // type system cannot hold in range.
+    let scratch = Scratch::new("todo-done-at-missing");
+    scratch.write("todo.txt", "[ ] two\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let before = std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap();
+    let output = run(&["run", TODO, "--dir", &dir, "--", "done", "9"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    assert!(
+        stdout(&output).contains("no task at 9"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
+        before
     );
 }
 
@@ -731,7 +779,7 @@ fn a_file_written_on_windows_reads_the_same_as_one_written_anywhere_else() {
 
     let text = stdout(&output);
     assert!(text.contains("1 of 2 done"), "{text}");
-    assert!(text.contains("still open: two"), "{text}");
+    assert!(text.contains("still open: 2. two"), "{text}");
     assert!(!text.contains('\r'), "a carriage return survived:\n{text}");
 }
 

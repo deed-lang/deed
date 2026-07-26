@@ -67,13 +67,32 @@
 //    position is a cost nobody had paid until somebody wanted the word. The
 //    fold below is that word being wanted, so it is a name again (#128).
 //
-// What it still cannot do is say which task when two have the same title.
-// That wants an index, and an index into a list nothing bounds is exactly the
-// sort of thing the refinement tier exists to argue about, so it is worth its
-// own conversation rather than a quick answer.
+// 8. Two tasks with the same title, which this file had listed as the thing it
+//    could not do. It can now: `done 2` finishes the second task and
+//    `done buy milk` still finishes every task called that. Nothing in the
+//    language had to change, and what it took is the interesting part.
+//
+//    A position is a fact about where an element is, and a callback is only
+//    ever handed the element. So `map` and `filter` stop being enough the
+//    moment position matters, and the walk goes back to being written out by
+//    hand with a counter in a record. There are three of those in this file
+//    now, all the same shape, and one of them replaced a `map(filter(..))`
+//    that used to be a single line. `filter` is not imported here any more.
+//
+//    Nothing bounds the number. `done 9` on a file with two tasks walks both,
+//    marks neither and hands back the list it started with, so whether it
+//    meant anything has to be asked again by a separate function that compares
+//    it against the length. That is the shape an index has when the type
+//    system cannot hold "in range", and it is the evidence the refinement
+//    conversation was waiting for rather than a story told ahead of it.
+//
+//    It also cost the program a name: a task called "2" can no longer be
+//    finished by title, because `done` has to decide what its argument is and
+//    a `String` has nowhere to record which of the two it was. That is the
+//    same mistake as using a title for a name, one level up.
 module examples/todo
 
-use examples/list.{map, filter, any, count_where}
+use examples/list.{map, any, count_where}
 
 record Task {
     done: Bool,
@@ -128,8 +147,30 @@ fn count_done(lines: List<String>) -> Int {
     count_where(tasks(lines), |task: Task| task.done)
 }
 
+// The open ones, numbered by where they are in the file.
+//
+// This used to be `map(filter(..))` and one line. It is a walk carrying a
+// counter now, and that is the first thing marking by position cost: `map` and
+// `filter` hand the callback an element and nothing else, so the moment a
+// position matters they stop being enough and the walk goes back to being
+// written out by hand. The counter has to count every task rather than every
+// open one, because the number a user types has to mean the same thing here
+// and in `marked_at`.
 fn open_titles(lines: List<String>) -> List<String> {
-    map(filter(tasks(lines), |task: Task| !task.done), |task: Task| task.title)
+    let walked = for task in tasks(lines) with state = Walking { seen: 0, kept: [] } {
+        let here = state.seen + 1
+
+        if task.done {
+            Walking { seen: here, kept: state.kept }
+        } else {
+            Walking {
+                seen: here,
+                kept: push(state.kept, to_string(here) + ". " + task.title),
+            }
+        }
+    }
+
+    walked.kept
 }
 
 fn report(lines: List<String>) -> String {
@@ -157,9 +198,43 @@ fn marked(lines: List<String>, title: String) -> List<String> {
     map(tasks(lines), |task: Task| render(finish(task, title)))
 }
 
+// The same thing by position rather than by title, which is what this file
+// said for its whole life it could not do.
+//
+// It is not one `map`. A position is a fact about where an element is and a
+// callback is only handed the element, so this is a walk carrying a counter,
+// the same shape as `after_first` and `open_titles`. Three of them in one file
+// is the language saying something.
+//
+// Nothing here bounds `position`. `done 9` on a file with two tasks walks
+// both, marks neither, and comes back with the list it started with, so the
+// answer to "was there anything there" has to be asked separately by
+// `holds_at`. An index into a list nothing bounds is the thing to argue about;
+// this is what writing it without that argument looks like.
+fn marked_at(lines: List<String>, position: Int) -> List<String> {
+    let walked = for task in tasks(lines) with state = Walking { seen: 0, kept: [] } {
+        let here = state.seen + 1
+
+        if here == position {
+            Walking {
+                seen: here,
+                kept: push(state.kept, render(done(task))),
+            }
+        } else {
+            Walking { seen: here, kept: push(state.kept, render(task)) }
+        }
+    }
+
+    walked.kept
+}
+
+fn done(task: Task) -> Task {
+    Task { done: true, title: task.title }
+}
+
 fn finish(task: Task, title: String) -> Task {
     if task.title == title {
-        Task { done: true, title: task.title }
+        done(task)
     } else {
         task
     }
@@ -167,6 +242,13 @@ fn finish(task: Task, title: String) -> Task {
 
 fn holds(lines: List<String>, title: String) -> Bool {
     any(tasks(lines), |task: Task| task.title == title)
+}
+
+// Whether there is a task at that position. Two comparisons rather than one
+// because a position is one-based, and both of them are here rather than in
+// `marked_at` because that walk has nowhere to say no.
+fn holds_at(lines: List<String>, position: Int) -> Bool {
+    position >= 1 && position <= walk(lines)
 }
 
 // A file that is not there is not a crash. The capability says which directory
@@ -188,10 +270,17 @@ fn read_or(files: Dir, name: String, fallback: String) -> String
 // answers are the whole set and a `match` on them is exhaustive. That is the
 // difference between a program that handles a new case and one that forgets
 // to.
+//
+// `done 2` finishes the second task, which is the arm this file was missing.
+// It carries the cost of a program deciding what a word means: a task called
+// "2" can no longer be finished by name. That is the same mistake as using a
+// title for a name, one level up, and there is nowhere in the type of a
+// `String` to record which of the two it is.
 choice Asked {
     Nothing,
     Add { title: String },
     Finish { title: String },
+    FinishAt { position: Int },
 }
 
 fn asked_for(arguments: List<String>) -> Asked {
@@ -212,7 +301,10 @@ fn rest_of(first: String, arguments: List<String>) -> Asked {
         if length(title) == 0 {
             Nothing
         } else {
-            Finish { title }
+            match to_int(title) {
+                ok(position) => FinishAt { position },
+                err(why) => Finish { title },
+            }
         }
     } else {
         Add { title: join(arguments, " ") }
@@ -224,6 +316,11 @@ fn rest_of(first: String, arguments: List<String>) -> Asked {
 // the library: what a caller usually wants is `filter`, and a list library
 // with a `drop` in it invites index arithmetic that nothing in this language
 // makes safe.
+//
+// Three walks in this file carry this record now, which is what happened when
+// position started mattering. It is not a `drop`, a `map` and a `filter`
+// wearing different names; it is the same counter written out three times
+// because there is no way to hand a callback where it is.
 record Walking {
     seen: Int,
     kept: List<String>,
@@ -250,6 +347,7 @@ fn written(text: String, asked: Asked) -> String {
         Nothing => text,
         Add { title } => lines_of(push(entries_in(text), "[ ] " + title)),
         Finish { title } => lines_of(marked(entries_in(text), title)),
+        FinishAt { position } => lines_of(marked_at(entries_in(text), position)),
     }
 }
 
@@ -321,6 +419,7 @@ fn said(text: String, asked: Asked) -> String {
         Nothing => "nothing asked for",
         Add { title } => "added: " + title,
         Finish { title } => finished_or_not(text, title),
+        FinishAt { position } => finished_at_or_not(text, position),
     }
 }
 
@@ -329,6 +428,14 @@ fn finished_or_not(text: String, title: String) -> String {
         "done: " + title
     } else {
         "no task called: " + title
+    }
+}
+
+fn finished_at_or_not(text: String, position: Int) -> String {
+    if holds_at(entries_in(text), position) {
+        "done: " + to_string(position)
+    } else {
+        "no task at " + to_string(position)
     }
 }
 
@@ -352,7 +459,7 @@ test "counting and collecting agree with each other" {
 
     assert walk(lines) == 3
     assert count_done(lines) == 1
-    assert open_titles(lines) == ["two", "three"]
+    assert open_titles(lines) == ["2. two", "3. three"]
     assert report(lines) == "1 of 3 done"
 }
 
@@ -372,6 +479,37 @@ test "marking one done leaves the others alone" {
     assert marked([], "two") == []
 }
 
+// The bug this file carried for months, and the shortest statement of it.
+test "a title is not a name when two tasks share one" {
+    let lines = ["[ ] buy milk", "[ ] buy milk"]
+
+    assert marked(lines, "buy milk") == ["[x] buy milk", "[x] buy milk"]
+    assert marked_at(lines, 2) == ["[ ] buy milk", "[x] buy milk"]
+}
+
+test "marking by position marks exactly one" {
+    let lines = ["[x] one", "[ ] two", "[ ] three"]
+
+    assert marked_at(lines, 2) == ["[x] one", "[x] two", "[ ] three"]
+    assert marked_at(lines, 1) == lines
+    assert marked_at([], 1) == []
+}
+
+// A position nothing bounds. The walk has nowhere to say no, so out of range
+// is the list coming back unchanged, and whether that meant anything is a
+// second question asked somewhere else.
+test "a position that is not there changes nothing and is said so" {
+    let lines = ["[ ] two"]
+
+    assert marked_at(lines, 9) == lines
+    assert marked_at(lines, 0) == lines
+    assert marked_at(lines, 0 - 1) == lines
+    assert holds_at(lines, 1) == true
+    assert holds_at(lines, 9) == false
+    assert holds_at(lines, 0) == false
+    assert holds_at([], 1) == false
+}
+
 test "a task that is not there is said so rather than ignored" {
     let lines = ["[ ] two"]
 
@@ -389,12 +527,23 @@ test "one verb and the rest is a title" {
     assert asked_for(["done"]) == Nothing
 }
 
+// What the program decided a word means, and what that decision costs.
+test "done reads a number as a position" {
+    assert asked_for(["done", "2"]) == FinishAt { position: 2 }
+    assert asked_for(["done", "0"]) == FinishAt { position: 0 }
+    // A task called "2" cannot be finished by name any more. Nothing in the
+    // type of a `String` records which of the two it was meant to be.
+    assert asked_for(["done", "2", "left"]) == Finish { title: "2 left" }
+}
+
 test "what gets written back" {
     let text = "[ ] two\n"
 
     assert written(text, Nothing) == text
     assert written(text, Add { title: "three" }) == "[ ] two\n[ ] three\n"
     assert written(text, Finish { title: "two" }) == "[x] two\n"
+    assert written(text, FinishAt { position: 1 }) == "[x] two\n"
+    assert written(text, FinishAt { position: 9 }) == text
     assert written("", Add { title: "first" }) == "[ ] first\n"
     assert written("", Nothing) == ""
 }
