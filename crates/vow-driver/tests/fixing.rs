@@ -229,6 +229,106 @@ fn a_contract_with_more_than_a_row_in_it_is_left_alone() {
     assert!(!diagnose(&result.source).is_empty(), "still an error");
 }
 
+// -- imports ---------------------------------------------------------------
+//
+// The same layering as the rows, one pass earlier. `VOW3003` knows which name
+// is unused and nothing else: taking a name out of a list is a question about
+// a comma, and taking the last one out is a question about a line and the
+// blank line beside it.
+
+/// A module with two things in it, for the import cases.
+const DEP: &str = "module dep\n\nfn used() -> Int { 1 }\n\nfn spare() -> Int { 2 }\n";
+
+/// Fixing a file that imports another one.
+///
+/// An unused import needs something real on the other side of it, or the
+/// diagnostic is about the module rather than about the name.
+fn fixed_with(source: &str, dependency: &str) -> String {
+    fix(source, |text| {
+        let mut sources = SourceMap::new();
+        let dep = sources.add("dep.vow", dependency.to_string());
+        let file = sources.add("test.vow", text.to_string());
+        vow_driver::check_all(&sources, &[dep, file])
+            .pop()
+            .expect("two files in, two results out")
+            .diagnostics
+    })
+    .source
+}
+
+#[test]
+fn an_import_nobody_uses_is_taken_out_of_the_list() {
+    let source = "module a\n\nuse dep.{used, spare}\n\nfn f() -> Int {\n    used()\n}\n";
+    let result = fixed_with(source, DEP);
+    assert!(result.contains("use dep.{used}\n"), "{result}");
+}
+
+#[test]
+fn the_last_name_takes_the_line_and_a_blank_with_it() {
+    // Deleting only the line leaves the blank above it and the blank below it
+    // doing the work of one gap.
+    let source = "module a\n\nuse dep.{spare}\n\nfn f() -> Int {\n    1\n}\n";
+    let result = fixed_with(source, DEP);
+    assert_eq!(result, "module a\n\nfn f() -> Int {\n    1\n}\n");
+}
+
+#[test]
+fn two_lines_that_both_empty_out_leave_one_gap_between_them() {
+    // Removed one at a time these would each leave their own blank behind.
+    // One fix for the block is what makes that impossible rather than unlikely.
+    let source = "module a\n\nuse dep.{spare}\nuse dep.{used}\n\nfn f() -> Int {\n    1\n}\n";
+    let result = fixed_with(source, DEP);
+    assert_eq!(result, "module a\n\nfn f() -> Int {\n    1\n}\n");
+}
+
+#[test]
+fn what_survives_keeps_its_own_line() {
+    let source = "module a\n\nuse dep.{spare}\nuse dep.{used}\n\nfn f() -> Int {\n    used()\n}\n";
+    let result = fixed_with(source, DEP);
+    assert_eq!(
+        result,
+        "module a\n\nuse dep.{used}\n\nfn f() -> Int {\n    used()\n}\n"
+    );
+}
+
+#[test]
+fn what_it_writes_for_an_import_is_what_the_formatter_would_have() {
+    let source = "module a\n\nuse dep.{used, spare}\n\nfn f() -> Int {\n    used()\n}\n";
+    let result = fixed_with(source, DEP);
+
+    let mut sources = SourceMap::new();
+    let file = sources.add("fixed.vow", result.clone());
+    let formatted = vow_fmt::format(file, &result).expect("it should parse");
+    assert_eq!(formatted, result);
+}
+
+#[test]
+fn a_comment_among_the_imports_stops_it() {
+    // A comment beside an import is usually about that import. It is not the
+    // compiler's to move and certainly not the compiler's to delete.
+    let source =
+        "module a\n\nuse dep.{used}\n// why\nuse dep.{spare}\n\nfn f() -> Int {\n    used()\n}\n";
+    let result = fixed_with(source, DEP);
+    assert_eq!(result, source);
+}
+
+/// A comment above the block is not in the block, so it is not in the way.
+#[test]
+fn a_comment_above_the_imports_is_not_in_the_way() {
+    let source = "module a\n\n// what this file needs\nuse dep.{used, spare}\n\nfn f() -> Int {\n    used()\n}\n";
+    let result = fixed_with(source, DEP);
+    assert_eq!(
+        result,
+        "module a\n\n// what this file needs\nuse dep.{used}\n\nfn f() -> Int {\n    used()\n}\n"
+    );
+}
+
+#[test]
+fn an_import_that_is_used_is_left_where_it_is() {
+    let source = "module a\n\nuse dep.{used}\n\nfn f() -> Int {\n    used()\n}\n";
+    assert_eq!(fixed_with(source, DEP), source);
+}
+
 // -- what it declines to do ------------------------------------------------
 
 #[test]
