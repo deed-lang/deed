@@ -50,6 +50,13 @@ pub enum DefKind {
     /// In scope for the whole declaration, which is the signature, the
     /// contract and the body, and nowhere else.
     TypeParam,
+    /// A row variable of a generic function, such as the `r` in
+    /// `fn map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> B)`.
+    ///
+    /// Stands for whatever the callback it is attached to performs, so that
+    /// the function can pass that through to its own row rather than naming
+    /// one effect and being useful for that effect only.
+    RowParam,
     /// A `state` field of a handler. The only mutable thing in the language.
     State,
     /// A `let` binding, a pattern binding, or a closure parameter.
@@ -73,6 +80,7 @@ impl DefKind {
             DefKind::Function => "function",
             DefKind::Param => "parameter",
             DefKind::TypeParam => "type parameter",
+            DefKind::RowParam => "row variable",
             DefKind::State => "handler state",
             DefKind::Local => "binding",
             DefKind::Import => "import",

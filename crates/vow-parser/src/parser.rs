@@ -456,16 +456,38 @@ impl<'a> Parser<'a> {
     /// expression position and with them the `f<a>(b)` versus `f < a > (b)`
     /// ambiguity that costs other parsers a real amount of lookahead.
     fn parse_type_params(&mut self) -> Vec<Ident> {
+        self.parse_declaration_params().0
+    }
+
+    /// The same list, which may also hold row variables written `uses r`.
+    ///
+    /// One list rather than two, because a reader wants to see everything a
+    /// call has to work out in one place, and `uses` marks which kind each one
+    /// is rather than leaving it to be inferred from where it turns up.
+    fn parse_declaration_params(&mut self) -> (Vec<Ident>, Vec<Ident>) {
         let mut generics = Vec::new();
+        let mut rows = Vec::new();
         if !self.eat(&TokenKind::Lt) {
-            return generics;
+            return (generics, rows);
         }
         while !self.at(&TokenKind::Gt) && !self.at_eof() {
             let before = self.pos;
-            let Some(parameter) = self.expect_ident("a type parameter") else {
+            let is_row = self.at_kw(Keyword::Uses);
+            if is_row {
+                self.bump();
+            }
+            let Some(parameter) = self.expect_ident(if is_row {
+                "a row variable"
+            } else {
+                "a type parameter"
+            }) else {
                 break;
             };
-            generics.push(parameter);
+            if is_row {
+                rows.push(parameter);
+            } else {
+                generics.push(parameter);
+            }
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
@@ -474,7 +496,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::Gt, "a type parameter list");
-        generics
+        (generics, rows)
     }
 
     /// `{ name: Type, other: Type }`, trailing comma allowed.
@@ -700,10 +722,10 @@ impl<'a> Parser<'a> {
         let start = self.bump().span;
         let name = self.expect_ident("a function signature")?;
 
-        // `<T, U>`, and only here. In a declaration the `<` cannot be a
-        // comparison, so this needs no lookahead and none of the machinery
+        // `<T, U, uses r>`, and only here. In a declaration the `<` cannot be
+        // a comparison, so this needs no lookahead and none of the machinery
         // that `f<a>(b)` in expression position would.
-        let generics = self.parse_type_params();
+        let (generics, rows) = self.parse_declaration_params();
 
         self.expect(TokenKind::LParen, "a parameter list")?;
 
@@ -765,6 +787,7 @@ impl<'a> Parser<'a> {
         Some(FnSig {
             name,
             generics,
+            rows,
             params,
             ret,
             span: start.to(end),

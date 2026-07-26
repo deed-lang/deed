@@ -227,9 +227,10 @@ terminate, so it would bring `Diverge` back with it and undo the reason for havi
 has come up yet in a program written here.
 
 What is deliberately absent from lists: slicing, searching, and any operation that takes a
-function. The last one is now writable, since a function type can carry a row, but a `map`
-that works for every callback needs a row variable and that is still an open question in
-`design/03-effects.md`.
+function. The last one is now writable, and `examples/list.vow` is a list library written in
+Vow rather than built into the compiler. It stays out of the prelude, because the prelude is
+where names go to become unavailable to everyone else and a library does not need to be
+there.
 
 ## Functions and the contract block
 
@@ -382,12 +383,22 @@ unknown absorbs, so it fits wherever an `Option` was wanted. That is not a speci
 is a `List<unknown>` and `ok(x)` is a `Result<T, unknown>` for the same reason. Three places,
 one answer.
 
-What is still missing is a type parameter on an alias, and a row variable. An alias with no
-predicate is expanded away and one with a predicate is a refinement, and a generic refinement
-is a different question about what the predicate may say about a value whose type nobody
-knows yet. The row one is in `design/03-effects.md`: `map` works only for a callback that
-performs nothing, because `Fn(A) -> B` promises that, and writing a row on it would name one
-effect rather than passing whatever the callback does through.
+What is still missing is a type parameter on an alias. An alias with no predicate is expanded
+away and one with a predicate is a refinement, and a generic refinement is a different
+question about what the predicate may say about a value whose type nobody knows yet.
+
+A declaration's list may also hold a **row variable**, written `uses r`:
+
+```vow
+fn map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> B) -> List<B>
+  uses
+    r,
+{ ... }
+```
+
+One list rather than two, because a reader wants everything a call has to work out in one
+place, and `uses` says which kind each entry is rather than leaving it to be inferred from
+where it turns up. `design/03-effects.md` has the rest.
 
 ## Verification, honestly
 

@@ -208,6 +208,7 @@ impl<'a> Checker<'a> {
                         module: PRELUDE_MODULE.to_string(),
                         effect: "Io".to_string(),
                         operation: Some(name.to_string()),
+                        variable: false,
                     }]),
                     guarantee: Guarantee::any(),
                 },
@@ -408,6 +409,7 @@ impl<'a> Checker<'a> {
                     let Some(def) = self.def_of(&function.sig.name) else {
                         continue;
                     };
+                    self.rows.declaring(&function.sig.rows);
                     let mut signature = self.lower_signature(&function.sig);
                     // A function named rather than called is a value, and
                     // what that value performs is what its contract says.
@@ -1145,10 +1147,15 @@ impl<'a> Checker<'a> {
         // value keeps that promise is a question for the pass that knows about
         // rows. Which values owe which row is this pass's question, so it
         // answers it here, before anything short circuits.
+        //
+        // A row variable is left alone. It has made room for anything, and
+        // what it turned out to be is settled at the call site rather than
+        // here.
         if let Ty::Fn {
             row: FnRow::Declared(allowed),
             ..
         } = expected
+            && !allowed.iter().any(|entry| entry.variable)
         {
             self.types
                 .require_row(expr.map(Expr::span).unwrap_or(span), allowed.clone());
@@ -1629,6 +1636,11 @@ impl<'a> Checker<'a> {
     }
 
     fn check_fn_against(&mut self, function: &'a FnDecl, declared: Option<(Vec<Ty>, Ty)>) {
+        // A row variable means nothing outside the signature that declared it,
+        // so what the rows in this body may name is set before anything in it
+        // is lowered.
+        self.rows.declaring(&function.sig.rows);
+
         // Reuse the signature computed during collection where there is one.
         // Lowering the same annotation twice would report anything wrong with
         // it twice, which is a cascade from a single mistake.
