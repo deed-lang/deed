@@ -225,6 +225,118 @@ fn the_binder_is_a_binding_like_any_other() {
     assert!(!checked.diagnostics.is_empty(), "shadowing went unnoticed");
 }
 
+// -- where in the list it is ------------------------------------------------
+//
+// A `for` used to walk a list without saying where in it you were, so the
+// moment a position mattered the walk went back to a counter carried in a
+// record, and every branch had to remember to bump it. There were three of
+// those in `examples/todo.vow` and they were the same three lines each time.
+
+#[test]
+fn the_index_is_an_integer_and_counts_from_zero() {
+    expect_pass(
+        "module a\n\n\
+         fn positions(items: List<String>) -> List<Int> {\n\
+         \x20 for item at here in items with out = [] {\n\
+         \x20   push(out, here)\n\
+         \x20 }\n\
+         }\n\n\
+         test \"from zero\" {\n\
+         \x20 assert positions([\"a\", \"b\", \"c\"]) == [0, 1, 2]\n\
+         \x20 assert positions([]) == []\n\
+         }\n",
+    );
+}
+
+#[test]
+fn the_index_is_bound_again_on_every_turn_like_everything_else() {
+    expect_pass(
+        "module a\n\n\
+         fn weighted(numbers: List<Int>) -> Int {\n\
+         \x20 for n at here in numbers with total = 0 {\n\
+         \x20   total + n * here\n\
+         \x20 }\n\
+         }\n\n\
+         test \"nothing is assigned\" {\n\
+         \x20 assert weighted([5, 5, 5]) == 15\n\
+         }\n",
+    );
+}
+
+#[test]
+fn the_index_is_a_binding_like_any_other() {
+    // Shadowing is an error everywhere else, and this is not an exemption.
+    let (_, checked) = check(
+        "module a\n\n\
+         fn f(here: Int, numbers: List<Int>) -> Int {\n\
+         \x20 for n at here in numbers with sum = 0 {\n\
+         \x20   sum + n\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert!(!checked.diagnostics.is_empty(), "shadowing went unnoticed");
+}
+
+#[test]
+fn the_index_is_known_to_be_a_real_position() {
+    // Not negative and below the length of what is being walked, which is what
+    // makes it worth binding rather than counting by hand: something that
+    // indexes with it can say so and be believed.
+    check_ok(
+        "module a\n\n\
+         fn nth(items: List<Int>, index: Int) -> Result<Int, String>\n\
+         \x20 where\n\
+         \x20   index >= 0,\n\
+         \x20   index < length(items),\n\
+         {\n\
+         \x20 at(items, index)\n\
+         }\n\n\
+         fn each(items: List<Int>) -> List<Result<Int, String>> {\n\
+         \x20 for item at here in items with out = [] {\n\
+         \x20   push(out, nth(items, here))\n\
+         \x20 }\n\
+         }\n",
+    );
+    let (_, checked) = check(
+        "module a\n\n\
+         fn nth(items: List<Int>, index: Int) -> Result<Int, String>\n\
+         \x20 where\n\
+         \x20   index >= 0,\n\
+         \x20   index < length(items),\n\
+         {\n\
+         \x20 at(items, index)\n\
+         }\n\n\
+         fn each(items: List<Int>) -> List<Result<Int, String>> {\n\
+         \x20 for item at here in items with out = [] {\n\
+         \x20   push(out, nth(items, here))\n\
+         \x20 }\n\
+         }\n",
+    );
+    let proven = checked
+        .obligations
+        .iter()
+        .filter(|obligation| obligation.tier == vow_typeck::Tier::Proven)
+        .count();
+    assert_eq!(proven, 2, "obligations: {:?}", checked.obligations);
+}
+
+#[test]
+fn a_for_that_does_not_ask_where_it_is_binds_nothing_extra() {
+    // `at` is a name everywhere else, including the prelude function that
+    // indexes a list, so leaving it off has to leave the walk alone.
+    expect_pass(
+        "module a\n\n\
+         fn heads(items: List<Int>) -> Result<Int, String> {\n\
+         \x20 for item in items with found = at(items, 0) {\n\
+         \x20   found\n\
+         \x20 }\n\
+         }\n\n\
+         test \"at is still a function\" {\n\
+         \x20 assert heads([4, 5]) == ok(4)\n\
+         }\n",
+    );
+}
+
 // -- running ----------------------------------------------------------------
 
 #[test]

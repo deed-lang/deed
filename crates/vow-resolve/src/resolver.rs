@@ -975,6 +975,7 @@ impl Resolver<'_> {
 
             Expr::For {
                 binder,
+                index,
                 iterable,
                 accumulator,
                 body,
@@ -991,6 +992,9 @@ impl Resolver<'_> {
 
                 self.push_scope(ScopeKind::Local);
                 self.declare_local(binder, DefKind::Local);
+                if let Some(index) = index {
+                    self.declare_local(index, DefKind::Local);
+                }
                 if let Some(accumulator) = accumulator {
                     self.declare_local(&accumulator.name, DefKind::Local);
                 }

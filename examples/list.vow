@@ -31,6 +31,23 @@ fn map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> B) -> List<B>
     }
 }
 
+// The same, and the callback is told where the element was.
+//
+// This is the test for whether a `for` should be the thing that knows a
+// position rather than the library. It could not be written before, because
+// everything in this file is a `for` and a `for` could not say where it was,
+// so a callback could not be told something the walk did not know. Now it can,
+// and the library builds the indexed form rather than the language growing a
+// second one.
+fn map_at<A, B, uses r>(items: List<A>, step: Fn(Int, A) uses r -> B) -> List<B>
+  uses
+    r,
+{
+    for item at index in items with out = [] {
+        push(out, step(index, item))
+    }
+}
+
 // Keep the ones that pass. A `for` is a fold, so this is the accumulator
 // growing or not growing, which is what a filter is.
 fn filter<T, uses r>(items: List<T>, keep: Fn(T) uses r -> Bool) -> List<T>

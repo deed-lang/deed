@@ -803,6 +803,7 @@ impl<'a> Interp<'a> {
             // is what the next turn starts with.
             Expr::For {
                 binder,
+                index,
                 iterable,
                 accumulator,
                 body,
@@ -821,8 +822,14 @@ impl<'a> Interp<'a> {
                     None => Value::Unit,
                 };
 
-                for element in elements.iter() {
+                for (position, element) in elements.iter().enumerate() {
                     self.rebind(binder, element.clone());
+                    // Zero-based, like `at`. A `for` that counted from one
+                    // while the only way to index counted from zero would be a
+                    // trap rather than a convenience.
+                    if let Some(index) = index {
+                        self.rebind(index, Value::Int(position as i64));
+                    }
                     if let Some(accumulator) = accumulator {
                         self.rebind(&accumulator.name, carried);
                     }

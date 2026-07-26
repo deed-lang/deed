@@ -152,7 +152,7 @@ trim("line\r")           // "line"
 The test for whether something belongs in the prelude is whether it can be written in the
 language, and most of the obvious candidates can. `contains(text, needle)` is
 `length(split(text, needle)) > 1`. `replace(text, from, to)` is `join(split(text, from), to)`.
-An indexed walk is a `for` with a record accumulator holding the index.
+An indexed walk is `for item at index in items`.
 
 `trim` cannot be. Deciding what whitespace is needs to look at characters, and taking it off
 the ends needs a walk that stops early, which a fold does not do. It is also the difference
@@ -236,6 +236,38 @@ either now.
 The accumulator is not in scope in what it starts as: `with sum = sum` names something that
 does not exist yet rather than a value that refers to itself. The binder is a binding like
 any other, so shadowing an outer name with it is the same error it is anywhere else.
+
+**A `for` can say where in the list it is.**
+
+```vow
+for task at here in tasks with kept = [] {
+    if task.done {
+        kept
+    } else {
+        push(kept, to_string(here + 1) + ". " + task.title)
+    }
+}
+```
+
+`at` is optional and there is no second loop form: everything above still holds, the index is
+a fresh binding on every turn like the element and the accumulator, and nothing became
+mutable. It counts from zero, like the `at` that indexes a list, because a walk that
+disagreed with the only way to index would be a trap rather than a convenience. It is known
+to be a real position, so it is not negative and it is below the length of what is being
+walked, which is what makes it worth binding rather than counting: something that indexes with
+it can say so in a `where` clause and be believed.
+
+`at` stays an ordinary name, and it is the name of the prelude function that indexes a list.
+Reserving the word for one position would cost a name people already use, and the only thing
+that can follow a `for` binder is `at` or `in`, so there is nothing here for it to be
+confused with. That is the same reasoning that took `state` back out of the keyword list.
+
+This is in the language rather than in the library because the library cannot have it
+otherwise. Everything in `examples/list.vow` is written with a `for`, so `map` cannot hand a
+callback something the walk never knew. With this, the library builds its own indexed forms:
+`map_at` is four lines and no part of the language grew a second `map`. Before it,
+`examples/todo.vow` had three walks carrying a counter in a record, all the same shape, each
+with branches that existed only to remember to bump it.
 
 What can be walked is a `List`, and nothing else. A `for` over a `String` or a `Result` would
 need a way to say what walking one means, which is a trait system, which does not exist.
@@ -1035,11 +1067,11 @@ using an effect to get around not having a loop.
   cannot happen. A total indexing form is a precondition on a prelude function, which is a
   thing the language can now express, and whether the prelude should carry one is the
   question.
-- Position is not something a callback can be handed. `map` and `filter` give the callback an
-  element, so the moment where an element is matters the walk goes back to a counter in a
-  record. There are three of those in `examples/todo.vow` and they are the same three lines
-  each time. An indexed form of each is the obvious answer and the obvious answer doubles the
-  library, so it is worth knowing whether the counter is the cost of not having one.
+- Position is not something a callback can be handed by a library that does not already have
+  it. A `for` says where it is now, so `examples/list.vow` can write `map_at` and anything
+  else it wants out of that. What is still unanswered is whether an indexed form of every
+  walk belongs in that library at all, since one of each doubles it and nobody has wanted
+  more than `map_at` yet.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.

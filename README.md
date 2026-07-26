@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-80 passed, 0 failed
+81 passed, 0 failed
 ```
 
 ```
@@ -253,6 +253,17 @@ return, and without a loop every walk over a list is recursion. A row that almos
 function carries the same entry in has stopped saying anything. A `for` walks a list that is
 already there, so it stops, so it declares nothing.
 
+It also says where in the list it is, which came out of `todo.vow` for the third time.
+`for task at here in tasks with kept = []` binds the position, zero-based like the `at` that
+indexes a list, and it is known to be a real one: not negative, and below the length of what
+is being walked. Before it, three walks in that file carried a counter in a record so that
+something could ride alongside the answer, and every branch had to remember to bump it. The
+reason this is in the language rather than in the library is that the library cannot have it
+otherwise: everything in `list.vow` is written with a `for`, so `map` cannot hand a callback
+something the walk never knew. With it, `map_at` is four lines of Vow and no part of the
+language grew a second `map`. `at` is still an ordinary name, since the only thing that can
+follow a `for` binder is `at` or `in`.
+
 `journal.vow` is the half `todo.vow` could not write. `Io` could read a file and open a
 directory and there was no operation that wrote one, so `Dir` was a read capability wearing a
 more general name. `Io.save` is that operation, and the thing worth looking at is what stops
@@ -387,7 +398,7 @@ at the type it was applied to, and so does a pattern binder, which is the part a
 declared with.
 
 `list.vow` and `using_list.vow` are the point of the three changes above. `list.vow` is a
-list library written in Vow: `map`, `filter`, `fold`, `any`, `all`, `count_where`,
+list library written in Vow: `map`, `map_at`, `filter`, `fold`, `any`, `all`, `count_where`,
 `filtered_with`, none of them known to the compiler, no builtin, no special case, no name in
 the prelude. It is the first thing in this repository anybody else could have written.
 

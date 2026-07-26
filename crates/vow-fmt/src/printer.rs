@@ -675,12 +675,17 @@ impl Printer<'_> {
 
             Expr::For {
                 binder,
+                index,
                 iterable,
                 accumulator,
                 body,
                 ..
             } => {
-                let mut head = format!("for {} in {}", binder.name, self.expr(iterable));
+                let mut head = format!("for {}", binder.name);
+                if let Some(index) = index {
+                    let _ = write!(head, " at {}", index.name);
+                }
+                let _ = write!(head, " in {}", self.expr(iterable));
                 if let Some(accumulator) = accumulator {
                     let _ = write!(
                         head,

@@ -483,6 +483,40 @@ fn a_for_without_with_has_no_accumulator() {
 }
 
 #[test]
+fn a_for_can_bind_where_in_the_list_it_is() {
+    let stmts = body_of("for line at here in lines {\n  f(line, here)\n}");
+    let Stmt::Expr(Expr::For { binder, index, .. }) = &stmts[0] else {
+        panic!("expected a for, got {:?}", stmts[0]);
+    };
+    assert_eq!(binder.name, "line");
+    assert_eq!(index.as_ref().expect("an index").name, "here");
+}
+
+#[test]
+fn a_for_without_at_binds_no_index() {
+    let stmts = body_of("for line in lines {\n  f(line)\n}");
+    let Stmt::Expr(Expr::For { index, .. }) = &stmts[0] else {
+        panic!("expected a for, got {:?}", stmts[0]);
+    };
+    assert!(index.is_none());
+}
+
+#[test]
+fn at_is_still_a_name_everywhere_else() {
+    // The prelude function that indexes a list is called `at`, so reserving
+    // the word for this one position would cost a name people already use.
+    // The only things that can follow a `for` binder are `at` and `in`.
+    let stmts = body_of("let first = at(items, 0)");
+    let Stmt::Let { init, .. } = &stmts[0] else {
+        panic!("expected a let, got {:?}", stmts[0]);
+    };
+    let Expr::Call { callee, .. } = init else {
+        panic!("expected a call, got {init:?}");
+    };
+    assert!(matches!(&**callee, Expr::Ident(name) if name.name == "at"));
+}
+
+#[test]
 fn a_brace_after_a_for_head_is_the_body_not_a_struct_literal() {
     // The same lookahead the `if` condition needs. Without it, `for n in items
     // { ... }` reads `items { ... }` as a literal and the loop loses its body.
