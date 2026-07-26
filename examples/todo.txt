@@ -1,4 +1,5 @@
 x|hold more than one of something
 x|get from text to a number and back
--|decide what a loop looks like
--|write a language server
+x|decide what a loop looks like
+x|write a language server
+-|work out what a trait is

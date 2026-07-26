@@ -581,9 +581,9 @@ fn the_todo_example_reads_a_real_file_and_reports_on_it() {
     assert_eq!(code(&output), 0, "{}", stdout(&output));
 
     let text = stdout(&output);
-    assert!(text.contains("2 of 4 done"), "{text}");
+    assert!(text.contains("4 of 5 done"), "{text}");
     assert!(
-        text.contains("still open: decide what a loop looks like, write a language server"),
+        text.contains("still open: work out what a trait is"),
         "{text}"
     );
     // A `\r` left on the end of a title would print the rest of the line over

@@ -11,10 +11,10 @@
 //! function from being parsed, because each hidden error costs a round trip.
 
 use vow_ast::{
-    BinaryOp, Block, ChoiceDecl, Contract, EffectDecl, EffectRef, Ensures, Expr, FieldDecl,
-    FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module, ModulePath, Outcome,
-    Param, Pattern, PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias, UnaryOp, Use,
-    Variant,
+    Accumulator, BinaryOp, Block, ChoiceDecl, Contract, EffectDecl, EffectRef, Ensures, Expr,
+    FieldDecl, FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module, ModulePath,
+    Outcome, Param, Pattern, PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias, UnaryOp,
+    Use, Variant,
 };
 use vow_diagnostics::{Applicability, Diagnostic, FileId, Span};
 use vow_lexer::{Keyword, Token, TokenKind};
@@ -1348,6 +1348,7 @@ impl<'a> Parser<'a> {
             TokenKind::Pipe | TokenKind::PipePipe => self.parse_closure(),
             TokenKind::Keyword(Keyword::If) => self.parse_if(),
             TokenKind::Keyword(Keyword::Match) => self.parse_match(),
+            TokenKind::Keyword(Keyword::For) => self.parse_for(),
             TokenKind::Keyword(Keyword::With) => self.parse_with(),
             TokenKind::Keyword(Keyword::Old) => {
                 self.bump();
@@ -1452,11 +1453,54 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `for n in numbers with sum = 0 { ... }`, with `for` still to be read.
+    ///
+    /// The iterable and the initial value are parsed with struct literals
+    /// held back, for the same reason an `if` condition is: the brace after
+    /// them opens the body, and a name followed by one would otherwise read as
+    /// a literal.
+    fn parse_for(&mut self) -> Expr {
+        let start = self.bump().span;
+
+        let binder = self
+            .expect_ident("a `for` loop")
+            .unwrap_or_else(|| Ident::new("", self.span()));
+        self.expect(TokenKind::Keyword(Keyword::In), "a `for` loop");
+
+        let saved = std::mem::replace(&mut self.struct_lit, StructLit::RequireColon);
+        let iterable = self.parse_expr();
+
+        let accumulator = if self.at_kw(Keyword::With) {
+            let with = self.bump().span;
+            let name = self
+                .expect_ident("a `for` accumulator")
+                .unwrap_or_else(|| Ident::new("", self.span()));
+            self.expect(TokenKind::Eq, "a `for` accumulator");
+            let init = self.parse_expr();
+            Some(Accumulator {
+                span: with.to(init.span()),
+                name,
+                init: Box::new(init),
+            })
+        } else {
+            None
+        };
+        self.struct_lit = saved;
+
+        let body = self.parse_block();
+        Expr::For {
+            span: start.to(body.span),
+            binder,
+            iterable: Box::new(iterable),
+            accumulator,
+            body,
+        }
+    }
+
     fn parse_if(&mut self) -> Expr {
         let start = self.bump().span;
         let condition = self.parse_expr_no_struct();
         let then_branch = self.parse_block();
-
         let else_branch = if self.eat_kw(Keyword::Else) {
             if self.at_kw(Keyword::If) {
                 Some(Box::new(self.parse_if()))

@@ -18,8 +18,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use vow_ast::{
-    BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item, MatchArm, Module,
-    Outcome, Pattern, Stmt, Type, TypeAlias, UnaryOp,
+    Accumulator, BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item,
+    MatchArm, Module, Outcome, Pattern, Stmt, Type, TypeAlias, UnaryOp,
 };
 use vow_diagnostics::{Diagnostic, FileId, Span};
 use vow_resolve::{DefId, DefKind, Resolutions};
@@ -1630,6 +1630,85 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `for n in numbers with sum = 0 { ... }`
+    ///
+    /// A fold, checked as one. The element type comes out of the list, the
+    /// accumulator's type comes from what it starts as, and the body has to
+    /// produce that same type because its value is what the next turn starts
+    /// with. Leaving `with` off means an accumulator of `()`, so the body has
+    /// to produce `()` and the loop is there for its effects.
+    ///
+    /// Nothing here is assigned. `sum` is a fresh binding on every turn, which
+    /// is what lets the language have iteration without having a second
+    /// mutable thing in it.
+    fn check_for(
+        &mut self,
+        binder: &'a Ident,
+        iterable: &'a Expr,
+        accumulator: Option<&'a Accumulator>,
+        body: &'a Block,
+        span: Span,
+    ) -> Ty {
+        let iterable_ty = self.infer(iterable);
+        let element = match self.widen(&iterable_ty) {
+            Ty::List(element) => *element,
+            other if other.absorbs() => Ty::Unknown,
+            other => {
+                let described = self.types.describe(&other);
+                self.emit(
+                    Diagnostic::error(
+                        codes::NOT_A_LIST,
+                        self.file,
+                        iterable.span(),
+                        format!("`for` walks a list, and this is {described}"),
+                    )
+                    .with_primary_label("not a list")
+                    .with_note(
+                        "there is one thing to walk in this language, and a `for` over \
+                         anything else would need a way to say what walking means",
+                    ),
+                );
+                Ty::Unknown
+            }
+        };
+
+        if let Some(def) = self.def_of(binder) {
+            self.def_types.insert(def, element);
+        }
+
+        // What the accumulator starts as is worked out before the loop, so it
+        // is checked with the loop's own names still out of scope.
+        let carried = match accumulator {
+            Some(accumulator) => {
+                let ty = self.infer(&accumulator.init);
+                if let Some(def) = self.def_of(&accumulator.name) {
+                    self.def_types.insert(def, ty.clone());
+                }
+                ty
+            }
+            None => Ty::Unit,
+        };
+
+        // The body may run no times at all, so what is known afterwards is
+        // what was known before it or what is known after it, and nothing
+        // stronger. Same reasoning as an `if` with no `else`.
+        let outer = self.facts.clone();
+        let because = match accumulator {
+            Some(accumulator) => Some((
+                accumulator.span,
+                "the accumulator this has to produce again".to_string(),
+            )),
+            None => Some((
+                span,
+                "a `for` with no `with` produces `()` on every turn".to_string(),
+            )),
+        };
+        self.check_block_against(body, &carried, because);
+        self.facts = outer.join(&self.facts.clone());
+
+        carried
+    }
+
     fn infer(&mut self, expr: &'a Expr) -> Ty {
         let ty = self.infer_inner(expr);
         self.types.record_expr(expr.span(), ty.clone());
@@ -1757,6 +1836,14 @@ impl<'a> Checker<'a> {
                 arms,
                 span,
             } => self.infer_match(scrutinee, arms, *span),
+
+            Expr::For {
+                binder,
+                iterable,
+                accumulator,
+                body,
+                span,
+            } => self.check_for(binder, iterable, accumulator.as_ref(), body, *span),
 
             Expr::Block(block) => self.check_block(block),
 

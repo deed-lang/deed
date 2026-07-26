@@ -185,6 +185,23 @@ fn lists() {
 }
 
 #[test]
+fn iteration() {
+    // The binder and the accumulator are bindings with no annotation
+    // anywhere, so both of their types come from somewhere else: one from the
+    // list, one from what the accumulator starts as. A hole in either would be
+    // a hole in every loop.
+    expect_all_known(
+        "iteration.vow",
+        "module a\n\n\
+         fn f(words: List<String>) -> Int {\n\
+         \x20 for word in words with total = 0 {\n\
+         \x20   total + length(word)\n\
+         \x20 }\n\
+         }\n",
+    );
+}
+
+#[test]
 fn closures() {
     expect_all_known(
         "closures.vow",

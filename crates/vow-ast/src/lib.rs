@@ -390,6 +390,14 @@ pub struct MatchArm {
     pub span: Span,
 }
 
+/// `with sum = 0`, the accumulator of a `for`.
+#[derive(Clone, Debug)]
+pub struct Accumulator {
+    pub name: Ident,
+    pub init: Box<Expr>,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug)]
 pub enum Expr {
     Int {
@@ -466,6 +474,25 @@ pub enum Expr {
         arms: Vec<MatchArm>,
         span: Span,
     },
+    /// `for n in numbers with sum = 0 { sum + n }`
+    ///
+    /// A fold with syntax, and not a loop with a variable in it. `sum` is bound
+    /// again on each turn rather than assigned, so nothing here is mutable and
+    /// the claim that a handler's `state` is the only mutable thing in the
+    /// language survives having iteration at all.
+    ///
+    /// The block's value is the accumulator for the next turn, and the value of
+    /// the whole expression is the last one. Leaving `with` off means an
+    /// accumulator of `()`, which is the loop that exists for its effects.
+    For {
+        /// The element, bound once per turn.
+        binder: Ident,
+        iterable: Box<Expr>,
+        /// The accumulator and what it starts as, when there is one.
+        accumulator: Option<Accumulator>,
+        body: Block,
+        span: Span,
+    },
     Block(Block),
     Closure {
         params: Vec<Param>,
@@ -512,6 +539,7 @@ impl Expr {
             | Expr::Try { span, .. }
             | Expr::If { span, .. }
             | Expr::Match { span, .. }
+            | Expr::For { span, .. }
             | Expr::Closure { span, .. }
             | Expr::Old { span, .. }
             | Expr::Unchanged { span, .. }

@@ -428,6 +428,48 @@ fn a_statement_can_start_with_a_list() {
 }
 
 #[test]
+fn a_for_reads_its_binder_iterable_and_accumulator() {
+    let stmts = body_of("let total = for n in numbers with sum = 0 {\n  sum + n\n}");
+    let Stmt::Let { init, .. } = &stmts[0] else {
+        panic!("expected a let");
+    };
+    let Expr::For {
+        binder,
+        accumulator,
+        ..
+    } = init
+    else {
+        panic!("expected a for, got {init:?}");
+    };
+    assert_eq!(binder.name, "n");
+    let accumulator = accumulator.as_ref().expect("an accumulator");
+    assert_eq!(accumulator.name.name, "sum");
+}
+
+#[test]
+fn a_for_without_with_has_no_accumulator() {
+    let stmts = body_of("for line in lines {\n  f(line)\n}");
+    let Stmt::Expr(Expr::For { accumulator, .. }) = &stmts[0] else {
+        panic!("expected a for, got {:?}", stmts[0]);
+    };
+    assert!(accumulator.is_none());
+}
+
+#[test]
+fn a_brace_after_a_for_head_is_the_body_not_a_struct_literal() {
+    // The same lookahead the `if` condition needs. Without it, `for n in items
+    // { ... }` reads `items { ... }` as a literal and the loop loses its body.
+    let stmts = body_of("for n in items {\n  f(n)\n}");
+    let Stmt::Expr(Expr::For { iterable, .. }) = &stmts[0] else {
+        panic!("expected a for, got {:?}", stmts[0]);
+    };
+    assert!(
+        matches!(&**iterable, Expr::Ident(name) if name.name == "items"),
+        "the iterable swallowed the body: {iterable:?}"
+    );
+}
+
+#[test]
 fn a_brace_after_an_if_condition_is_a_block_not_a_struct_literal() {
     let stmts = body_of("if available < amount {\n  return err(x)\n}");
     let Stmt::Expr(Expr::If { condition, .. }) = &stmts[0] else {
