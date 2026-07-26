@@ -109,6 +109,10 @@ pub struct Export {
 /// its type is a function type whose row names one of the declaration's row
 /// variables, and the declaration's own row names it too. Both halves are
 /// needed: a callback whose row goes nowhere is one the function may not call.
+///
+/// More than one parameter may carry the same variable, and then all of them
+/// are here. The call site unions what was passed at each, so a variable in
+/// two parameters is not two callbacks made to agree.
 pub fn row_sources(sig: &vow_ast::FnSig, contract: &vow_ast::Contract) -> Vec<usize> {
     let passed: Vec<&str> = sig
         .rows

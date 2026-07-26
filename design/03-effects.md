@@ -346,6 +346,30 @@ in instead. So `map(ns, |n| n + n)` performs nothing and `map(ns, |n| { Log.note
 performs `Log.note`, and the second caller has to say so. The library says "whatever you gave
 me" and the caller says what that was.
 
+**One variable in two parameters means the union of the two.** It does not force the two
+callbacks to have the same row. A variable is not a name for one row that every place
+carrying it has to agree on; it is a name for the places a call reads a row off, and the
+declaration's `uses` is charged with the sum of them. So
+
+```vow
+fn filtered_with<T, uses r>(
+    items: List<T>,
+    keep: Fn(T) uses r -> Bool,
+    dropped: Fn(T) uses r -> (),
+) -> List<T>
+  uses
+    r,
+```
+
+takes a pure `keep` and a `dropped` that logs, and the caller declares `Log.note` and nothing
+else. This follows from the paragraph above rather than being a second rule: each occurrence
+is replaced by what was passed there, and two replacements are two rows.
+
+Writing two variables instead, `uses r, uses s`, says the same thing at the call site. Both
+are unioned into the caller either way, so separate names are not a way to keep two
+callbacks' rows apart. Where the two spellings differ is inside the declaration, where each
+name has to be performed for its own entry in `uses` to be justified.
+
 **It crosses a module boundary as a position.** Which parameter a variable comes from is what
 travels, for the same reason a type parameter travels as a position: a `DefId` is an index
 into one module's table. `examples/list.vow` is a list library written in Vow and
@@ -413,11 +437,6 @@ to be found by reading the pass that had the bug.
   closure's row can be written down where it crosses a boundary, the conservative rule is
   doing less work than it used to. Changing it changes the soundness argument above, which is
   worth its own change rather than a line in someone else's.
-- Whether a row variable should be able to appear in two parameters. Today the second one is
-  checked against the first, the same way a type parameter's second occurrence is, so
-  `fn both<uses r>(f: Fn() uses r -> (), g: Fn() uses r -> ())` forces two callbacks to have
-  the same row. The useful version is a union, and a union is a different thing from a
-  variable that stands for one row.
 - Can rows be inferred well enough that most functions carry none, and does that then
   undermine the review argument, which depends on the signature being complete?
 - How do effects interact with data structures. Does a `Map` holding closures need a row?

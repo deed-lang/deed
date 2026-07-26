@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-74 passed, 0 failed
+75 passed, 0 failed
 ```
 
 ```
@@ -340,9 +340,9 @@ at the type it was applied to, and so does a pattern binder, which is the part a
 declared with.
 
 `list.vow` and `using_list.vow` are the point of the three changes above. `list.vow` is a
-list library written in Vow: `map`, `filter`, `fold`, `any`, `all`, `count_where`, none of
-them known to the compiler, no builtin, no special case, no name in the prelude. It is the
-first thing in this repository anybody else could have written.
+list library written in Vow: `map`, `filter`, `fold`, `any`, `all`, `count_where`,
+`filtered_with`, none of them known to the compiler, no builtin, no special case, no name in
+the prelude. It is the first thing in this repository anybody else could have written.
 
 Pointing `todo.vow` at it found the last thing missing. The compiler only looks at the files
 it was handed, which is a rule worth having, and it meant `vow run examples/todo.vow` could
@@ -369,6 +369,15 @@ Inside the body a row variable is an ordinary entry: calling the callback perfor
 contract says `uses r`, and the same two rules that check every other function check that
 one. Which is why a variable that reaches no parameter was already an error before anything
 was written for it, since nothing can fill it, so nothing performs it, so the row is too wide.
+
+The design doc spent a while listing "can a row variable appear in two parameters" as an open
+question, on the assumption that the second occurrence was checked against the first the way
+a type parameter's is. Measuring it first said otherwise: nothing compares them, and the call
+site unions the row of every argument the variable came from. That is the useful answer, so
+`filtered_with(ns, keep, dropped)` takes a pure `keep` and a `dropped` that logs and charges
+the caller `Log.note`. A variable is not a name for one row that every parameter carrying it
+has to agree on, it is a name for the places a call reads a row off. The behaviour was right
+and untested, which is a worse position than being wrong and tested, so it is pinned now.
 
 Looking at that machinery again turned up a hole that had been open the whole time. The
 pass worked out a function value's row by matching on the shape of the expression: it knew a
