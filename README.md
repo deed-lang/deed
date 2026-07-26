@@ -567,6 +567,17 @@ meant to throw a value away and working code should not have to be rewritten to 
 compiling, and dropping a `Result` gets its own sentence, since that one loses the failure
 rather than a line.
 
+Then the escape hatch turned out to have a hole. `let _ = f()` throws the value away and
+says so, but `let b = f()` silences the warning too, and now there is a name nobody reads,
+which is the same statement doing nothing with an explanation attached. So a `let` binding
+one plain name that no expression mentions is `VOW3009`. The measurement is the interesting
+part: pointing it at every binder fired twenty seven times across the examples and twenty
+five of those were not mistakes, because a pattern is there to match and `err(why)` names
+what the shape holds, a parameter's shape is the signature and a handler's belongs to the
+effect it implements, and a `for` binder walks whether or not the element is wanted. A `let`
+is the one form whose entire reason for existing is the name. Narrowed to that, it fires
+once in the whole corpus, on a binding an example had already called `unused`.
+
 `vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
 is not configurable long before anything enforced it, which meant the files were formatted
 the way they happened to have been typed. A test now asserts that every `.vow` file in the

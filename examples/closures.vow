@@ -76,7 +76,7 @@ fn never_called() -> Int
   uses
     Log.note,
 {
-    let unused = || {
+    let _unused = || {
         Log.note("nobody runs this")
     }
 
