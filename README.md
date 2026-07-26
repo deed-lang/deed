@@ -167,10 +167,14 @@ mean. An editor that names no folder gets the single file behaviour. That was th
 behaviour until recently, and it meant every file with a `use` in it had a red line under the
 import, which is exactly the failure a server is not allowed to have.
 
-It rechecks the whole workspace on every keystroke and on every hover. That is fine at this
-size and is the thing that will stop being fine first, which is what P9 is about and what
-nothing has measured yet. Completion is where it will show first: a hover is once per pause
-and a completion is once per keystroke in the middle of a word.
+It rechecks the whole workspace on every keystroke and on every hover. That used to be
+followed by "and nothing has measured it", which is now not true:
+`cargo run -p vow-driver --example edit_loop --release` says the recheck is linear at about
+70 microseconds per file, so 512 files cost about 38ms per keystroke, inside P9's 100ms
+budget, and a few thousand files is where it leaves. It also says 99% of that work is spent
+on files that did not change, which is what a cache would take off. So the cache is worth
+writing when the size arrives and is not worth writing now, and that is a conclusion with a
+number behind it rather than a feeling. `design/01-principles.md` has the table.
 
 It has no dependencies either. The protocol is a `Content-Length` header, a blank line and a
 handful of object shapes, so the JSON reader and the framing are written out. Two parts are
