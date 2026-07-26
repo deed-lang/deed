@@ -483,6 +483,30 @@ fn a_for_without_with_has_no_accumulator() {
 }
 
 #[test]
+fn an_assert_can_say_something_is_refused() {
+    let stmts = body_of("assert refuses order_of(0)");
+    let Stmt::Refuses { subject, .. } = &stmts[0] else {
+        panic!("expected a refuses, got {:?}", stmts[0]);
+    };
+    assert!(matches!(subject, Expr::Call { .. }), "{subject:?}");
+}
+
+#[test]
+fn refuses_is_still_a_name_when_it_is_called() {
+    // The direction this has to fail in. `refuses` is the marker only when an
+    // identifier follows it, and no statement could ever have been two names
+    // in a row, so a program with a function called `refuses` keeps working.
+    let stmts = body_of("assert refuses(0)");
+    let Stmt::Assert { condition, .. } = &stmts[0] else {
+        panic!("expected an assert, got {:?}", stmts[0]);
+    };
+    let Expr::Call { callee, .. } = condition else {
+        panic!("expected a call, got {condition:?}");
+    };
+    assert!(matches!(&**callee, Expr::Ident(name) if name.name == "refuses"));
+}
+
+#[test]
 fn a_for_can_bind_where_in_the_list_it_is() {
     let stmts = body_of("for line at here in lines {\n  f(line, here)\n}");
     let Stmt::Expr(Expr::For { binder, index, .. }) = &stmts[0] else {

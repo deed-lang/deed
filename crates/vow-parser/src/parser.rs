@@ -1187,6 +1187,23 @@ impl<'a> Parser<'a> {
 
         if self.at_kw(Keyword::Assert) {
             let start = self.bump().span;
+
+            // `assert refuses f(x)`. `refuses` stays an ordinary name: it is
+            // the marker only when an identifier follows it, and no statement
+            // could ever have been two names in a row. So `assert refuses(x)`
+            // is still a call to a function somebody called `refuses`, which
+            // is the direction this has to fail in.
+            if matches!(self.kind(), TokenKind::Ident(found) if found == "refuses")
+                && matches!(self.nth_kind(1), TokenKind::Ident(_))
+            {
+                self.bump();
+                let subject = self.parse_expr();
+                return Stmt::Refuses {
+                    span: start.to(subject.span()),
+                    subject,
+                };
+            }
+
             let condition = self.parse_expr();
             return Stmt::Assert {
                 span: start.to(condition.span()),

@@ -865,6 +865,9 @@ impl Printer<'_> {
             Stmt::Assert { condition, .. } => {
                 format!("assert {}", self.with_prefix(7, condition))
             }
+            Stmt::Refuses { subject, .. } => {
+                format!("assert refuses {}", self.with_prefix(15, subject))
+            }
             Stmt::Expr(expr) => self.expr(expr),
         }
     }

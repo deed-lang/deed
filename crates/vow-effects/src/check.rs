@@ -348,6 +348,7 @@ impl<'a> Checker<'a> {
                     }
                 }
                 Stmt::Assert { condition, .. } => self.calls_in(condition, found),
+                Stmt::Refuses { subject, .. } => self.calls_in(subject, found),
                 Stmt::Expr(expr) => self.calls_in(expr, found),
             }
         }
@@ -746,6 +747,9 @@ impl<'a> Checker<'a> {
                 None => Row::new(),
             },
             Stmt::Assert { condition, .. } => self.infer_expr(condition),
+            // Asserting that something breaks its contract still runs it, so
+            // what it performs is performed.
+            Stmt::Refuses { subject, .. } => self.infer_expr(subject),
             Stmt::Expr(expr) => self.infer_expr(expr),
         }
     }
