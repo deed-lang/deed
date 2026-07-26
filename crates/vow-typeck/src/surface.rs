@@ -302,6 +302,7 @@ impl Lowerer<'_> {
                         "Result" if lowered.len() == 2 => {
                             Ty::Result(Box::new(lowered[0].clone()), Box::new(lowered[1].clone()))
                         }
+                        "List" if lowered.len() == 1 => Ty::List(Box::new(lowered[0].clone())),
                         // A capability crossing a module boundary as a
                         // parameter type is the whole point of one, and there
                         // is exactly one `Console`, so it is named under the

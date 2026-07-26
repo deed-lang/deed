@@ -166,6 +166,25 @@ fn results_and_the_question_mark() {
 }
 
 #[test]
+fn lists() {
+    // An empty literal is a `List<unknown>`, which is a type, not a hole. The
+    // distinction matters here more than anywhere: if `[]` were unknown
+    // outright then nothing done with any list would be checked.
+    expect_all_known(
+        "lists.vow",
+        "module a\n\n\
+         fn f(items: List<String>) -> Int {\n\
+         \x20 let more = push(items, \"x\")\n\
+         \x20 let empty: List<String> = []\n\
+         \x20 match at(more, 0) {\n\
+         \x20   ok(first) => length(first) + length(empty),\n\
+         \x20   err(why) => length(why),\n\
+         \x20 }\n\
+         }\n",
+    );
+}
+
+#[test]
 fn closures() {
     expect_all_known(
         "closures.vow",

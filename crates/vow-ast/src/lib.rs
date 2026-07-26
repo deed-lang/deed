@@ -423,6 +423,15 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// `[1, 2, 3]`
+    ///
+    /// The only way to write a list down. There is no constructor call for
+    /// one, because a literal is the form every reader already knows and a
+    /// second spelling would be a second thing to learn for no gain.
+    List {
+        elements: Vec<Expr>,
+        span: Span,
+    },
     StructLit {
         path: Box<Expr>,
         fields: Vec<FieldInit>,
@@ -496,6 +505,7 @@ impl Expr {
             | Expr::Unit(span)
             | Expr::Field { span, .. }
             | Expr::Call { span, .. }
+            | Expr::List { span, .. }
             | Expr::StructLit { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }

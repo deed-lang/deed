@@ -249,6 +249,11 @@ impl<'a> Checker<'a> {
                 }
             }
             Expr::Field { receiver, .. } => self.calls_in(receiver, found),
+            Expr::List { elements, .. } => {
+                for element in elements {
+                    self.calls_in(element, found);
+                }
+            }
             Expr::StructLit { path, fields, .. } => {
                 self.calls_in(path, found);
                 for field in fields {
@@ -623,6 +628,12 @@ impl<'a> Checker<'a> {
                     if let Some(value) = &field.value {
                         row.extend(&self.infer_expr(value));
                     }
+                }
+            }
+
+            Expr::List { elements, .. } => {
+                for element in elements {
+                    row.extend(&self.infer_expr(element));
                 }
             }
 

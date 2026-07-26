@@ -157,6 +157,25 @@ fn a_long_call_breaks_one_argument_per_line() {
 }
 
 #[test]
+fn a_short_list_stays_on_one_line() {
+    let formatted = fmt("module a\n\nfn f() -> List<Int> {\n[1,\n2,\n3,]\n}\n");
+    assert!(formatted.contains("    [1, 2, 3]\n"), "{formatted}");
+}
+
+#[test]
+fn a_long_list_breaks_one_element_per_line() {
+    let long = "aaaaaaaaaaaaaaaaaaaa";
+    let formatted = fmt(&format!(
+        "module a\n\nfn f() -> Int {{ [{long}, {long}, {long}, {long}] }}\n"
+    ));
+    assert!(formatted.contains("[\n"), "{formatted}");
+    assert!(
+        formatted.contains(&format!("        {long},\n")),
+        "{formatted}"
+    );
+}
+
+#[test]
 fn a_trailing_comment_stays_on_its_line() {
     let formatted = fmt("module a\n\nfn f() -> Int {\n    let x = 1 // why\n    x\n}\n");
     assert!(formatted.contains("let x = 1 // why"), "{formatted}");
@@ -241,6 +260,8 @@ const SOURCES: &[&str] = &[
     "module a\n\nfn f(n: Int) -> Result<Int, String>\n  where\n    n > 0,\n  ensures\n    ok => result > 0,\n    err => true,\n{\n    if n > 10 {\n        return err(\"too big\")\n    }\n    ok(n)\n}\n",
     "module a\n\nfn f(v: C) -> Int {\n    match v {\n        One => 1,\n        Two { x, y } => x + y,\n    }\n}\n",
     "module a\n\nfn f() -> Int { g(1)? + h(2)? }\n",
+    "module a\n\nfn f() -> List<Int> { [1, 2, 3] }\n",
+    "module a\n\nfn f() -> List<List<Int>> { [[], [1]] }\n",
     "module a\n\nfn f() -> Int { (1 + 2) * (3 - 4) / (5 % 6) }\n",
     "module a\n\ntest \"a test\" {\n    assert 1 == 1\n}\n",
 ];

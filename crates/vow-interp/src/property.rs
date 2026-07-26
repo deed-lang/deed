@@ -460,6 +460,7 @@ impl<'a> TypeIndex<'a> {
                         "Result" => {
                             args.len() == 2 && args.iter().all(|a| self.can_generate(a, depth + 1))
                         }
+                        "List" => args.len() == 1 && self.can_generate(&args[0], depth + 1),
                         _ => false,
                     },
                     DefKind::Record => self.records.get(&def).is_some_and(|record| {
@@ -519,6 +520,18 @@ impl<'a> TypeIndex<'a> {
                             } else {
                                 Value::err(inner)
                             })
+                        }
+                        // Short on purpose. A counterexample with forty
+                        // elements in it is a counterexample nobody reads,
+                        // and the empty list is the case worth hitting often.
+                        "List" => {
+                            let element = args.first()?;
+                            let count = rng.next() % 4;
+                            let mut elements = Vec::new();
+                            for _ in 0..count {
+                                elements.push(self.generate(element, rng, interp, depth + 1)?);
+                            }
+                            Some(Value::list(elements))
                         }
                         _ => None,
                     },

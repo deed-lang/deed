@@ -312,8 +312,11 @@ fn length_takes_a_string_and_gives_a_number() {
 
 #[test]
 fn length_will_not_measure_a_number() {
+    // Its own code rather than a plain mismatch, because `length` takes more
+    // than one type now and "expected a String" would be the wrong half of
+    // the story.
     let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int { length(n) }\n");
-    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_LIST]);
 }
 
 #[test]

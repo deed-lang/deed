@@ -426,6 +426,25 @@ impl<'a> Checker<'a> {
                             );
                             return Ty::Unknown;
                         }
+                        "List" => {
+                            if lowered_args.len() == 1 {
+                                return Ty::List(Box::new(lowered_args[0].clone()));
+                            }
+                            self.emit(
+                                Diagnostic::error(
+                                    codes::NOT_GENERIC,
+                                    self.file,
+                                    *span,
+                                    format!(
+                                        "`List` takes exactly one type argument, and {} were given",
+                                        lowered_args.len()
+                                    ),
+                                )
+                                .with_primary_label("wrong number of type arguments")
+                                .with_note("it is written `List<Element>`"),
+                            );
+                            return Ty::Unknown;
+                        }
                         _ => Ty::Unknown,
                     },
                     // A name from another module. It has a type now, and the
@@ -594,6 +613,10 @@ impl<'a> Checker<'a> {
             (Ty::Result(a_ok, a_err), Ty::Result(e_ok, e_err)) => {
                 self.compatible(a_ok, e_ok) && self.compatible(a_err, e_err)
             }
+            // Componentwise for the same reason, which is what makes `[]`
+            // work: it produces `List<unknown>`, and unknown agrees with
+            // whatever the expected element type turns out to be.
+            (Ty::List(actual), Ty::List(expected)) => self.compatible(actual, expected),
             // Componentwise, for the same reason `Result` is: a closure with a
             // parameter the checker gave up on should not be a second error on
             // top of the first. Exactly matching otherwise, so a refined
@@ -714,6 +737,23 @@ impl<'a> Checker<'a> {
 
             self.assign_carrying(a_ok, e_ok, ok_expr, payload, ok_span, because.clone());
             self.assign(a_err, e_err, err_expr, err_span, because);
+            return;
+        }
+
+        // `[1, 2]` where the element type is refined. Same reasoning as the
+        // `ok` above: the list has no range and nothing to check, the elements
+        // do, so the obligation belongs on each of them. Only for a literal
+        // written here, because that is the only case where anything names the
+        // elements; a list that came back from a call falls through to the
+        // mismatch below rather than being quietly accepted.
+        if let (Ty::List(a_el), Ty::List(e_el)) = (actual, expected)
+            && let Some(Expr::List { elements, .. }) = expr
+            && !elements.is_empty()
+        {
+            let (a_el, e_el) = ((**a_el).clone(), (**e_el).clone());
+            for element in elements {
+                self.assign(&a_el, &e_el, Some(element), element.span(), because.clone());
+            }
             return;
         }
 
@@ -1580,6 +1620,8 @@ impl<'a> Checker<'a> {
 
             Expr::Call { callee, args, .. } => self.infer_call(callee, args, expr.span()),
 
+            Expr::List { elements, .. } => self.infer_list(elements),
+
             Expr::StructLit { path, fields, .. } => {
                 self.infer_struct_lit(path, fields, expr.span())
             }
@@ -1745,7 +1787,7 @@ impl<'a> Checker<'a> {
                     params: signature.params.iter().map(|p| p.ty.clone()).collect(),
                     ret: Box::new(signature.ret.clone()),
                 },
-                None if matches!(ident.name.as_str(), "ok" | "err") => Ty::Unknown,
+                None if matches!(ident.name.as_str(), "ok" | "err" | "at" | "push") => Ty::Unknown,
                 None => {
                     self.not_a_value(ident, "a type");
                     Ty::Unknown
@@ -1902,6 +1944,126 @@ impl<'a> Checker<'a> {
         Ty::Unknown
     }
 
+    /// `[1, 2, 3]`
+    ///
+    /// The first element decides the element type and every other element is
+    /// checked against it. There is no unification anywhere in this checker,
+    /// so there is nothing to meet two candidate types with, and "the first
+    /// one decides" is the only rule that fits in a sentence.
+    ///
+    /// `[]` is `List<unknown>`, which is what lets an empty list go where any
+    /// list was wanted without an annotation on the literal itself.
+    fn infer_list(&mut self, elements: &'a [Expr]) -> Ty {
+        let mut element = Ty::Unknown;
+        for (index, expr) in elements.iter().enumerate() {
+            let ty = self.infer(expr);
+            if index == 0 {
+                element = ty;
+                continue;
+            }
+            let expected = element.clone();
+            self.assign(
+                &ty,
+                &expected,
+                Some(expr),
+                expr.span(),
+                Some((
+                    elements[0].span(),
+                    "the first element, which decides the element type".to_string(),
+                )),
+            );
+        }
+        Ty::List(Box::new(element))
+    }
+
+    /// `length`, `at` and `push`.
+    ///
+    /// Typed here rather than through a [`Signature`], because a signature is
+    /// a list of concrete types and none of these has one: each is polymorphic
+    /// in the element type. The same reasoning that keeps `ok` and `err` out
+    /// of the signature table keeps these out of it, and the unknown type
+    /// absorbing is what stands in for the unification there is none of.
+    fn infer_prelude_call(&mut self, name: &str, args: &'a [Expr], span: Span) -> Ty {
+        let types: Vec<Ty> = args.iter().map(|arg| self.infer(arg)).collect();
+
+        let wanted = if name == "length" { 1 } else { 2 };
+        if types.len() != wanted {
+            self.emit(
+                Diagnostic::error(
+                    codes::WRONG_ARITY,
+                    self.file,
+                    span,
+                    format!(
+                        "`{name}` takes {wanted} argument{}, but {} {} given",
+                        if wanted == 1 { "" } else { "s" },
+                        types.len(),
+                        if types.len() == 1 { "was" } else { "were" }
+                    ),
+                )
+                .with_primary_label("wrong number of arguments"),
+            );
+            return Ty::Unknown;
+        }
+
+        let receiver = self.widen(&types[0]);
+
+        // `length` predates lists and a `String` still has one. It is the same
+        // question about a different thing, so it stayed one name.
+        if name == "length" {
+            if !receiver.absorbs() && !matches!(receiver, Ty::Str | Ty::List(_)) {
+                let described = self.types.describe(&types[0]);
+                self.emit(
+                    Diagnostic::error(
+                        codes::NOT_A_LIST,
+                        self.file,
+                        args[0].span(),
+                        format!("`length` needs something with a length, and this is {described}"),
+                    )
+                    .with_primary_label("nothing to measure")
+                    .with_note("`length` measures a `String` or a `List`"),
+                );
+            }
+            return Ty::Int;
+        }
+
+        let Ty::List(element) = receiver else {
+            // An unknown receiver already produced a diagnostic, or came from
+            // a module that was not loaded. Either way a second complaint here
+            // would be about the same mistake.
+            if !receiver.absorbs() {
+                let described = self.types.describe(&types[0]);
+                self.emit(
+                    Diagnostic::error(
+                        codes::NOT_A_LIST,
+                        self.file,
+                        args[0].span(),
+                        format!("`{name}` needs a list, and this is {described}"),
+                    )
+                    .with_primary_label("not a list"),
+                );
+            }
+            return Ty::Unknown;
+        };
+        let element = *element;
+
+        if name == "at" {
+            self.assign(&types[1], &Ty::Int, Some(&args[1]), args[1].span(), None);
+            // An index that is not there is not a mistake in the caller, and
+            // nothing in this language stops a program, so it is an error
+            // value like every other thing that can fail.
+            return Ty::Result(Box::new(element), Box::new(Ty::Str));
+        }
+
+        self.assign(
+            &types[1],
+            &element,
+            Some(&args[1]),
+            args[1].span(),
+            Some((args[0].span(), "the list it is pushed onto".to_string())),
+        );
+        Ty::List(Box::new(element))
+    }
+
     fn infer_call(&mut self, callee: &'a Expr, args: &'a [Expr], span: Span) -> Ty {
         let callee_def = match callee {
             Expr::Ident(ident) => self.def_of(ident),
@@ -1939,6 +2101,9 @@ impl<'a> Checker<'a> {
                 } else {
                     Ty::Result(Box::new(Ty::Unknown), Box::new(carried))
                 };
+            }
+            if matches!(name.as_str(), "length" | "at" | "push") {
+                return self.infer_prelude_call(&name, args, span);
             }
         }
 
