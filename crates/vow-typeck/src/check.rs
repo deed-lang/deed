@@ -189,7 +189,7 @@ impl<'a> Checker<'a> {
         // reason a disk has.
         let io_error = |ok: Ty| Ty::Result(Box::new(ok), Box::new(Ty::Str));
 
-        let operations: [(&str, Vec<Ty>, Ty); 8] = [
+        let operations: [(&str, Vec<Ty>, Ty); 9] = [
             ("write", vec![console, Ty::Str], Ty::Unit),
             ("now", vec![clock], Ty::Int),
             ("open", vec![dir.clone(), Ty::Str], io_error(dir.clone())),
@@ -203,7 +203,12 @@ impl<'a> Checker<'a> {
             // for the same reason `save` is separate from `read`: what a
             // caller is handing over is which of these a function may do, and
             // holding the directory says nothing about that.
-            ("remove", vec![dir, Ty::Str], io_error(Ty::Unit)),
+            ("remove", vec![dir.clone(), Ty::Str], io_error(Ty::Unit)),
+            // Making a place rather than putting something in one. The `Dir`
+            // it hands back is rooted inside the one it was given, so this is
+            // `open` on a directory that did not exist yet rather than a way
+            // to reach anything new.
+            ("make", vec![dir.clone(), Ty::Str], io_error(dir)),
             // Enumerating rather than naming, which is why it takes the
             // directory and nothing else: there is no name to give, and
             // finding out what the names are is the whole operation.

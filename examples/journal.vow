@@ -25,12 +25,22 @@
 // rules reading obeys, because it is the same check and not a second one that
 // happens to agree today.
 //
-// There are three authorities over one `Dir` here, and they are three row
-// entries rather than three types. `Io.read` lets a function read the file
+// There are five authorities over one `Dir` here, and they are five row
+// entries rather than five types. `Io.read` lets a function read the file
 // somebody told it about. `Io.save` lets it write one. `Io.list` lets it find
 // out what is there, which is strictly more than reading and is the one most
 // easily given away by accident: a directory handed over for one purpose
-// usually has other things in it.
+// usually has other things in it. `Io.remove` lets it destroy one, which is
+// the only one that cannot be undone from what it replaced. `Io.make` lets it
+// create a place to put things.
+//
+// The last one is the one that looks like it breaks the rule and does not.
+// `Io.make` hands back a `Dir`, and a `Dir` is authority, so it reads like
+// authority being made. It is not: the directory it names is inside the one it
+// was given, so what comes back reaches strictly less than what went in. Which
+// paths happen to exist was never what a `Dir` granted, which is why `Io.save`
+// writing a file that was not there a moment ago is not authority creation
+// either.
 
 module examples/journal
 
@@ -79,6 +89,21 @@ fn what_is_here(files: Dir) -> String
     }
 }
 
+// Making a place to put things, and the only function here whose answer is a
+// capability. What comes back reaches inside `files` and nothing else, so a
+// caller that hands over a `Dir` and `uses Io.make` has not handed over
+// anything it was not already holding.
+//
+// Take `Io.make` out of the row and this does not compile, even though the
+// `Dir` it is holding has not changed at all. That is the same sentence as the
+// one above `what_is_here`, and it is the fifth time it has been true.
+fn shelf(files: Dir, name: String) -> Result<Dir, String>
+  uses
+    Io.make,
+{
+    Io.make(files, name)
+}
+
 // Handed a real `Dir` and a name it must not be able to use. Every one of
 // these comes back as an error naming the rule it hit, and the first three
 // never reach the filesystem at all.
@@ -92,11 +117,23 @@ fn refusal(files: Dir, name: String) -> String
     }
 }
 
+// The `Dir` that came back from `Io.make` is a `Dir` like any other, so every
+// rule that applies to the one above applies to it. Climbing out of it with
+// `..` is refused by the same check, which is what "authority only shrinks"
+// has to mean if it means anything.
+fn refusal_inside(files: Dir) -> String
+  uses
+    Io.save,
+{
+    refusal(files, "..")
+}
+
 fn main(sys: System) -> Int
   uses
     Io.write,
     Io.read,
     Io.save,
+    Io.make,
     Io.list,
 {
     let out = sys.console
@@ -111,13 +148,21 @@ fn main(sys: System) -> Int
     Io.write(out, refusal(sys.files, "/etc/passwd"))
     Io.write(out, "here: " + what_is_here(sys.files))
 
+    // A place to put things, and then the same refusal from inside it. Making
+    // a directory hands back authority over somewhere the caller could already
+    // reach, and what comes back is narrower rather than wider.
+    match shelf(sys.files, "shelf") {
+        ok(inside) => Io.write(out, "made a shelf, and " + refusal_inside(inside)),
+        err(why) => Io.write(out, why),
+    }
+
     0
 }
 
-// What is still missing: deleting a file and creating a directory. Both are
-// destructive in a way reading and listing are not, so they want their own
-// argument about what a `Dir` means rather than being carried along with
-// something else.
+// Nothing here is missing any more. Reading, listing, writing, deleting and
+// making are five entries in the row over one `Dir`, and each of the last
+// three was added believing it would need a second kind of capability. None of
+// them did.
 //
 // Also `read_only()`, and it is the interesting one. Nothing here needs it,
 // because a function that cannot write is a function that did not declare

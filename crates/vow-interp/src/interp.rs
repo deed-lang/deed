@@ -1512,6 +1512,37 @@ impl<'a> Interp<'a> {
                     Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
                 })
             }
+            // Making a place rather than putting something in one, which is
+            // why the answer is a `Dir` and not a `()`. The one it hands back
+            // is rooted inside the one it was given, so authority still only
+            // shrinks: this is `open` on a directory that did not exist yet.
+            //
+            // Nothing may already be at the name, file or directory. "I made
+            // it" and "it was already there" are different answers, and a
+            // program that cannot tell them apart has a bug waiting, which is
+            // the same reason a missing file is an error for `remove`.
+            //
+            // `resolve_new` because the name is not supposed to exist, and it
+            // is the resolver that refuses a symlink sitting there pointing
+            // out of the directory rather than following it.
+            ("make", Capability::Dir(root)) => {
+                let name_arg = self.io_name(args.get(1), span)?;
+                Ok(match sandbox::resolve_new(&root, &name_arg) {
+                    Ok(path) if path.exists() => {
+                        Value::err(Value::str(format!("`{name_arg}` is already there")))
+                    }
+                    Ok(path) => match std::fs::create_dir(&path) {
+                        Ok(()) => match sandbox::root(&path) {
+                            Ok(made) => {
+                                Value::ok(Value::Capability(Capability::Dir(Rc::from(made))))
+                            }
+                            Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
+                        },
+                        Err(error) => Value::err(Value::str(format!("`{name_arg}`: {error}"))),
+                    },
+                    Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
+                })
+            }
             (_, held) => Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,

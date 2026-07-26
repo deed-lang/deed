@@ -652,6 +652,139 @@ fn declaring_removal_does_not_grant_anything_else() {
     );
 }
 
+// -- making a place --------------------------------------------------------
+//
+// The one that looks like it breaks the rule and does not. `Io.make` hands
+// back a `Dir`, and a `Dir` is authority, so it reads like authority being
+// made. It is not: the directory it names is inside the one it was given, so
+// what comes back reaches strictly less than what went in. Which paths happen
+// to exist was never what a `Dir` granted, which is why `Io.save` writing a
+// file that was not there is not authority creation either.
+
+#[test]
+fn a_dir_makes_a_directory_inside_it() {
+    let scratch = Scratch::new("make");
+
+    let (_, run) = run_in(
+        &report(
+            &["write", "make"],
+            "  match Io.make(sys.files, \"shelf\") {\n    ok(inside) => Io.write(sys.console, \"made\"),\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        scratch.path(),
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["made".to_string()]);
+    assert!(scratch.path().join("shelf").is_dir());
+}
+
+#[test]
+fn what_comes_back_reaches_less_than_what_went_in() {
+    // The claim, tested rather than asserted in a comment. The new `Dir` is a
+    // `Dir` like any other, so climbing out of it is refused by the same rule
+    // that refuses climbing out of the one it came from, however many times
+    // this is done.
+    let scratch = Scratch::new("make-narrower");
+    let outside = scratch.path().parent().unwrap().to_path_buf();
+
+    let (_, run) = run_in(
+        &report(
+            &["write", "make", "save"],
+            "  match Io.make(sys.files, \"shelf\") {\n    ok(inside) => match Io.save(inside, \"..\", \"escaped\") {\n      ok(nothing) => Io.write(sys.console, \"ESCAPED\"),\n      err(why) => Io.write(sys.console, why),\n    },\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        scratch.path(),
+    );
+
+    assert!(run.result.is_ok());
+    assert_ne!(run.output, vec!["ESCAPED".to_string()]);
+    assert!(!outside.join("escaped").exists());
+}
+
+#[test]
+fn a_name_that_is_already_there_is_an_error_rather_than_a_success() {
+    // "I made it" and "it was already there" are different answers, which is
+    // the same reasoning that makes a missing file an error for `Io.remove`.
+    let scratch = Scratch::new("make-twice");
+    scratch.write("shelf", "a file, not a directory");
+
+    let (_, run) = run_in(
+        &report(
+            &["write", "make"],
+            "  match Io.make(sys.files, \"shelf\") {\n    ok(inside) => Io.write(sys.console, \"MADE IT\"),\n    err(why) => Io.write(sys.console, \"refused\"),\n  }",
+        ),
+        scratch.path(),
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["refused".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("shelf")).unwrap(),
+        "a file, not a directory"
+    );
+}
+
+#[test]
+fn every_way_out_of_a_dir_is_refused_for_making_too() {
+    let scratch = Scratch::new("make-escape");
+    let outside = scratch.path().parent().unwrap().to_path_buf();
+
+    for attempt in [
+        "..",
+        ".",
+        "../escaped",
+        "/etc/passwd",
+        "C:\\\\Windows\\\\System32",
+        "a/b",
+        "a\\\\b",
+        "",
+    ] {
+        let (_, run) = run_in(
+            &report(
+                &["write", "make"],
+                &format!(
+                    "  match Io.make(sys.files, \"{attempt}\") {{\n    ok(inside) => Io.write(sys.console, \"MADE IT\"),\n    err(why) => Io.write(sys.console, why),\n  }}"
+                ),
+            ),
+            scratch.path(),
+        );
+        assert!(run.result.is_ok());
+        assert_ne!(
+            run.output,
+            vec!["MADE IT".to_string()],
+            "`{attempt}` got out of the directory"
+        );
+    }
+
+    assert!(
+        !outside.join("escaped").exists(),
+        "something was made beside the directory"
+    );
+}
+
+#[test]
+fn making_without_declaring_it_is_an_effect_error() {
+    let (sources, checked) = check(
+        "module a\n\nfn sneak(files: Dir) -> Result<Dir, String>\n  uses Io.save,\n{\n  Io.make(files, \"shelf\")\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn declaring_making_does_not_grant_anything_else() {
+    let (sources, checked) = check(
+        "module a\n\nfn sneak(files: Dir) -> Result<(), String>\n  uses Io.make,\n{\n  Io.save(files, \"note.txt\", \"hello\")\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
 // -- arguments -------------------------------------------------------------
 
 #[test]
