@@ -101,6 +101,23 @@ pub enum Ty {
     /// lets `[]` be a `List<unknown>` and still fit where a `List<Int>` was
     /// wanted, with no unification anywhere.
     List(Box<Ty>),
+    /// A type parameter of the generic function being checked, such as the `T`
+    /// in `fn first<T>(items: List<T>) -> Result<T, String>`.
+    ///
+    /// Identified by where it sits in the declaration's list rather than by a
+    /// `DefId`, for the same reason an imported type is identified by module
+    /// path and name: a `DefId` is an index into one module's table, and a
+    /// generic function is callable from another module. The name is carried
+    /// so a diagnostic can say `T` rather than say nothing.
+    ///
+    /// It appears in exactly two places: inside the body of the function that
+    /// declared it, where it is compared against itself and against nothing
+    /// else, and inside that function's signature, where every call site
+    /// substitutes it away.
+    Param {
+        index: usize,
+        name: Rc<str>,
+    },
     Fn {
         params: Vec<Ty>,
         /// What calling it is allowed to perform. See [`FnRow`].
@@ -114,6 +131,101 @@ impl Ty {
     /// it or because control never gets here.
     pub fn absorbs(&self) -> bool {
         matches!(self, Ty::Unknown | Ty::Never)
+    }
+
+    /// Whether a type parameter appears anywhere inside this type.
+    ///
+    /// What makes a signature generic, rather than a count kept beside it.
+    /// Keeping the answer in the type means an imported generic function needs
+    /// nothing extra to cross a module boundary: its parameters arrive with
+    /// the parameters still in them and the call site does the same work it
+    /// does at home.
+    pub fn is_generic(&self) -> bool {
+        match self {
+            Ty::Param { .. } => true,
+            Ty::Result(ok, err) => ok.is_generic() || err.is_generic(),
+            Ty::List(element) => element.is_generic(),
+            Ty::Fn { params, ret, .. } => params.iter().any(Ty::is_generic) || ret.is_generic(),
+            _ => false,
+        }
+    }
+
+    /// Whether the type parameter at `index` appears anywhere inside.
+    pub fn mentions(&self, index: usize) -> bool {
+        match self {
+            Ty::Param { index: found, .. } => *found == index,
+            Ty::Result(ok, err) => ok.mentions(index) || err.mentions(index),
+            Ty::List(element) => element.mentions(index),
+            Ty::Fn { params, ret, .. } => {
+                params.iter().any(|param| param.mentions(index)) || ret.mentions(index)
+            }
+            _ => false,
+        }
+    }
+
+    /// Works out what the type parameters have to be for `self` to describe
+    /// `actual`, and writes the answers into `bindings`.
+    ///
+    /// A walk down two types in step, not a solver. The first answer for a
+    /// parameter wins: `fn pair<T>(a: T, b: T)` called with two different
+    /// types binds `T` from the first and then reports an ordinary mismatch on
+    /// the second, which is a better message than anything a unifier would
+    /// produce about a variable the caller never wrote.
+    ///
+    /// An actual type that absorbs binds nothing. It agrees with whatever the
+    /// parameter turns out to be, so treating it as an answer would let one
+    /// argument the checker gave up on decide the type of every other.
+    pub fn bind(&self, actual: &Ty, bindings: &mut HashMap<usize, Ty>) {
+        if actual.absorbs() {
+            return;
+        }
+        match (self, actual) {
+            (Ty::Param { index, .. }, _) => {
+                bindings.entry(*index).or_insert_with(|| actual.clone());
+            }
+            (Ty::Result(ok, err), Ty::Result(a_ok, a_err)) => {
+                ok.bind(a_ok, bindings);
+                err.bind(a_err, bindings);
+            }
+            (Ty::List(element), Ty::List(actual)) => element.bind(actual, bindings),
+            (
+                Ty::Fn { params, ret, .. },
+                Ty::Fn {
+                    params: a_params,
+                    ret: a_ret,
+                    ..
+                },
+            ) => {
+                for (param, actual) in params.iter().zip(a_params) {
+                    param.bind(actual, bindings);
+                }
+                ret.bind(a_ret, bindings);
+            }
+            _ => {}
+        }
+    }
+
+    /// The same type with every parameter replaced by what it was bound to.
+    ///
+    /// A parameter with no binding becomes unknown rather than staying a
+    /// parameter. It is unbound because nothing in the call said what it is,
+    /// which is exactly the thing unknown means, and leaving it as a parameter
+    /// would put one function's `T` into another function's types.
+    pub fn substitute(&self, bindings: &HashMap<usize, Ty>) -> Ty {
+        match self {
+            Ty::Param { index, .. } => bindings.get(index).cloned().unwrap_or(Ty::Unknown),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(ok.substitute(bindings)),
+                Box::new(err.substitute(bindings)),
+            ),
+            Ty::List(element) => Ty::List(Box::new(element.substitute(bindings))),
+            Ty::Fn { params, row, ret } => Ty::Fn {
+                params: params.iter().map(|p| p.substitute(bindings)).collect(),
+                row: row.clone(),
+                ret: Box::new(ret.substitute(bindings)),
+            },
+            other => other.clone(),
+        }
     }
 }
 
@@ -318,6 +430,7 @@ impl Types {
             }
             Ty::Result(ok, err) => format!("`Result<{}, {}>`", self.bare(ok), self.bare(err)),
             Ty::List(element) => format!("`List<{}>`", self.bare(element)),
+            Ty::Param { name, .. } => format!("`{name}`, a type parameter"),
             Ty::Fn { .. } => format!("`{}`", self.bare(ty)),
         }
     }
@@ -339,6 +452,7 @@ impl Types {
             Ty::External { name, .. } => name.to_string(),
             Ty::Result(ok, err) => format!("Result<{}, {}>", self.bare(ok), self.bare(err)),
             Ty::List(element) => format!("List<{}>", self.bare(element)),
+            Ty::Param { name, .. } => name.to_string(),
             // Written the way the signature that declared it is written. The
             // arity alone used to be all this said, which reads as a riddle in
             // a message about two function types not matching, and reads as

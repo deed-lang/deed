@@ -417,7 +417,12 @@ impl Printer<'_> {
     /// `fn name(a: T, b: U) -> R` on one line when it fits.
     fn signature_line(&mut self, sig: &FnSig) -> String {
         let params: Vec<String> = sig.params.iter().map(|p| self.param(p)).collect();
-        let mut text = format!("fn {}({})", sig.name.name, params.join(", "));
+        let mut text = format!(
+            "fn {}{}({})",
+            sig.name.name,
+            generics(sig),
+            params.join(", ")
+        );
         if let Some(ret) = &sig.ret {
             let _ = write!(text, " -> {}", self.ty(ret));
         }
@@ -449,7 +454,12 @@ impl Printer<'_> {
             self.push(&one_line);
         } else {
             let params: Vec<String> = sig.params.iter().map(|p| self.param(p)).collect();
-            let head = format!("fn {}({})", sig.name.name, params.join(", "));
+            let head = format!(
+                "fn {}{}({})",
+                sig.name.name,
+                generics(sig),
+                params.join(", ")
+            );
             let head_width = self.indent * INDENT.len() + head.len();
 
             if head_width <= WIDTH {
@@ -457,7 +467,7 @@ impl Printer<'_> {
                 self.push(&head);
             } else {
                 self.line_start();
-                self.push(&format!("fn {}(", sig.name.name));
+                self.push(&format!("fn {}{}(", sig.name.name, generics(sig)));
                 self.newline();
                 self.indent += 1;
                 for param in &params {
@@ -963,6 +973,22 @@ fn path(segments: &[Ident]) -> String {
         .map(|s| s.name.as_str())
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// `<T, U>`, or nothing at all.
+///
+/// Never broken across lines. A list long enough to need it would be a
+/// signature with a different problem.
+fn generics(sig: &FnSig) -> String {
+    if sig.generics.is_empty() {
+        return String::new();
+    }
+    let names: Vec<&str> = sig
+        .generics
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .collect();
+    format!("<{}>", names.join(", "))
 }
 
 fn effect_ref(effect: &EffectRef) -> String {

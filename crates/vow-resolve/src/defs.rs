@@ -44,6 +44,12 @@ pub enum DefKind {
     Handler,
     Function,
     Param,
+    /// A type parameter of a generic function, such as the `T` in
+    /// `fn first<T>(items: List<T>) -> Result<T, String>`.
+    ///
+    /// In scope for the whole declaration, which is the signature, the
+    /// contract and the body, and nowhere else.
+    TypeParam,
     /// A `state` field of a handler. The only mutable thing in the language.
     State,
     /// A `let` binding, a pattern binding, or a closure parameter.
@@ -66,6 +72,7 @@ impl DefKind {
             DefKind::Handler => "handler",
             DefKind::Function => "function",
             DefKind::Param => "parameter",
+            DefKind::TypeParam => "type parameter",
             DefKind::State => "handler state",
             DefKind::Local => "binding",
             DefKind::Import => "import",

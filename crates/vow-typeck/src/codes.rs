@@ -93,3 +93,24 @@ pub const OPERATION_MISMATCH: &str = "VOW4021";
 
 /// A list operation applied to something that is not a list.
 pub const NOT_A_LIST: &str = "VOW4022";
+
+/// A type parameter that appears in no parameter's type.
+///
+/// Every call has to be able to work out what a type parameter is from the
+/// arguments alone, and the only place it can look is the parameter types.
+/// The alternative is writing type arguments at the call site, which needs
+/// `first<String>([])` to parse, which is the `f<a>(b)` versus `f < a > (b)`
+/// ambiguity, and P2 has a budget for exactly this kind of thing.
+///
+/// It is also the same claim the rest of the language makes: a signature is
+/// complete, and one with a hole a caller has to fill from somewhere else is
+/// not.
+pub const UNDETERMINED_TYPE_PARAM: &str = "VOW4023";
+
+/// A generic function used as a value rather than called.
+///
+/// One expression has one type here, and a generic function named rather than
+/// called has as many as there are ways to call it. What would make this work
+/// is a polymorphic value, which is a much larger thing than substituting into
+/// a signature at a call site.
+pub const GENERIC_AS_VALUE: &str = "VOW4024";

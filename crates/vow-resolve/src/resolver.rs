@@ -754,6 +754,18 @@ impl Resolver<'_> {
     fn resolve_fn(&mut self, function: &FnDecl) {
         self.push_scope(ScopeKind::Local);
 
+        // Before anything else, because a parameter's type, the return type
+        // and the body can all name one and none of them can be resolved
+        // without it.
+        for parameter in &function.sig.generics {
+            let def = self.declare_local(parameter, DefKind::TypeParam);
+            // A type parameter that appears nowhere is caught by the type
+            // checker, which has the better message for it: the rule is that
+            // it has to appear in a *parameter's* type, and "used somewhere"
+            // is not that rule.
+            self.used.insert(def);
+        }
+
         for param in &function.sig.params {
             if let Some(ty) = &param.ty {
                 self.resolve_type(ty);

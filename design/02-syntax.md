@@ -8,7 +8,8 @@ apart by looking. So: every rule stated as a rule, and every diagnostic code nam
 what the compiler does today. Four constructs appear in the illustrations and do not parse at
 all, because the sections around them would be thin without something to name:
 
-- generic application, as in `Id<Account>`. Writing it is `VOW4013`.
+- generic application on a declared type, as in `Id<Account>`. A generic *function* is real
+  and is described below; a generic record or choice is not, so applying one is `VOW4013`.
 - traits, which have no keyword and no node
 - `matches(value, EMAIL_PATTERN)`, which is not in the prelude
 - `Int.parse(input)`, since a builtin type has no members
@@ -163,10 +164,13 @@ push(names, "katherine")
 ```
 
 `List` is built in, and that is not where it should end up. There is no way to declare a
-generic type yet, so it is the same shortcut `Result` takes: the checker compares element
+generic *type* yet, so it is the same shortcut `Result` takes: the checker compares element
 types componentwise and lets an unknown one absorb, which is why `[]` fits wherever a list
 was wanted with nothing written on the literal itself. The first element of a literal decides
 the element type, because with no unification there is nothing to meet two candidates with.
+
+A generic *function* is writable, which is the half that mattered most: it is what lets a
+list helper be written once rather than once per element type. See below.
 
 It is built in at all because nothing else in the language could hold more than one of
 something. Every program written before it worked on a fixed number of named variables,
@@ -297,6 +301,69 @@ mechanism.
 
 Postconditions are the review surface. A person reads the contract, the compiler is
 responsible for the body agreeing with it.
+
+## Generic functions
+
+```vow
+fn first<T>(items: List<T>) -> Result<T, String> {
+    at(items, 0)
+}
+
+fn map<A, B>(items: List<A>, step: Fn(A) -> B) -> List<B> {
+    for item in items with out = [] {
+        push(out, step(item))
+    }
+}
+```
+
+`Result` and `List` are built in because there is no way to declare a generic type. That
+shortcut was never the expensive part. The expensive part was that nobody could write a
+library: `first`, `last`, `map` and `count_where` are all one function at different element
+types, and until this existed not one of them could be written down.
+
+**There is no unification and no inference beyond the call.** At a call site the declared
+parameter types are matched against the argument types, walking down both in step. `List<T>`
+against `List<String>` gives `T = String`. That is the same kind of local reasoning the
+checker already does everywhere else, and it is the reason generics cost this design almost
+nothing.
+
+**The first answer for a parameter wins.** `fn same<T>(a: T, b: T)` called with `same(1, "two")`
+binds `T` from the first argument and then reports an ordinary mismatch on the second:
+"expected `Int`, found `String`", pointing at the parameter. That is a better message than
+anything about a variable the caller never wrote.
+
+**An argument the checker gave up on decides nothing.** An unknown agrees with whatever the
+parameter turns out to be, so treating it as an answer would let one argument nobody could
+type decide the type of every other, and turn one mistake into several.
+
+**Every type parameter has to appear in a parameter's type.** `fn empty<T>() -> List<T>` is
+`VOW4023`. Without this rule a call would sometimes have to write its type arguments, which
+needs `empty<String>()` to parse, which is the `f<a>(b)` versus `f < a > (b)` ambiguity, and
+P2 has a budget for exactly this kind of thing. The rule costs nothing today: `[]` is already
+a `List<unknown>` and unknown absorbs, so `empty()` would add nothing the empty literal does
+not already do.
+
+It is also the same claim everything else here makes. A signature is complete, and one with
+a hole a caller has to fill in from somewhere else is not.
+
+**A type parameter is not a free pass inside the body.** `T` is whatever the caller decided,
+so the body may hold one, count them and put them in a list, and may not add two together.
+Nothing said they could be added.
+
+**A generic function is not a value.** `let f = first` is `VOW4024`. One expression has one
+type here, and a generic function named rather than called has as many as there are ways to
+call it. Making that work needs a polymorphic value, which is a much larger thing than
+substituting into a signature at a call site.
+
+**A type parameter crosses a module boundary as a position, not as a name.** The same reason
+an imported type crosses as a module path and a name: a `DefId` is an index into one module's
+table. An imported generic function arrives with its parameters still in it and the call site
+does exactly the work it would have done at home.
+
+What is still missing is a generic record or choice, and a row variable. `map` above works
+only for a callback that performs nothing, because `Fn(A) -> B` promises that, and writing a
+row on it would name one effect rather than passing whatever the callback does through to
+`map`'s own row. `design/03-effects.md` has that one.
 
 ## Verification, honestly
 
@@ -827,9 +894,9 @@ using an effect to get around not having a loop.
   walks all of it, and a fold cannot say it has seen enough. The honest version is probably a
   `for` whose accumulator is a `Result`, which stops meaning "done" and starts meaning
   "failed", so it needs its own answer rather than a reused one.
-- Generics: how much is needed before P2 breaks. `Result` and `List` are both built in
-  because there is no way to declare one, and a third would be the point where the shortcut
-  has clearly stopped paying. Higher-kinded types are almost certainly out.
+- Generic types. A generic function is real, and a generic record or choice is not, so
+  `Result` and `List` are still built in. A third would be the point where the shortcut has
+  clearly stopped paying. Higher-kinded types are almost certainly out.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.

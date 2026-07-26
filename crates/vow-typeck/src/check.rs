@@ -50,6 +50,7 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         types: Types::default(),
         diagnostics: Vec::new(),
         def_types: HashMap::new(),
+        type_params: HashMap::new(),
         signatures: HashMap::new(),
         aliases: HashMap::new(),
         alias_targets: HashMap::new(),
@@ -91,6 +92,9 @@ struct Signature {
     params: Vec<ParamTy>,
     ret: Ty,
     span: Span,
+    /// The type parameters this was declared with, in order, and where each
+    /// was written. Empty for almost everything.
+    generics: Vec<(String, Span)>,
     /// What the contract says a call performs, as a function type would write
     /// it. Named directly rather than called, a function is a value of that
     /// type, so this is what it has to fit.
@@ -113,6 +117,12 @@ struct Checker<'a> {
     diagnostics: Vec<Diagnostic>,
     /// Types of parameters, locals and handler state.
     def_types: HashMap<DefId, Ty>,
+    /// Where each type parameter sits in the list its function declared.
+    ///
+    /// Keyed by definition, so two functions that both call theirs `T` never
+    /// collide and the whole map can be one table rather than a stack of
+    /// scopes.
+    type_params: HashMap<DefId, (usize, Rc<str>)>,
     signatures: HashMap<DefId, Signature>,
     aliases: HashMap<DefId, &'a TypeAlias>,
     alias_targets: HashMap<DefId, Ty>,
@@ -184,6 +194,7 @@ impl<'a> Checker<'a> {
                         .collect(),
                     ret,
                     span: Span::at(0),
+                    generics: Vec::new(),
                     // An operation performs its own effect and nothing else,
                     // so naming one where a function type was wanted is only
                     // allowed if that type made room for it.
@@ -255,6 +266,7 @@ impl<'a> Checker<'a> {
                         .collect(),
                     ret,
                     span: Span::at(0),
+                    generics: Vec::new(),
                     row: FnRow::Declared(Vec::new()),
                     guarantee,
                 },
@@ -395,6 +407,7 @@ impl<'a> Checker<'a> {
                     signature.guarantee = signature
                         .guarantee
                         .meet(promised_by(&function.contract.ensures, &function.sig));
+                    self.check_type_params_are_determined(&signature);
                     self.signatures.insert(def, signature);
                 }
                 _ => {}
@@ -414,6 +427,15 @@ impl<'a> Checker<'a> {
     }
 
     fn lower_signature(&mut self, sig: &vow_ast::FnSig) -> Signature {
+        // Before the parameter types, which are what name them.
+        for (index, parameter) in sig.generics.iter().enumerate() {
+            if let Some(def) = self.def_of(parameter) {
+                self.type_params
+                    .insert(def, (index, Rc::from(parameter.name.as_str())));
+                self.types.set_name(def, parameter.name.clone());
+            }
+        }
+
         let mut params = Vec::new();
         for param in &sig.params {
             params.push(ParamTy {
@@ -436,12 +458,194 @@ impl<'a> Checker<'a> {
             params,
             ret,
             span: sig.span,
+            generics: sig
+                .generics
+                .iter()
+                .map(|parameter| (parameter.name.clone(), parameter.span))
+                .collect(),
             // Overwritten by the caller for a function with a contract. A
             // signature on its own says nothing about effects, and an effect
             // operation performs only its own.
             row: FnRow::Declared(Vec::new()),
             guarantee,
         }
+    }
+
+    /// Checks that every type parameter can be worked out from a call.
+    ///
+    /// The only place a call site can look is the parameter types, so one that
+    /// appears nowhere in them is one nothing can ever determine. Reported at
+    /// the declaration rather than at every call, because the declaration is
+    /// where the mistake is and a caller cannot fix it from where they are.
+    fn check_type_params_are_determined(&mut self, signature: &Signature) {
+        for (index, (name, span)) in signature.generics.iter().enumerate() {
+            if signature
+                .params
+                .iter()
+                .any(|param| param.ty.mentions(index))
+            {
+                continue;
+            }
+
+            let note = if signature.ret.mentions(index) {
+                "it appears in the return type, and a return type is what a call produces rather than something it can be worked out from"
+            } else {
+                "a type parameter is worked out by matching the parameter types against the arguments, so one that appears in none of them has nothing to match"
+            };
+
+            self.emit(
+                Diagnostic::error(
+                    codes::UNDETERMINED_TYPE_PARAM,
+                    self.file,
+                    *span,
+                    format!("nothing at a call site says what `{name}` is"),
+                )
+                .with_primary_label("appears in no parameter's type")
+                .with_note(note),
+            );
+        }
+    }
+
+    /// A signature with its type parameters worked out from the arguments.
+    ///
+    /// Hands back the signature unchanged when nothing in it is generic, which
+    /// is almost every call.
+    fn instantiate(&self, signature: &Signature, actual: &[Ty]) -> Signature {
+        if signature.generics.is_empty() {
+            return signature.clone();
+        }
+
+        let mut bindings = HashMap::new();
+        for (param, actual) in signature.params.iter().zip(actual) {
+            param.ty.bind(actual, &mut bindings);
+        }
+
+        Signature {
+            params: signature
+                .params
+                .iter()
+                .map(|param| ParamTy {
+                    ty: param.ty.substitute(&bindings),
+                    span: param.span,
+                })
+                .collect(),
+            ret: signature.ret.substitute(&bindings),
+            span: signature.span,
+            generics: Vec::new(),
+            row: signature.row.clone(),
+            guarantee: signature.guarantee.clone(),
+        }
+    }
+
+    /// What another module's function looks like as a signature.
+    ///
+    /// `None` when the name is not a function there, which is every other kind
+    /// of import and is somebody else's question.
+    fn imported_function_signature(&self, def: DefId) -> Option<Signature> {
+        let module = self.resolutions.import_module(def)?;
+        let name = &self.resolutions.def(def).name;
+        let Some(SurfaceItem::Function {
+            params,
+            ret,
+            generics,
+            row,
+            guarantee,
+        }) = self.world.get(module, name)
+        else {
+            return None;
+        };
+
+        Some(Signature {
+            // Nowhere to point at. The declaration is in a file this
+            // diagnostic cannot draw, so a mismatch lands on the argument and
+            // says what was wanted rather than pointing across the boundary.
+            params: params
+                .iter()
+                .map(|ty| ParamTy {
+                    ty: ty.clone(),
+                    span: Span::at(0),
+                })
+                .collect(),
+            ret: ret.clone(),
+            span: Span::at(0),
+            generics: generics
+                .iter()
+                .map(|name| (name.clone(), Span::at(0)))
+                .collect(),
+            row: row.clone(),
+            guarantee: guarantee.clone(),
+        })
+    }
+
+    /// Checks a call against a signature, working out its type parameters
+    /// first.
+    ///
+    /// Every argument is inferred before anything is checked. A generic
+    /// signature is not a signature until the arguments have said what its
+    /// type parameters are, and it cannot say what the first parameter wanted
+    /// without having looked at all of them.
+    ///
+    /// `name` is what to call it in an arity message, when there is a name
+    /// worth using.
+    fn check_call_against(
+        &mut self,
+        signature: &Signature,
+        callee: &'a Expr,
+        args: &'a [Expr],
+        span: Span,
+        name: Option<String>,
+    ) -> Ty {
+        if args.len() != signature.params.len() {
+            let what = match &name {
+                Some(name) => format!("`{name}` takes"),
+                None => "this takes".to_string(),
+            };
+            let mut diagnostic = Diagnostic::error(
+                codes::WRONG_ARITY,
+                self.file,
+                span,
+                format!(
+                    "{what} {} argument{}, but {} {} given",
+                    signature.params.len(),
+                    if signature.params.len() == 1 { "" } else { "s" },
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" }
+                ),
+            )
+            .with_primary_label("wrong number of arguments");
+            if !signature.span.is_empty() {
+                diagnostic = diagnostic.with_secondary(signature.span, "declared here");
+            }
+            self.emit(diagnostic);
+        }
+
+        let actual: Vec<Ty> = args.iter().map(|arg| self.infer(arg)).collect();
+        let signature = self.instantiate(signature, &actual);
+
+        // What the name in callee position turned out to mean, which for a
+        // generic function is the type it was called at rather than the type
+        // it was declared with. Recorded rather than inferred, because
+        // inferring it would be a second complaint about a generic function
+        // named where a value belongs, and this is a call.
+        self.types.record_expr(
+            callee.span(),
+            Ty::Fn {
+                params: signature.params.iter().map(|p| p.ty.clone()).collect(),
+                row: signature.row.clone(),
+                ret: Box::new(signature.ret.clone()),
+            },
+        );
+
+        for (index, arg) in args.iter().enumerate() {
+            let Some(param) = signature.params.get(index) else {
+                continue;
+            };
+            let param_ty = param.ty.clone();
+            let because = (!param.span.is_empty())
+                .then(|| (param.span, "the parameter it is passed to".to_string()));
+            self.assign(&actual[index], &param_ty, Some(arg), arg.span(), because);
+        }
+        signature.ret
     }
 
     /// What a return type alone promises about the value coming back.
@@ -532,6 +736,16 @@ impl<'a> Checker<'a> {
                     DefKind::Import => self.imported_ty(def, name),
                     DefKind::Record | DefKind::Choice => Ty::Named(def),
                     DefKind::Type => self.alias_ty(def),
+                    // A type parameter of the function being checked. It only
+                    // means anything inside that declaration, and every call
+                    // site substitutes it away.
+                    DefKind::TypeParam => match self.type_params.get(&def) {
+                        Some((index, name)) => Ty::Param {
+                            index: *index,
+                            name: Rc::clone(name),
+                        },
+                        None => Ty::Unknown,
+                    },
                     other => {
                         self.emit(
                             Diagnostic::error(
@@ -556,7 +770,7 @@ impl<'a> Checker<'a> {
                             format!("{described} does not take type arguments"),
                         )
                         .with_primary_label("unexpected type arguments")
-                        .with_note("Vow has no generic declarations yet, so only types from other modules can be applied"),
+                        .with_note("a function may be generic, and a record, a choice and an alias may not, so only `Result`, `List` and a type from another module can be applied"),
                     );
                 }
 
@@ -1939,6 +2153,34 @@ impl<'a> Checker<'a> {
         }
         match self.resolutions.def(def).kind {
             DefKind::Function => match self.signatures.get(&def) {
+                // One expression has one type here, and a generic function
+                // named rather than called has as many as there are ways to
+                // call it. Making this work needs a polymorphic value, which
+                // is a much larger thing than substituting at a call site.
+                Some(signature) if !signature.generics.is_empty() => {
+                    let names: Vec<&str> = signature
+                        .generics
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect();
+                    let names = names.join(", ");
+                    self.emit(
+                        Diagnostic::error(
+                            codes::GENERIC_AS_VALUE,
+                            self.file,
+                            ident.span,
+                            format!(
+                                "`{}` is generic, so naming it does not say what it is",
+                                ident.name
+                            ),
+                        )
+                        .with_primary_label(format!("nothing here says what `{names}` is"))
+                        .with_note(
+                            "call it, or write a closure that calls it at the type you want",
+                        ),
+                    );
+                    Ty::Unknown
+                }
                 Some(signature) => Ty::Fn {
                     params: signature.params.iter().map(|p| p.ty.clone()).collect(),
                     row: signature.row.clone(),
@@ -1988,6 +2230,27 @@ impl<'a> Checker<'a> {
             return Ty::Unknown;
         };
         match self.world.get(module, &ident.name) {
+            // Generic, so naming it says as little here as it does at home.
+            // The message is the same one a local generic function gets,
+            // because it is the same mistake and a module boundary does not
+            // make it a different one.
+            Some(SurfaceItem::Function { generics, .. }) if !generics.is_empty() => {
+                let names = generics.join(", ");
+                self.emit(
+                    Diagnostic::error(
+                        codes::GENERIC_AS_VALUE,
+                        self.file,
+                        ident.span,
+                        format!(
+                            "`{}` is generic, so naming it does not say what it is",
+                            ident.name
+                        ),
+                    )
+                    .with_primary_label(format!("nothing here says what `{names}` is"))
+                    .with_note("call it, or write a closure that calls it at the type you want"),
+                );
+                Ty::Unknown
+            }
             Some(SurfaceItem::Function {
                 params, ret, row, ..
             }) => Ty::Fn {
@@ -2329,44 +2592,24 @@ impl<'a> Checker<'a> {
             return ret;
         }
 
+        // A call to a function in another module. Its surface carries its type
+        // parameters, so a generic one is worked out here exactly the way a
+        // local one is. It cannot go through the function type path below,
+        // because a function type never carries type parameters of its own.
+        if let Some(def) = callee_def
+            && self.resolutions.def(def).kind == DefKind::Import
+            && let Some(signature) = self.imported_function_signature(def)
+        {
+            return self.check_call_against(&signature, callee, args, span, None);
+        }
+
         // A direct call to a declared function, where the parameter spans are
         // available and a mismatch can point at the declaration.
         if let Some(def) = callee_def
             && let Some(signature) = self.signatures.get(&def).cloned()
         {
             let name = self.types.name_of(def).to_string();
-            if args.len() != signature.params.len() {
-                self.emit(
-                    Diagnostic::error(
-                        codes::WRONG_ARITY,
-                        self.file,
-                        span,
-                        format!(
-                            "`{name}` takes {} argument{}, but {} {} given",
-                            signature.params.len(),
-                            if signature.params.len() == 1 { "" } else { "s" },
-                            args.len(),
-                            if args.len() == 1 { "was" } else { "were" }
-                        ),
-                    )
-                    .with_primary_label("wrong number of arguments")
-                    .with_secondary(signature.span, "declared here"),
-                );
-            }
-            for (index, arg) in args.iter().enumerate() {
-                let actual = self.infer(arg);
-                if let Some(param) = signature.params.get(index) {
-                    let param_ty = param.ty.clone();
-                    self.assign(
-                        &actual,
-                        &param_ty,
-                        Some(arg),
-                        arg.span(),
-                        Some((param.span, "the parameter it is passed to".to_string())),
-                    );
-                }
-            }
-            return signature.ret;
+            return self.check_call_against(&signature, callee, args, span, Some(name));
         }
 
         let callee_ty = self.infer(callee);
@@ -2388,6 +2631,17 @@ impl<'a> Checker<'a> {
                         .with_primary_label("wrong number of arguments"),
                     );
                 }
+
+                // No instantiation here, and that is the point. A function
+                // type never carries type parameters of its own: the `A` and
+                // `B` in a `f: Fn(A) -> B` parameter belong to the function
+                // that declared `f`, and inside that body they are settled
+                // already. Substituting them would turn `f(x)` into an unknown
+                // in the one place the answer was never in doubt.
+                //
+                // An imported generic function does not arrive here. It is
+                // handled above, through its surface, where its parameters are
+                // its own.
                 for (index, arg) in args.iter().enumerate() {
                     let actual = self.infer(arg);
                     if let Some(param) = params.get(index) {
