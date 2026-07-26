@@ -197,9 +197,15 @@ impl<'a> Checker<'a> {
         // reason a disk has.
         let io_error = |ok: Ty| Ty::Result(Box::new(ok), Box::new(Ty::Str));
 
-        let operations: [(&str, Vec<Ty>, Ty); 9] = [
+        let operations: [(&str, Vec<Ty>, Ty); 10] = [
             ("write", vec![console, Ty::Str], Ty::Unit),
-            ("now", vec![clock], Ty::Int),
+            ("now", vec![clock.clone()], Ty::Int),
+            // The machine's clock, in milliseconds since 1970. A separate
+            // entry in the row for the same reason `save` is separate from
+            // `read`: holding a `Clock` says nothing about which of these a
+            // function may do, and the difference between them is whether the
+            // program gives the same answer twice.
+            ("epoch", vec![clock], Ty::Int),
             ("open", vec![dir.clone(), Ty::Str], io_error(dir.clone())),
             ("read", vec![dir.clone(), Ty::Str], io_error(Ty::Str)),
             (

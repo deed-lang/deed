@@ -617,17 +617,28 @@ fn the_journal_example_writes_a_file_and_cannot_write_outside_the_directory() {
     assert!(scratch.path().join("shelf").is_dir(), "{text}");
 
     let written = std::fs::read_to_string(scratch.path().join("journal.txt")).unwrap();
-    assert_eq!(written, "wrote a file for the first time");
+    // Stamped with the machine's clock, so the line is checked by shape rather
+    // than by equality: `Io.epoch` is in the row precisely because it is the
+    // thing that makes two runs differ.
+    let stamp_of = |line: &str| -> i64 {
+        let (millis, rest) = line
+            .split_once(' ')
+            .unwrap_or_else(|| panic!("a stamped line: {line:?}"));
+        assert_eq!(rest, "wrote a file for the first time");
+        millis
+            .parse()
+            .unwrap_or_else(|_| panic!("milliseconds: {millis:?}"))
+    };
+    assert!(stamp_of(&written) > 1_577_836_800_000, "{written}");
 
     // Running it again appends rather than replacing, which is the only thing
     // that makes it a journal.
     let output = run(&["run", JOURNAL, "--dir", &dir]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let written = std::fs::read_to_string(scratch.path().join("journal.txt")).unwrap();
-    assert_eq!(
-        written,
-        "wrote a file for the first time\nwrote a file for the first time"
-    );
+    let lines: Vec<&str> = written.split('\n').collect();
+    assert_eq!(lines.len(), 2, "{written}");
+    assert!(stamp_of(lines[0]) <= stamp_of(lines[1]), "{written}");
 
     // And the shelf is still there rather than made again. "I made it" and "it
     // was already there" are different answers.

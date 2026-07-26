@@ -315,6 +315,15 @@ reaches strictly less, and there is a test that makes a directory and then fails
 of the result. Nothing may already be at the name: "I made it" and "it was already there" are
 different answers.
 
+`Io.epoch` is the same split about something other than authority. `Io.now` counts calls
+rather than reading a wall clock, because P8 says the default is deterministic and a real
+clock would make every run different, which is the right answer for a test and the wrong one
+for a program that needs the actual time. So the machine's clock is a second entry in the
+row on the same `Clock`. `uses Io.now` cannot reach it and it cannot reach `uses Io.now`,
+and what that buys is not narrower authority: a signature saying `uses Io.epoch` is a
+function whose output can change between two runs of the same program, and that is now
+something you can see without reading the body.
+
 `proven.vow` is the one that argues with itself. Every function in it either proves its
 postcondition or explains, in a comment, why the checker cannot, and the file is written so
 that the two halves sit next to each other. The `Proven` tier used to hold constant
