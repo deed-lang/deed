@@ -1141,6 +1141,12 @@ impl<'a> Checker<'a> {
     /// This is what makes one `map` work for a callback that logs, a callback
     /// that reads a file and a callback that does neither, rather than there
     /// being three of them.
+    ///
+    /// `sources` is a list rather than a position because one variable may
+    /// appear in more than one parameter, and when it does the answer is the
+    /// union of what was passed at each. It is not an equality: two callbacks
+    /// sharing a variable are not made to perform the same things, they are
+    /// two places a row is read off and the caller is charged with the sum.
     fn fill_row(&mut self, declared: Row, sources: &[usize], args: &[Expr]) -> Row {
         if sources.is_empty() {
             return declared;

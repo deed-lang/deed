@@ -16,7 +16,7 @@
 //    was.
 module examples/using_list
 
-use examples/list.{map, filter, fold, any, all, count_where, first, reversed}
+use examples/list.{map, filter, filtered_with, fold, any, all, count_where, first, reversed}
 
 effect Log {
     fn note(message: String) -> ()
@@ -88,6 +88,25 @@ fn counted_over(numbers: List<Int>) -> Int
     )
 }
 
+// 4. Two callbacks and one row variable. `keep` performs nothing, `dropped`
+//    logs, and this declares `Log.note` because that is the sum of the two.
+//    One variable in two parameters does not make the two callbacks agree: it
+//    stands for whatever was passed at each place it appears. Under the other
+//    reading this would not compile, since the two rows are different.
+fn kept_loudly(numbers: List<Int>) -> List<Int>
+  uses
+    Log.note,
+{
+    let complain = |n: Int| Log.note("dropped one")
+    filtered_with(numbers, |n: Int| n > 0, complain)
+}
+
+// The same call with nothing performed at either place. The variable came
+// back empty from both, so this declares nothing.
+fn kept_quietly(numbers: List<Int>) -> List<Int> {
+    filtered_with(numbers, |n: Int| n > 0, |n: Int| ())
+}
+
 test "a callback that performs nothing" {
     assert doubled([1, 2, 3]) == [2, 4, 6]
     assert positives([0 - 1, 2, 0 - 3, 4]) == [2, 4]
@@ -111,6 +130,13 @@ test "any and all walk the same list two ways" {
     assert all([1, 2], |n: Int| n > 0) == true
     assert all([1, 0], |n: Int| n > 0) == false
     assert all([], |n: Int| false) == true
+}
+
+test "two callbacks, and the caller is charged with both" {
+    assert kept_quietly([0 - 1, 2, 0 - 3, 4]) == [2, 4]
+    with Counted { seen: 0 } {
+        assert kept_loudly([0 - 1, 2, 0 - 3]) == [2]
+    }
 }
 
 test "a callback that performs an effect" {

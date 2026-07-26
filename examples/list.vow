@@ -97,6 +97,32 @@ fn count_where<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Int
     }
 }
 
+// Filter, and say something about the ones that did not make it. Two
+// callbacks, and `r` names both of their rows.
+//
+// One variable in two parameters does not force the two callbacks to agree.
+// It stands for whatever was passed at each place it appears, and the caller
+// is charged with the sum. So `keep` can be pure while `dropped` logs, and the
+// caller declares what `dropped` does and nothing else.
+fn filtered_with<T, uses r>(
+    items: List<T>,
+    keep: Fn(T) uses r -> Bool,
+    dropped: Fn(T) uses r -> (),
+)
+    -> List<T>
+  uses
+    r,
+{
+    for item in items with kept = [] {
+        if keep(item) {
+            push(kept, item)
+        } else {
+            dropped(item)
+            kept
+        }
+    }
+}
+
 // These two need no callback and so no row variable. Worth having next to the
 // rest so that the row on the others reads as a decision rather than as
 // something every signature in the file happens to carry.

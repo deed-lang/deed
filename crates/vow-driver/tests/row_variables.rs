@@ -281,6 +281,166 @@ fn the_one_legal_position_is_still_legal() {
     );
 }
 
+// -- one variable, two parameters ---------------------------------------------
+//
+// A variable does not stand for one row that every parameter carrying it has
+// to agree on. It stands for whatever was passed at each place it appears, and
+// the call site is charged with the sum. Nothing compares the second occurrence
+// against the first, in either pass: the type checker makes room for anything
+// once a row holds a variable, and the effect checker unions the row of every
+// argument the variable came from.
+//
+// That is the useful reading, and it was true before anything below was
+// written. These tests are here because it was true by consequence rather than
+// by decision, so nothing would have gone red if it stopped being true.
+
+/// `both` calls two callbacks that share one row variable.
+const BOTH: &str = "module a\n\n\
+     effect Log {\n\
+     \x20 fn note(message: String) -> ()\n\
+     }\n\n\
+     effect Bell {\n\
+     \x20 fn ring() -> ()\n\
+     }\n\n\
+     handler Counted implements Log {\n\
+     \x20 state seen: Int\n\n\
+     \x20 fn note(message) -> () {\n\
+     \x20   seen = seen + 1\n\
+     \x20 }\n\
+     }\n\n\
+     handler Silent implements Bell {\n\
+     \x20 state rung: Int\n\n\
+     \x20 fn ring() -> () {\n\
+     \x20   rung = rung + 1\n\
+     \x20 }\n\
+     }\n\n\
+     fn both<A, uses r>(x: A, f: Fn(A) uses r -> A, g: Fn(A) uses r -> A) -> A\n\
+     \x20 uses r,\n\
+     {\n\
+     \x20 g(f(x))\n\
+     }\n\n";
+
+#[test]
+fn two_parameters_sharing_a_variable_need_not_perform_the_same_things() {
+    // The case the equality reading would refuse. One callback logs, the other
+    // rings, and the caller is charged with both.
+    expect_clean(&format!(
+        "{BOTH}\
+         fn run(n: Int) -> Int\n\
+         \x20 uses Log.note, Bell.ring,\n\
+         {{\n\
+         \x20 both(n, |a: Int| {{\n\
+         \x20   Log.note(\"first\")\n\
+         \x20   a\n\
+         \x20 }}, |b: Int| {{\n\
+         \x20   Bell.ring()\n\
+         \x20   b\n\
+         \x20 }})\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn the_second_parameter_contributes_on_its_own() {
+    // Nothing is passed at the first, so under a reading where the second
+    // occurrence is checked against the first there would be an empty row to
+    // check it against. There is not: the caller declares what it handed over
+    // at the second place and that is the whole row.
+    expect_clean(&format!(
+        "{BOTH}\
+         fn run(n: Int) -> Int\n\
+         \x20 uses Bell.ring,\n\
+         {{\n\
+         \x20 both(n, |a: Int| a, |b: Int| {{\n\
+         \x20   Bell.ring()\n\
+         \x20   b\n\
+         \x20 }})\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn a_caller_that_declares_only_one_of_the_two_is_refused() {
+    // The union is a union in both directions. Leaving out what the second
+    // callback does is the ordinary too-narrow error, so the flexibility does
+    // not cost the caller its contract.
+    let text = expect_refused(&format!(
+        "{BOTH}\
+         fn run(n: Int) -> Int\n\
+         \x20 uses Log.note,\n\
+         {{\n\
+         \x20 both(n, |a: Int| {{\n\
+         \x20   Log.note(\"first\")\n\
+         \x20   a\n\
+         \x20 }}, |b: Int| {{\n\
+         \x20   Bell.ring()\n\
+         \x20   b\n\
+         \x20 }})\n\
+         }}\n"
+    ));
+    assert!(text.contains("VOW5001"), "{text}");
+    assert!(text.contains("`Bell.ring`"), "{text}");
+}
+
+#[test]
+fn both_callbacks_run_and_the_union_is_what_the_handlers_see() {
+    expect_tests_pass(&format!(
+        "{BOTH}\
+         fn run(n: Int) -> Int\n\
+         \x20 uses Log.note, Bell.ring,\n\
+         {{\n\
+         \x20 both(n, |a: Int| {{\n\
+         \x20   Log.note(\"first\")\n\
+         \x20   a + 1\n\
+         \x20 }}, |b: Int| {{\n\
+         \x20   Bell.ring()\n\
+         \x20   b + 1\n\
+         \x20 }})\n\
+         }}\n\n\
+         test \"both callbacks ran\" {{\n\
+         \x20 with Counted {{ seen: 0 }} {{\n\
+         \x20   with Silent {{ rung: 0 }} {{\n\
+         \x20     assert run(1) == 3\n\
+         \x20   }}\n\
+         \x20 }}\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn two_variables_say_the_same_thing_as_one_written_twice() {
+    // Worth knowing rather than assuming. Separate variables are not a way to
+    // keep two callbacks' rows apart at the call site, because both are
+    // unioned into the caller either way. The difference is inside the
+    // declaration, where each name has to be performed for its own row entry
+    // to be justified.
+    expect_clean(
+        "module a\n\n\
+         effect Log {\n\
+         \x20 fn note(message: String) -> ()\n\
+         }\n\n\
+         effect Bell {\n\
+         \x20 fn ring() -> ()\n\
+         }\n\n\
+         fn both<A, uses r, uses s>(x: A, f: Fn(A) uses r -> A, g: Fn(A) uses s -> A) -> A\n\
+         \x20 uses r, s,\n\
+         {\n\
+         \x20 g(f(x))\n\
+         }\n\n\
+         fn run(n: Int) -> Int\n\
+         \x20 uses Log.note, Bell.ring,\n\
+         {\n\
+         \x20 both(n, |a: Int| {\n\
+         \x20   Log.note(\"first\")\n\
+         \x20   a\n\
+         \x20 }, |b: Int| {\n\
+         \x20   Bell.ring()\n\
+         \x20   b\n\
+         \x20 })\n\
+         }\n",
+    );
+}
+
 // -- across a module boundary -----------------------------------------------------
 
 /// A library module holding nothing but a `map` with a row variable.
@@ -291,6 +451,11 @@ const LIST: &str = "module list\n\n\
      \x20 for item in items with out = [] {\n\
      \x20   push(out, step(item))\n\
      \x20 }\n\
+     }\n\n\
+     fn both<A, uses r>(x: A, f: Fn(A) uses r -> A, g: Fn(A) uses r -> A) -> A\n\
+     \x20 uses r,\n\
+     {\n\
+     \x20 g(f(x))\n\
      }\n";
 
 fn check_with_library(app: &str) -> (SourceMap, Checked) {
@@ -350,4 +515,67 @@ fn an_imported_map_still_charges_the_caller() {
     assert!(checked.has_errors(), "this should not have been accepted");
     assert!(text.contains("VOW5001"), "{text}");
     assert!(text.contains("`Log.note`"), "{text}");
+}
+
+#[test]
+fn the_union_survives_a_module_boundary_too() {
+    // Which parameters a variable came from crosses as positions, and there is
+    // more than one of them here. The far side unions the same way the near
+    // side does, which is the part that would break quietly if `row_from` ever
+    // became a single position instead of a list.
+    let (sources, checked) = check_with_library(
+        "module app\n\n\
+         use list.{both}\n\n\
+         effect Log {\n\
+         \x20 fn note(message: String) -> ()\n\
+         }\n\n\
+         effect Bell {\n\
+         \x20 fn ring() -> ()\n\
+         }\n\n\
+         fn run(n: Int) -> Int\n\
+         \x20 uses Log.note, Bell.ring,\n\
+         {\n\
+         \x20 both(n, |a: Int| {\n\
+         \x20   Log.note(\"first\")\n\
+         \x20   a\n\
+         \x20 }, |b: Int| {\n\
+         \x20   Bell.ring()\n\
+         \x20   b\n\
+         \x20 })\n\
+         }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn an_imported_two_callback_call_charges_the_caller_for_both() {
+    let (sources, checked) = check_with_library(
+        "module app\n\n\
+         use list.{both}\n\n\
+         effect Log {\n\
+         \x20 fn note(message: String) -> ()\n\
+         }\n\n\
+         effect Bell {\n\
+         \x20 fn ring() -> ()\n\
+         }\n\n\
+         fn forgot(n: Int) -> Int\n\
+         \x20 uses Log.note,\n\
+         {\n\
+         \x20 both(n, |a: Int| {\n\
+         \x20   Log.note(\"first\")\n\
+         \x20   a\n\
+         \x20 }, |b: Int| {\n\
+         \x20   Bell.ring()\n\
+         \x20   b\n\
+         \x20 })\n\
+         }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(checked.has_errors(), "this should not have been accepted");
+    assert!(text.contains("VOW5001"), "{text}");
+    assert!(text.contains("`Bell.ring`"), "{text}");
 }
