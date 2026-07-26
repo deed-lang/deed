@@ -513,6 +513,145 @@ fn a_function_with_no_dir_has_nothing_to_save_into() {
     );
 }
 
+// -- deleting --------------------------------------------------------------
+//
+// Reading, listing and writing all leave what was there. Deleting does not,
+// and the difference is not one of degree: a program that writes the wrong
+// bytes can be put back from what it overwrote, and one that deletes the wrong
+// file cannot be put back from anything.
+//
+// The claim being tested is that this needed no new mechanism. It is a fourth
+// entry in the row over the same `Dir`, the same way `Io.save` and `Io.list`
+// were, and holding the directory still says nothing about which of the four a
+// function may do.
+
+#[test]
+fn a_dir_removes_a_file_inside_it() {
+    let scratch = Scratch::new("remove");
+    scratch.write("note.txt", "the contents");
+
+    let (_, run) = run_in(
+        &report(
+            &["write", "remove"],
+            "  match Io.remove(sys.files, \"note.txt\") {\n    ok(nothing) => Io.write(sys.console, \"removed\"),\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        scratch.path(),
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["removed".to_string()]);
+    assert!(!scratch.path().join("note.txt").exists());
+}
+
+#[test]
+fn removing_something_that_is_not_there_is_an_error_rather_than_a_success() {
+    // "It was already gone" and "I removed it" are different answers, and a
+    // program that cannot tell them apart has a bug waiting.
+    let scratch = Scratch::new("remove-missing");
+
+    let (_, run) = run_in(
+        &report(
+            &["write", "remove"],
+            "  match Io.remove(sys.files, \"nothing.txt\") {\n    ok(nothing) => Io.write(sys.console, \"REMOVED IT\"),\n    err(why) => Io.write(sys.console, \"refused\"),\n  }",
+        ),
+        scratch.path(),
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["refused".to_string()]);
+}
+
+#[test]
+fn a_directory_is_not_a_file_to_remove() {
+    // Files only, like `list`. Removing a directory is a different operation
+    // with a different blast radius and nothing here wants it.
+    let scratch = Scratch::new("remove-dir");
+    std::fs::create_dir(scratch.path().join("inside")).unwrap();
+
+    let (_, run) = run_in(
+        &report(
+            &["write", "remove"],
+            "  match Io.remove(sys.files, \"inside\") {\n    ok(nothing) => Io.write(sys.console, \"REMOVED IT\"),\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        scratch.path(),
+    );
+
+    assert!(run.result.is_ok());
+    assert_ne!(run.output, vec!["REMOVED IT".to_string()]);
+    assert!(scratch.path().join("inside").exists());
+}
+
+#[test]
+fn every_way_out_of_a_dir_is_refused_for_removing_too() {
+    // The same list as reading and writing, because removing goes through the
+    // same check rather than through a second one that agrees today.
+    let scratch = Scratch::new("remove-escape");
+    let outside = scratch.path().parent().unwrap().to_path_buf();
+    std::fs::write(outside.join("target.txt"), "still here").unwrap();
+
+    for attempt in [
+        "..",
+        ".",
+        "../target.txt",
+        "/etc/passwd",
+        "C:\\\\Windows\\\\System32",
+        "a/b",
+        "a\\\\b",
+        "",
+    ] {
+        let (_, run) = run_in(
+            &report(
+                &["write", "remove"],
+                &format!(
+                    "  match Io.remove(sys.files, \"{attempt}\") {{\n    ok(nothing) => Io.write(sys.console, \"REMOVED IT\"),\n    err(why) => Io.write(sys.console, why),\n  }}"
+                ),
+            ),
+            scratch.path(),
+        );
+        assert!(run.result.is_ok());
+        assert_ne!(
+            run.output,
+            vec!["REMOVED IT".to_string()],
+            "`{attempt}` got out of the directory"
+        );
+    }
+
+    assert!(
+        outside.join("target.txt").exists(),
+        "something outside the directory was deleted"
+    );
+    std::fs::remove_file(outside.join("target.txt")).ok();
+}
+
+#[test]
+fn removing_without_declaring_it_is_an_effect_error() {
+    // The whole argument for not inventing a second kind of `Dir`. This
+    // function holds one and may write to it, and it still cannot delete
+    // anything, because which of the two it is doing lives in the row.
+    let (sources, checked) = check(
+        "module a\n\nfn sneak(files: Dir) -> Result<(), String>\n  uses Io.save,\n{\n  Io.remove(files, \"note.txt\")\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn declaring_removal_does_not_grant_anything_else() {
+    // The other direction, and the one that would make the row decorative if
+    // it failed. Saying `uses Io.remove` is not a way to read the file first.
+    let (sources, checked) = check(
+        "module a\n\nfn sneak(files: Dir) -> Result<String, String>\n  uses Io.remove,\n{\n  Io.read(files, \"note.txt\")\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&vow_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
 // -- arguments -------------------------------------------------------------
 
 #[test]

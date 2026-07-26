@@ -279,6 +279,7 @@ choice Asked {
     Add { title: String },
     Finish { title: String },
     FinishAt { position: Int },
+    Clear,
 }
 
 fn asked_for(arguments: List<String>) -> Asked {
@@ -305,7 +306,14 @@ fn rest_of(first: String, arguments: List<String>) -> Asked {
             }
         }
     } else {
-        Add { title: join(arguments, " ") }
+        // Bare `clear` and nothing else. `clear the shed` is a task, because a
+        // verb that swallows whatever follows it is a program deciding it
+        // knows better than what was typed.
+        if first == "clear" && length(title) == 0 {
+            Clear
+        } else {
+            Add { title: join(arguments, " ") }
+        }
     }
 }
 
@@ -339,6 +347,37 @@ fn written(text: String, asked: Asked) -> String {
         Add { title } => lines_of(push(entries_in(text), "[ ] " + title)),
         Finish { title } => lines_of(marked(entries_in(text), title)),
         FinishAt { position } => lines_of(marked_at(entries_in(text), position)),
+        Clear => "",
+    }
+}
+
+// Whether what was asked for destroys the file rather than rewriting it.
+//
+// A separate question from what the file should say afterwards, because the
+// answer to that one is "nothing" either way and there is a large difference
+// between a file holding nothing and a file that is not there.
+fn wipes(asked: Asked) -> Bool {
+    match asked {
+        Clear => true,
+        Nothing => false,
+        Add { title } => false,
+        Finish { title } => false,
+        FinishAt { position } => false,
+    }
+}
+
+// Deleting is its own authority, and this function is where that is worth
+// looking at. It declares `uses Io.remove` and nothing else, so it cannot
+// write the file back, cannot read it and cannot find out what else is in the
+// directory, while holding exactly the same `Dir` that `main` uses to do all
+// three. Holding a directory is not permission to do anything to it.
+fn cleared(files: Dir, name: String) -> String
+  uses
+    Io.remove,
+{
+    match Io.remove(files, name) {
+        ok(nothing) => "cleared",
+        err(why) => why,
     }
 }
 
@@ -376,6 +415,7 @@ fn main(sys: System) -> Int
     Io.write,
     Io.read,
     Io.save,
+    Io.remove,
     Io.args,
 {
     let out = sys.console
@@ -387,13 +427,18 @@ fn main(sys: System) -> Int
     // nothing is how somebody finds out a week later that they misspelled it.
     Io.write(out, said(before, asked))
 
-    // Saving only when something changed. A program that rewrote the file on
-    // every run would touch it even when asked to do nothing, and a to-do list
-    // whose timestamp moves for no reason is a to-do list nobody trusts.
-    if before != after {
-        match Io.save(sys.files, "todo.txt", after) {
-            ok(nothing) => Io.write(out, "saved"),
-            err(why) => Io.write(out, why),
+    if wipes(asked) {
+        Io.write(out, cleared(sys.files, "todo.txt"))
+    } else {
+        // Saving only when something changed. A program that rewrote the file
+        // on every run would touch it even when asked to do nothing, and a
+        // to-do list whose timestamp moves for no reason is a to-do list
+        // nobody trusts.
+        if before != after {
+            match Io.save(sys.files, "todo.txt", after) {
+                ok(nothing) => Io.write(out, "saved"),
+                err(why) => Io.write(out, why),
+            }
         }
     }
 
@@ -411,6 +456,7 @@ fn said(text: String, asked: Asked) -> String {
         Add { title } => "added: " + title,
         Finish { title } => finished_or_not(text, title),
         FinishAt { position } => finished_at_or_not(text, position),
+        Clear => "clearing",
     }
 }
 
@@ -525,6 +571,20 @@ test "done reads a number as a position" {
     // A task called "2" cannot be finished by name any more. Nothing in the
     // type of a `String` records which of the two it was meant to be.
     assert asked_for(["done", "2", "left"]) == Finish { title: "2 left" }
+}
+
+test "clear on its own is the only clear" {
+    assert asked_for(["clear"]) == Clear
+    // A verb that swallowed whatever followed it would be the program
+    // deciding it knows better than what was typed.
+    assert asked_for(["clear", "the", "shed"]) == Add { title: "clear the shed" }
+    assert wipes(Clear) == true
+    assert wipes(Nothing) == false
+    assert wipes(Add { title: "one" }) == false
+    // What the file should say afterwards is "nothing" either way, and there
+    // is a large difference between a file holding nothing and a file that is
+    // not there.
+    assert written("[ ] two\n", Clear) == ""
 }
 
 test "what gets written back" {

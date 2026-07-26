@@ -1484,6 +1484,34 @@ impl<'a> Interp<'a> {
                     Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
                 })
             }
+            // Destroying rather than replacing, which is why it is its own
+            // entry in the row and not something `save` happens to allow. A
+            // program that writes the wrong bytes can be put back from what it
+            // overwrote; one that deletes the wrong file cannot be put back
+            // from anything.
+            //
+            // Files only, like `list`. Removing a directory is a different
+            // operation with a different blast radius and nothing here wants
+            // it. A name that is not there is an error rather than a success,
+            // because "it was already gone" and "I removed it" are different
+            // answers.
+            //
+            // `resolve` rather than `resolve_new`: the file has to be there,
+            // and a symlink pointing out of the directory is refused rather
+            // than followed out of it.
+            ("remove", Capability::Dir(root)) => {
+                let name_arg = self.io_name(args.get(1), span)?;
+                Ok(match sandbox::resolve(&root, &name_arg) {
+                    Ok(path) if path.is_dir() => {
+                        Value::err(Value::str(format!("`{name_arg}` is a directory")))
+                    }
+                    Ok(path) => match std::fs::remove_file(&path) {
+                        Ok(()) => Value::ok(Value::Unit),
+                        Err(error) => Value::err(Value::str(format!("`{name_arg}`: {error}"))),
+                    },
+                    Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
+                })
+            }
             (_, held) => Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,
