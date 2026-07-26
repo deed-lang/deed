@@ -179,6 +179,12 @@ pub struct Param {
 #[derive(Clone, Debug)]
 pub struct FnSig {
     pub name: Ident,
+    /// `<T>` in `fn first<T>(items: List<T>) -> Result<T, String>`.
+    ///
+    /// Every one of these has to appear in a parameter's type, which is what
+    /// removes the need to write type arguments at a call site and with them
+    /// the `f<a>(b)` versus `f < a > (b)` ambiguity. See `design/02-syntax.md`.
+    pub generics: Vec<Ident>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
     pub span: Span,

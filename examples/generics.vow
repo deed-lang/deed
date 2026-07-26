@@ -1,0 +1,105 @@
+// Generic functions, and the thing they make possible.
+//
+// `Result` and `List` are built into the language because there was no way to
+// declare a generic type. That is a shortcut and it is written up as one, but
+// the shortcut was never the real cost. The real cost was that nobody could
+// write a library. `first`, `last`, `count_where` and `contains` are all one
+// function at different element types, and until now not one of them could be
+// written down anywhere in this repository.
+//
+// The mechanism is deliberately small. There is no unification here and no
+// global inference, on purpose, and none of this brings either. At a call site
+// the declared parameter types are matched against the argument types, walking
+// down both in step, and that is all of it. `List<T>` against `List<String>`
+// gives `T = String`.
+//
+// One rule does the rest of the work: every type parameter has to appear in a
+// parameter's type. Without it, `fn empty<T>() -> List<T>` would need type
+// arguments written at the call site, which needs `empty<String>()` to parse,
+// which is the `f<a>(b)` versus `f < a > (b)` ambiguity that costs other
+// languages a real amount of parser complexity. With it, a call always knows
+// what every parameter is and there is nothing to write.
+//
+// It is also the same claim the rest of the language makes. A signature is
+// complete, and one with a hole a caller has to fill in from somewhere else is
+// not.
+module examples/generics
+
+// The one that motivated all of it. Three lines, and it works for every list
+// in the language rather than for one element type.
+fn first<T>(items: List<T>) -> Result<T, String> {
+    at(items, 0)
+}
+
+fn last<T>(items: List<T>) -> Result<T, String> {
+    at(items, length(items) - 1)
+}
+
+// A type parameter is whatever the caller decided, so the body knows nothing
+// about it. That is the point rather than a limitation: this can hold a `T`,
+// count them and put them in a list, and it cannot add two of them together,
+// because nothing said they could be added.
+fn take<T>(items: List<T>, upto: Int) -> List<T> {
+    for item in items with kept = [] {
+        if length(kept) < upto {
+            push(kept, item)
+        } else {
+            kept
+        }
+    }
+}
+
+// A function type carries one through, which is what makes a callback
+// possible at all. What is missing to write a real `map` is a way to say that
+// the result list holds `B` and not `A`, and that works: the return type says
+// so and the caller works both out from the arguments.
+fn map<A, B>(items: List<A>, step: Fn(A) -> B) -> List<B> {
+    for item in items with out = [] {
+        push(out, step(item))
+    }
+}
+
+fn count_where<T>(items: List<T>, keep: Fn(T) -> Bool) -> Int {
+    for item in items with total = 0 {
+        if keep(item) {
+            total + 1
+        } else {
+            total
+        }
+    }
+}
+
+// What is still not writable here is a `map` whose callback performs an
+// effect. `Fn(A) -> B` promises to perform nothing, and writing a row on it
+// would name one effect rather than passing whatever the callback does through
+// to `map`'s own row. That wants a row variable and it is the next thing.
+
+test "one declaration serves every element type" {
+    assert first([1, 2, 3]) == ok(1)
+    assert first(["a", "b"]) == ok("a")
+    assert first([true]) == ok(true)
+    assert last([1, 2, 3]) == ok(3)
+}
+
+test "an empty list is an error rather than a stop" {
+    assert first([]) == err("index 0 is outside a list of 0")
+    assert last([]) == err("index -1 is outside a list of 0")
+}
+
+test "taking a prefix keeps the element type" {
+    assert take([1, 2, 3], 2) == [1, 2]
+    assert take(["a", "b"], 0) == []
+    assert take([1], 5) == [1]
+}
+
+test "a callback changes the element type" {
+    assert map([1, 2, 3], |n: Int| n + n) == [2, 4, 6]
+    assert map([1, 2], |n: Int| to_string(n)) == ["1", "2"]
+    assert map(["a", "bb"], |s: String| length(s)) == [1, 2]
+}
+
+test "counting is the same walk with a different answer" {
+    assert count_where([1, 2, 3, 4], |n: Int| n > 2) == 2
+    assert count_where(["a", "", "b"], |s: String| length(s) == 0) == 1
+    assert count_where([], |n: Int| true) == 0
+}

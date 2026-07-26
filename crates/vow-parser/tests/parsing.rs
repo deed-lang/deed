@@ -604,6 +604,36 @@ fn node_spans_land_on_the_right_source_text() {
 // -- function types --------------------------------------------------------
 
 #[test]
+fn a_declaration_may_carry_type_parameters() {
+    // Only in a declaration, where the `<` cannot be a comparison, which is
+    // why this needs no lookahead and `f<a>(b)` in expression position is not
+    // a thing the parser has to think about.
+    let (_, parsed) =
+        parse_source("module a\n\nfn apply<A, B>(f: Fn(A) -> B, value: A) -> B { f(value) }\n");
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{:?}",
+        codes_of(&parsed.diagnostics)
+    );
+
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.sig.generics.len(), 2);
+    assert_eq!(function.sig.generics[0].name, "A");
+    assert_eq!(function.sig.generics[1].name, "B");
+}
+
+#[test]
+fn a_declaration_without_them_has_none() {
+    let (_, parsed) = parse_source("module a\n\nfn f(n: Int) -> Int { n }\n");
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert!(function.sig.generics.is_empty());
+}
+
+#[test]
 fn a_function_type_is_a_type() {
     let (_, parsed) = parse_source(
         "module a\n\nfn apply(f: Fn(Int, Int) -> Int, n: Int) -> Fn(Int) -> Int { f }\n",

@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-54 passed, 0 failed
+59 passed, 0 failed
 ```
 
 ```
@@ -174,7 +174,8 @@ The examples are [transfer.vow](examples/transfer.vow),
 [config.vow](examples/config.vow), [todo.vow](examples/todo.vow),
 [journal.vow](examples/journal.vow), [proven.vow](examples/proven.vow),
 [closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow),
-[strings.vow](examples/strings.vow), [lists.vow](examples/lists.vow), and the three that see
+[strings.vow](examples/strings.vow), [lists.vow](examples/lists.vow),
+[generics.vow](examples/generics.vow), and the three that see
 each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
 `hello.vow`, `config.vow`, `todo.vow` and `journal.vow` have a `main`, and the rest run their
@@ -276,14 +277,24 @@ read input, print a count, or write anything back out.
 `lists.vow` is the same complaint one size up. Until it, nothing in the language could hold
 more than one of something, so every program was one that worked on a fixed number of named
 variables. `List` is built in rather than declared, because there is still no way to declare
-a generic type, and it is the same shortcut `Result` takes: element types are compared
+a generic *type*, and it is the same shortcut `Result` takes: element types are compared
 componentwise and an unknown one absorbs, so `[]` fits wherever a list was wanted and no
-unification was needed anywhere. Whether that shortcut can carry a third type is the question
-that decides whether generics get written. What the file is honest about is iteration: there
-is no `for`, so walking a list is recursion and every walk declares `Diverge`. That is not an
-oversight. An accumulator loop wants mutation or a fold, and mutation here is supposed to be
-handler state and nothing else, so the shape of `for` is an argument about the central claim
-of the language rather than a piece of syntax to add.
+unification was needed anywhere. What the file is honest about is iteration: at the time
+there was no `for`, so walking a list was recursion and every walk declared `Diverge`. That
+was not an oversight. An accumulator loop wants mutation or a fold, and mutation here is
+supposed to be handler state and nothing else, so the shape of `for` was an argument about
+the central claim of the language rather than a piece of syntax to add.
+
+`generics.vow` is what the two shortcuts were actually costing. Not the shortcuts: nobody
+could write a library. `first`, `last`, `map` and `count_where` are one function at different
+element types and none of them could be written down anywhere in this repository. A generic
+function costs this design almost nothing, because there is still no unification: at a call
+site the declared parameter types are matched against the argument types, walking down both
+in step, and `List<T>` against `List<String>` gives `T = String`. One rule carries the rest.
+Every type parameter has to appear in a parameter's type, which means a call always knows
+what every parameter is, which means no type arguments are ever written, which means
+`f<a>(b)` versus `f < a > (b)` is not a problem this parser has. It is also the same claim
+everything else here makes: a signature is complete.
 
 The worst one so far was found the same afternoon. The `Guarded` tier did not guard a return
 value. `vow check` printed "so it becomes a runtime check" and there was no check: the

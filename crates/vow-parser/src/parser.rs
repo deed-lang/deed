@@ -667,6 +667,28 @@ impl<'a> Parser<'a> {
     fn parse_fn_sig(&mut self, types_required: TypesRequired) -> Option<FnSig> {
         let start = self.bump().span;
         let name = self.expect_ident("a function signature")?;
+
+        // `<T, U>`, and only here. In a declaration the `<` cannot be a
+        // comparison, so this needs no lookahead and none of the machinery
+        // that `f<a>(b)` in expression position would.
+        let mut generics = Vec::new();
+        if self.eat(&TokenKind::Lt) {
+            while !self.at(&TokenKind::Gt) && !self.at_eof() {
+                let before = self.pos;
+                let Some(parameter) = self.expect_ident("a type parameter") else {
+                    break;
+                };
+                generics.push(parameter);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+                if self.pos == before {
+                    break;
+                }
+            }
+            self.expect(TokenKind::Gt, "a type parameter list");
+        }
+
         self.expect(TokenKind::LParen, "a parameter list")?;
 
         let mut params = Vec::new();
@@ -726,6 +748,7 @@ impl<'a> Parser<'a> {
 
         Some(FnSig {
             name,
+            generics,
             params,
             ret,
             span: start.to(end),

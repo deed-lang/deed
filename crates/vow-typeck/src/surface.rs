@@ -45,6 +45,12 @@ pub enum SurfaceItem {
     Function {
         params: Vec<Ty>,
         ret: Ty,
+        /// The type parameters it was declared with, in order.
+        ///
+        /// Carried by name rather than by count, so a caller on the far side
+        /// can say which one it could not work out. The types themselves refer
+        /// to them by position, which is what makes them portable at all.
+        generics: Vec<String>,
         /// What its contract says a call performs, so that naming it as a
         /// value across a module boundary is checked the same way naming one
         /// at home is.
@@ -131,10 +137,11 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
         return Surface::default();
     };
 
-    let lowerer = Lowerer {
+    let mut lowerer = Lowerer {
         here: Rc::from(path.as_str()),
         resolutions,
         rows: RowLowering::of(module),
+        type_params: BTreeMap::new(),
     };
 
     // Refinement predicates, by the name they are declared under. Needed here
@@ -154,6 +161,20 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
     for item in &module.items {
         match item {
             Item::Function(decl) => {
+                // What this module's own checker calls them, so an imported
+                // generic function arrives with its parameters still in it and
+                // the call site does the same substitution it does at home.
+                lowerer.type_params = decl
+                    .sig
+                    .generics
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, parameter)| {
+                        let def = resolutions.resolution(parameter.span)?;
+                        Some((def, (index, Rc::from(parameter.name.as_str()))))
+                    })
+                    .collect();
+
                 let declared = match &decl.sig.ret {
                     Some(Type::Named { name, .. }) => predicates
                         .get(name.name.as_str())
@@ -193,6 +214,12 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                             None => Ty::Unit,
                         },
                         row: FnRow::Declared(lowerer.rows.normalised(&decl.contract.uses)),
+                        generics: decl
+                            .sig
+                            .generics
+                            .iter()
+                            .map(|parameter| parameter.name.clone())
+                            .collect(),
                         guarantee: Guarantee::of(declared).meet(promised),
                     },
                 );
@@ -279,6 +306,10 @@ struct Lowerer<'a> {
     /// How a row written in this module reads from anywhere else. Shared with
     /// the exports table so the two cannot drift apart.
     rows: RowLowering,
+    /// The type parameters of the declaration being lowered, and nothing else.
+    /// Replaced per item, because they mean nothing outside the one that
+    /// declared them.
+    type_params: BTreeMap<vow_resolve::DefId, (usize, Rc<str>)>,
 }
 
 impl Lowerer<'_> {
@@ -335,6 +366,16 @@ impl Lowerer<'_> {
                     DefKind::Type | DefKind::Record | DefKind::Choice => {
                         self.external(&Rc::clone(&self.here), name)
                     }
+                    // A type parameter of the function being lowered. It
+                    // crosses as a position rather than as a name, which is
+                    // all a call site on the far side needs to substitute it.
+                    DefKind::TypeParam => match self.type_params.get(&def) {
+                        Some((index, name)) => Ty::Param {
+                            index: *index,
+                            name: Rc::clone(name),
+                        },
+                        None => Ty::Unknown,
+                    },
                     _ => Ty::Unknown,
                 }
             }
