@@ -1,4 +1,9 @@
-# Vow
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="vow-cipher-brand-kit/vow-cipher-lockup-dark.svg">
+    <img alt="Vow" src="vow-cipher-brand-kit/vow-cipher-lockup.svg" width="380">
+  </picture>
+</p>
 
 A contract-first language where a function signature is a promise the compiler checks.
 Built for code that machines write and humans review.
