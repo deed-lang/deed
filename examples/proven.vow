@@ -71,10 +71,17 @@ fn clamped(raw: Int) -> Percent
     raw + 50
 }
 
-// Guarded, and correctly so. `n` could be the largest integer there is, and
-// then `n + 1` has no answer at all. Refusing to prove this is not a gap in
-// the reasoning, it is the reasoning working, and the warning points at the
-// `+` and says as much rather than leaving it to be guessed.
+// Proven, and it took an argument to get here. `n` could be the largest
+// integer there is, and then `n + 1` has no answer at all. That used to be
+// enough to refuse, and this comment used to say refusing was the reasoning
+// working. It was not.
+//
+// Overflow is an error here rather than a wrap: `n + 1` either produces a
+// value or stops the program. It never produces a wrong one. So if this
+// produced a value, that value is inside `i64`, and it is greater than one,
+// which is what `Positive` wanted. The interval saturates at the edge instead
+// of collapsing to "anything at all", and the runtime check that used to be
+// emitted here could never have fired.
 fn one_more(n: Positive) -> Positive {
     n + 1
 }
@@ -92,9 +99,14 @@ fn span(low: Int, high: Int) -> Positive
     high - low
 }
 
-// Guarded, and this one is the same limit as `one_more`. Nothing bounds either
-// name, so `high - low` can be larger than an integer, and an expression with
-// no answer proves nothing about the answer.
+// Proven, and for the same reason `one_more` is. `low < high` says the
+// difference is at least one, and nothing bounds either name, so `high - low`
+// can be larger than an integer. It does not matter: a difference that exists
+// is inside `i64`, and every one that exists is positive.
+//
+// The `where` clauses on `span` above are still worth having. They are what
+// makes the answer tight rather than merely positive, which is what a reader
+// of that signature wants to know.
 fn unbounded_span(low: Int, high: Int) -> Positive
   where
     low < high,

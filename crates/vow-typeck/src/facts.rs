@@ -29,10 +29,6 @@
 //!
 //! - **Two names multiplied together.** `a < b * c` is not linear, and a pair
 //!   of bounds has nowhere to put it. Deciding it is a solver's job.
-//! - **A difference larger than an integer.** `low < high` on its own does not
-//!   settle `high - low`, because with nothing bounding either name the
-//!   subtraction overflows, and an expression with no answer proves nothing
-//!   about the answer.
 //! - **Anything that is not an integer.** No `String`, no record field, no
 //!   variant.
 //! - **The payload of a call that can fail, until it is taken out.** A call
@@ -116,26 +112,37 @@ impl Range {
         }
     }
 
+    /// Arithmetic saturates rather than giving up, and that is sound because
+    /// overflow is an error here rather than a wrap.
+    ///
+    /// `checked_add` in the interpreter means `n + 1` either produces a value
+    /// or stops the program with `VOW6004`. It never produces a wrong one. So
+    /// every value this expression can produce is inside `i64`, and a bound
+    /// that leaves `i64` should be clamped to the edge rather than thrown
+    /// away.
+    ///
+    /// Throwing it away was the old answer and it was not merely conservative,
+    /// it was wrong in the direction that matters: `Positive` is `[1, MAX]`, so
+    /// `n + 1` collapsed to "anything at all" and a provable obligation became
+    /// a runtime check that could never fire.
+    ///
+    /// This is the same argument [`Range::Empty`] already rests on. A claim
+    /// about a value that does not exist is vacuously true, which is why an
+    /// impossible branch needs no special case.
     fn add(self, other: Range) -> Range {
         let (Some((a_low, a_high)), Some((b_low, b_high))) = (self.bounds(), other.bounds()) else {
             return Range::Empty;
         };
-        match (a_low.checked_add(b_low), a_high.checked_add(b_high)) {
-            (Some(low), Some(high)) => Range::between(low, high),
-            // Overflow means the answer is not representable, so nothing is
-            // known rather than something wrong.
-            _ => Range::ANY,
-        }
+        Range::between(a_low.saturating_add(b_low), a_high.saturating_add(b_high))
     }
 
     fn sub(self, other: Range) -> Range {
         match other.bounds() {
             // Subtracting is adding the negation, and negating the bounds
             // swaps them.
-            Some((low, high)) => match (low.checked_neg(), high.checked_neg()) {
-                (Some(neg_low), Some(neg_high)) => self.add(Range::between(neg_high, neg_low)),
-                _ => Range::ANY,
-            },
+            Some((low, high)) => {
+                self.add(Range::between(high.saturating_neg(), low.saturating_neg()))
+            }
             None => Range::Empty,
         }
     }
@@ -145,31 +152,24 @@ impl Range {
             return Range::Empty;
         };
 
-        // The extremes of a product are at the corners, and any overflow makes
-        // the whole thing unknown rather than wrong.
+        // The extremes of a product are at the corners, and a corner outside
+        // `i64` is clamped to the edge for the same reason a sum is: nothing
+        // outside `i64` is ever a value.
         let corners = [
-            a_low.checked_mul(b_low),
-            a_low.checked_mul(b_high),
-            a_high.checked_mul(b_low),
-            a_high.checked_mul(b_high),
+            a_low.saturating_mul(b_low),
+            a_low.saturating_mul(b_high),
+            a_high.saturating_mul(b_low),
+            a_high.saturating_mul(b_high),
         ];
-        if corners.iter().any(Option::is_none) {
-            return Range::ANY;
-        }
-
-        let values: Vec<i64> = corners.into_iter().flatten().collect();
         Range::between(
-            *values.iter().min().expect("four corners"),
-            *values.iter().max().expect("four corners"),
+            *corners.iter().min().expect("four corners"),
+            *corners.iter().max().expect("four corners"),
         )
     }
 
     fn negate(self) -> Range {
         match self.bounds() {
-            Some((low, high)) => match (low.checked_neg(), high.checked_neg()) {
-                (Some(neg_low), Some(neg_high)) => Range::between(neg_high, neg_low),
-                _ => Range::ANY,
-            },
+            Some((low, high)) => Range::between(high.saturating_neg(), low.saturating_neg()),
             None => Range::Empty,
         }
     }
@@ -960,29 +960,26 @@ pub fn ok_range_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
 
 /// Where the arithmetic in `expr` can have no answer, if anywhere.
 ///
-/// This is not a check, it is an explanation. `n + 1` where `n` is `Positive`
-/// is not provably positive, and a reader looking at that has every right to
-/// think the reasoning is weak. It is not: the sum has no answer when `n` is
-/// the largest integer there is, so there is no value to prove anything about.
-/// Saying which operation, rather than leaving it to be worked out, is the
-/// difference between a diagnostic and a shrug.
+/// This is not a check, it is an explanation. `n / d` where `d` could be zero
+/// is not provably anything, and a reader looking at that has every right to
+/// think the reasoning is weak. It is not: the quotient has no answer when `d`
+/// is zero, so there is no value to prove anything about. Saying which
+/// operation, rather than leaving it to be worked out, is the difference
+/// between a diagnostic and a shrug.
 ///
-/// Worked out in a width that cannot overflow, so the answer is about the
-/// program's arithmetic rather than about this function's.
+/// Only dividing, and only because adding, subtracting and multiplying stopped
+/// being able to defeat a proof. Overflow is an error rather than a wrap, so
+/// every value a sum can produce is inside `i64`, and [`Range::add`] saturates
+/// rather than giving up. `n + 1` where `n` is `Positive` is provably positive
+/// now, and a note saying it might not be would be a note about something that
+/// no longer happens.
 pub fn overflowing(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Span> {
     match expr {
         Expr::Unary {
             op: UnaryOp::Neg,
             operand,
-            span,
             ..
-        } => {
-            if let Some(inner) = overflowing(operand, facts, env) {
-                return Some(inner);
-            }
-            let (low, _) = range_of(operand, facts, env).bounds()?;
-            (low == i64::MIN).then_some(*span)
-        }
+        } => overflowing(operand, facts, env),
 
         Expr::Binary {
             op, lhs, rhs, span, ..
@@ -996,49 +993,19 @@ pub fn overflowing(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Span> {
                 return Some(inner);
             }
 
-            let left = range_of(lhs, facts, env);
-            let right = range_of(rhs, facts, env);
             match op {
                 // Dividing by zero has no answer, and neither does the
                 // smallest integer divided by minus one.
                 BinaryOp::Div | BinaryOp::Rem => {
-                    let (low, high) = right.bounds()?;
+                    let (low, high) = range_of(rhs, facts, env).bounds()?;
                     (low <= 0 && high >= 0).then_some(*span)
                 }
-                _ => {
-                    let (low, high) = exact(*op, left, right)?;
-                    (low < i64::MIN as i128 || high > i64::MAX as i128).then_some(*span)
-                }
+                _ => None,
             }
         }
 
         _ => None,
     }
-}
-
-/// The bounds an operation really has, in a width nothing here can overflow.
-fn exact(op: BinaryOp, left: Range, right: Range) -> Option<(i128, i128)> {
-    let (a_low, a_high) = left.bounds()?;
-    let (b_low, b_high) = right.bounds()?;
-    let (a_low, a_high) = (i128::from(a_low), i128::from(a_high));
-    let (b_low, b_high) = (i128::from(b_low), i128::from(b_high));
-
-    Some(match op {
-        BinaryOp::Add => (a_low + b_low, a_high + b_high),
-        BinaryOp::Sub => (a_low - b_high, a_high - b_low),
-        BinaryOp::Mul => {
-            let corners = [
-                a_low * b_low,
-                a_low * b_high,
-                a_high * b_low,
-                a_high * b_high,
-            ];
-            let low = corners.iter().min().copied()?;
-            let high = corners.iter().max().copied()?;
-            (low, high)
-        }
-        _ => return None,
-    })
 }
 
 /// What the difference facts add to an expression, when it is a difference.
@@ -1526,10 +1493,21 @@ mod tests {
     }
 
     #[test]
-    fn arithmetic_that_overflows_gives_up_rather_than_wrapping() {
+    fn arithmetic_that_leaves_the_integers_clamps_to_the_edge() {
+        // Not because clamping is close enough, but because it is exact.
+        // Overflow is an error rather than a wrap, so `i64::MAX + 1` produces
+        // no value at all, and the only value this expression can produce is
+        // `i64::MAX` itself, from nothing.
         let huge = Range::exactly(i64::MAX);
-        assert_eq!(huge.add(Range::exactly(1)), Range::ANY);
-        assert_eq!(huge.mul(Range::exactly(2)), Range::ANY);
+        assert_eq!(huge.add(Range::exactly(1)), Range::exactly(i64::MAX));
+        assert_eq!(huge.mul(Range::exactly(2)), Range::exactly(i64::MAX));
+
+        // The interesting one: an unbounded name plus one is everything except
+        // the smallest integer, which used to be "anything at all".
+        assert_eq!(
+            Range::ANY.add(Range::exactly(1)),
+            Range::between(i64::MIN + 1, i64::MAX)
+        );
     }
 
     #[test]
@@ -1564,12 +1542,12 @@ mod tests {
 
     #[test]
     fn a_clamped_difference_still_says_which_side_of_zero_it_is_on() {
-        // The subtraction has no answer, because the answer is larger than an
-        // integer. Which side of zero it falls on is not in doubt, and that is
-        // the only thing a comparison asks.
+        // The subtraction can be larger than an integer, so the bound clamps
+        // at the edge. Which side of zero it falls on is not in doubt, and
+        // that is the only thing a comparison asks.
         let below = Range::between(i64::MIN, -1);
         let above = Range::between(0, i64::MAX);
-        assert_eq!(below.sub(above), Range::ANY);
+        assert_eq!(below.sub(above), Range::between(i64::MIN, -1));
 
         let (_, highest) = below.spread(above).bounds().expect("not empty");
         assert!(highest < 0, "the difference is negative whatever its size");

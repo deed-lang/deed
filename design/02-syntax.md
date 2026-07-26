@@ -547,19 +547,33 @@ Every one of these is `Guarded`, with a warning, never a wrong answer.
 - **Two names multiplied together.** `a < b * b` is not linear, and a pair of bounds has
   nowhere to put it. The same limit applies to a promise: `ensures ok => result == n * n`
   says something true and useful and there is nowhere to put it.
-- **Arithmetic that could overflow.** `n + 1` where `n` is `Positive` is not provably
-  positive, because `n` could be the largest integer there is. That is the reasoning working
-  rather than a gap in it, and the runtime agrees: the sum has no answer. The same rule is
-  why `low < high` alone does not settle `high - low`. The warning points at the operation
-  and says so, because a proof the arithmetic defeated looks exactly like weak reasoning and
-  is not the same thing.
 - **The payload of a call that can fail, until it is taken out.** The expression is the
   `Result` and the promise is about the number inside it, so the two meet at a `?`, at an
   `ok(..)` pattern, and where a `Result` is assigned into one with a refined success type,
   and nowhere else.
 - **Anything that is not an integer.** No `String`, no record field, no variant.
 - **Division and remainder.** The sign rules around zero and around the smallest integer are
-  fiddly enough that getting them wrong is worse than not trying.
+  fiddly enough that getting them wrong is worse than not trying. It is also the only
+  arithmetic left that can defeat a proof by having no answer, and the warning points at the
+  operation and says so.
+
+### What overflow does not cost
+
+`n + 1` where `n` is `Positive` used to be `Guarded`, and this document used to argue that
+refusing was the reasoning working. It was not.
+
+Overflow is an error rather than a wrap, so `n + 1` either produces a value or stops the
+program, and it never produces a wrong one. So a value that exists is inside `Int`, and if
+`n > 0` then any sum that exists is greater than one. The interval clamps at the edge instead
+of collapsing to "anything at all", and the runtime check that used to be emitted could never
+have fired.
+
+The same argument settles `high - low` under `low < high` alone, which used to be `Guarded`
+for the same wrong reason.
+
+It is also strictly more precise away from the edges. `n + 1` for an unbounded `n` used to
+be "anything at all" and is now everything except the smallest integer, which is exactly the
+set of values it can produce.
 
 A solver would decide most of these and would be a hard dependency at check time, which P9
 has a budget against. Whether that trade is right is an open question, not a settled one.
