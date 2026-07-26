@@ -25,6 +25,8 @@ use vow_ast::{Item, Module, Outcome};
 use vow_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use vow_effects::Effects;
 use vow_interp::{Guard, Guards};
+use vow_lexer::tokenize;
+use vow_parser::parse;
 use vow_resolve::{Resolutions, Universe};
 use vow_typeck::{Tier, Types, World};
 
@@ -127,6 +129,32 @@ impl Checked {
             })
             .collect()
     }
+}
+
+/// The module a file declares and the modules it imports.
+///
+/// `None` when the file has no `module` line, which is a file nothing can
+/// import and which therefore says nothing about where anything else lives.
+///
+/// This exists so that whatever is about to compile a set of files can work
+/// out which files those are, which has to happen before the compilation. Done
+/// with the real parser rather than by matching the text, because a second,
+/// worse parser would disagree with this one about comments and strings on
+/// exactly the day it mattered.
+pub fn imports_of(text: &str) -> Option<(String, Vec<String>)> {
+    let mut sources = SourceMap::new();
+    let file = sources.add("<imports>", text.to_string());
+    let lexed = tokenize(file, text);
+    let parsed = parse(file, &lexed.tokens);
+
+    let module = parsed.module.name.as_ref()?.to_string_path();
+    let uses = parsed
+        .module
+        .uses
+        .iter()
+        .map(|entry| entry.path.to_string_path())
+        .collect();
+    Some((module, uses))
 }
 
 /// Runs the whole pipeline over a file already in `sources`.

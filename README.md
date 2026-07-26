@@ -313,11 +313,24 @@ list library written in Vow: `map`, `filter`, `fold`, `any`, `all`, `count_where
 them known to the compiler, no builtin, no special case, no name in the prelude. It is the
 first thing in this repository anybody else could have written.
 
-What it needed last was a row variable. Before that there were two ways to write `map` and
-both were wrong: `Fn(A) -> B` promises to perform nothing, so the callback could not log or
-read a file, and `Fn(A) uses Log.note -> B` works for one effect and needs a second copy for
-the next one. `uses r` stands for whatever the callback performs and passes it through to the
-function's own row, so `map(ns, |n| n + n)` performs nothing and
+Pointing `todo.vow` at it found the last thing missing. The compiler only looks at the files
+it was handed, which is a rule worth having, and it meant `vow run examples/todo.vow` could
+not find `examples/list` and the workaround was to name every file the program transitively
+needs. A library nobody can use without knowing its file layout is not a library. A module's
+name says where it lives now: a module named `a/b` is at `<root>/a/b.vow`, and the root comes
+from taking a named file's module path off the end of its own path. No search path, no config
+file, no manifest, and it is a rule every file here already followed.
+
+What was named is the subject and what an import needed is context, so `vow test app.vow`
+does not run a library's tests and `vow check app.vow` does report a library's errors. That
+is the same split the language server already makes between the workspace and the open
+document.
+
+What `list.vow` needed last was a row variable. Before that there were two ways to write
+`map` and both were wrong: `Fn(A) -> B` promises to perform nothing, so the callback could
+not log or read a file, and `Fn(A) uses Log.note -> B` works for one effect and needs a
+second copy for the next one. `uses r` stands for whatever the callback performs and passes
+it through to the function's own row, so `map(ns, |n| n + n)` performs nothing and
 `map(ns, |n| { Log.note(..); n })` performs `Log.note`, and the second caller has to say so.
 The library says "whatever you gave me" and the caller says what that was.
 
