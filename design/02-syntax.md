@@ -463,6 +463,27 @@ value. Ranges come from the things that state one:
 - the contract of a function being called, so a proof one function did is worth something to
   the next one
 
+How long something is counts as a name here. `length(items)` used to come back as a range and
+nothing else, which meant it could not be one side of a difference, and `index < length(items)`
+was a shape the relation below could not see even though `low < high` was the shape it existed
+for. A length is a term keyed on the thing being measured, so the two are one rule:
+
+```vow
+fn how_many_after(items: List<Int>, index: Int) -> Positive
+  where
+    index >= 0,
+    index < length(items),
+{
+    length(items) - index
+}
+```
+
+The default for one is zero and up rather than anything at all, because there is no list with
+fewer than no things in it. Nobody writes that down and no call has to hand it back. Two lists
+are two terms, so a bound on one says nothing about the other, and `length(f(items))` is not a
+term at all: two calls could hand back two different lists and a fact about one of them is not
+a fact about the other.
+
 The relation is the difference between two names. An interval has nowhere to put `low < high`,
 so every contract that says how two arguments relate used to be thrown away, and that is half
 of what a `where` clause is for. A range per pair of names holds exactly the orderings, which
@@ -974,15 +995,14 @@ using an effect to get around not having a loop.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
   `Option` already is. What holds `List` in place is `[1, 2, 3]`, which is a literal with
   syntax of its own, so moving it out means deciding what that literal builds.
-- An index into a list has nowhere to say it is in range. `examples/todo.vow` marks a task by
-  position now, and the walk that does it cannot fail, so `done 9` on a file with two tasks
-  changes nothing and a separate function has to compare the number against the length after
-  the fact. The interval domain already knows a `length` is not negative and does not know it
-  as a name, so `position < length(items)` is not a relation it can hold. Making it one is
-  the smaller half. The larger half is what would consume the fact: `at` returns a `Result`
-  whatever is known about its index, and something that does not is a precondition relating
-  two arguments rather than a refinement on one value, which is a different shape from every
-  refinement in this document.
+- An index into a list has nowhere to say it is in range, and half of that is now fixed. A
+  length is a term the prover can hold, so `index < length(items)` is a relation like any
+  other and a `where` clause can say it. What is still missing is something that consumes it:
+  `at` returns a `Result` whatever is known about its index, and a `where` clause is a runtime
+  check on the callee rather than an obligation on the caller, so proving the bound saves
+  nothing at the boundary it was proved for. A precondition that could be discharged at a call
+  site is a bigger change than a term, and it is the one that would make `examples/todo.vow`
+  able to say no to `done 9` in the type system rather than after the fact.
 - Position is not something a callback can be handed. `map` and `filter` give the callback an
   element, so the moment where an element is matters the walk goes back to a counter in a
   record. There are three of those in `examples/todo.vow` and they are the same three lines

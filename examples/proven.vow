@@ -179,6 +179,50 @@ fn doubled(n: Percent) -> Int
     n + n
 }
 
+// Proven from how long something is. `length(items)` used to come back as a
+// range and nothing else, so it could not be one side of a difference and
+// `index < length(items)` was a shape the relation machinery could not see.
+//
+// A length is a term now, keyed on the thing being measured. Two things follow
+// and neither needed arithmetic of its own. The first is here: there is no
+// list with fewer than no things in it, so a length starts out not negative
+// and nobody has to write that down.
+fn how_many(items: List<Int>) -> NonNegative {
+    length(items)
+}
+
+// The second. Past the guard the list holds something, so one less than its
+// length is an index that is really there. Without a term for the length, `if`
+// narrowed nothing and this was a runtime check.
+fn last_index(items: List<Int>) -> Result<NonNegative, String> {
+    if length(items) <= 0 {
+        return err("nothing to index")
+    }
+
+    ok(length(items) - 1)
+}
+
+// And the shape the whole thing was for. `index < length(items)` is the same
+// rule as `low < high` in `span` above, which is the point: nothing here knows
+// about lists, it knows about two quantities and the difference between them.
+fn how_many_after(items: List<Int>, index: Int) -> Positive
+  where
+    index >= 0,
+    index < length(items),
+{
+    length(items) - index
+}
+
+// Guarded, and it has to be. Two lists are two lengths, so a bound on one says
+// nothing about the other, and an empty `others` makes this negative.
+fn from_the_wrong_list(items: List<Int>, others: List<Int>) -> Result<NonNegative, String> {
+    if length(items) <= 0 {
+        return err("nothing to index")
+    }
+
+    ok(length(others) - 1)
+}
+
 // Guarded. A promise that ties the result to an argument through a product of
 // two names is not linear, and there is nowhere to put it short of a solver. A
 // `Percent` squared is between nothing and ten thousand, and the tier says it
@@ -204,6 +248,16 @@ test "the proven ones still hold at runtime" {
     assert twice_over(3) == 6
     assert unwrapped() == ok(1)
     assert order_from_either(0) == err("a quantity has to be positive")
+}
+
+test "how long something is is a fact like any other" {
+    assert how_many([]) == 0
+    assert how_many([1, 2, 3]) == 3
+    assert last_index([1, 2, 3]) == ok(2)
+    assert last_index([]) == err("nothing to index")
+    assert how_many_after([1, 2, 3], 0) == 3
+    assert how_many_after([1, 2, 3], 2) == 1
+    assert from_the_wrong_list([1], [1, 2]) == ok(1)
 }
 
 // A test that only feeds a guard values it accepts proves nothing. This one

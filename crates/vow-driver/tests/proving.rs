@@ -40,7 +40,7 @@ fn expect(tier: Tier, body: &str) {
         .filter(|obligation| {
             matches!(
                 obligation.subject.as_str(),
-                "Positive" | "Percent" | "Negative"
+                "Positive" | "Percent" | "Negative" | "NonNegative"
             )
         })
         .map(|obligation| obligation.tier)
@@ -362,6 +362,159 @@ fn a_bound_on_a_multiple_that_does_not_divide_evenly_is_still_exact() {
     expect(
         Tier::Proven,
         "fn f(n: Int) -> Positive\n  where\n    n * 2 > 0,\n{\n    n\n}\n",
+    );
+}
+
+// -- how long something is -------------------------------------------------
+//
+// `length(items)` used to come back as a range and nothing more, so it could
+// not be one side of a difference and `index < length(items)` was a shape the
+// relation machinery could not see. It is a term now, keyed on the thing being
+// measured, and everything below falls out of the two rules that were already
+// there rather than out of anything written for lengths.
+
+#[test]
+fn a_length_is_not_negative_without_a_where_clause_saying_so() {
+    expect(
+        Tier::Proven,
+        "type NonNegative = Int where value >= 0\n\n\
+         fn f(items: List<Int>) -> NonNegative { length(items) }\n",
+    );
+}
+
+#[test]
+fn a_checked_length_proves_the_index_below_it() {
+    // The one this was for. Past the guard the list holds something, so one
+    // less than its length is not negative.
+    expect(
+        Tier::Proven,
+        "type NonNegative = Int where value >= 0\n\n\
+         fn f(items: List<Int>) -> Result<NonNegative, Int> {\n\
+         \x20 if length(items) <= 0 {\n\
+         \x20   return err(0)\n\
+         \x20 }\n\
+         \x20 ok(length(items) - 1)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn an_unchecked_length_proves_nothing_about_the_index_below_it() {
+    // The other half. An empty list has a length of zero and one less than
+    // that is negative, so this is a runtime check and says so.
+    expect(
+        Tier::Guarded,
+        "type NonNegative = Int where value >= 0\n\n\
+         fn f(items: List<Int>) -> NonNegative { length(items) - 1 }\n",
+    );
+}
+
+#[test]
+fn a_precondition_about_a_length_is_a_fact_about_the_body() {
+    // A `where` clause narrows the same term an `if` does, so where the bound
+    // came from does not change what follows from it.
+    expect(
+        Tier::Proven,
+        "type NonNegative = Int where value >= 0\n\n\
+         fn f(items: List<Int>) -> NonNegative\n\
+         \x20 where\n\
+         \x20   length(items) >= 1,\n\
+         {\n\
+         \x20 length(items) - 1\n\
+         }\n",
+    );
+}
+
+#[test]
+fn an_index_below_a_length_is_a_difference_like_any_other() {
+    // The shape this exists for, and the reason it needed a term rather than a
+    // range: `low < high` and `index < length(items)` are one rule.
+    expect(
+        Tier::Proven,
+        "type NonNegative = Int where value >= 0\n\n\
+         fn f(items: List<Int>, index: Int) -> NonNegative\n\
+         \x20 where\n\
+         \x20   index >= 0,\n\
+         \x20   index < length(items),\n\
+         {\n\
+         \x20 length(items) - index\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_string_has_a_length_the_same_way_a_list_does() {
+    // `length` was about strings before there were lists and it stayed one
+    // name, so the term is one thing too.
+    expect(
+        Tier::Proven,
+        "type NonNegative = Int where value >= 0\n\n\
+         fn f(text: String) -> Result<NonNegative, Int> {\n\
+         \x20 if length(text) <= 0 {\n\
+         \x20   return err(0)\n\
+         \x20 }\n\
+         \x20 ok(length(text) - 1)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn two_lists_have_two_lengths() {
+    // Keyed on the thing being measured, so a bound on one says nothing about
+    // the other. Getting this wrong is the way a term like this goes bad.
+    expect(
+        Tier::Guarded,
+        "type NonNegative = Int where value >= 0\n\n\
+         fn f(items: List<Int>, others: List<Int>) -> Result<NonNegative, Int> {\n\
+         \x20 if length(items) <= 0 {\n\
+         \x20   return err(0)\n\
+         \x20 }\n\
+         \x20 ok(length(others) - 1)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_length_of_something_that_is_not_a_name_is_not_a_term() {
+    // `length(g(items))` names nothing that stays put: two calls could hand
+    // back two different lists, so a fact about one of them is not a fact
+    // about the other.
+    expect(
+        Tier::Guarded,
+        "type NonNegative = Int where value >= 0\n\n\
+         fn g(items: List<Int>) -> List<Int> { items }\n\n\
+         fn f(items: List<Int>) -> Result<NonNegative, Int> {\n\
+         \x20 if length(g(items)) <= 0 {\n\
+         \x20   return err(0)\n\
+         \x20 }\n\
+         \x20 ok(length(g(items)) - 1)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_length_recorded_against_reassigned_handler_state_does_not_outlive_it() {
+    // Handler state is the only thing that can be assigned twice, and it is
+    // where a fact about a list's length could outlive the list. The same
+    // mistake was made once already with an integer.
+    expect(
+        Tier::Guarded,
+        "type NonNegative = Int where value >= 0\n\n\
+         effect Store {\n\
+         \x20 fn keep(item: Int) -> Int\n\
+         }\n\n\
+         handler Kept implements Store {\n\
+         \x20 state items: List<Int>\n\n\
+         \x20 fn keep(item: Int) -> Int {\n\
+         \x20   let sized: NonNegative = if length(items) > 0 {\n\
+         \x20     items = []\n\
+         \x20     length(items) - 1\n\
+         \x20   } else {\n\
+         \x20     0\n\
+         \x20   }\n\
+         \x20   sized\n\
+         \x20 }\n\
+         }\n",
     );
 }
 
@@ -773,8 +926,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Eighteen proven and one guarded, and the file explains the one. If
+    // Twenty-three proven and two guarded, and the file explains both. If
     // either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 18);
-    assert_eq!(checked.obligations_at(Tier::Guarded), 1);
+    assert_eq!(checked.obligations_at(Tier::Proven), 23);
+    assert_eq!(checked.obligations_at(Tier::Guarded), 2);
 }
