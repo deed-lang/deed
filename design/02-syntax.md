@@ -8,8 +8,6 @@ apart by looking. So: every rule stated as a rule, and every diagnostic code nam
 what the compiler does today. Four constructs appear in the illustrations and do not parse at
 all, because the sections around them would be thin without something to name:
 
-- generic application on a declared type, as in `Id<Account>`. A generic *function* is real
-  and is described below; a generic record or choice is not, so applying one is `VOW4013`.
 - traits, which have no keyword and no node
 - `matches(value, EMAIL_PATTERN)`, which is not in the prelude
 - `Int.parse(input)`, since a builtin type has no members
@@ -163,14 +161,16 @@ at(names, 9)           // err("index 9 is outside a list of 2")
 push(names, "katherine")
 ```
 
-`List` is built in, and that is not where it should end up. There is no way to declare a
-generic *type* yet, so it is the same shortcut `Result` takes: the checker compares element
-types componentwise and lets an unknown one absorb, which is why `[]` fits wherever a list
-was wanted with nothing written on the literal itself. The first element of a literal decides
-the element type, because with no unification there is nothing to meet two candidates with.
+`List` is built in, and that is not where it should end up. It is the same shortcut `Result`
+takes: the checker compares element types componentwise and lets an unknown one absorb, which
+is why `[]` fits wherever a list was wanted with nothing written on the literal itself. The
+first element of a literal decides the element type, because with no unification there is
+nothing to meet two candidates with.
 
-A generic *function* is writable, which is the half that mattered most: it is what lets a
-list helper be written once rather than once per element type. See below.
+The reason it is still built in is no longer that it could not be declared. It can be now,
+and `Option` in `examples/generic_types.vow` is the proof. It is that `[1, 2, 3]` is a
+literal with syntax of its own, and moving `List` out of the language means deciding what
+that literal builds.
 
 It is built in at all because nothing else in the language could hold more than one of
 something. Every program written before it worked on a fixed number of named variables,
@@ -302,30 +302,36 @@ mechanism.
 Postconditions are the review surface. A person reads the contract, the compiler is
 responsible for the body agreeing with it.
 
-## Generic functions
+## Generic functions and types
 
 ```vow
 fn first<T>(items: List<T>) -> Result<T, String> {
     at(items, 0)
 }
 
-fn map<A, B>(items: List<A>, step: Fn(A) -> B) -> List<B> {
-    for item in items with out = [] {
-        push(out, step(item))
-    }
+record Pair<A, B> {
+    left: A,
+    right: B,
+}
+
+choice Option<T> {
+    None,
+    Some { value: T },
 }
 ```
 
-`Result` and `List` are built in because there is no way to declare a generic type. That
-shortcut was never the expensive part. The expensive part was that nobody could write a
-library: `first`, `last`, `map` and `count_where` are all one function at different element
-types, and until this existed not one of them could be written down.
+`Result` and `List` are built in because there was no way to declare either. That shortcut
+was never the expensive part. The expensive part was that nobody could write a library:
+`first`, `last`, `map` and `count_where` are all one function at different element types, and
+until this existed not one of them could be written down. `Option` was the third generic type
+people reach for, and it is declared rather than built in.
 
-**There is no unification and no inference beyond the call.** At a call site the declared
-parameter types are matched against the argument types, walking down both in step. `List<T>`
-against `List<String>` gives `T = String`. That is the same kind of local reasoning the
-checker already does everywhere else, and it is the reason generics cost this design almost
-nothing.
+**There is no unification and no inference beyond the expression at hand.** At a call site
+the declared parameter types are matched against the argument types, walking down both in
+step. `List<T>` against `List<String>` gives `T = String`. A literal does the same thing with
+its fields: `Pair { left: 1, right: "a" }` matches the declared field types against the
+values and gets `A = Int`, `B = String`. One mechanism, two places, and it is the same kind
+of local reasoning the checker already does everywhere else.
 
 **The first answer for a parameter wins.** `fn same<T>(a: T, b: T)` called with `same(1, "two")`
 binds `T` from the first argument and then reports an ordinary mismatch on the second:
@@ -360,10 +366,28 @@ an imported type crosses as a module path and a name: a `DefId` is an index into
 table. An imported generic function arrives with its parameters still in it and the call site
 does exactly the work it would have done at home.
 
-What is still missing is a generic record or choice, and a row variable. `map` above works
-only for a callback that performs nothing, because `Fn(A) -> B` promises that, and writing a
-row on it would name one effect rather than passing whatever the callback does through to
-`map`'s own row. `design/03-effects.md` has that one.
+**A generic type is a head plus arguments, compared componentwise.** Two `Pair`s are the same
+type when the declaration matches and every argument matches, which is exactly how `Result`
+and `List` were already compared. A field reads at the type it was applied to, so `left` on a
+`Pair<Int, String>` is an `Int`, and so does a pattern binder: `Some { value }` on an
+`Option<Int>` binds an `Int`.
+
+**A type is written with exactly as many arguments as it declared.** `Pair` bare is
+`VOW4013`, and so is `Pair<Int>`. A signature is complete, so a missing argument is as much a
+hole in one as a parameter with no type, and filling it in with unknowns would make every use
+of it agree with everything.
+
+**A bare variant says nothing about its arguments.** `None` is an `Option<unknown>`, and
+unknown absorbs, so it fits wherever an `Option` was wanted. That is not a special case: `[]`
+is a `List<unknown>` and `ok(x)` is a `Result<T, unknown>` for the same reason. Three places,
+one answer.
+
+What is still missing is a type parameter on an alias, and a row variable. An alias with no
+predicate is expanded away and one with a predicate is a refinement, and a generic refinement
+is a different question about what the predicate may say about a value whose type nobody
+knows yet. The row one is in `design/03-effects.md`: `map` works only for a callback that
+performs nothing, because `Fn(A) -> B` promises that, and writing a row on it would name one
+effect rather than passing whatever the callback does through.
 
 ## Verification, honestly
 
@@ -894,9 +918,13 @@ using an effect to get around not having a loop.
   walks all of it, and a fold cannot say it has seen enough. The honest version is probably a
   `for` whose accumulator is a `Result`, which stops meaning "done" and starts meaning
   "failed", so it needs its own answer rather than a reused one.
-- Generic types. A generic function is real, and a generic record or choice is not, so
-  `Result` and `List` are still built in. A third would be the point where the shortcut has
-  clearly stopped paying. Higher-kinded types are almost certainly out.
+- Generic types on an alias. A `record` and a `choice` may carry type parameters and a `type`
+  may not, because an alias with no predicate is expanded away and one with a predicate is a
+  refinement, and a generic refinement is a different question. Higher-kinded types are
+  almost certainly out.
+- Whether `Result` and `List` should stop being built in now that they could be declared.
+  `Option` already is. What holds `List` in place is `[1, 2, 3]`, which is a literal with
+  syntax of its own, so moving it out means deciding what that literal builds.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.

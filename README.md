@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-59 passed, 0 failed
+64 passed, 0 failed
 ```
 
 ```
@@ -175,7 +175,8 @@ The examples are [transfer.vow](examples/transfer.vow),
 [journal.vow](examples/journal.vow), [proven.vow](examples/proven.vow),
 [closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow),
 [strings.vow](examples/strings.vow), [lists.vow](examples/lists.vow),
-[generics.vow](examples/generics.vow), and the three that see
+[generics.vow](examples/generics.vow),
+[generic_types.vow](examples/generic_types.vow), and the three that see
 each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
 `hello.vow`, `config.vow`, `todo.vow` and `journal.vow` have a `main`, and the rest run their
@@ -276,9 +277,9 @@ read input, print a count, or write anything back out.
 
 `lists.vow` is the same complaint one size up. Until it, nothing in the language could hold
 more than one of something, so every program was one that worked on a fixed number of named
-variables. `List` is built in rather than declared, because there is still no way to declare
-a generic *type*, and it is the same shortcut `Result` takes: element types are compared
-componentwise and an unknown one absorbs, so `[]` fits wherever a list was wanted and no
+variables. `List` is built in rather than declared, and it is the same shortcut `Result`
+takes: element types are compared componentwise and an unknown one absorbs, so `[]` fits
+wherever a list was wanted and no
 unification was needed anywhere. What the file is honest about is iteration: at the time
 there was no `for`, so walking a list was recursion and every walk declared `Diverge`. That
 was not an oversight. An accumulator loop wants mutation or a fold, and mutation here is
@@ -295,6 +296,16 @@ Every type parameter has to appear in a parameter's type, which means a call alw
 what every parameter is, which means no type arguments are ever written, which means
 `f<a>(b)` versus `f < a > (b)` is not a problem this parser has. It is also the same claim
 everything else here makes: a signature is complete.
+
+`generic_types.vow` is the other half, and it is where the shortcut stops being one.
+`Option` was always the third generic type people reach for, and it is declared there rather
+than built in. A generic type is a head plus arguments compared componentwise, which is
+exactly how `Result` and `List` were already compared, so the mechanism was half built
+before it was asked for. What decides the arguments is the same matching a call does: a
+literal matches its declared field types against the values it was given. A field then reads
+at the type it was applied to, and so does a pattern binder, which is the part a test caught:
+`Some { value }` on an `Option<Int>` has to bind an `Int` rather than the `T` the choice was
+declared with.
 
 The worst one so far was found the same afternoon. The `Guarded` tier did not guard a return
 value. `vow check` printed "so it becomes a runtime check" and there was no check: the

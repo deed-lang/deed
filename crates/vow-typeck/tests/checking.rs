@@ -178,6 +178,7 @@ fn a_name_from_another_module_has_a_type() {
         Some(&Ty::External {
             module: "other".into(),
             name: "Thing".into(),
+            args: Vec::new(),
         })
     );
 }
@@ -858,25 +859,67 @@ fn unchanged_is_a_condition() {
 // -- generics and robustness -----------------------------------------------
 
 #[test]
-fn a_local_type_takes_no_type_arguments() {
+fn a_type_declared_with_no_parameters_takes_none() {
     let (sources, checked) =
         check_source("module a\n\nrecord R { n: Int }\n\nfn f(x: R<Int>) -> Int { 0 }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_GENERIC]);
-    assert!(rendered(&sources, &checked.diagnostics).contains("does not take type arguments"));
+    assert!(
+        rendered(&sources, &checked.diagnostics)
+            .contains("`R` takes no type arguments, and 1 was given")
+    );
 }
 
 #[test]
-fn an_imported_type_cannot_take_type_arguments_either() {
+fn a_generic_type_takes_exactly_as_many_as_it_declared() {
+    // In both directions. A signature is complete, so `Pair` written bare is
+    // as much a hole in one as a parameter with no type, and filling it in
+    // with unknowns would make every use of it agree with everything.
+    let (sources, checked) = check_source(
+        "module a\n\nrecord Pair<A, B> { left: A, right: B }\n\nfn f(x: Pair<Int>) -> Int { 0 }\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_GENERIC]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`Pair` takes 2 type arguments, and 1 was given"),
+        "{text}"
+    );
+
+    let (sources, checked) = check_source(
+        "module a\n\nrecord Pair<A, B> { left: A, right: B }\n\nfn f(x: Pair) -> Int { 0 }\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_GENERIC]);
+    assert!(
+        rendered(&sources, &checked.diagnostics).contains("and 0 were given"),
+        "a bare generic type is a hole in a signature"
+    );
+}
+
+#[test]
+fn an_imported_type_is_checked_against_what_it_declared() {
     // This used to be accepted, and only because an imported name had no type,
-    // so there was nothing for the arguments to be applied to. Vow has no
-    // generic declarations, and which module a type was declared in does not
-    // change that.
+    // so there was nothing for the arguments to be applied to. Which module a
+    // type was declared in does not change how many arguments it takes.
     let (sources, checked) = check_source_in(
         "module a\n\nuse other.{Thing}\n\nfn f(x: Thing<Int>) -> Int { 0 }\n",
         &universe_of(&["module other\n\nrecord Thing { n: Int }\n"]),
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_GENERIC]);
-    assert!(rendered(&sources, &checked.diagnostics).contains("does not take type arguments"));
+    assert!(rendered(&sources, &checked.diagnostics).contains("`Thing` takes no type arguments"));
+}
+
+#[test]
+fn an_imported_generic_type_takes_the_arguments_it_declared() {
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Box}\n\nfn f(x: Box<Int>) -> Int { 0 }\n",
+        &universe_of(&["module other\n\nrecord Box<T> { value: T }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), Vec::<&str>::new());
+
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Box}\n\nfn f(x: Box) -> Int { 0 }\n",
+        &universe_of(&["module other\n\nrecord Box<T> { value: T }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_GENERIC]);
 }
 
 #[test]

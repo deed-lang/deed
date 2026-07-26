@@ -1,0 +1,106 @@
+// Generic types, and the shortcut they were there to cover for.
+//
+// `Result` and `List` are built into the language because there was no way to
+// declare either of them. That was written down as a shortcut from the start,
+// with the note that a third would be the point where it had clearly stopped
+// paying. `Option` is the third one people reach for, and here it is, declared
+// rather than built in.
+//
+// A generic function came first, in `generics.vow`. This is the other half:
+// the type itself carries parameters, and two of them are the same type only
+// when the head and every argument match. That is the same componentwise
+// comparison `Result` and `List` already get, which is why it cost so little.
+//
+// Nothing here is inferred beyond the expression that builds it. A literal
+// matches the declared field types against the values it was given, exactly
+// the way a call matches parameter types against arguments, and that is the
+// whole mechanism.
+module examples/generic_types
+
+record Pair<A, B> {
+    left: A,
+    right: B,
+}
+
+// The third generic type, and the first one that did not have to be built in.
+choice Option<T> {
+    None,
+    Some { value: T },
+}
+
+// `Pair { left: 1, right: "a" }` works out `A = Int` and `B = String` from the
+// values, so nothing has to be written on the literal. Swapping them swaps the
+// arguments too, which is a claim the checker holds this function to.
+fn swap<A, B>(pair: Pair<A, B>) -> Pair<B, A> {
+    Pair { left: pair.right, right: pair.left }
+}
+
+fn left_of<A, B>(pair: Pair<A, B>) -> A {
+    pair.left
+}
+
+// The reason `Option` is worth having: a lookup that can come back empty
+// without inventing a sentinel value, and without a `Result` whose error side
+// says nothing.
+fn or_else<T>(option: Option<T>, fallback: T) -> T {
+    match option {
+        None => fallback,
+        Some { value } => value,
+    }
+}
+
+fn found<T>(option: Option<T>) -> Bool {
+    match option {
+        None => false,
+        Some { value } => true,
+    }
+}
+
+// A bare `None` says nothing about what it is holding, so it is an
+// `Option<unknown>`, and unknown agrees with whatever it is compared against.
+// That is not a special case: `[]` is a `List<unknown>` and `ok(x)` is a
+// `Result<T, unknown>` for exactly the same reason. Three places, one answer.
+fn first_matching(names: List<String>, wanted: String) -> Option<String> {
+    for name in names with seen = None {
+        if name == wanted {
+            Some { value: name }
+        } else {
+            seen
+        }
+    }
+}
+
+// What is still not writable is a type parameter on an alias. An alias with no
+// predicate is expanded away and one with a predicate is a refinement, and a
+// generic refinement is a different question about what the predicate is
+// allowed to say about a value whose type nobody knows yet.
+
+test "a literal works out its own arguments" {
+    let numbered = Pair { left: 1, right: "one" }
+
+    assert numbered.left == 1
+    assert numbered.right == "one"
+    assert left_of(numbered) == 1
+}
+
+test "swapping swaps the arguments too" {
+    assert swap(Pair { left: 1, right: "a" }) == Pair { left: "a", right: 1 }
+    assert swap(swap(Pair { left: true, right: 2 })) == Pair { left: true, right: 2 }
+}
+
+test "the third generic type, declared rather than built in" {
+    assert or_else(Some { value: 7 }, 0) == 7
+    assert or_else(None, 5) == 5
+    assert or_else(Some { value: "here" }, "missing") == "here"
+}
+
+test "a bare variant says nothing and agrees with everything" {
+    assert found(Some { value: 1 }) == true
+    assert found(None) == false
+}
+
+test "searching a list without a sentinel" {
+    assert first_matching(["ada", "grace"], "grace") == Some { value: "grace" }
+    assert first_matching(["ada"], "grace") == None
+    assert or_else(first_matching([], "grace"), "nobody") == "nobody"
+}

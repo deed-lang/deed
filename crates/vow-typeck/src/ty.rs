@@ -75,8 +75,16 @@ pub enum Ty {
     Int,
     Str,
     Bool,
-    /// A record, a choice, or a refinement declared in this module.
-    Named(DefId),
+    /// A record, a choice, or a refinement declared in this module, with
+    /// whatever type arguments it was applied to.
+    ///
+    /// `args` is empty for the ordinary case. When it is not, two of these are
+    /// the same type only when the head and every argument match, which is the
+    /// same componentwise comparison `Result` and `List` already get.
+    Named {
+        def: DefId,
+        args: Vec<Ty>,
+    },
     /// The same, declared in another module.
     ///
     /// A `DefId` is an index into one module's resolution table, so it cannot
@@ -86,6 +94,7 @@ pub enum Ty {
     External {
         module: Rc<str>,
         name: Rc<str>,
+        args: Vec<Ty>,
     },
     /// `Result<T, E>`, which the language provides.
     ///
@@ -145,6 +154,7 @@ impl Ty {
             Ty::Param { .. } => true,
             Ty::Result(ok, err) => ok.is_generic() || err.is_generic(),
             Ty::List(element) => element.is_generic(),
+            Ty::Named { args, .. } | Ty::External { args, .. } => args.iter().any(Ty::is_generic),
             Ty::Fn { params, ret, .. } => params.iter().any(Ty::is_generic) || ret.is_generic(),
             _ => false,
         }
@@ -156,6 +166,9 @@ impl Ty {
             Ty::Param { index: found, .. } => *found == index,
             Ty::Result(ok, err) => ok.mentions(index) || err.mentions(index),
             Ty::List(element) => element.mentions(index),
+            Ty::Named { args, .. } | Ty::External { args, .. } => {
+                args.iter().any(|arg| arg.mentions(index))
+            }
             Ty::Fn { params, ret, .. } => {
                 params.iter().any(|param| param.mentions(index)) || ret.mentions(index)
             }
@@ -189,6 +202,22 @@ impl Ty {
             }
             (Ty::List(element), Ty::List(actual)) => element.bind(actual, bindings),
             (
+                Ty::Named { args, .. },
+                Ty::Named {
+                    args: actual_args, ..
+                },
+            )
+            | (
+                Ty::External { args, .. },
+                Ty::External {
+                    args: actual_args, ..
+                },
+            ) => {
+                for (arg, actual) in args.iter().zip(actual_args) {
+                    arg.bind(actual, bindings);
+                }
+            }
+            (
                 Ty::Fn { params, ret, .. },
                 Ty::Fn {
                     params: a_params,
@@ -219,6 +248,15 @@ impl Ty {
                 Box::new(err.substitute(bindings)),
             ),
             Ty::List(element) => Ty::List(Box::new(element.substitute(bindings))),
+            Ty::Named { def, args } => Ty::Named {
+                def: *def,
+                args: args.iter().map(|arg| arg.substitute(bindings)).collect(),
+            },
+            Ty::External { module, name, args } => Ty::External {
+                module: Rc::clone(module),
+                name: Rc::clone(name),
+                args: args.iter().map(|arg| arg.substitute(bindings)).collect(),
+            },
             Ty::Fn { params, row, ret } => Ty::Fn {
                 params: params.iter().map(|p| p.substitute(bindings)).collect(),
                 row: row.clone(),
@@ -227,6 +265,18 @@ impl Ty {
             other => other.clone(),
         }
     }
+}
+
+/// The bindings a type's arguments stand for, by position.
+///
+/// A declaration's parameters are numbered from zero in the order they were
+/// written, so its arguments line up with them and nothing else is needed to
+/// read a field type at the type it was applied to.
+pub fn bindings_for(args: &[Ty]) -> HashMap<usize, Ty> {
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| (index, arg.clone()))
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -415,17 +465,17 @@ impl Types {
             Ty::Int => "`Int`".to_string(),
             Ty::Str => "`String`".to_string(),
             Ty::Bool => "`Bool`".to_string(),
-            Ty::Named(def) => match self.names.get(def) {
-                Some(name) => format!("`{name}`"),
-                None => "an unnamed type".to_string(),
-            },
-            Ty::External { module, name } => {
-                // A capability is not "from" anywhere a reader could go and
-                // look, so saying so would be noise in every message about one.
-                if &**module == "<prelude>" {
-                    format!("`{name}`")
-                } else {
-                    format!("`{name}` from `{module}`")
+            Ty::Named { .. } | Ty::External { .. } => {
+                let written = self.bare(ty);
+                match ty {
+                    // A capability is not "from" anywhere a reader could go
+                    // and look, so saying so would be noise in every message
+                    // about one.
+                    Ty::External { module, .. } if &**module != "<prelude>" => {
+                        format!("`{written}` from `{module}`")
+                    }
+                    _ if written == "?" => "an unnamed type".to_string(),
+                    _ => format!("`{written}`"),
                 }
             }
             Ty::Result(ok, err) => format!("`Result<{}, {}>`", self.bare(ok), self.bare(err)),
@@ -439,6 +489,15 @@ impl Types {
         self.names.get(&def).map(String::as_str).unwrap_or("?")
     }
 
+    /// `Pair<Int, String>`, or just `Pair` when it was applied to nothing.
+    fn applied(&self, name: &str, args: &[Ty]) -> String {
+        if args.is_empty() {
+            return name.to_string();
+        }
+        let written: Vec<String> = args.iter().map(|arg| self.bare(arg)).collect();
+        format!("{name}<{}>", written.join(", "))
+    }
+
     /// A type name without the surrounding backticks, for nesting.
     fn bare(&self, ty: &Ty) -> String {
         match ty {
@@ -448,8 +507,8 @@ impl Types {
             Ty::Int => "Int".to_string(),
             Ty::Str => "String".to_string(),
             Ty::Bool => "Bool".to_string(),
-            Ty::Named(def) => self.name_of(*def).to_string(),
-            Ty::External { name, .. } => name.to_string(),
+            Ty::Named { def, args } => self.applied(self.name_of(*def), args),
+            Ty::External { name, args, .. } => self.applied(name, args),
             Ty::Result(ok, err) => format!("Result<{}, {}>", self.bare(ok), self.bare(err)),
             Ty::List(element) => format!("List<{}>", self.bare(element)),
             Ty::Param { name, .. } => name.to_string(),

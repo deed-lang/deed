@@ -256,6 +256,7 @@ impl Printer<'_> {
         self.line_start();
         self.push("record ");
         self.push(&decl.name.name);
+        self.push(&type_params(&decl.generics));
         self.fields_block(&decl.fields);
     }
 
@@ -293,6 +294,7 @@ impl Printer<'_> {
         self.line_start();
         self.push("choice ");
         self.push(&decl.name.name);
+        self.push(&type_params(&decl.generics));
 
         if decl.variants.is_empty() {
             self.push(" {}");
@@ -420,7 +422,7 @@ impl Printer<'_> {
         let mut text = format!(
             "fn {}{}({})",
             sig.name.name,
-            generics(sig),
+            type_params(&sig.generics),
             params.join(", ")
         );
         if let Some(ret) = &sig.ret {
@@ -457,7 +459,7 @@ impl Printer<'_> {
             let head = format!(
                 "fn {}{}({})",
                 sig.name.name,
-                generics(sig),
+                type_params(&sig.generics),
                 params.join(", ")
             );
             let head_width = self.indent * INDENT.len() + head.len();
@@ -467,7 +469,11 @@ impl Printer<'_> {
                 self.push(&head);
             } else {
                 self.line_start();
-                self.push(&format!("fn {}{}(", sig.name.name, generics(sig)));
+                self.push(&format!(
+                    "fn {}{}(",
+                    sig.name.name,
+                    type_params(&sig.generics)
+                ));
                 self.newline();
                 self.indent += 1;
                 for param in &params {
@@ -978,13 +984,12 @@ fn path(segments: &[Ident]) -> String {
 /// `<T, U>`, or nothing at all.
 ///
 /// Never broken across lines. A list long enough to need it would be a
-/// signature with a different problem.
-fn generics(sig: &FnSig) -> String {
-    if sig.generics.is_empty() {
+/// declaration with a different problem.
+fn type_params(generics: &[Ident]) -> String {
+    if generics.is_empty() {
         return String::new();
     }
-    let names: Vec<&str> = sig
-        .generics
+    let names: Vec<&str> = generics
         .iter()
         .map(|parameter| parameter.name.as_str())
         .collect();
