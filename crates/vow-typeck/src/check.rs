@@ -27,7 +27,7 @@ use vow_resolve::{DefId, DefKind, Resolutions, RowLowering};
 use crate::codes;
 use crate::facts::{self, Facts, Guarantee, Promise, Range, Truth};
 use crate::surface::{PRELUDE_MODULE, SurfaceItem, World};
-use crate::ty::{FieldTy, FnRow, Nominal, Obligation, Tier, Ty, Types, VariantTy};
+use crate::ty::{FieldTy, FnRow, Nominal, Obligation, Tier, Ty, Types, VariantTy, bindings_for};
 
 pub struct Checked {
     pub types: Types,
@@ -51,6 +51,7 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         diagnostics: Vec::new(),
         def_types: HashMap::new(),
         type_params: HashMap::new(),
+        nominal_generics: HashMap::new(),
         signatures: HashMap::new(),
         aliases: HashMap::new(),
         alias_targets: HashMap::new(),
@@ -123,6 +124,11 @@ struct Checker<'a> {
     /// collide and the whole map can be one table rather than a stack of
     /// scopes.
     type_params: HashMap<DefId, (usize, Rc<str>)>,
+    /// What each record and choice declared its type parameters as.
+    ///
+    /// Kept as names rather than a count, so a message about the wrong number
+    /// of arguments can say which ones were wanted.
+    nominal_generics: HashMap<DefId, Vec<String>>,
     signatures: HashMap<DefId, Signature>,
     aliases: HashMap<DefId, &'a TypeAlias>,
     alias_targets: HashMap<DefId, Ty>,
@@ -341,6 +347,7 @@ impl<'a> Checker<'a> {
                     let Some(def) = self.def_of(&record.name) else {
                         continue;
                     };
+                    self.declare_type_params(def, &record.generics);
                     let fields = self.lower_fields(&record.fields);
                     self.types.set_nominal(
                         def,
@@ -352,6 +359,7 @@ impl<'a> Checker<'a> {
                     let Some(def) = self.def_of(&choice.name) else {
                         continue;
                     };
+                    self.declare_type_params(def, &choice.generics);
                     let mut variants = Vec::new();
                     for variant in &choice.variants {
                         let Some(variant_def) = self.def_of(&variant.name) else {
@@ -426,15 +434,33 @@ impl<'a> Checker<'a> {
             .collect()
     }
 
-    fn lower_signature(&mut self, sig: &vow_ast::FnSig) -> Signature {
-        // Before the parameter types, which are what name them.
-        for (index, parameter) in sig.generics.iter().enumerate() {
+    /// Notes what a declaration's type parameters are called and where each
+    /// sits, before anything that could name one is lowered.
+    fn declare_type_params_of(&mut self, generics: &[Ident]) {
+        for (index, parameter) in generics.iter().enumerate() {
             if let Some(def) = self.def_of(parameter) {
                 self.type_params
                     .insert(def, (index, Rc::from(parameter.name.as_str())));
                 self.types.set_name(def, parameter.name.clone());
             }
         }
+    }
+
+    /// The same, for a record or a choice, which also has to remember how many
+    /// arguments a use of it owes.
+    fn declare_type_params(&mut self, def: DefId, generics: &[Ident]) {
+        self.declare_type_params_of(generics);
+        self.nominal_generics.insert(
+            def,
+            generics
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect(),
+        );
+    }
+
+    fn lower_signature(&mut self, sig: &vow_ast::FnSig) -> Signature {
+        self.declare_type_params_of(&sig.generics);
 
         let mut params = Vec::new();
         for param in &sig.params {
@@ -655,7 +681,7 @@ impl<'a> Checker<'a> {
     /// answering a question nobody asked.
     fn guarantee_of(&mut self, ret: &Ty) -> Guarantee {
         match ret {
-            Ty::Named(def) => Guarantee::of(self.refinement_range(*def)),
+            Ty::Named { def, .. } => Guarantee::of(self.refinement_range(*def)),
             _ => Guarantee::any(),
         }
     }
@@ -733,8 +759,17 @@ impl<'a> Checker<'a> {
                     // identity is the module path and the name rather than a
                     // `DefId`, which cannot mean anything outside the table it
                     // came from.
-                    DefKind::Import => self.imported_ty(def, name),
-                    DefKind::Record | DefKind::Choice => Ty::Named(def),
+                    DefKind::Import => return self.imported_ty(def, name, &lowered_args, *span),
+                    DefKind::Record | DefKind::Choice => {
+                        let arity = self.nominal_generics.get(&def).map_or(0, Vec::len);
+                        if !self.check_type_arity(&name.name, arity, lowered_args.len(), *span) {
+                            return Ty::Unknown;
+                        }
+                        return Ty::Named {
+                            def,
+                            args: lowered_args,
+                        };
+                    }
                     DefKind::Type => self.alias_ty(def),
                     // A type parameter of the function being checked. It only
                     // means anything inside that declaration, and every call
@@ -770,7 +805,7 @@ impl<'a> Checker<'a> {
                             format!("{described} does not take type arguments"),
                         )
                         .with_primary_label("unexpected type arguments")
-                        .with_note("a function may be generic, and a record, a choice and an alias may not, so only `Result`, `List` and a type from another module can be applied"),
+                        .with_note("a function, a record and a choice may be generic; an alias and an effect may not"),
                     );
                 }
 
@@ -787,27 +822,88 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Whether a type was applied to as many arguments as it was declared
+    /// with.
+    ///
+    /// Exactly as many, in both directions. A signature is complete, so a
+    /// `Pair` written with no arguments is as much a hole in one as a
+    /// parameter with no type is, and filling it in with unknowns would make
+    /// every use of it agree with everything.
+    fn check_type_arity(&mut self, name: &str, wanted: usize, given: usize, span: Span) -> bool {
+        if wanted == given {
+            return true;
+        }
+
+        let written = if wanted == 0 {
+            format!("`{name}` takes no type arguments")
+        } else {
+            format!(
+                "`{name}` takes {wanted} type argument{}",
+                if wanted == 1 { "" } else { "s" }
+            )
+        };
+        self.emit(
+            Diagnostic::error(
+                codes::NOT_GENERIC,
+                self.file,
+                span,
+                format!(
+                    "{written}, and {given} {} given",
+                    if given == 1 { "was" } else { "were" }
+                ),
+            )
+            .with_primary_label("wrong number of type arguments")
+            .with_note(
+                "a type argument is written out rather than left to be worked out, because a type is a signature's business and a signature is complete",
+            ),
+        );
+        false
+    }
+
     /// The type an imported name denotes when used in type position.
     ///
     /// A transparent alias is expanded, because it was not a distinct type
     /// where it was declared and crossing a module boundary does not make it
     /// one. A refinement stays nominal for the same reason it does at home.
-    fn imported_ty(&mut self, def: DefId, name: &Ident) -> Ty {
+    fn imported_ty(&mut self, def: DefId, name: &Ident, args: &[Ty], span: Span) -> Ty {
         let Some(module) = self.resolutions.import_module(def) else {
             return Ty::Unknown;
+        };
+
+        let arity = match self.world.get(module, &name.name) {
+            Some(SurfaceItem::Record { generics, .. } | SurfaceItem::Choice { generics, .. }) => {
+                generics.len()
+            }
+            _ => 0,
         };
         let external = Ty::External {
             module: Rc::from(module),
             name: Rc::from(name.name.as_str()),
+            args: args.to_vec(),
         };
 
         match self.world.get(module, &name.name) {
-            Some(SurfaceItem::Alias { target }) => target.clone(),
+            // An alias is expanded, so it is whatever it was declared as and
+            // takes nothing of its own. A parameter on an alias is a different
+            // question about what a refinement's predicate may say, and it is
+            // not answered yet.
+            Some(SurfaceItem::Alias { target }) => {
+                let target = target.clone();
+                if !self.check_type_arity(&name.name, 0, args.len(), span) {
+                    return Ty::Unknown;
+                }
+                target
+            }
             Some(
                 SurfaceItem::Record { .. }
                 | SurfaceItem::Choice { .. }
                 | SurfaceItem::Refinement { .. },
-            ) => external,
+            ) => {
+                if !self.check_type_arity(&name.name, arity, args.len(), span) {
+                    return Ty::Unknown;
+                }
+                external
+            }
             // A function or a handler is not a type, and the resolver already
             // said the name exists, so this is the only place to say what is
             // wrong with using it here.
@@ -839,7 +935,7 @@ impl<'a> Checker<'a> {
 
     /// The declaration behind an external type, if it can be found.
     fn external_item(&self, ty: &Ty) -> Option<&'a SurfaceItem> {
-        let Ty::External { module, name } = ty else {
+        let Ty::External { module, name, .. } = ty else {
             return None;
         };
         self.world.get(module, name)
@@ -856,7 +952,10 @@ impl<'a> Checker<'a> {
         };
 
         if alias.refinement.is_some() {
-            let ty = Ty::Named(def);
+            let ty = Ty::Named {
+                def,
+                args: Vec::new(),
+            };
             self.alias_targets.insert(def, ty.clone());
             return ty;
         }
@@ -884,7 +983,7 @@ impl<'a> Checker<'a> {
 
     /// A refinement seen as its base type. Widening is always safe.
     fn widen(&self, ty: &Ty) -> Ty {
-        if let Ty::Named(def) = ty
+        if let Ty::Named { def, .. } = ty
             && let Some(Nominal::Refinement { base, .. }) = self.types.nominal(*def)
         {
             return base.clone();
@@ -912,6 +1011,45 @@ impl<'a> Checker<'a> {
             // work: it produces `List<unknown>`, and unknown agrees with
             // whatever the expected element type turns out to be.
             (Ty::List(actual), Ty::List(expected)) => self.compatible(actual, expected),
+            // A declared generic type, compared the same way. The head has to
+            // be the same declaration, which is what keeps a `Pair` from being
+            // a `Box`, and the arguments are compared one by one, which is
+            // what lets a bare `None` be an `Option<Int>`: nothing said what
+            // its argument was, so it is unknown, and unknown absorbs.
+            (
+                Ty::Named { def: a_def, args },
+                Ty::Named {
+                    def: e_def,
+                    args: expected,
+                },
+            ) => {
+                a_def == e_def
+                    && args.len() == expected.len()
+                    && args
+                        .iter()
+                        .zip(expected)
+                        .all(|(a, e)| self.compatible(a, e))
+            }
+            (
+                Ty::External {
+                    module: a_module,
+                    name: a_name,
+                    args,
+                },
+                Ty::External {
+                    module: e_module,
+                    name: e_name,
+                    args: expected,
+                },
+            ) => {
+                a_module == e_module
+                    && a_name == e_name
+                    && args.len() == expected.len()
+                    && args
+                        .iter()
+                        .zip(expected)
+                        .all(|(a, e)| self.compatible(a, e))
+            }
             // Componentwise, for the same reason `Result` is: a closure with a
             // parameter the checker gave up on should not be a second error on
             // top of the first. Exactly matching otherwise, so a refined
@@ -1066,7 +1204,7 @@ impl<'a> Checker<'a> {
         // may already be refined by something else: going sideways is widening
         // out of one and back into the other, and the predicate that arrives is
         // often enough to discharge the predicate that is wanted.
-        if let Ty::Named(def) = expected
+        if let Ty::Named { def, .. } = expected
             && let Some(Nominal::Refinement { base, .. }) = self.types.nominal(*def)
         {
             let base = base.clone();
@@ -1114,7 +1252,10 @@ impl<'a> Checker<'a> {
     /// making the author write `where n > 0` next to it would be asking them
     /// to repeat the type in prose.
     fn declared_range(&self, def: DefId) -> Range {
-        let Some(Ty::Named(refinement)) = self.def_types.get(&def) else {
+        let Some(Ty::Named {
+            def: refinement, ..
+        }) = self.def_types.get(&def)
+        else {
             return Range::ANY;
         };
         self.refinement_range(*refinement)
@@ -2219,7 +2360,10 @@ impl<'a> Checker<'a> {
             // A handler names itself in a `with` block. It is not a value
             // anybody can do anything with, but it is a name for something,
             // and a name with no type is a name nothing is checked against.
-            DefKind::Handler => Ty::Named(def),
+            DefKind::Handler => Ty::Named {
+                def,
+                args: Vec::new(),
+            },
             _ => Ty::Unknown,
         }
     }
@@ -2261,9 +2405,12 @@ impl<'a> Checker<'a> {
             // A variant is a value of its choice. One with a payload written
             // bare is still that type; the struct literal path is what checks
             // the payload, and it is reached from somewhere else.
-            Some(SurfaceItem::Variant { choice, .. }) => Ty::External {
+            Some(SurfaceItem::Variant {
+                choice, generics, ..
+            }) => Ty::External {
                 module: Rc::from(module),
                 name: Rc::clone(choice),
+                args: vec![Ty::Unknown; generics.len()],
             },
             Some(SurfaceItem::Record { .. } | SurfaceItem::Choice { .. }) => {
                 self.not_a_value(ident, "a type");
@@ -2288,6 +2435,7 @@ impl<'a> Checker<'a> {
             Some(SurfaceItem::Handler { .. }) => Ty::External {
                 module: Rc::from(module),
                 name: Rc::from(ident.name.as_str()),
+                args: Vec::new(),
             },
             None => Ty::Unknown,
         }
@@ -2314,9 +2462,17 @@ impl<'a> Checker<'a> {
     }
 
     /// The type a variant produces, which is the choice it belongs to.
+    ///
+    /// Written bare, so nothing says what its type arguments are. A choice
+    /// with parameters comes back applied to unknowns, which absorb, and that
+    /// is the same answer `[]` gets for its element type: nothing was said, so
+    /// nothing is claimed.
     fn variant_ty(&self, variant: DefId) -> Ty {
         match self.resolutions.def(variant).parent {
-            Some(parent) => Ty::Named(parent),
+            Some(def) => Ty::Named {
+                def,
+                args: vec![Ty::Unknown; self.nominal_generics.get(&def).map_or(0, Vec::len)],
+            },
             None => Ty::Unknown,
         }
     }
@@ -2355,16 +2511,20 @@ impl<'a> Checker<'a> {
         }
 
         let looked_through = self.widen(receiver);
-        if let Ty::Named(def) = looked_through
-            && let Some(Nominal::Record { fields }) = self.types.nominal(def)
+        if let Ty::Named { def, args } = &looked_through
+            && let Some(Nominal::Record { fields }) = self.types.nominal(*def)
             && let Some(field) = fields.iter().find(|field| field.name == name.name)
         {
-            return field.ty.clone();
+            // The field type as this use of the record sees it. `left` on a
+            // `Pair<Int, String>` is an `Int` rather than the `A` the
+            // declaration wrote.
+            return field.ty.substitute(&bindings_for(args));
         }
-        if let Some(SurfaceItem::Record { fields }) = self.external_item(&looked_through)
+        if let Ty::External { args, .. } = &looked_through
+            && let Some(SurfaceItem::Record { fields, .. }) = self.external_item(&looked_through)
             && let Some((_, ty)) = fields.iter().find(|(field, _)| *field == name.name)
         {
-            return ty.clone();
+            return ty.substitute(&bindings_for(args));
         }
 
         let described = self.types.describe(receiver);
@@ -2376,13 +2536,13 @@ impl<'a> Checker<'a> {
         )
         .with_primary_label("no such field");
 
-        if let Ty::Named(def) = looked_through
+        if let Ty::Named { def, .. } = looked_through
             && let Some(Nominal::Record { fields }) = self.types.nominal(def)
         {
             let available: Vec<&str> = fields.iter().map(|field| field.name.as_str()).collect();
             diagnostic = diagnostic.with_note(format!("it has {}", list(&available)));
         }
-        if let Some(SurfaceItem::Record { fields }) = self.external_item(&looked_through) {
+        if let Some(SurfaceItem::Record { fields, .. }) = self.external_item(&looked_through) {
             let available: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
             diagnostic = diagnostic.with_note(format!("it has {}", list(&available)));
         }
@@ -2689,8 +2849,9 @@ impl<'a> Checker<'a> {
                     if let Some(Nominal::Record { fields: declared }) = self.types.nominal(def) {
                         let declared = declared.clone();
                         let name = self.types.name_of(def).to_string();
-                        self.check_literal_fields(&declared, fields, span, &name);
-                        return Ty::Named(def);
+                        let arity = self.nominal_generics.get(&def).map_or(0, Vec::len);
+                        let args = self.check_literal_fields(&declared, fields, span, &name, arity);
+                        return Ty::Named { def, args };
                     }
                 }
                 DefKind::Variant => {
@@ -2703,16 +2864,24 @@ impl<'a> Checker<'a> {
                             }
                             _ => None,
                         });
+                    let arity = parent
+                        .and_then(|parent| self.nominal_generics.get(&parent))
+                        .map_or(0, Vec::len);
+                    let mut args = vec![Ty::Unknown; arity];
                     if let Some(variant) = declared {
                         let name = variant.name.clone();
-                        self.check_literal_fields(
+                        args = self.check_literal_fields(
                             variant.fields.as_deref().unwrap_or(&[]),
                             fields,
                             span,
                             &name,
+                            arity,
                         );
                     }
-                    return self.variant_ty(def);
+                    return match parent {
+                        Some(def) => Ty::Named { def, args },
+                        None => Ty::Unknown,
+                    };
                 }
                 // A handler is not a value, but the literal that installs one
                 // is checked like a record's. Without this the whole literal
@@ -2722,8 +2891,11 @@ impl<'a> Checker<'a> {
                     if let Some(Nominal::Handler { state }) = self.types.nominal(def) {
                         let state = state.clone();
                         let name = self.types.name_of(def).to_string();
-                        self.check_literal_fields(&state, fields, span, &name);
-                        return Ty::Named(def);
+                        self.check_literal_fields(&state, fields, span, &name, 0);
+                        return Ty::Named {
+                            def,
+                            args: Vec::new(),
+                        };
                     }
                 }
                 // A record or a variant from another module is built the same
@@ -2789,32 +2961,41 @@ impl<'a> Checker<'a> {
         let name = self.resolutions.def(def).name.clone();
 
         match self.world.get(&module, &name)? {
-            SurfaceItem::Record { fields: declared } => {
+            SurfaceItem::Record {
+                fields: declared,
+                generics,
+            } => {
+                let arity = generics.len();
                 let declared = external_fields(declared);
-                self.check_literal_fields(&declared, fields, span, &name);
+                let args = self.check_literal_fields(&declared, fields, span, &name, arity);
                 Some(Ty::External {
                     module,
                     name: Rc::from(name.as_str()),
+                    args,
                 })
             }
             SurfaceItem::Variant {
                 choice,
                 fields: declared,
+                generics,
             } => {
                 let choice = Rc::clone(choice);
+                let arity = generics.len();
                 let declared = declared.as_deref().map(external_fields).unwrap_or_default();
-                self.check_literal_fields(&declared, fields, span, &name);
+                let args = self.check_literal_fields(&declared, fields, span, &name, arity);
                 Some(Ty::External {
                     module,
                     name: choice,
+                    args,
                 })
             }
             SurfaceItem::Handler { state } => {
                 let declared = external_fields(state);
-                self.check_literal_fields(&declared, fields, span, &name);
+                self.check_literal_fields(&declared, fields, span, &name, 0);
                 Some(Ty::External {
                     module,
                     name: Rc::from(name.as_str()),
+                    args: Vec::new(),
                 })
             }
             // Not a constructor, which the fallthrough below reports the same
@@ -2823,14 +3004,29 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Checks a literal against the fields it was declared with, and works out
+    /// what its type arguments are while doing it.
+    ///
+    /// Every value is inferred before anything is checked, for the same reason
+    /// a call infers every argument first: the declared field types are not
+    /// types yet until the values have said what the type parameters are, and
+    /// the first field cannot say what it wanted without the rest having been
+    /// looked at.
+    ///
+    /// The answer is `arity` types long. A parameter no field mentioned comes
+    /// back as unknown, which absorbs, and that is the same answer `[]` gets
+    /// for its element type and `ok(x)` gets for its error type. A third
+    /// answer to the same question would be a third thing to explain.
     fn check_literal_fields(
         &mut self,
         declared: &[FieldTy],
         fields: &'a [FieldInit],
         span: Span,
         what: &str,
-    ) {
+        arity: usize,
+    ) -> Vec<Ty> {
         let mut seen: HashSet<String> = HashSet::new();
+        let mut given: Vec<(FieldTy, Ty, &FieldInit, Span)> = Vec::new();
 
         for init in fields {
             match declared
@@ -2850,16 +3046,7 @@ impl<'a> Checker<'a> {
                         .as_ref()
                         .map(Expr::span)
                         .unwrap_or(init.name.span);
-                    self.assign(
-                        &actual,
-                        &field.ty,
-                        init.value.as_ref(),
-                        value_span,
-                        // An empty span means the declaration is in another
-                        // file, so there is nothing here to point at.
-                        (field.span != Span::at(0))
-                            .then(|| (field.span, "the field it is assigned to".to_string())),
-                    );
+                    given.push((field, actual, init, value_span));
                 }
                 None => {
                     let available: Vec<&str> =
@@ -2879,6 +3066,26 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+        }
+
+        let mut bindings = HashMap::new();
+        if arity > 0 {
+            for (field, actual, _, _) in &given {
+                field.ty.bind(actual, &mut bindings);
+            }
+        }
+
+        for (field, actual, init, value_span) in &given {
+            self.assign(
+                actual,
+                &field.ty.substitute(&bindings),
+                init.value.as_ref(),
+                *value_span,
+                // An empty span means the declaration is in another file, so
+                // there is nothing here to point at.
+                (field.span != Span::at(0))
+                    .then(|| (field.span, "the field it is assigned to".to_string())),
+            );
         }
 
         let missing: Vec<&str> = declared
@@ -2901,6 +3108,10 @@ impl<'a> Checker<'a> {
                 ),
             );
         }
+
+        (0..arity)
+            .map(|index| bindings.get(&index).cloned().unwrap_or(Ty::Unknown))
+            .collect()
     }
 
     fn infer_match(&mut self, scrutinee: &'a Expr, arms: &'a [MatchArm], span: Span) -> Ty {
@@ -2994,14 +3205,14 @@ impl<'a> Checker<'a> {
         }
 
         let widened = self.widen(scrutinee);
-        if let Some(SurfaceItem::Choice { variants }) = self.external_item(&widened) {
+        if let Some(SurfaceItem::Choice { variants, .. }) = self.external_item(&widened) {
             let names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
             let choice = self.types.describe(&widened);
             self.check_named_exhaustive(&names, &choice, arms, span);
             return;
         }
 
-        let Ty::Named(def) = widened else {
+        let Ty::Named { def, .. } = widened else {
             return;
         };
         let Some(Nominal::Choice { variants }) = self.types.nominal(def).cloned() else {
@@ -3281,11 +3492,21 @@ impl<'a> Checker<'a> {
                     .and_then(|last| self.resolutions.resolution(last.span))
                     .and_then(|def| self.variant_fields(def));
 
+                // What the scrutinee was applied to, so a binder reads at the
+                // type the value actually has. `Some { value }` on an
+                // `Option<Int>` binds an `Int` and not the `T` the choice was
+                // declared with, and a binder that stayed a type parameter
+                // would be a parameter of a declaration nobody is inside.
+                let bindings = match self.widen(ty) {
+                    Ty::Named { args, .. } | Ty::External { args, .. } => bindings_for(&args),
+                    _ => HashMap::new(),
+                };
+
                 for field in fields {
                     let field_ty = variant_fields
                         .as_ref()
                         .and_then(|fields| fields.iter().find(|f| f.name == field.name.name))
-                        .map(|f| f.ty.clone())
+                        .map(|f| f.ty.substitute(&bindings))
                         .unwrap_or(Ty::Unknown);
 
                     match &field.pattern {
@@ -3510,6 +3731,7 @@ fn capability(name: &str) -> Ty {
     Ty::External {
         module: Rc::from(PRELUDE_MODULE),
         name: Rc::from(name),
+        args: Vec::new(),
     }
 }
 

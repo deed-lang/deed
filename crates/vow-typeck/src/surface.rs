@@ -61,23 +61,26 @@ pub enum SurfaceItem {
     },
     Record {
         fields: Vec<(String, Ty)>,
+        /// The type parameters it was declared with. A use of it owes exactly
+        /// this many arguments.
+        generics: Vec<String>,
     },
     Choice {
         variants: Vec<SurfaceVariant>,
+        generics: Vec<String>,
     },
     /// A variant, exported in its own right, remembering what it constructs.
     Variant {
         choice: Rc<str>,
         fields: Option<Vec<(String, Ty)>>,
+        /// The type parameters of the choice, not of the variant. A variant
+        /// has none of its own.
+        generics: Vec<String>,
     },
     /// A refinement, opaque from outside. See the note at the top of the file.
-    Refinement {
-        base: Ty,
-    },
+    Refinement { base: Ty },
     /// A transparent alias, which is just its target.
-    Alias {
-        target: Ty,
-    },
+    Alias { target: Ty },
     Effect {
         operations: BTreeMap<String, (Vec<Ty>, Ty)>,
     },
@@ -86,9 +89,7 @@ pub enum SurfaceItem {
     /// The state crosses because installing a handler from another module is
     /// still writing a literal, and a literal nobody checks is a literal that
     /// can put a `String` where an `Int` was declared.
-    Handler {
-        state: Vec<(String, Ty)>,
-    },
+    Handler { state: Vec<(String, Ty)> },
 }
 
 #[derive(Clone, Debug)]
@@ -164,16 +165,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 // What this module's own checker calls them, so an imported
                 // generic function arrives with its parameters still in it and
                 // the call site does the same substitution it does at home.
-                lowerer.type_params = decl
-                    .sig
-                    .generics
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, parameter)| {
-                        let def = resolutions.resolution(parameter.span)?;
-                        Some((def, (index, Rc::from(parameter.name.as_str()))))
-                    })
-                    .collect();
+                lowerer.type_params = positions(&decl.sig.generics, resolutions);
 
                 let declared = match &decl.sig.ret {
                     Some(Type::Named { name, .. }) => predicates
@@ -225,14 +217,17 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 );
             }
             Item::Record(decl) => {
+                lowerer.type_params = positions(&decl.generics, resolutions);
                 items.insert(
                     decl.name.name.clone(),
                     SurfaceItem::Record {
                         fields: lowerer.fields(&decl.fields),
+                        generics: named(&decl.generics),
                     },
                 );
             }
             Item::Choice(decl) => {
+                lowerer.type_params = positions(&decl.generics, resolutions);
                 let choice: Rc<str> = Rc::from(decl.name.name.as_str());
                 let mut variants = Vec::new();
                 for variant in &decl.variants {
@@ -242,6 +237,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                         SurfaceItem::Variant {
                             choice: Rc::clone(&choice),
                             fields: fields.clone(),
+                            generics: named(&decl.generics),
                         },
                     );
                     variants.push(SurfaceVariant {
@@ -249,7 +245,13 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                         fields,
                     });
                 }
-                items.insert(decl.name.name.clone(), SurfaceItem::Choice { variants });
+                items.insert(
+                    decl.name.name.clone(),
+                    SurfaceItem::Choice {
+                        variants,
+                        generics: named(&decl.generics),
+                    },
+                );
             }
             Item::TypeAlias(decl) => {
                 let base = lowerer.ty(&decl.ty);
@@ -298,6 +300,32 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
     }
 
     Surface { items }
+}
+
+/// Where each of a declaration's type parameters sits in its list.
+///
+/// A position rather than a name is what makes a parameter portable: the far
+/// side has no `DefId` to compare against and no need for one, because the
+/// arguments it applies line up by order.
+fn positions(
+    generics: &[Ident],
+    resolutions: &Resolutions,
+) -> BTreeMap<vow_resolve::DefId, (usize, Rc<str>)> {
+    generics
+        .iter()
+        .enumerate()
+        .filter_map(|(index, parameter)| {
+            let def = resolutions.resolution(parameter.span)?;
+            Some((def, (index, Rc::from(parameter.name.as_str()))))
+        })
+        .collect()
+}
+
+fn named(generics: &[Ident]) -> Vec<String> {
+    generics
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect()
 }
 
 struct Lowerer<'a> {
@@ -352,7 +380,7 @@ impl Lowerer<'_> {
                         // prelude rather than under whichever module happened
                         // to mention it.
                         "System" | "Console" | "Clock" | "Dir" => {
-                            self.external(&Rc::from(PRELUDE_MODULE), name)
+                            self.external(&Rc::from(PRELUDE_MODULE), name, Vec::new())
                         }
                         _ => Ty::Unknown,
                     },
@@ -360,11 +388,11 @@ impl Lowerer<'_> {
                     // rather than picking up this module's path on the way
                     // through.
                     DefKind::Import => match self.resolutions.import_module(def) {
-                        Some(module) => self.external(&Rc::from(module), name),
+                        Some(module) => self.external(&Rc::from(module), name, lowered),
                         None => Ty::Unknown,
                     },
                     DefKind::Type | DefKind::Record | DefKind::Choice => {
-                        self.external(&Rc::clone(&self.here), name)
+                        self.external(&Rc::clone(&self.here), name, lowered)
                     }
                     // A type parameter of the function being lowered. It
                     // crosses as a position rather than as a name, which is
@@ -382,10 +410,11 @@ impl Lowerer<'_> {
         }
     }
 
-    fn external(&self, module: &Rc<str>, name: &Ident) -> Ty {
+    fn external(&self, module: &Rc<str>, name: &Ident, args: Vec<Ty>) -> Ty {
         Ty::External {
             module: Rc::clone(module),
             name: Rc::from(name.name.as_str()),
+            args,
         }
     }
 }

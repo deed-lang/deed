@@ -439,12 +439,42 @@ impl<'a> Parser<'a> {
     fn parse_record(&mut self) -> Option<RecordDecl> {
         let start = self.bump().span;
         let name = self.expect_ident("a record declaration")?;
+        let generics = self.parse_type_params();
         let (fields, end) = self.parse_field_block("a record declaration")?;
         Some(RecordDecl {
             name,
+            generics,
             fields,
             span: start.to(end),
         })
+    }
+
+    /// `<T, U>`, or nothing at all.
+    ///
+    /// Only ever read in a declaration, right after the name, where the `<`
+    /// cannot be a comparison. That is what keeps type arguments out of
+    /// expression position and with them the `f<a>(b)` versus `f < a > (b)`
+    /// ambiguity that costs other parsers a real amount of lookahead.
+    fn parse_type_params(&mut self) -> Vec<Ident> {
+        let mut generics = Vec::new();
+        if !self.eat(&TokenKind::Lt) {
+            return generics;
+        }
+        while !self.at(&TokenKind::Gt) && !self.at_eof() {
+            let before = self.pos;
+            let Some(parameter) = self.expect_ident("a type parameter") else {
+                break;
+            };
+            generics.push(parameter);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+            if self.pos == before {
+                break;
+            }
+        }
+        self.expect(TokenKind::Gt, "a type parameter list");
+        generics
     }
 
     /// `{ name: Type, other: Type }`, trailing comma allowed.
@@ -482,6 +512,7 @@ impl<'a> Parser<'a> {
     fn parse_choice(&mut self) -> Option<ChoiceDecl> {
         let start = self.bump().span;
         let name = self.expect_ident("a choice declaration")?;
+        let generics = self.parse_type_params();
         self.expect(TokenKind::LBrace, "a choice declaration")?;
 
         let mut variants = Vec::new();
@@ -518,6 +549,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RBrace, "a choice declaration");
         Some(ChoiceDecl {
             name,
+            generics,
             variants,
             span: start.to(end),
         })
@@ -671,23 +703,7 @@ impl<'a> Parser<'a> {
         // `<T, U>`, and only here. In a declaration the `<` cannot be a
         // comparison, so this needs no lookahead and none of the machinery
         // that `f<a>(b)` in expression position would.
-        let mut generics = Vec::new();
-        if self.eat(&TokenKind::Lt) {
-            while !self.at(&TokenKind::Gt) && !self.at_eof() {
-                let before = self.pos;
-                let Some(parameter) = self.expect_ident("a type parameter") else {
-                    break;
-                };
-                generics.push(parameter);
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
-                if self.pos == before {
-                    break;
-                }
-            }
-            self.expect(TokenKind::Gt, "a type parameter list");
-        }
+        let generics = self.parse_type_params();
 
         self.expect(TokenKind::LParen, "a parameter list")?;
 

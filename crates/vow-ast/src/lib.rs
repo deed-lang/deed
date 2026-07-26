@@ -123,6 +123,8 @@ pub struct FieldDecl {
 #[derive(Clone, Debug)]
 pub struct RecordDecl {
     pub name: Ident,
+    /// `<A, B>` in `record Pair<A, B> { left: A, right: B }`.
+    pub generics: Vec<Ident>,
     pub fields: Vec<FieldDecl>,
     pub span: Span,
 }
@@ -138,6 +140,8 @@ pub struct Variant {
 #[derive(Clone, Debug)]
 pub struct ChoiceDecl {
     pub name: Ident,
+    /// `<T>` in `choice Option<T> { None, Some { value: T } }`.
+    pub generics: Vec<Ident>,
     pub variants: Vec<Variant>,
     pub span: Span,
 }

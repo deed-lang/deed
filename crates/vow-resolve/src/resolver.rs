@@ -38,8 +38,11 @@ use crate::exports::{ExportKind, Universe};
 /// `length` is here because a `String` you cannot measure is a `String` you
 /// cannot check. It measures a `List` too, for the same reason.
 ///
-/// `List` is built in rather than declared because there is no way to declare
-/// a generic type yet. Nothing else in the language can hold more than one of
+/// `List` is built in rather than declared, which is a shortcut and was named
+/// as one from the start. A `record` and a `choice` may carry type parameters
+/// now, so it could be declared; what holds it here is `[1, 2, 3]`, which is a
+/// literal with syntax of its own. Nothing else in the language can hold more
+/// than one of
 /// something, and a language where the only way to have two of a thing is to
 /// name two variables is not one anybody can write a program in. `at` and
 /// `push` come with it: a list you cannot read out of and cannot extend is a
@@ -711,16 +714,34 @@ impl Resolver<'_> {
     }
 
     fn resolve_record(&mut self, record: &RecordDecl) {
+        self.push_scope(ScopeKind::Local);
+        self.declare_type_params(&record.generics);
         for field in &record.fields {
             self.resolve_type(&field.ty);
         }
+        self.pop_scope();
     }
 
     fn resolve_choice(&mut self, choice: &ChoiceDecl) {
+        self.push_scope(ScopeKind::Local);
+        self.declare_type_params(&choice.generics);
         for variant in &choice.variants {
             for field in variant.fields.iter().flatten() {
                 self.resolve_type(&field.ty);
             }
+        }
+        self.pop_scope();
+    }
+
+    /// Puts a declaration's type parameters in scope for the rest of it.
+    ///
+    /// Marked used on the spot. Whether one is ever mentioned is a question
+    /// the type checker answers with a better message than "unused", because
+    /// the rule is about where it appears rather than whether it does.
+    fn declare_type_params(&mut self, generics: &[Ident]) {
+        for parameter in generics {
+            let def = self.declare_local(parameter, DefKind::TypeParam);
+            self.used.insert(def);
         }
     }
 
@@ -757,14 +778,7 @@ impl Resolver<'_> {
         // Before anything else, because a parameter's type, the return type
         // and the body can all name one and none of them can be resolved
         // without it.
-        for parameter in &function.sig.generics {
-            let def = self.declare_local(parameter, DefKind::TypeParam);
-            // A type parameter that appears nowhere is caught by the type
-            // checker, which has the better message for it: the rule is that
-            // it has to appear in a *parameter's* type, and "used somewhere"
-            // is not that rule.
-            self.used.insert(def);
-        }
+        self.declare_type_params(&function.sig.generics);
 
         for param in &function.sig.params {
             if let Some(ty) = &param.ty {
