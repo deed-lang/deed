@@ -56,6 +56,16 @@ struct Entry {
     checked: Checked,
 }
 
+/// Every place one name is written in one file.
+///
+/// Kept as spans rather than as answers, because references wants locations
+/// and rename wants edits and the walk that finds them is the same walk.
+struct Found {
+    uri: String,
+    file: vow_diagnostics::FileId,
+    spans: Vec<Span>,
+}
+
 #[derive(Default)]
 pub struct Server {
     /// Keyed by URI, ordered so that anything iterating them is reproducible.
@@ -110,6 +120,11 @@ impl Server {
             "textDocument/hover" => result(id, self.hover(message)),
             "textDocument/definition" => result(id, self.definition(message)),
             "textDocument/references" => result(id, self.references(message)),
+            "textDocument/prepareRename" => result(id, self.prepare_rename(message)),
+            // Answers with the whole response rather than a value, because
+            // refusing a rename has to be an error: an editor told "here is an
+            // edit with nothing in it" reports success and changes nothing.
+            "textDocument/rename" => self.rename(id, message),
             "textDocument/formatting" => result(id, self.formatting(message)),
             _ => error(
                 id,
@@ -253,6 +268,38 @@ impl Server {
 
     /// Every place a name is used, across the workspace.
     ///
+    /// The list rename edits, as a list. Sharing the walk rather than writing
+    /// it twice is the point: two implementations of "everywhere this name is
+    /// written" would agree today and stop agreeing on whichever file nobody
+    /// tested.
+    fn references(&self, message: &Json) -> Json {
+        let wanted = message
+            .at(&["params", "context", "includeDeclaration"])
+            .map(|value| value == &Json::Bool(true))
+            .unwrap_or(true);
+
+        let Some((sources, found)) = self.occurrences(message, wanted) else {
+            return Json::Array(Vec::new());
+        };
+
+        Json::Array(
+            found
+                .iter()
+                .flat_map(|file| {
+                    let text = sources.file(file.file).text();
+                    file.spans.iter().map(move |span| {
+                        Json::object(vec![
+                            ("uri", Json::string(&file.uri)),
+                            ("range", range_in(text, *span)),
+                        ])
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// Every place the name under the cursor is written, across the workspace.
+    ///
     /// Two questions wearing one name. A parameter or a `let` cannot leave the
     /// module that declared it, so the answer is every span in this file that
     /// resolves to that one definition, and it is exact. A declaration another
@@ -260,25 +307,24 @@ impl Server {
     /// a `DefId` is an index into one module's table, so the answer is
     /// assembled the same way go to definition crosses the boundary: by the
     /// module path and the name.
-    fn references(&self, message: &Json) -> Json {
-        let Some((_, offset, checked)) = self.locate(message) else {
-            return Json::Null;
-        };
-        let Some((_, def)) = narrowest_name(&checked, offset) else {
-            return Json::Null;
-        };
-
-        let wanted = message
-            .at(&["params", "context", "includeDeclaration"])
-            .map(|value| value == &Json::Bool(true))
-            .unwrap_or(true);
+    ///
+    /// `None` when the question has no answer at all, which is a different
+    /// thing from an answer with nothing in it and is what lets rename refuse
+    /// rather than quietly do nothing.
+    fn occurrences(
+        &self,
+        message: &Json,
+        include_declaration: bool,
+    ) -> Option<(SourceMap, Vec<Found>)> {
+        let (_, offset, checked) = self.locate(message)?;
+        let (_, def) = narrowest_name(&checked, offset)?;
 
         let data = checked.resolutions.def(def);
         // Declared nowhere and used everywhere. Listing every mention of
         // `length` in a workspace is not an answer to any question somebody
-        // was asking.
+        // was asking, and renaming one is not a thing this workspace can do.
         if data.kind == DefKind::Builtin {
-            return Json::Array(Vec::new());
+            return None;
         }
 
         let name = data.name.clone();
@@ -302,7 +348,6 @@ impl Server {
         let mut found = Vec::new();
 
         for entry in &entries {
-            let text = sources.file(entry.checked.file).text();
             let here = entry
                 .checked
                 .module
@@ -349,22 +394,107 @@ impl Server {
                 .filter(|(span, id)| *id == local && *span != declared)
                 .map(|(span, _)| span)
                 .collect();
-            if wanted && !declared.is_empty() {
+            if include_declaration && !declared.is_empty() {
                 spans.push(declared);
             }
             // Source order, so an editor's list reads down the file rather
             // than in whatever order a hash map handed things back.
             spans.sort_by_key(|span| (span.start, span.end));
 
-            found.extend(spans.into_iter().map(|span| {
-                Json::object(vec![
-                    ("uri", Json::string(&entry.uri)),
-                    ("range", range_in(text, span)),
-                ])
-            }));
+            if !spans.is_empty() {
+                found.push(Found {
+                    uri: entry.uri.clone(),
+                    file: entry.checked.file,
+                    spans,
+                });
+            }
         }
 
-        Json::Array(found)
+        Some((sources, found))
+    }
+
+    /// Whether the thing under the cursor can be renamed, and where its name
+    /// is written.
+    ///
+    /// An editor asks this before showing the box, so that a name nothing can
+    /// be done about is greyed out rather than accepting a new spelling and
+    /// then doing nothing with it.
+    fn prepare_rename(&self, message: &Json) -> Json {
+        let Some((document, offset, checked)) = self.locate(message) else {
+            return Json::Null;
+        };
+        let Some((span, def)) = narrowest_name(&checked, offset) else {
+            return Json::Null;
+        };
+        // The prelude belongs to the language rather than to this workspace.
+        if checked.resolutions.def(def).kind == DefKind::Builtin {
+            return Json::Null;
+        }
+        self.range(document, span)
+    }
+
+    /// One name, everywhere it is written, replaced.
+    ///
+    /// The same set references answers with, always including the declaration,
+    /// which is the difference between the two questions. It crosses module
+    /// boundaries, so renaming an exported function rewrites the `use` line
+    /// that brought it in as well: a rename that edited one file and broke
+    /// another would be worse than no rename at all.
+    ///
+    /// What this deliberately does not do is decide whether the new name is a
+    /// good one. A name that collides with something already in scope, or that
+    /// shadows a prelude entry, is something the checker already has a
+    /// diagnostic for, and answering it twice is how the two answers come to
+    /// disagree.
+    fn rename(&self, id: &Json, message: &Json) -> Json {
+        let Some(name) = message
+            .at(&["params", "newName"])
+            .and_then(Json::as_str)
+            .map(str::to_string)
+        else {
+            return error(id, INVALID_REQUEST, "a rename needs a new name");
+        };
+        if !is_identifier(&name) {
+            return error(
+                id,
+                INVALID_REQUEST,
+                &format!("`{name}` is not a name this language can hold"),
+            );
+        }
+
+        let Some((sources, found)) = self.occurrences(message, true) else {
+            return error(
+                id,
+                INVALID_REQUEST,
+                "there is nothing here that can be renamed",
+            );
+        };
+
+        let changes: Vec<(String, Json)> = found
+            .iter()
+            .map(|file| {
+                let text = sources.file(file.file).text();
+                let edits = file
+                    .spans
+                    .iter()
+                    .map(|span| {
+                        Json::object(vec![
+                            ("range", range_in(text, *span)),
+                            ("newText", Json::string(&name)),
+                        ])
+                    })
+                    .collect();
+                (file.uri.clone(), Json::Array(edits))
+            })
+            .collect();
+
+        result(
+            id,
+            Json::object(vec![(
+                "changes",
+                Json::Object(changes.into_iter().collect()),
+            )]),
+        )
     }
 
     /// The whole document, replaced by its canonical form.
@@ -623,6 +753,32 @@ fn declares(kind: DefKind) -> bool {
     )
 }
 
+/// Whether some text is a name this language can hold.
+///
+/// Asked of the lexer rather than answered again here. A second definition of
+/// what an identifier is would agree with the first until one of them changed,
+/// and the failure would be a rename that produces a file that does not parse.
+fn is_identifier(text: &str) -> bool {
+    let mut sources = SourceMap::new();
+    let file = sources.add("<rename>", text);
+    let lexed = vow_lexer::tokenize(file, text);
+    if lexed.has_errors() {
+        return false;
+    }
+    // One identifier and the end of the file. A keyword lexes as a keyword
+    // rather than as a name, so this refuses `fn` without holding a second
+    // copy of the keyword list.
+    matches!(
+        lexed
+            .tokens
+            .iter()
+            .map(|token| &token.kind)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [vow_lexer::TokenKind::Ident(_), vow_lexer::TokenKind::Eof]
+    )
+}
+
 fn position(position: Position) -> Json {
     Json::object(vec![
         ("line", Json::number(position.line as i64)),
@@ -646,6 +802,13 @@ fn initialize_result() -> Json {
             ("hoverProvider", Json::Bool(true)),
             ("definitionProvider", Json::Bool(true)),
             ("referencesProvider", Json::Bool(true)),
+            // `prepareProvider` is what lets an editor grey the command out
+            // on a prelude name instead of asking for a new spelling and then
+            // refusing it.
+            (
+                "renameProvider",
+                Json::object(vec![("prepareProvider", Json::Bool(true))]),
+            ),
             ("documentFormattingProvider", Json::Bool(true)),
         ]),
     )])

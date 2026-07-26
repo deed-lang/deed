@@ -11,6 +11,7 @@ rust-version.workspace = true
 vow-diagnostics = { path = "../vow-diagnostics" }
 vow-driver = { path = "../vow-driver" }
 vow-fmt = { path = "../vow-fmt" }
+vow-lexer = { path = "../vow-lexer" }
 vow-resolve = { path = "../vow-resolve" }
 
 [lints]
