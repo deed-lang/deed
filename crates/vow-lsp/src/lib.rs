@@ -7,6 +7,13 @@
 //! all this is: framing, a small JSON reader, and a translation between byte
 //! offsets and the positions the protocol uses.
 //!
+//! Some of that data had nowhere to go for longer than the rest. A diagnostic
+//! carries the patch that resolves it where the repair is unambiguous, and
+//! until quick fixes existed the only thing that could reach one was `vow fix`
+//! on a command line, which applies the certain ones and skips the guesses. So
+//! "cannot find `lenght`, did you mean `length`" knew the answer and made the
+//! reader type it.
+//!
 //! No dependencies, for the same reason the rest of the compiler has none. The
 //! protocol needed here is a header, a blank line and a handful of object
 //! shapes, and a serialiser would be a larger thing to audit than the code it

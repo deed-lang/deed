@@ -128,7 +128,7 @@ Read them in order. Each one leans on the one before it.
 | `vow-effects` | Every effect row checked against what the body does |
 | `vow-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `vow-fmt` | The one canonical form, with no options for the output |
-| `vow-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion and formatting |
+| `vow-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, quick fixes and formatting |
 | `vow-driver` | Runs all of the above, in one place, so nothing drifts |
 | `vow-cli` | The `vow` binary: `check`, `test`, `run`, `fmt`, `fix` and `lsp` |
 
@@ -138,7 +138,17 @@ expression turned out to be, `Resolutions` can say where a name was declared, an
 formatter has one canonical answer with no options. It publishes diagnostics as you type,
 says the type of whatever is under the cursor, jumps to a declaration in whichever file
 declares it, lists every use of a name across the workspace, renames one everywhere it is
-written, offers what could be written where the cursor is, and formats a file.
+written, offers what could be written where the cursor is, offers the patch a diagnostic is
+already carrying, and formats a file.
+
+That last one was data with nowhere to go. A diagnostic carries the edit that resolves it
+where the repair is unambiguous, and the only thing that could reach one was `vow fix` on a
+command line, which applies the certain ones and skips the guesses. So the guesses were
+reachable by nothing at all, and "cannot find `lenght`, did you mean `length`" knew the answer
+and made the reader type it. They are quick fixes now, and `Applicability` carries straight
+over: a machine-applicable fix is the one `vow fix` would apply without being asked, so it is
+the preferred action, and a guess is offered and never preferred. The editor already had a
+word for the distinction and the compiler already had the distinction.
 
 Completion is the only one that is a different shape. Everything else answers a question
 about a name that already exists, and a document does not parse while somebody is typing into
@@ -586,7 +596,9 @@ repository is already canonical, so the principle either holds or the build fail
 `vow fix` is the same move for P7. Diagnostics already carried a patch and a note about
 whether that patch is certain or a guess, and nothing applied them, so what P7 described was
 a data structure. `vow fix` applies the certain ones and refuses the guesses, with no flag to
-override that.
+override that. Which left the guesses reachable by nothing, and the certain ones reachable
+only from a place the reader has already left, until the language server started offering
+both as quick fixes.
 
 It writes rows now, which is the part that costs something day to day. A fix is a span and a
 replacement, so most of them are handed over where the problem is found, and the row
