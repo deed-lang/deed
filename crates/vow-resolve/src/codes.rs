@@ -28,3 +28,12 @@ pub const UNKNOWN_MODULE: &str = "VOW3007";
 
 /// A `use` of a name the module does not declare.
 pub const UNKNOWN_EXPORT: &str = "VOW3008";
+
+/// A binding nobody reads.
+///
+/// A `let` binding, a pattern binder, a `for` binder or a parameter that no
+/// expression mentions. Shadowing is not allowed, so a name is bound once and
+/// means one thing for the whole function, which is what makes this decidable
+/// by looking rather than by tracking. A leading underscore is how a program
+/// says it meant to ignore something.
+pub const UNUSED_BINDING: &str = "VOW3009";

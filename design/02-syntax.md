@@ -909,6 +909,18 @@ error, because `let _ = f()` is how a program says it meant that and working cod
 have to be rewritten to keep compiling. Dropping a `Result` gets its own sentence, since that
 one loses the failure rather than a line.
 
+That warning has an escape hatch, and one of the ways out is worse than the thing it escapes.
+`let _ = f()` throws the value away and says so. `let b = f()` also silences it, and now
+there is a name nobody reads, which is the same statement doing nothing with an explanation
+attached. So a `let` binding one plain name that no expression mentions is `VOW3009`. Only a
+`let`, and only a plain name. Pointing it at every binder was tried and it fired twenty seven
+times across the examples, of which twenty five were not mistakes: a pattern is there to
+match, so `err(why)` names what the shape holds and reads better than `err(_)`; a parameter's
+shape is the signature, and a handler's signature belongs to the effect it implements; a
+`for` binder walks whether or not the element is wanted. A `let` is the one form whose entire
+reason for existing is the name. `_name` is how it says it meant to keep the name and not the
+value.
+
 **Type arguments close with single `>` tokens.** There is no shift operator in Vow, so
 `Map<K, Vec<V>>` needs none of the special handling that costs other languages a real
 amount of parser complexity.

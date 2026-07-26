@@ -459,6 +459,78 @@ fn an_unused_import_is_a_warning_not_an_error() {
     assert!(resolved.diagnostics[0].message.contains("Spare"));
 }
 
+// -- a name nobody reads -------------------------------------------------
+
+#[test]
+fn a_let_nobody_reads_is_a_warning() {
+    let (sources, _, resolved) =
+        resolve_source("module a\n\nfn f() -> Int {\n  let spare = 1\n  2\n}\n");
+    assert_eq!(codes_of(&resolved.diagnostics), vec![codes::UNUSED_BINDING]);
+    assert!(!resolved.has_errors());
+    let rendered = render_human(&sources, &resolved.diagnostics[0]);
+    assert!(rendered.contains("nothing reads `spare`"), "{rendered}");
+    assert!(rendered.contains("write `_spare`"), "{rendered}");
+}
+
+#[test]
+fn a_leading_underscore_says_it_was_meant() {
+    let (_, _, resolved) =
+        resolve_source("module a\n\nfn f() -> Int {\n  let _spare = 1\n  2\n}\n");
+    assert!(resolved.diagnostics.is_empty());
+}
+
+#[test]
+fn a_binding_read_once_is_read() {
+    let (_, _, resolved) = resolve_source("module a\n\nfn f() -> Int {\n  let n = 1\n  n\n}\n");
+    assert!(resolved.diagnostics.is_empty());
+}
+
+/// A pattern is there to match, so its binders name what the shape holds
+/// whether or not the arm goes on to look. `err(why)` reads better than
+/// `err(_)` and neither one is a mistake.
+#[test]
+fn a_pattern_binder_is_left_alone() {
+    let (_, _, resolved) = resolve_source(
+        "module a\n\nfn f(r: Result<Int, String>) -> Int {\n  match r {\n    ok(n) => n,\n    err(why) => 0,\n  }\n}\n",
+    );
+    assert!(resolved.diagnostics.is_empty());
+}
+
+/// Same reason one level up: the shape of a parameter list is the signature,
+/// and a handler's signature belongs to the effect it implements.
+#[test]
+fn a_parameter_is_left_alone() {
+    let (_, _, resolved) = resolve_source("module a\n\nfn f(n: Int) -> Int { 0 }\n");
+    assert!(resolved.diagnostics.is_empty());
+}
+
+#[test]
+fn a_for_binder_is_left_alone() {
+    let (_, _, resolved) = resolve_source(
+        "module a\n\nfn f(ns: List<Int>) -> Int {\n  for n in ns with count = 0 {\n    count + 1\n  }\n}\n",
+    );
+    assert!(resolved.diagnostics.is_empty());
+}
+
+/// A `let` that destructures is a pattern like any other. What it takes apart
+/// is the program saying which pieces it is talking about, not planning to
+/// read every one of them.
+#[test]
+fn a_let_that_destructures_is_a_pattern() {
+    let (_, _, resolved) = resolve_source(
+        "module a\n\nrecord Pair { left: Int, right: Int }\n\nfn f(p: Pair) -> Int {\n  let Pair { left, right } = p\n  left\n}\n",
+    );
+    assert!(resolved.diagnostics.is_empty());
+}
+
+#[test]
+fn a_capitalised_pattern_is_not_a_binding() {
+    let (_, _, resolved) = resolve_source(
+        "module a\n\nchoice Flag { On, Off }\n\nfn f(x: Flag) -> Int {\n  let On = x\n  0\n}\n",
+    );
+    assert!(resolved.diagnostics.is_empty());
+}
+
 #[test]
 fn shadowing_a_declaration_only_warns() {
     let (_, _, resolved) = resolve_source(

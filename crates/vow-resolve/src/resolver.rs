@@ -158,6 +158,7 @@ pub fn resolve(file: FileId, module: &Module, universe: &Universe) -> Resolved {
         scopes: Vec::new(),
         diagnostics: Vec::new(),
         used: HashSet::new(),
+        named: Vec::new(),
         suggestions: SUGGESTION_BUDGET,
     };
 
@@ -218,6 +219,7 @@ pub fn resolve(file: FileId, module: &Module, universe: &Universe) -> Resolved {
     resolver.collect(module);
     resolver.resolve_module(module);
     resolver.report_unused_imports();
+    resolver.report_unused_bindings();
 
     Resolved {
         resolutions: resolver.resolutions,
@@ -244,6 +246,9 @@ struct Resolver<'a> {
     scopes: Vec<Scope>,
     diagnostics: Vec<Diagnostic>,
     used: HashSet<DefId>,
+    /// Every `let` that binds one plain name, in the order they were written.
+    /// See [`Resolver::report_unused_bindings`] for why only those.
+    named: Vec<DefId>,
     /// How many more "did you mean" suggestions this file gets. See
     /// [`Resolver::suggest`].
     suggestions: usize,
@@ -584,6 +589,54 @@ impl Resolver<'_> {
         }
     }
 
+    /// Reports every `let` that names a value nobody reads.
+    ///
+    /// A `let` exists to give a value a name so that something else can use
+    /// it. The name is the whole reason the form was written, so one that no
+    /// expression mentions leaves a statement doing nothing a statement could
+    /// not have done on its own. That case already has a warning, and a name
+    /// is exactly what silences it: `twice(n)` on its own line is a value
+    /// nobody reads, and `let b = twice(n)` is the same value with somewhere
+    /// to put it that nobody looks in.
+    ///
+    /// Only a `let` binding one plain name. Every other binder is part of a
+    /// shape something outside the binding chose. A pattern is there to match,
+    /// so `err(why)` names what it is not going to look at and reads better
+    /// for it. A parameter's shape is the signature, and a handler's signature
+    /// belongs to the effect it implements. A `for` binder walks whether or
+    /// not the element is wanted. Asking those to be spelled differently
+    /// trades a name for a hole and says nothing that was not already visible.
+    ///
+    /// `_name` is how a `let` says it meant to keep the name and not the
+    /// value. So is `let _ = ...`, which binds nothing at all.
+    fn report_unused_bindings(&mut self) {
+        let unused: Vec<(String, Span)> = self
+            .named
+            .iter()
+            .filter(|id| !self.used.contains(id))
+            .map(|id| {
+                let def = self.resolutions.def(*id);
+                (def.name.clone(), def.span)
+            })
+            .filter(|(name, _)| !name.starts_with('_'))
+            .collect();
+
+        for (name, span) in unused {
+            self.diagnostics.push(
+                Diagnostic::warning(
+                    codes::UNUSED_BINDING,
+                    self.file,
+                    span,
+                    format!("nothing reads `{name}`"),
+                )
+                .with_primary_label("this name is never used")
+                .with_note(format!(
+                    "a name cannot be shadowed, so this one is read nowhere; write `_{name}` if the value is meant to be dropped"
+                )),
+            );
+        }
+    }
+
     // -- walking -----------------------------------------------------------
 
     /// Collects every module level name before resolving any body, so that
@@ -887,6 +940,16 @@ impl Resolver<'_> {
                     self.resolve_type(ty);
                 }
                 self.bind_pattern(pattern);
+
+                // A `let` binding one plain name is the only binder whose
+                // whole reason for existing is the name.
+                if let Pattern::Path { segments, .. } = pattern
+                    && let [only] = segments.as_slice()
+                    && !starts_upper(&only.name)
+                    && let Some((def, _)) = self.lookup(&only.name)
+                {
+                    self.named.push(def);
+                }
             }
             Stmt::Return { value, .. } => {
                 if let Some(value) = value {
