@@ -719,8 +719,11 @@ claim about IO only, and it is supposed to be a claim about everything.
 It also keeps P1 intact. A mutable local would mean a name's value depends on where you are
 in the function, which is the same objection that made shadowing an error.
 
-The cost is that accumulator loops have to be written some other way. There are no loops
-yet, so that bill has not arrived.
+The cost is that accumulator loops have to be written some other way, and that bill has now
+arrived. `examples/todo.vow` threads its accumulator through a recursive parameter, because
+there is nowhere else to put it and reaching for a handler to collect four strings would be
+using an effect to get around not having a loop. It is not a bad workaround. It is just the
+only one, and there are three copies of it in one small file.
 
 ## Open questions
 

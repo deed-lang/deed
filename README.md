@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-44 passed, 0 failed
+48 passed, 0 failed
 ```
 
 ```
@@ -133,12 +133,26 @@ Read them in order. Each one leans on the one before it.
 
 The examples are [transfer.vow](examples/transfer.vow),
 [counter.vow](examples/counter.vow), [hello.vow](examples/hello.vow),
-[config.vow](examples/config.vow), [proven.vow](examples/proven.vow),
-[closures.vow](examples/closures.vow), [diverge.vow](examples/diverge.vow),
-[strings.vow](examples/strings.vow), [lists.vow](examples/lists.vow), and the three that see
-each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
+[config.vow](examples/config.vow), [todo.vow](examples/todo.vow),
+[proven.vow](examples/proven.vow), [closures.vow](examples/closures.vow),
+[diverge.vow](examples/diverge.vow), [strings.vow](examples/strings.vow),
+[lists.vow](examples/lists.vow), and the three that see each other:
+[names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 [greeting.vow](examples/greeting.vow). All are checked by every pass on every commit,
-`hello.vow` and `config.vow` have a `main`, and the rest run their own tests.
+`hello.vow`, `config.vow` and `todo.vow` have a `main`, and the rest run their own tests.
+
+`todo.vow` is the one written to find out what is missing rather than to show what is there.
+It reads a list of tasks out of a directory it was handed, counts them, and prints the ones
+that are not done, which is the smallest thing anybody would call a program and was not
+writable at all a week ago. It found four things. Three of its functions are the same
+function: start at zero, look at each element, stop when the index runs out, and declare
+`Diverge` for the privilege. An accumulator has to be threaded through as a parameter,
+because handler state is the only mutable thing in the language and reaching for a handler to
+collect strings would be using an effect to avoid a loop. The file format is `x|title` rather
+than `[x] title` because splitting is all there is, so the data got bent to fit the tool. And
+the first run printed its own output backwards over itself, because splitting on `\n` leaves
+a carriage return on every line of a file written on Windows and there is nothing that trims
+one off. None of those were obvious from inside the compiler.
 
 `proven.vow` is the one that argues with itself. Every function in it either proves its
 postcondition or explains, in a comment, why the checker cannot, and the file is written so

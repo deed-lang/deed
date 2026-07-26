@@ -163,6 +163,11 @@ argument about how much of the P2 budget capabilities get to spend.
 properly needs a second type. Writing files, listing a directory and creating one are also
 not there, so `Dir` is currently a read capability wearing a more general name.
 
+`examples/todo.vow` is where that stops being theoretical. It reads a list of tasks out of a
+directory it was handed and reports on them, and it cannot add one, because there is no
+operation that writes a file. Half of the smallest useful program is missing, and the missing
+half is the half that needs the authority to be narrower rather than wider.
+
 ### Where the root comes from
 
 `vow run --dir <path>` decides, defaulting to the working directory. The runtime does not

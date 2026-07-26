@@ -11,6 +11,7 @@ const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/trans
 const RUNNABLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/counter.vow");
 const HELLO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/hello.vow");
 const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/config.vow");
+const TODO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/todo.vow");
 const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
 
 fn run(args: &[&str]) -> Output {
@@ -519,6 +520,27 @@ fn the_config_example_runs_and_reaches_nothing_it_was_not_given() {
     assert!(text.contains("found it"), "{text}");
     assert!(text.contains("no way out of a `Dir`"), "{text}");
     assert!(text.contains("used the fallback"), "{text}");
+}
+
+#[test]
+fn the_todo_example_reads_a_real_file_and_reports_on_it() {
+    // The end to end one. It reads a file, takes the lines apart, counts them,
+    // collects some of them and prints a number, so every piece added this
+    // week has to work at once for this to say anything.
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+    let output = run(&["run", TODO, "--dir", dir]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("2 of 4 done"), "{text}");
+    assert!(
+        text.contains("still open: decide what a loop looks like, write a language server"),
+        "{text}"
+    );
+    // A `\r` left on the end of a title would print the rest of the line over
+    // the top of itself, which is how the line endings in the data file were
+    // found in the first place.
+    assert!(!text.contains('\r'), "a carriage return survived:\n{text}");
 }
 
 // -- formatting ------------------------------------------------------------

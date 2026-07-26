@@ -1,0 +1,4 @@
+x|hold more than one of something
+x|get from text to a number and back
+-|decide what a loop looks like
+-|write a language server
