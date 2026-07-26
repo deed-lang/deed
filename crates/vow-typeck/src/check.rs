@@ -2285,9 +2285,62 @@ impl<'a> Checker<'a> {
                 self.refuting = outer;
             }
             Stmt::Expr(expr) => {
-                self.infer(expr);
+                let ty = self.infer(expr);
+                self.discarded(&ty, expr);
             }
         }
+    }
+
+    /// A statement that produces a value nobody reads.
+    ///
+    /// A block's value is its tail, so every other expression in it is there
+    /// for what it does rather than for what it is. When it produces `()` that
+    /// is the whole story. When it produces something else the value has
+    /// nowhere to go, and the two ways to arrive here are both mistakes: a
+    /// result that was meant to be looked at, or a line that was meant to
+    /// belong to the one above it.
+    ///
+    /// The second one is why this is here. An expression ends at the end of a
+    /// line, so `let a = 1` with `-2` under it is two statements rather than
+    /// one, which is the honest reading and still leaves a line doing nothing.
+    /// Saying so is the difference between a rule that is right and a rule
+    /// that helps.
+    ///
+    /// A warning rather than an error, because `let _ = f()` is how you say
+    /// you meant it and a program should not have to be rewritten to keep
+    /// compiling. `Unknown` and `Never` say nothing: the first is a type the
+    /// checker does not have and the second is an expression that never
+    /// produced a value at all.
+    ///
+    /// `f()?` is exempt. The value it drops is the success case, and the case
+    /// worth not losing is the error, which `?` returns rather than discards.
+    /// A statement written as `?` is a statement about the failure, so the rest
+    /// of it going nowhere is what it says.
+    fn discarded(&mut self, ty: &Ty, expr: &Expr) {
+        if matches!(ty, Ty::Unit | Ty::Unknown | Ty::Never) || matches!(expr, Expr::Try { .. }) {
+            return;
+        }
+
+        let found = self.types.describe(ty);
+        let advice = if matches!(ty, Ty::Result(..)) {
+            // Worth its own sentence. Dropping an `Int` wastes a line and
+            // dropping a `Result` loses the failure, which is the thing the
+            // type was carrying and the reason it is a `Result` at all.
+            "the failure case goes with it; use `?`, a `match`, or `let _ = ...` if that is what you meant"
+        } else {
+            "write `let _ = ...` if that is what you meant"
+        };
+
+        self.emit(
+            Diagnostic::warning(
+                codes::DISCARDED_VALUE,
+                self.file,
+                expr.span(),
+                format!("this produces {found} and nothing reads it"),
+            )
+            .with_primary_label("the value goes nowhere")
+            .with_note(advice),
+        );
     }
 
     /// `for n in numbers with sum = 0 { ... }`

@@ -894,6 +894,21 @@ breaks a binary expression across lines and never puts a call's `(` or a literal
 line of its own, so an argument list or a record can still spread over as many lines as it
 likes, the opening bracket just has to stay with what it opens.
 
+The rule creates one mistake and pays for both halves of it. A line starting with an
+operator that cannot also begin an expression, like `* 2`, is now a parse error, and it says
+why rather than only what: an expression ends at the end of a line, so leave the operator on
+the line above to carry it over. It takes the right hand side with it too, since that was
+meant to belong to the operator and letting it become a statement would draw a second
+complaint about one mistake.
+
+A line starting with `-` is the harder half, because `-2` is a perfectly good expression and
+there is nothing to refuse. What is left is a statement whose value nobody reads, and
+`VOW4026` says so. A block's value is its tail, so every other expression in it is there for
+what it does; one that produces a value has nowhere to put it. It is a warning rather than an
+error, because `let _ = f()` is how a program says it meant that and working code should not
+have to be rewritten to keep compiling. Dropping a `Result` gets its own sentence, since that
+one loses the failure rather than a line.
+
 **Type arguments close with single `>` tokens.** There is no shift operator in Vow, so
 `Map<K, Vec<V>>` needs none of the special handling that costs other languages a real
 amount of parser complexity.

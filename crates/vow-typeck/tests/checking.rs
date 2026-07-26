@@ -856,6 +856,127 @@ fn unchanged_is_a_condition() {
     );
 }
 
+// -- values nobody reads ---------------------------------------------------
+//
+// A block's value is its tail, so every other expression in it is there for
+// what it does. One that produces a value has nowhere to put it, and the two
+// ways to get there are a result that was meant to be looked at and a line
+// that was meant to belong to the one above it. The second one only became
+// possible to tell apart when an expression started ending at the end of a
+// line.
+
+#[test]
+fn a_statement_that_produces_a_value_says_nobody_reads_it() {
+    let (sources, checked) = check_source(
+        "module a\n\n\
+         fn twice(n: Int) -> Int { n + n }\n\n\
+         fn f(n: Int) -> Int {\n\
+         \x20 twice(n)\n\
+         \x20 n\n\
+         }\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::DISCARDED_VALUE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("produces `Int` and nothing reads it"),
+        "{text}"
+    );
+    assert!(text.contains("write `let _ = ...`"), "{text}");
+}
+
+#[test]
+fn a_line_that_was_meant_to_continue_the_one_above_says_so() {
+    // The reason this is worth having. `let a = 1` with `- 2` under it is two
+    // statements, which is the honest reading and still leaves a line doing
+    // nothing. Saying so is the difference between a rule that is right and a
+    // rule that helps.
+    let (_, checked) = check_source(
+        "module a\n\n\
+         fn f(n: Int) -> Int {\n\
+         \x20 let a = 1\n\
+         \x20 - 2\n\
+         \x20 a + n\n\
+         }\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::DISCARDED_VALUE]);
+}
+
+#[test]
+fn dropping_a_result_says_the_failure_goes_with_it() {
+    // Worth its own sentence. Dropping an `Int` wastes a line and dropping a
+    // `Result` loses the failure, which is the thing the type was carrying.
+    let (sources, checked) = check_source(
+        "module a\n\n\
+         fn boom(n: Int) -> Result<Int, String> { ok(n) }\n\n\
+         fn f(n: Int) -> Int {\n\
+         \x20 boom(n)\n\
+         \x20 n\n\
+         }\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::DISCARDED_VALUE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("the failure case goes with it"), "{text}");
+}
+
+#[test]
+fn a_question_mark_is_a_statement_about_the_failure() {
+    // `f()?` drops the success case and keeps the error, which is the one
+    // worth not losing, so a statement written as `?` is saying what it means.
+    check_ok(
+        "module a\n\n\
+         fn boom(n: Int) -> Result<Int, String> { ok(n) }\n\n\
+         fn f(n: Int) -> Result<Int, String> {\n\
+         \x20 boom(n)?\n\
+         \x20 ok(n)\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_statement_that_produces_nothing_is_the_ordinary_case() {
+    check_ok(
+        "module a\n\n\
+         effect Log {\n  fn note(message: String) -> ()\n}\n\n\
+         fn f(n: Int) -> Int\n\
+         \x20 uses Log.note,\n\
+         {\n\
+         \x20 Log.note(\"hi\")\n\
+         \x20 n\n\
+         }\n",
+    );
+}
+
+#[test]
+fn saying_you_meant_it_is_enough() {
+    // A warning rather than an error, and `let _ = ...` is how a program says
+    // it meant to throw the value away. Anything else would mean rewriting
+    // working code to keep compiling.
+    check_ok(
+        "module a\n\n\
+         fn twice(n: Int) -> Int { n + n }\n\n\
+         fn f(n: Int) -> Int {\n\
+         \x20 let _ = twice(n)\n\
+         \x20 n\n\
+         }\n",
+    );
+}
+
+#[test]
+fn an_expression_that_never_produced_a_value_is_not_discarded() {
+    // `Never` is not a value nobody read, it is an expression that did not
+    // come back, and `Unknown` is a type the checker does not have rather than
+    // one it worked out.
+    check_ok(
+        "module a\n\n\
+         fn f(n: Int) -> Result<Int, String> {\n\
+         \x20 if n < 0 {\n\
+         \x20   return err(\"no\")\n\
+         \x20 }\n\
+         \x20 ok(n)\n\
+         }\n",
+    );
+}
+
 // -- generics and robustness -----------------------------------------------
 
 #[test]

@@ -547,6 +547,26 @@ on the calls that mattered least. Rows travel now, and a caller that inherits an
 never imported is told which module to import it from, because a row that cannot name what it
 grants is not a row.
 
+The grammar had one of its own. Statements are separated by nothing, so what ends one is the
+next token not being able to continue the expression before it, and the design doc said that
+held only by coincidence. It did not hold at all: `(` starts a parenthesised expression and
+continues a call, `-` starts a negation and continues a sum, so `let a = 1` with `-2` under
+it read as `let a = 1 - 2` and the second line was gone with nothing said about it. A line
+break ends an expression now, and the rule is the same inside brackets as outside them,
+because a rule that switches off somewhere is a rule people have to remember. Nothing
+canonical changes shape under it, since `vow fmt` never breaks a binary expression across
+lines.
+
+Being right is half of it. The rule makes a new mistake possible, which is carrying an
+operator down to the next line, and both halves of that are answered. `* 2` on its own line
+is a parse error that says why rather than only what, and takes the rest of the line with it
+so one mistake gets one complaint. `- 2` on its own line is a perfectly good expression and
+there is nothing to refuse, so what is left is a statement whose value nobody reads, and
+saying that is `VOW4026`. It is a warning, because `let _ = f()` is how a program says it
+meant to throw a value away and working code should not have to be rewritten to keep
+compiling, and dropping a `Result` gets its own sentence, since that one loses the failure
+rather than a line.
+
 `vow fmt` prints one canonical form and takes no options for the output. P4 said formatting
 is not configurable long before anything enforced it, which meant the files were formatted
 the way they happened to have been typed. A test now asserts that every `.vow` file in the

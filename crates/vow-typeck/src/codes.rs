@@ -122,3 +122,12 @@ pub const GENERIC_AS_VALUE: &str = "VOW4024";
 /// at the call site settle the clause the wrong way; not knowing is the
 /// ordinary case and leaves the runtime check to answer.
 pub const BROKEN_PRECONDITION: &str = "VOW4025";
+
+/// A statement whose value nobody reads.
+///
+/// A block's value is its tail, so any other expression in it is there for
+/// what it does. One that produces a value has nowhere to put it, and the two
+/// ways to get here are a result that was meant to be looked at and a line
+/// that was meant to continue the one above it. The second became possible to
+/// tell apart when an expression started ending at the end of a line.
+pub const DISCARDED_VALUE: &str = "VOW4026";
