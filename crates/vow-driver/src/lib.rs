@@ -136,10 +136,14 @@ impl Checked {
     /// signatures. The rows are what this language is for, and the pass that
     /// produces them was the only thing that ever read one, which is how five
     /// separate ways of getting an effect past them stayed open at once.
+    ///
+    /// Handler operations are in here too, keyed by where the name was written,
+    /// because they have no definition of their own and they are where an
+    /// effect is implemented.
     pub fn rows(&self) -> DeclaredRows {
         self.effects
             .declarations()
-            .map(|(def, row)| {
+            .map(|(span, row)| {
                 let items = row
                     .iter()
                     .map(|item| RowItem {
@@ -147,7 +151,7 @@ impl Checked {
                         operation: item.operation.clone(),
                     })
                     .collect();
-                (def, items)
+                (span, items)
             })
             .collect()
     }
