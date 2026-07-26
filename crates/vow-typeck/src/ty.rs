@@ -1,10 +1,57 @@
 //! Types, and the table the checker fills in.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use vow_diagnostics::Span;
-use vow_resolve::DefId;
+use vow_resolve::{DefId, RowEntry};
+
+/// What a function value is allowed to perform.
+///
+/// A row is part of a function type rather than something attached to it. Two
+/// function types with different rows are different types, in the same way
+/// that two with different parameters are, because the whole point of a row is
+/// that a caller can read it off the signature.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum FnRow {
+    /// Written down, normalised so that two spellings of one row are one
+    /// value.
+    ///
+    /// An empty list is a row rather than the absence of one: `Fn(Int) -> Int`
+    /// promises to perform nothing at all.
+    Declared(Vec<RowEntry>),
+    /// A closure written on the spot, whose row this pass does not work out.
+    ///
+    /// Fits wherever it is put, and the effects pass settles whether it really
+    /// did. The alternative is teaching this pass to walk a body looking for
+    /// effects, which is the other pass in a worse place.
+    Inferred,
+}
+
+impl FnRow {
+    /// Whether a value with this row may be used where `expected` was wanted.
+    ///
+    /// Containment rather than equality, and this is the one place in the
+    /// checker where a type fits another without being it. It gives way in the
+    /// direction that is safe: a function that performs less than it was given
+    /// room for breaks nothing, and one that performs more is the mistake the
+    /// row was written to catch.
+    pub fn within(&self, expected: &FnRow) -> bool {
+        let (FnRow::Declared(actual), FnRow::Declared(expected)) = (self, expected) else {
+            return true;
+        };
+        actual.iter().all(|entry| {
+            expected.iter().any(|allowed| {
+                allowed == entry
+                    // Naming a whole effect covers every operation on it, the
+                    // same way naming one in a contract does.
+                    || (allowed.operation.is_none()
+                        && allowed.module == entry.module
+                        && allowed.effect == entry.effect)
+            })
+        })
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Ty {
@@ -56,6 +103,8 @@ pub enum Ty {
     List(Box<Ty>),
     Fn {
         params: Vec<Ty>,
+        /// What calling it is allowed to perform. See [`FnRow`].
+        row: FnRow,
         ret: Box<Ty>,
     },
 }
@@ -150,7 +199,7 @@ pub struct Types {
     names: HashMap<DefId, String>,
     exprs: HashMap<Span, Ty>,
     obligations: Vec<Obligation>,
-    pure_required: HashSet<Span>,
+    row_required: HashMap<Span, Vec<RowEntry>>,
 }
 
 impl Types {
@@ -171,18 +220,25 @@ impl Types {
         self.obligations.push(obligation);
     }
 
-    /// Notes that the value at `span` has to perform no effects.
+    /// Notes that the value at `span` may perform no more than `allowed`.
     ///
-    /// A `Fn(Int) -> Int` promises that, and whether a value keeps the promise
-    /// is a question about rows, which this pass has no answer for. Which
-    /// values have to keep it is a question about types, which it does. So the
-    /// question is recorded here and settled by the pass that can settle it.
-    pub(crate) fn require_pure(&mut self, span: Span) {
-        self.pure_required.insert(span);
+    /// A function type says what a value of it performs, and whether a value
+    /// keeps that promise is a question about rows, which this pass has no
+    /// answer for. Which values have to keep it, and which row each one owes,
+    /// are questions about types, which it does. So the question is recorded
+    /// here and settled by the pass that can settle it.
+    ///
+    /// Two expectations on one expression both have to hold, so what is kept
+    /// is what they agree on rather than whichever arrived last.
+    pub(crate) fn require_row(&mut self, span: Span, allowed: Vec<RowEntry>) {
+        self.row_required
+            .entry(span)
+            .and_modify(|existing| existing.retain(|entry| allowed.contains(entry)))
+            .or_insert(allowed);
     }
 
-    pub fn pure_required(&self) -> &HashSet<Span> {
-        &self.pure_required
+    pub fn row_required(&self) -> &HashMap<Span, Vec<RowEntry>> {
+        &self.row_required
     }
 
     pub fn nominal(&self, def: DefId) -> Option<&Nominal> {
@@ -287,9 +343,25 @@ impl Types {
             // arity alone used to be all this said, which reads as a riddle in
             // a message about two function types not matching, and reads as
             // nothing at all in a hover.
-            Ty::Fn { params, ret } => {
+            Ty::Fn { params, row, ret } => {
                 let params: Vec<String> = params.iter().map(|p| self.bare(p)).collect();
-                format!("Fn({}) -> {}", params.join(", "), self.bare(ret))
+                let row = match row {
+                    FnRow::Declared(entries) if !entries.is_empty() => {
+                        let named: Vec<String> = entries
+                            .iter()
+                            .map(|entry| match &entry.operation {
+                                Some(operation) => format!("{}.{operation}", entry.effect),
+                                None => entry.effect.clone(),
+                            })
+                            .collect();
+                        format!(" uses {}", named.join(", "))
+                    }
+                    // A closure's row is not this pass's to state, and
+                    // inventing one for a hover would be inventing it
+                    // everywhere.
+                    FnRow::Declared(_) | FnRow::Inferred => String::new(),
+                };
+                format!("Fn({}){row} -> {}", params.join(", "), self.bare(ret))
             }
         }
     }

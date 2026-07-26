@@ -975,7 +975,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// The rest of `Fn(Int, Int) -> Int`, with the name already read.
+    /// The rest of `Fn(Int, Int) uses Log.note -> Int`, with the name read.
     fn parse_fn_type(&mut self, name: Ident) -> Type {
         self.expect(TokenKind::LParen, "a function type");
 
@@ -992,6 +992,28 @@ impl<'a> Parser<'a> {
         }
         self.expect(TokenKind::RParen, "a function type");
 
+        // Before the arrow, not after the return type. A declaration's own
+        // contract also begins with `uses` and also follows a return type, so
+        // `fn f() -> Fn(Int) -> Int uses Log.note` would be two readings of
+        // the same text. Here the `->` closes the list and nothing is in doubt.
+        let mut row = Vec::new();
+        if self.at_kw(Keyword::Uses) {
+            self.bump();
+            loop {
+                if self.at(&TokenKind::Arrow) || self.at_eof() {
+                    break;
+                }
+                let before = self.pos;
+                row.push(self.parse_effect_ref());
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+                if self.pos == before {
+                    break;
+                }
+            }
+        }
+
         // The return type is written out even when it is `()`. One way to
         // write a thing, and a function type with no arrow reads like an
         // unfinished one.
@@ -1001,6 +1023,7 @@ impl<'a> Parser<'a> {
         Type::Fn {
             span: name.span.to(ret.span()),
             params,
+            row,
             ret: Box::new(ret),
         }
     }

@@ -83,13 +83,28 @@ fn never_called() -> Int
     0
 }
 
-// A closure can leave the function that wrote it, as long as it promises
-// nothing. `Fn(Int) -> Int` says two things: this takes an `Int` and hands back
-// an `Int`, and it performs no effects. The second is not decoration. There is
-// no syntax for a row on a function type, and leaving one off cannot mean "any
-// row", because a value carrying an unstated effect through a signature would
-// undo the point of having rows at all.
+// A closure can leave the function that wrote it, and the type it leaves
+// through says what it may do on the way out. `Fn(Int) -> Int` says three
+// things: this takes an `Int`, hands back an `Int`, and performs nothing. The
+// third is not decoration. Leaving a row off cannot mean "any row", because a
+// value carrying an unstated effect through a signature would undo the point
+// of having rows at all.
 fn apply(f: Fn(Int) -> Int, n: Int) -> Int {
+    f(n)
+}
+
+// When the callback is supposed to log, the type says so, and the row goes
+// before the arrow. After the return type it would be indistinguishable from
+// this declaration's own contract, which also starts with `uses` and also
+// comes after a return type.
+//
+// Note that `apply_logging` has to declare `Log.note` itself. Calling a
+// function value costs whatever its type said it costs, so the row does not
+// stop at the parameter.
+fn apply_logging(f: Fn(Int) uses Log.note -> Int, n: Int) -> Int
+  uses
+    Log.note,
+{
     f(n)
 }
 
@@ -106,12 +121,26 @@ fn adder() -> Fn(Int) -> Int {
     |x: Int| x + 1
 }
 
-// Take the effect out of `announced` above and it can cross too. Leave it in
-// and passing it into `apply` is an error, which is the promise being kept
-// rather than assumed.
+// Take the effect out of `announced` above and it can cross into `apply` too.
+// Leave it in and only `apply_logging` will take it, which is the promise
+// being kept rather than assumed. Passing a callback that performs less than
+// the row allows is fine: `doubled` performs nothing and still fits, because a
+// function that stays inside the room it was given breaks nothing.
 fn composed(n: Int) -> Int {
     let step = |x: Int| x - 1
     apply(step, apply(doubled, apply(adder(), n)))
+}
+
+fn announced_twice(n: Int) -> Int
+  uses
+    Log.note,
+{
+    let step = |x: Int| {
+        Log.note("halfway")
+        x + 1
+    }
+
+    apply_logging(step, apply_logging(doubled, n))
 }
 
 test "a closure computes" {
@@ -129,5 +158,11 @@ test "a closure performs the effect its author declared" {
     with Counted { seen: 0 } {
         assert announced(1) == 2
         assert never_called() == 0
+    }
+}
+
+test "a row on a function type lets an effect cross" {
+    with Counted { seen: 0 } {
+        assert announced_twice(2) == 5
     }
 }

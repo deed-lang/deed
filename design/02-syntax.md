@@ -199,7 +199,9 @@ terminate, so it would bring `Diverge` back with it and undo the reason for havi
 has come up yet in a program written here.
 
 What is deliberately absent from lists: slicing, searching, and any operation that takes a
-function. The last one needs a row on a function type, which is the open question below.
+function. The last one is now writable, since a function type can carry a row, but a `map`
+that works for every callback needs a row variable and that is still an open question in
+`design/03-effects.md`.
 
 ## Functions and the contract block
 
@@ -567,17 +569,23 @@ function that wrote it, so its parameters are not a boundary anyone reviews. Tha
 it is a different claim from "may be unchecked". With no types the parameters were unknown,
 so the closure's body was checked against nothing at all: `|x| { x + "not a number" }` was
 accepted, and so was calling it with a string. Not being a review surface does not make a
-body exempt from type checking. It is also no longer true, since a closure that performs no
-effects can now cross a boundary.
+body exempt from type checking. It is also no longer true, since a closure can now cross a
+boundary, carrying whatever row the function type it crosses through allows.
 
 Nothing can infer them. A `let f = |x| ..` has no expected type to push down, and Vow does
 not do global inference on purpose.
 
-**A function type is written `Fn(Int, Int) -> Int`,** and it means a function that performs no
-effects. The return type is written out even when it is `()`, because a function type with no
-arrow reads like an unfinished one. There is no syntax for a row on it, and leaving one off
-cannot mean "any row": a value that carried an unstated effect through a signature would undo
-the point of having rows. `design/03-effects.md` has the rest.
+**A function type is written `Fn(Int, Int) -> Int`,** and a row goes before the arrow:
+`Fn(String) uses Log.note -> ()`. The return type is written out even when it is `()`,
+because a function type with no arrow reads like an unfinished one. Leaving a row off means
+the function performs nothing, and it cannot mean "any row": a value that carried an unstated
+effect through a signature would undo the point of having rows.
+
+The row goes before the arrow rather than after the return type because a declaration's own
+contract also starts with `uses` and also follows a return type, so
+`fn make() -> Fn(Int) -> Int uses Log.note` would have two readings and no way to tell them
+apart. Before the arrow the `->` ends the list and nothing is in doubt.
+`design/03-effects.md` has the rest.
 
 **There are no float literals.** That is what makes `40.try` unambiguously `40`, `.`, `try`
 with no lookahead. If floats ever arrive, they will need a rule for that, and it is a debt

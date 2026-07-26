@@ -276,7 +276,7 @@ fn check_parsed(
         file,
         &module,
         &resolved.resolutions,
-        checked.types.pure_required(),
+        checked.types.row_required(),
     );
     timings.effects = start.elapsed();
 

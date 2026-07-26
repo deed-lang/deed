@@ -895,9 +895,20 @@ impl Printer<'_> {
                     format!("{}<{}>", name.name, rendered.join(", "))
                 }
             }
-            Type::Fn { params, ret, .. } => {
+            Type::Fn {
+                params, row, ret, ..
+            } => {
                 let rendered: Vec<String> = params.iter().map(|param| self.ty(param)).collect();
-                format!("Fn({}) -> {}", rendered.join(", "), self.ty(ret))
+                // Before the arrow, which is where the parser insists on it:
+                // after the return type it would be indistinguishable from a
+                // declaration's own contract.
+                let row = if row.is_empty() {
+                    String::new()
+                } else {
+                    let named: Vec<String> = row.iter().map(effect_ref).collect();
+                    format!(" uses {}", named.join(", "))
+                };
+                format!("Fn({}){row} -> {}", rendered.join(", "), self.ty(ret))
             }
             Type::Unit(_) => "()".to_string(),
             Type::Error(_) => String::new(),

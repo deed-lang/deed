@@ -1,10 +1,10 @@
 //! Function values, and the promise a function type makes.
 //!
-//! `Fn(Int) -> Int` says two things: this takes an `Int` and hands back an
-//! `Int`, and it performs no effects. The second is not decoration. There is no
-//! syntax for a row on a function type, and leaving one off cannot mean "any
-//! row": a value that carried an unstated effect through a signature would undo
-//! the point of having rows at all.
+//! `Fn(Int) -> Int` says three things: this takes an `Int`, hands back an
+//! `Int`, and performs nothing. The third is not decoration. Leaving a row off
+//! cannot mean "any row": a value that carried an unstated effect through a
+//! signature would undo the point of having rows at all. What a type with a
+//! row on it allows is in `function_rows.rs`.
 //!
 //! These run the whole pipeline, and they have to. Deciding which values have
 //! to keep the promise is a question about types and deciding whether they do
@@ -191,7 +191,10 @@ fn a_closure_that_performs_an_effect_cannot_cross() {
          }}\n"
     ));
     assert!(text.contains("VOW5007"), "{text}");
-    assert!(text.contains("a function type promises nothing"), "{text}");
+    assert!(
+        text.contains("a function type with no row promises nothing"),
+        "{text}"
+    );
 }
 
 #[test]
