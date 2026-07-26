@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-81 passed, 0 failed
+82 passed, 0 failed
 ```
 
 ```
@@ -274,6 +274,16 @@ signature. The capability: `Io.save` takes the `Dir` it writes into and there is
 construct one, and the name goes through the same check reading goes through, so `..`, an
 absolute path, a separator and a symlink pointing out are refused for writing exactly as they
 are for reading. Not a second implementation that agrees today.
+
+`Io.remove` is the case where a second kind of `Dir` was most tempting. Reading, listing and
+writing all leave what was there; deleting does not, and a program that writes the wrong
+bytes can be put back from what it overwrote while one that deletes the wrong file cannot be
+put back from anything. It got the same answer as writing did, and for the same reason:
+`uses Io.remove` cannot be reached from `uses Io.save`, holding a `Dir` says nothing about
+which of the four operations a function may do, and nothing new had to be built for it. That
+is three tests of the same claim now, and the third was the one meant to break it. `todo.vow`
+can say `clear`, and the function that does the deleting declares `uses Io.remove` and
+nothing else, so it cannot read the file it is about to delete.
 
 `proven.vow` is the one that argues with itself. Every function in it either proves its
 postcondition or explains, in a comment, why the checker cannot, and the file is written so

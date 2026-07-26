@@ -127,7 +127,7 @@ given and no string it could build that would get it back out.
 That holds because narrowing is the only operation. `Io.open` goes down, nothing goes up,
 and a `Dir` carries a canonical path the program can neither read nor compare.
 
-### Reading, writing and listing are different authorities over the same capability
+### Reading, writing, listing and deleting are different authorities over the same capability
 `Io.save(files, name, contents)` writes a file, and it takes the same `Dir` `Io.read` does.
 What separates them is not the type but the row: a function that declares `uses Io.read` and
 is handed `sys.files` cannot write to it, because performing an operation it did not declare
@@ -155,6 +155,25 @@ That is the split this document keeps claiming: the row says what kind of operat
 argument says which resource. It is also why there is no separate write capability type. A
 second type would say the same thing twice and would have to be threaded through every
 signature that already carries a `Dir`.
+
+`Io.remove(files, name)` is the fourth, and it is the one where a second type was most
+tempting. Reading, listing and writing all leave what was there. Deleting does not, and the
+difference is not one of degree: a program that writes the wrong bytes can be put back from
+what it overwrote, and one that deletes the wrong file cannot be put back from anything. So
+the obvious move is a `Dir` that may destroy and a `Dir` that may not.
+
+It is the same move that was rejected for writing, and it is rejected here for the same
+reason and with the same result: `uses Io.remove` cannot be reached from `uses Io.save`,
+holding a `Dir` says nothing about which of the four a function may do, and nothing new had
+to be built. That is three tests of the claim now, and the third was the one designed to
+break it.
+
+Files only, like listing. Removing a directory is a different operation with a different
+blast radius and nothing written here has wanted it. A name that is not there comes back as
+`err` rather than as a success, because "it was already gone" and "I removed it" are
+different answers and a program that cannot tell them apart has a bug waiting. It goes
+through the same name check as everything else, so a symlink pointing out of the directory is
+refused rather than followed out of it.
 
 By that argument `Io.save` and `Io.write` should be one name, since writing to a console and
 writing to a file are the same kind of operation on different resources. They are two names
@@ -206,11 +225,12 @@ argument about how much of the P2 budget capabilities get to spend.
 write is a function that did not declare `Io.save`, and that is a row rather than a type. It
 starts to matter the moment a row can be a wildcard, and `sys.*` already is one.
 
-Deleting a file and creating a directory are not there. Both are destructive in a way reading
-and listing are not, so they want their own argument about what a `Dir` means rather than
-being carried along with something else. Recursive listing is not there either, and does not
-need to be: it is a third amount of authority that a caller can build out of `Io.list` and
-`Io.open` if it declares both, which is the model working.
+Creating a directory is not there. It is not destructive and it is not the same question:
+what it hands back is a `Dir` that did not exist a moment ago, which is authority being made
+rather than narrowed, and that is the first thing in this document that would go the other
+way. Recursive listing is not there either, and does not need to be: it is a third amount of
+authority that a caller can build out of `Io.list` and `Io.open` if it declares both, which
+is the model working.
 
 `examples/journal.vow` is the file to argue with. It reads a journal, appends a line and
 saves it, and everything it is refused is refused in front of you.

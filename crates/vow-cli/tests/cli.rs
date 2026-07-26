@@ -741,6 +741,49 @@ fn a_position_that_is_not_there_says_so_and_writes_nothing() {
 }
 
 #[test]
+fn clearing_deletes_the_file_rather_than_emptying_it() {
+    // There is a large difference between a file holding nothing and a file
+    // that is not there, and only one of the two is what `clear` was asked
+    // for.
+    let scratch = Scratch::new("todo-clear");
+    scratch.write("todo.txt", "[x] one\n[ ] two\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let output = run(&["run", TODO, "--dir", &dir, "--", "clear"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("cleared"), "{text}");
+    assert!(text.contains("0 of 0 done"), "{text}");
+    assert!(
+        !scratch.path().join("todo.txt").exists(),
+        "the file is still there"
+    );
+}
+
+#[test]
+fn clear_with_anything_after_it_is_a_task() {
+    // A verb that swallowed whatever followed it would be the program deciding
+    // it knows better than what was typed.
+    let scratch = Scratch::new("todo-clear-task");
+    scratch.write("todo.txt", "[ ] two\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let output = run(&["run", TODO, "--dir", &dir, "--", "clear", "the", "shed"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    assert!(
+        stdout(&output).contains("added: clear the shed"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
+        "[ ] two\n[ ] clear the shed\n"
+    );
+}
+
+#[test]
 fn finishing_a_task_that_is_not_there_says_so_and_writes_nothing() {
     // Silently doing nothing is how somebody finds out a week later that they
     // misspelled it.
