@@ -1368,6 +1368,7 @@ impl<'a> Checker<'a> {
         let (def_of, call) = self.env();
         let env = facts::Env {
             def_of: &def_of,
+            length: self.resolutions.builtin("length"),
             call: &call,
         };
         facts::narrowed(condition, base, &env, when_true)
@@ -1377,6 +1378,7 @@ impl<'a> Checker<'a> {
         let (def_of, call) = self.env();
         let env = facts::Env {
             def_of: &def_of,
+            length: self.resolutions.builtin("length"),
             call: &call,
         };
         facts::range_of(expr, &self.facts, &env)
@@ -1387,6 +1389,7 @@ impl<'a> Checker<'a> {
         let (def_of, call) = self.env();
         let env = facts::Env {
             def_of: &def_of,
+            length: self.resolutions.builtin("length"),
             call: &call,
         };
         facts::ok_range_of(expr, &self.facts, &env)
@@ -1397,6 +1400,7 @@ impl<'a> Checker<'a> {
         let (def_of, call) = self.env();
         let env = facts::Env {
             def_of: &def_of,
+            length: self.resolutions.builtin("length"),
             call: &call,
         };
         facts::overflowing(expr, &self.facts, &env)
@@ -1415,6 +1419,7 @@ impl<'a> Checker<'a> {
         let (def_of, call) = self.env();
         let env = facts::Env {
             def_of: &def_of,
+            length: self.resolutions.builtin("length"),
             call: &call,
         };
         facts::holds(predicate, &with_subject, &env)

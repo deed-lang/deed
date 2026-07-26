@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-79 passed, 0 failed
+80 passed, 0 failed
 ```
 
 ```
@@ -272,6 +272,22 @@ ceremony around it. It now reasons about intervals, about the difference between
 and about what a callee promised: a `where` clause, a refined parameter type, an `if`
 condition, a guard that returns, `low < high`, and `ensures ok => result == n` at a call site
 are all facts the rest of the body can use.
+
+How long something is is one of them now. `length(items)` used to come back as a range and
+nothing else, which meant it could not be one side of a difference, so `index < length(items)`
+was invisible to the machinery that existed for `low < high`. A length is a term keyed on the
+thing being measured, and the rest falls out of the two rules that were already there: the
+default is zero and up, because there is no list with fewer than no things in it, and past
+`if length(items) <= 0 { return err(..) }` one less than the length is an index that is really
+there. Two lists are two terms, and `length(f(items))` is not a term at all, since two calls
+could hand back two different lists.
+
+That was prompted by `todo.vow`, which marks a task by position now and cannot say no to
+`done 9` before running. It does not finish the job: `at` still returns a `Result` whatever is
+known about its index, and a `where` clause is a runtime check on the callee rather than an
+obligation on the caller, so the bound can be proved and nothing at the boundary is any
+cheaper for it. Preconditions being provable at a call site is a bigger change than a term,
+and it is the one that would close this.
 
 It also used to refuse `n + 1` on a `Positive`, and this paragraph used to say that was the
 reasoning working. It was not. Overflow is an error rather than a wrap, so `n + 1` either

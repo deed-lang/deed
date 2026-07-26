@@ -270,6 +270,25 @@ impl Truth {
     }
 }
 
+/// A thing a fact can be about.
+///
+/// A name is the obvious one and was the only one for a while. A length is the
+/// other, and it is here because `index < length(items)` is a relation between
+/// two quantities and the machinery that holds `low < high` could not see it.
+/// A call came back as a range, and a range cannot be one side of a difference.
+///
+/// `Length` carries the definition of the thing being measured rather than a
+/// definition of its own, so `length(items)` written twice is one term. Nothing
+/// else in this module knows the difference between the two: [`Linear`], the
+/// differences and [`Facts::settle`] all work on keys.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Term {
+    /// An integer-valued name.
+    Name(DefId),
+    /// How many things are in the list or string that name refers to.
+    Length(DefId),
+}
+
 /// Ranges for the names in scope, and for the differences between them.
 ///
 /// Keyed by definition, which resolution already made unique, so a shadowed
@@ -278,7 +297,7 @@ impl Truth {
 /// something that could change.
 #[derive(Clone, Debug, Default)]
 pub struct Facts {
-    known: HashMap<DefId, Range>,
+    known: HashMap<Term, Range>,
     /// The range of `a - b`, for the pair `(a, b)`.
     ///
     /// Both orders are stored. Reading a difference the wrong way round means
@@ -286,7 +305,7 @@ pub struct Facts {
     /// the honest answer in that case is that nothing is known. Recording both
     /// orders keeps that answer where it belongs, on the order that could not
     /// be worked out, instead of on every lookup.
-    differences: HashMap<(DefId, DefId), Range>,
+    differences: HashMap<(Term, Term), Range>,
     /// The range `value` stands for, while a refinement predicate is being
     /// evaluated. `value` has no definition of its own.
     subject: Option<Range>,
@@ -304,31 +323,42 @@ impl Facts {
         Self::default()
     }
 
-    pub fn get(&self, def: DefId) -> Range {
-        self.known.get(&def).copied().unwrap_or(Range::ANY)
+    /// What is known about a term.
+    ///
+    /// The default is where "a length is not negative" lives. It is not a fact
+    /// anybody states and not one a call has to hand back: there is no list
+    /// with fewer than no things in it, so the domain says so and every
+    /// length starts from there.
+    pub fn get(&self, term: Term) -> Range {
+        self.known.get(&term).copied().unwrap_or(match term {
+            Term::Name(_) => Range::ANY,
+            Term::Length(_) => Range::between(0, i64::MAX),
+        })
     }
 
     /// Replaces what is known about `def`.
     ///
-    /// Any difference involving `def` goes with it. This is what a binding
-    /// does, and a fact about the old meaning of a name is not a fact about the
-    /// new one.
+    /// Any difference involving `def` goes with it, and so does anything known
+    /// about its length. This is what a binding does, and a fact about the old
+    /// meaning of a name is not a fact about the new one.
     pub fn set(&mut self, def: DefId, range: Range) {
-        self.differences
-            .retain(|(left, right), _| *left != def && *right != def);
-        self.known.insert(def, range);
+        self.forget(def);
+        self.known.insert(Term::Name(def), range);
         self.settle();
     }
 
-    /// Narrows what is known about `def`, keeping anything already known.
-    pub fn narrow(&mut self, def: DefId, range: Range) {
-        if self.tighten(def, range) {
-            self.settle();
-        }
+    /// Drops everything known about a definition, under either reading.
+    pub fn forget(&mut self, def: DefId) {
+        let gone = |term: &Term| match term {
+            Term::Name(other) | Term::Length(other) => *other == def,
+        };
+        self.known.retain(|term, _| !gone(term));
+        self.differences
+            .retain(|(left, right), _| !gone(left) && !gone(right));
     }
 
     /// The range of `a - b`.
-    pub fn difference(&self, a: DefId, b: DefId) -> Range {
+    pub fn difference(&self, a: Term, b: Term) -> Range {
         if a == b {
             return Range::exactly(0);
         }
@@ -336,23 +366,30 @@ impl Facts {
     }
 
     /// Narrows what is known about `a - b`, keeping anything already known.
-    pub fn narrow_difference(&mut self, a: DefId, b: DefId, range: Range) {
+    pub fn narrow_difference(&mut self, a: Term, b: Term, range: Range) {
         if self.tighten_difference(a, b, range) {
             self.settle();
         }
     }
 
-    fn tighten(&mut self, def: DefId, range: Range) -> bool {
-        let current = self.get(def);
+    /// Narrows what is known about a term, keeping anything already known.
+    pub fn narrow(&mut self, term: Term, range: Range) {
+        if self.tighten(term, range) {
+            self.settle();
+        }
+    }
+
+    fn tighten(&mut self, term: Term, range: Range) -> bool {
+        let current = self.get(term);
         let narrowed = current.meet(range);
         if narrowed == current {
             return false;
         }
-        self.known.insert(def, narrowed);
+        self.known.insert(term, narrowed);
         true
     }
 
-    fn tighten_difference(&mut self, a: DefId, b: DefId, range: Range) -> bool {
+    fn tighten_difference(&mut self, a: Term, b: Term, range: Range) -> bool {
         if a == b {
             return false;
         }
@@ -388,7 +425,7 @@ impl Facts {
     }
 
     fn settle_once(&mut self) -> bool {
-        let entries: Vec<((DefId, DefId), Range)> =
+        let entries: Vec<((Term, Term), Range)> =
             self.differences.iter().map(|(k, v)| (*k, *v)).collect();
         let mut changed = false;
 
@@ -615,6 +652,7 @@ pub fn promised_by(condition: &Expr, subject: &str, names: &[&str]) -> Guarantee
     };
     let env = Env {
         def_of: &def_of,
+        length: None,
         call: &|_| Promise::any(),
     };
 
@@ -625,7 +663,7 @@ pub fn promised_by(condition: &Expr, subject: &str, names: &[&str]) -> Guarantee
     collect_scaled(condition, &facts, &env, result, &params, &mut offsets, true);
 
     Guarantee {
-        range: facts.get(result),
+        range: facts.get(Term::Name(result)),
         offsets,
     }
 }
@@ -708,11 +746,17 @@ fn scaled_from(
     let mut terms = form.terms.clone();
     // One `result`, no more and no less. Two of it is a shape with nowhere to
     // go, and none of it is a clause about something else.
-    if terms.remove(&subject) != Some(1) {
+    if terms.remove(&Term::Name(subject)) != Some(1) {
         return;
     }
 
-    let [(def, count)] = terms.into_iter().collect::<Vec<_>>()[..] else {
+    let [(term, count)] = terms.into_iter().collect::<Vec<_>>()[..] else {
+        return;
+    };
+    let Term::Name(def) = term else {
+        // A promise about how long one of the arguments is. There is nowhere
+        // in a `Guarantee` to put that: what crosses a call is a range and a
+        // difference per argument, and a length is neither of those.
         return;
     };
     let Some(factor) = count.checked_neg() else {
@@ -736,6 +780,12 @@ fn scaled_from(
 pub struct Env<'a> {
     /// The definition an identifier refers to.
     pub def_of: &'a dyn Fn(&Expr) -> Option<DefId>,
+    /// The `length` the language provides, when it is in scope.
+    ///
+    /// A definition rather than a spelling, because a name is only that
+    /// builtin if it resolves to it and a module is free to declare a `length`
+    /// of its own.
+    pub length: Option<DefId>,
     /// What a call to this callee promises, from its declared return type and
     /// its `ensures` clause. Whoever answers this is responsible for only
     /// answering for contracts that are themselves checked, since a promise
@@ -748,15 +798,30 @@ impl Env<'_> {
     pub fn blind() -> Env<'static> {
         Env {
             def_of: &|_| None,
+            length: None,
             call: &|_| Promise::any(),
         }
     }
 }
 
-/// Whether an expression is a name a fact can be attached to.
-fn def_of(expr: &Expr, env: &Env<'_>) -> Option<DefId> {
+/// Whether an expression is something a fact can be attached to.
+///
+/// Two shapes. A name, which is the obvious one, and `length(x)` where `x` is
+/// a name, which is the one that makes an index and a bound comparable. Only a
+/// name inside the call: `length(f(xs))` names nothing that stays put, and a
+/// term that could mean two things across two calls is worse than no term.
+fn term_of(expr: &Expr, env: &Env<'_>) -> Option<Term> {
     match expr {
-        Expr::Ident(_) => (env.def_of)(expr),
+        Expr::Ident(_) => (env.def_of)(expr).map(Term::Name),
+        Expr::Call { callee, args, .. } if args.len() == 1 => {
+            if (env.def_of)(callee) != env.length || env.length.is_none() {
+                return None;
+            }
+            match &args[0] {
+                Expr::Ident(_) => (env.def_of)(&args[0]).map(Term::Length),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -768,8 +833,8 @@ fn def_of(expr: &Expr, env: &Env<'_>) -> Option<DefId> {
 /// the interval reasoning answers it as it always did.
 #[derive(Clone, Debug)]
 struct Linear {
-    /// How many of each name, with a zero coefficient dropped rather than kept.
-    terms: BTreeMap<DefId, i64>,
+    /// How many of each term, with a zero coefficient dropped rather than kept.
+    terms: BTreeMap<Term, i64>,
     offset: Range,
 }
 
@@ -781,9 +846,9 @@ impl Linear {
         }
     }
 
-    fn name(def: DefId) -> Linear {
+    fn name(term: Term) -> Linear {
         Linear {
-            terms: BTreeMap::from([(def, 1)]),
+            terms: BTreeMap::from([(term, 1)]),
             offset: Range::exactly(0),
         }
     }
@@ -843,13 +908,13 @@ impl Linear {
     }
 
     /// The pair this is the difference of, when it is the difference of a pair.
-    fn pair(&self) -> Option<(DefId, DefId)> {
+    fn pair(&self) -> Option<(Term, Term)> {
         let mut positive = None;
         let mut negative = None;
-        for (def, count) in &self.terms {
+        for (term, count) in &self.terms {
             match count {
-                1 if positive.is_none() => positive = Some(*def),
-                -1 if negative.is_none() => negative = Some(*def),
+                1 if positive.is_none() => positive = Some(*term),
+                -1 if negative.is_none() => negative = Some(*term),
                 _ => return None,
             }
         }
@@ -857,9 +922,9 @@ impl Linear {
     }
 
     /// The one name in this, and how many of it, when there is exactly one.
-    fn scaled_name(&self) -> Option<(DefId, i64)> {
+    fn scaled_name(&self) -> Option<(Term, i64)> {
         match self.terms.iter().next() {
-            Some((def, count)) if self.terms.len() == 1 => Some((*def, *count)),
+            Some((term, count)) if self.terms.len() == 1 => Some((*term, *count)),
             _ => None,
         }
     }
@@ -873,8 +938,15 @@ fn linear(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Linear {
         Expr::Ident(ident) if ident.name == "value" => {
             Linear::constant(facts.subject.unwrap_or(Range::ANY))
         }
-        Expr::Ident(_) => match def_of(expr, env) {
-            Some(def) => Linear::name(def),
+        Expr::Ident(_) => match term_of(expr, env) {
+            Some(term) => Linear::name(term),
+            None => Linear::constant(interval_of(expr, facts, env)),
+        },
+        // `length(items)` is a quantity with a name, so it can be one side of
+        // a difference. Anything else that is called is whatever its contract
+        // says and stays a range.
+        Expr::Call { .. } => match term_of(expr, env) {
+            Some(term) => Linear::name(term),
             None => Linear::constant(interval_of(expr, facts, env)),
         },
         Expr::Unary {
@@ -1033,14 +1105,24 @@ fn interval_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
     match expr {
         Expr::Int { value, .. } => Range::exactly(*value),
         Expr::Ident(ident) if ident.name == "value" => facts.subject.unwrap_or(Range::ANY),
-        Expr::Ident(_) => match def_of(expr, env) {
-            Some(def) => facts.get(def),
+        Expr::Ident(_) => match term_of(expr, env) {
+            Some(term) => facts.get(term),
             None => Range::ANY,
         },
         // The contract of whatever is being called. This is the one place the
         // reasoning leaves the function it is looking at, and it is why a
         // proof inside one function is worth anything to its callers.
-        Expr::Call { callee, args, .. } => (env.call)(callee).value.applied(args, facts, env),
+        //
+        // A `length` is both: it has a contract like any other call and it is
+        // a term the body may have narrowed, so the two are met rather than
+        // one of them winning.
+        Expr::Call { callee, args, .. } => {
+            let promised = (env.call)(callee).value.applied(args, facts, env);
+            match term_of(expr, env) {
+                Some(term) => promised.meet(facts.get(term)),
+                None => promised,
+            }
+        }
         // `f()?` is the number inside the `ok`, which is what the promise on a
         // fallible function was about all along.
         Expr::Try { operand, .. } => ok_range_of(operand, facts, env),
@@ -1264,17 +1346,17 @@ fn narrow_relation(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, e
 /// of the comparison.
 fn narrow_scaled(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
     let form = linear(left, facts, env).add(linear(right, facts, env).negate());
-    let Some((def, count)) = form.scaled_name() else {
+    let Some((term, count)) = form.scaled_name() else {
         return;
     };
-    // The constraint is `(count * def) + offset op 0`.
+    // The constraint is `(count * term) + offset op 0`.
     let Some(bound) = bound_from(op, form.offset) else {
         return;
     };
     let Some(narrowed) = divided(bound, count) else {
         return;
     };
-    facts.narrow(def, narrowed);
+    facts.narrow(term, narrowed);
 }
 
 /// The range of `d`, given the range of `count * d`.
@@ -1326,7 +1408,7 @@ fn round_up(value: i64, by: i64) -> Option<i64> {
 
 /// Narrows the left side of `left op right`.
 fn narrow_side(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
-    let Some(def) = def_of(left, env) else {
+    let Some(term) = term_of(left, env) else {
         return;
     };
     let Some((low, high)) = range_of(right, facts, env).bounds() else {
@@ -1351,7 +1433,7 @@ fn narrow_side(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: 
         _ => return,
     };
 
-    facts.narrow(def, narrowed);
+    facts.narrow(term, narrowed);
 }
 
 fn negated(op: BinaryOp) -> Option<BinaryOp> {
@@ -1476,6 +1558,11 @@ fn narrow_subject(
 mod tests {
     use super::*;
 
+    /// An integer-valued name, for the tests that only need a key.
+    fn name(raw: u32) -> Term {
+        Term::Name(DefId::from_raw(raw))
+    }
+
     #[test]
     fn narrowing_keeps_the_tighter_bound() {
         let wide = Range::between(0, 100);
@@ -1555,7 +1642,7 @@ mod tests {
 
     #[test]
     fn two_differences_that_share_a_name_make_a_third() {
-        let (a, b, c) = (DefId::from_raw(0), DefId::from_raw(1), DefId::from_raw(2));
+        let (a, b, c) = (name(0), name(1), name(2));
         let mut facts = Facts::new();
         facts.narrow_difference(a, b, Range::between(i64::MIN, -1));
         facts.narrow_difference(b, c, Range::between(i64::MIN, -1));
@@ -1567,7 +1654,7 @@ mod tests {
 
     #[test]
     fn a_difference_carries_a_bound_from_one_name_to_the_other() {
-        let (n, limit) = (DefId::from_raw(0), DefId::from_raw(1));
+        let (n, limit) = (name(0), name(1));
         let mut facts = Facts::new();
         facts.narrow_difference(n, limit, Range::between(i64::MIN, -1));
 
@@ -1580,16 +1667,55 @@ mod tests {
 
     #[test]
     fn a_binding_does_not_inherit_the_differences_of_the_name_it_replaces() {
-        let (a, b) = (DefId::from_raw(0), DefId::from_raw(1));
+        let (a, b) = (name(0), name(1));
         let mut facts = Facts::new();
         facts.narrow_difference(a, b, Range::between(i64::MIN, -1));
-        facts.set(a, Range::ANY);
+        facts.set(DefId::from_raw(0), Range::ANY);
         assert_eq!(facts.difference(a, b), Range::ANY);
     }
 
     #[test]
+    fn a_length_is_not_negative_without_anybody_saying_so() {
+        // The default is the fact. A list with fewer than no things in it does
+        // not exist, so nothing has to state it and no call has to hand it
+        // back for the domain to know.
+        let facts = Facts::new();
+        assert_eq!(
+            facts.get(Term::Length(DefId::from_raw(0))),
+            Range::between(0, i64::MAX)
+        );
+        assert_eq!(facts.get(name(0)), Range::ANY);
+    }
+
+    #[test]
+    fn an_index_below_a_length_is_a_difference_like_any_other() {
+        // The point of a length being a term. `index < length(items)` is the
+        // same shape as `low < high`, and the machinery that already held one
+        // holds the other with no new arithmetic behind it.
+        let index = name(0);
+        let length = Term::Length(DefId::from_raw(1));
+        let mut facts = Facts::new();
+        facts.narrow_difference(index, length, Range::between(i64::MIN, -1));
+        facts.narrow(length, Range::between(0, 3));
+
+        let (_, highest) = facts.get(index).bounds().expect("not empty");
+        assert_eq!(highest, 2);
+    }
+
+    #[test]
+    fn a_binding_forgets_how_long_the_old_value_was() {
+        // `set` is what a binding does, and a length recorded against the name
+        // it replaces is a fact about something that is no longer there.
+        let def = DefId::from_raw(0);
+        let mut facts = Facts::new();
+        facts.narrow(Term::Length(def), Range::exactly(3));
+        facts.set(def, Range::ANY);
+        assert_eq!(facts.get(Term::Length(def)), Range::between(0, i64::MAX));
+    }
+
+    #[test]
     fn joining_two_branches_keeps_only_the_differences_both_agree_on() {
-        let (a, b) = (DefId::from_raw(0), DefId::from_raw(1));
+        let (a, b) = (name(0), name(1));
         let mut left = Facts::new();
         left.narrow_difference(a, b, Range::between(-10, -1));
         let mut right = Facts::new();
