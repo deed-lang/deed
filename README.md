@@ -331,7 +331,7 @@ looked at it from where the call was written, so `halve(0 - 5)` against `where n
 the checker in silence. The design doc had described the call-site check for months. Now a
 call that plainly breaks a clause is an error where the call is, a caller that can show the
 clause holds is `Proven`, and a caller that cannot is `Guarded` with the runtime check still
-standing. `proven.vow` went from four proven obligations to forty-three that way, and most
+standing. `proven.vow` went from four proven obligations to forty-five that way, and most
 of them are calls rather than values.
 
 What crosses into a clause is the caller's facts said in the callee's parameter names: each
@@ -351,6 +351,15 @@ it was given when it has one. The name is the strongest of the three, since it i
 the body has been narrowing all along. The length covers the case with no name to give, so
 `""` where a non-empty string is wanted is refused outright instead of being left to a check
 at runtime, and a string written on the spot proves the refinement it is being passed into.
+
+The same thing was missing from both of the other directions, which is what a gap like that
+usually turns out to mean. A parameter already of a refined type is a fact without a `where`
+clause repeating it in prose, and that held for what the value is worth and not for how long
+it is, so a `NonEmptyList` knew nothing about its own length inside the body that declared it.
+And narrowing into a refinement asked for the base type exactly rather than asking the
+question the base type would have been asked, so `first_of([])` came back as "expected
+`NonEmptyList`, found `List<_>`". The empty list fits a `List<Int>` perfectly well. What is
+wrong with it is the predicate, and that is what it says now.
 
 That also answered a question the design doc had listed as open. A refinement has no
 conversion form, and it turns out not to need one: `try_positive(n)` returning a `Result` is

@@ -393,6 +393,18 @@ impl Facts {
         self.settle();
     }
 
+    /// Records what is known about one term, leaving the rest alone.
+    ///
+    /// Unlike [`Facts::set`], which is what a binding does and forgets
+    /// everything about the old meaning of the name. This is for saying a
+    /// second thing about something already in scope, such as how long a
+    /// parameter whose type is refined over its length has to be.
+    pub fn note(&mut self, term: Term, range: Range) {
+        let current = self.get(term);
+        self.known.insert(term, current.meet(range));
+        self.settle();
+    }
+
     /// Drops everything known about a definition, under either reading.
     pub fn forget(&mut self, def: DefId) {
         let gone = |term: &Term| match term {
@@ -1586,7 +1598,19 @@ fn flipped(op: BinaryOp) -> Option<BinaryOp> {
 /// This is what turns a parameter already of a refined type into a fact,
 /// without anyone writing a `where` clause saying the same thing again.
 pub fn range_admitted_by(predicate: &Expr) -> Range {
-    range_of_subject(predicate, "value")
+    admitted_by(predicate, &Env::blind()).range
+}
+
+/// Everything a refinement predicate admits about the thing it describes.
+///
+/// The range and the length, because `length(value) > 0` is as much a fact
+/// about a parameter as `value > 0` is, and it belongs on the entry everything
+/// else reads rather than nowhere. Needs a real [`Env`] to recognise `length`,
+/// since a name is only that builtin if it resolves to it.
+pub fn admitted_by(predicate: &Expr, env: &Env<'_>) -> Subject {
+    let mut narrowed = Facts::new();
+    apply_subject_narrowing(predicate, &mut narrowed, env, "value", true);
+    narrowed.subject.unwrap_or(Subject::of(Range::ANY))
 }
 
 /// The range a condition pins its subject to, reading nothing else.
@@ -1642,6 +1666,13 @@ fn apply_subject_narrowing(
     }
 }
 
+/// Which half of the subject a comparison is about.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum About {
+    Value,
+    Length,
+}
+
 fn narrow_subject(
     op: BinaryOp,
     left: &Expr,
@@ -1650,9 +1681,16 @@ fn narrow_subject(
     env: &Env<'_>,
     subject: &str,
 ) {
-    if !matches!(left, Expr::Ident(ident) if ident.name == subject) {
-        return;
-    }
+    let names_subject = |expr: &Expr| matches!(expr, Expr::Ident(ident) if ident.name == subject);
+    let about = match left {
+        _ if names_subject(left) => About::Value,
+        Expr::Call { callee, args, .. }
+            if is_length_call(callee, args, env) && names_subject(&args[0]) =>
+        {
+            About::Length
+        }
+        _ => return,
+    };
     let Some((low, high)) = range_of(right, facts, env).bounds() else {
         return;
     };
@@ -1673,9 +1711,15 @@ fn narrow_subject(
     };
 
     let current = facts.subject.unwrap_or(Subject::of(Range::ANY));
-    facts.subject = Some(Subject {
-        range: current.range.meet(narrowed),
-        ..current
+    facts.subject = Some(match about {
+        About::Value => Subject {
+            range: current.range.meet(narrowed),
+            ..current
+        },
+        About::Length => Subject {
+            length: current.length.meet(narrowed),
+            ..current
+        },
     });
 }
 
