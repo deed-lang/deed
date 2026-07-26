@@ -114,3 +114,11 @@ pub const UNDETERMINED_TYPE_PARAM: &str = "VOW4023";
 /// is a polymorphic value, which is a much larger thing than substituting into
 /// a signature at a call site.
 pub const GENERIC_AS_VALUE: &str = "VOW4024";
+
+/// A call the checker can see does not satisfy what the callee requires.
+///
+/// A precondition is the caller's job, so it is reported where the call was
+/// written rather than inside the function that stated it. Only when the facts
+/// at the call site settle the clause the wrong way; not knowing is the
+/// ordinary case and leaves the runtime check to answer.
+pub const BROKEN_PRECONDITION: &str = "VOW4025";

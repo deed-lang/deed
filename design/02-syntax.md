@@ -285,9 +285,40 @@ fn transfer(from: AccountId, to: AccountId, amount: Money)
 
 ### `where`, preconditions
 
-What the caller must guarantee. Checked at the call site when it can be proven statically,
-and compiled into a check at the boundary when it cannot. A precondition failure is a bug
-in the caller, and it is reported that way.
+What the caller must guarantee. Read at the call site with the facts in scope there, and
+checked at the boundary on every call whatever the reading found. A precondition failure is a
+bug in the caller, and it is reported that way: a call the checker can see breaks the clause
+is `VOW4025` where the call was written, not a runtime failure inside a function the author
+of the call did not write.
+
+For a long time this section described a check that did not exist. A `where` clause was two
+things, a fact for the callee's body and a check inside the callee at runtime, and nothing
+ever looked at it from where the call was. So `halve(0 - 5)` against `where n >= 0` passed in
+silence and failed when it ran.
+
+What crosses into a clause is the caller's facts said in the callee's parameter names: the
+range of each argument, how long each one is, and the differences between them where the
+arguments are things a fact can be about. That last part is what settles a clause relating
+two arguments, which is most of what a `where` clause is for:
+
+```vow
+fn nth(items: List<Int>, index: Int) -> Result<Int, String>
+  where
+    index >= 0,
+    index < length(items),
+{
+    at(items, index)
+}
+```
+
+A caller that checked the length first proves both clauses. A caller that did not is
+`Guarded`, which is the ordinary case and not a mistake. A caller passing `0 - 1` is refused.
+
+The runtime check stays either way, for the same reason an `ensures` clause is evaluated on
+every call whatever tier it landed in: the tier says how much was settled ahead of time, not
+whether the check happens. And a predicate does not cross a module boundary, the same as a
+refinement's does not, so a caller in another file answers for a precondition at runtime and
+the checker says nothing about it in either direction.
 
 ### `uses`, the effect row
 
@@ -995,14 +1026,15 @@ using an effect to get around not having a loop.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
   `Option` already is. What holds `List` in place is `[1, 2, 3]`, which is a literal with
   syntax of its own, so moving it out means deciding what that literal builds.
-- An index into a list has nowhere to say it is in range, and half of that is now fixed. A
+- An index into a list has nowhere to say it is in range, and most of that is now fixed. A
   length is a term the prover can hold, so `index < length(items)` is a relation like any
-  other and a `where` clause can say it. What is still missing is something that consumes it:
-  `at` returns a `Result` whatever is known about its index, and a `where` clause is a runtime
-  check on the callee rather than an obligation on the caller, so proving the bound saves
-  nothing at the boundary it was proved for. A precondition that could be discharged at a call
-  site is a bigger change than a term, and it is the one that would make `examples/todo.vow`
-  able to say no to `done 9` in the type system rather than after the fact.
+  other, and a `where` clause saying it is read at the call site, so a caller that checked the
+  length proves it and a caller passing something plainly out of range is refused. What is
+  still missing is a way to spend the proof: `at` returns a `Result` whatever is known about
+  its index, so the caller that proved the bound still writes a `match` for a failure that
+  cannot happen. A total indexing form is a precondition on a prelude function, which is a
+  thing the language can now express, and whether the prelude should carry one is the
+  question.
 - Position is not something a callback can be handed. `map` and `filter` give the callback an
   element, so the moment where an element is matters the walk goes back to a counter in a
   record. There are three of those in `examples/todo.vow` and they are the same three lines

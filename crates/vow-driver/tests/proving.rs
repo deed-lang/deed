@@ -748,6 +748,211 @@ fn an_or_says_nothing_about_either_side() {
     );
 }
 
+// -- what a caller has to answer for ---------------------------------------
+//
+// `design/02-syntax.md` has always said a precondition is checked at the call
+// site when it can be proven there. It was not. A `where` clause was a fact for
+// the callee's body and a check inside the callee at runtime, and nothing ever
+// looked at it from where the call was written, so a call that plainly broke
+// the contract passed the checker in silence.
+//
+// The runtime check stays whatever happens here, the same way an `ensures`
+// clause runs on every call whatever tier it landed in.
+
+/// A function nobody may call with a negative number.
+const HALVE: &str = "fn halve(n: Int) -> Int\n\
+     \x20 where\n\
+     \x20   n >= 0,\n\
+     {\n\
+     \x20 n\n\
+     }\n\n";
+
+/// The tiers of every precondition in `body`, in order.
+fn preconditions(body: &str) -> (Vec<Tier>, SourceMap, Checked) {
+    let (sources, checked) = check(body);
+    let tiers = checked
+        .obligations
+        .iter()
+        .filter(|obligation| obligation.subject.ends_with(" requires"))
+        .map(|obligation| obligation.tier)
+        .collect();
+    (tiers, sources, checked)
+}
+
+#[test]
+fn a_call_that_plainly_breaks_a_precondition_is_refused() {
+    let (_, sources, checked) =
+        preconditions(&format!("{HALVE}fn caller() -> Int {{ halve(0 - 5) }}\n"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(checked.has_errors(), "this should not have been accepted");
+    assert!(text.contains("VOW4025"), "{text}");
+    assert!(
+        text.contains("does not satisfy what `halve` requires"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_caller_that_can_show_it_holds_proves_it() {
+    let (tiers, sources, checked) = preconditions(&format!(
+        "{HALVE}fn caller(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n > 3,\n\
+         {{\n\
+         \x20 halve(n)\n\
+         }}\n"
+    ));
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(tiers, vec![Tier::Proven]);
+}
+
+#[test]
+fn a_guard_that_leaves_proves_the_call_after_it() {
+    let (tiers, _, _) = preconditions(&format!(
+        "{HALVE}fn caller(n: Int) -> Int {{\n\
+         \x20 if n < 0 {{\n\
+         \x20   return 0\n\
+         \x20 }}\n\
+         \x20 halve(n)\n\
+         }}\n"
+    ));
+    assert_eq!(tiers, vec![Tier::Proven]);
+}
+
+#[test]
+fn a_caller_that_knows_nothing_leaves_it_to_the_runtime() {
+    // Not knowing is the ordinary case and is not a mistake. The check inside
+    // the callee is still there, so this is a tier and not a hole.
+    let (tiers, sources, checked) =
+        preconditions(&format!("{HALVE}fn caller(n: Int) -> Int {{ halve(n) }}\n"));
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(tiers, vec![Tier::Guarded]);
+}
+
+#[test]
+fn a_precondition_about_two_arguments_reads_the_pair() {
+    // The clause is about `low` and `high` together, so what has to cross into
+    // it is the difference between the two arguments and not a bound on
+    // either.
+    let (tiers, _, _) = preconditions(
+        "fn between(low: Int, high: Int) -> Int\n\
+         \x20 where\n\
+         \x20   low < high,\n\
+         {\n\
+         \x20 high - low\n\
+         }\n\n\
+         fn caller(a: Int, b: Int) -> Int\n\
+         \x20 where\n\
+         \x20   a < b,\n\
+         {\n\
+         \x20 between(a, b)\n\
+         }\n",
+    );
+    assert_eq!(tiers, vec![Tier::Proven]);
+}
+
+#[test]
+fn a_precondition_about_a_length_is_settled_by_a_caller_that_checked_it() {
+    // What #142 was for. The clause names a length, the caller checked one,
+    // and the two meet because a length is a term on both sides.
+    let (tiers, _, _) = preconditions(
+        "fn nth(items: List<Int>, index: Int) -> Result<Int, String>\n\
+         \x20 where\n\
+         \x20   index >= 0,\n\
+         \x20   index < length(items),\n\
+         {\n\
+         \x20 at(items, index)\n\
+         }\n\n\
+         fn head(items: List<Int>) -> Result<Int, String> {\n\
+         \x20 if length(items) <= 0 {\n\
+         \x20   return err(\"empty\")\n\
+         \x20 }\n\
+         \x20 nth(items, 0)\n\
+         }\n",
+    );
+    assert_eq!(tiers, vec![Tier::Proven, Tier::Proven]);
+}
+
+#[test]
+fn a_list_written_on_the_spot_knows_how_long_it_is() {
+    let (tiers, _, _) = preconditions(
+        "fn nth(items: List<Int>, index: Int) -> Result<Int, String>\n\
+         \x20 where\n\
+         \x20   index >= 0,\n\
+         \x20   index < length(items),\n\
+         {\n\
+         \x20 at(items, index)\n\
+         }\n\n\
+         fn second() -> Result<Int, String> { nth([1, 2, 3], 1) }\n",
+    );
+    assert_eq!(tiers, vec![Tier::Proven, Tier::Proven]);
+}
+
+#[test]
+fn an_index_off_the_end_of_a_list_written_on_the_spot_is_refused() {
+    let (_, sources, checked) = preconditions(
+        "fn nth(items: List<Int>, index: Int) -> Result<Int, String>\n\
+         \x20 where\n\
+         \x20   index >= 0,\n\
+         \x20   index < length(items),\n\
+         {\n\
+         \x20 at(items, index)\n\
+         }\n\n\
+         fn fourth() -> Result<Int, String> { nth([1, 2, 3], 3) }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(checked.has_errors(), "this should not have been accepted");
+    assert!(text.contains("VOW4025"), "{text}");
+}
+
+#[test]
+fn a_precondition_does_not_cross_a_module_boundary() {
+    // A predicate stays inside the module that wrote it, the same as a
+    // refinement's does. What crosses is bounds, and there is nowhere in them
+    // to put a clause about an argument, so a caller in another file answers
+    // for this at runtime and the checker says nothing either way.
+    let mut sources = SourceMap::new();
+    let ids: Vec<_> = [
+        "module app\n\n\
+         use lib.{halve}\n\n\
+         fn caller() -> Int { halve(0 - 5) }\n",
+        "module lib\n\n\
+         fn halve(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n >= 0,\n\
+         {\n\
+         \x20 n\n\
+         }\n",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, text)| sources.add(format!("file{index}.vow"), *text))
+    .collect();
+    let mut checks = vow_driver::check_all(&sources, &ids);
+    let checked = checks.remove(0);
+
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert!(
+        checked
+            .obligations
+            .iter()
+            .all(|obligation| !obligation.subject.ends_with(" requires")),
+        "a precondition from another module should not be reported as settled"
+    );
+}
+
 // -- why a proof failed ----------------------------------------------------
 
 #[test]
@@ -926,8 +1131,8 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Twenty-three proven and two guarded, and the file explains both. If
+    // Thirty-seven proven and two guarded, and the file explains both. If
     // either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 23);
+    assert_eq!(checked.obligations_at(Tier::Proven), 37);
     assert_eq!(checked.obligations_at(Tier::Guarded), 2);
 }

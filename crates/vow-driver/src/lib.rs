@@ -358,6 +358,17 @@ fn check_parsed(
         })
         .collect();
 
+    // What a caller answered for. A `where` clause is checked inside the
+    // callee on every call whatever happens here, so the floor is `Guarded`
+    // and `Proven` means the call site settled it as well.
+    for precondition in checked.types.preconditions() {
+        obligations.push(ObligationReport {
+            tier: precondition.tier,
+            span: precondition.span,
+            subject: format!("{} requires", precondition.callee),
+        });
+    }
+
     // Contract obligations. Every `ensures` clause is checked at runtime on
     // every call, so the floor is `Guarded`. A pure function whose parameters
     // can be generated gets exercised by a property test as well, which is the

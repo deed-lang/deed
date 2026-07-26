@@ -27,7 +27,9 @@ use vow_resolve::{DefId, DefKind, Resolutions, RowLowering};
 use crate::codes;
 use crate::facts::{self, Facts, Guarantee, Promise, Range, Truth};
 use crate::surface::{PRELUDE_MODULE, SurfaceItem, World};
-use crate::ty::{FieldTy, FnRow, Nominal, Obligation, Tier, Ty, Types, VariantTy, bindings_for};
+use crate::ty::{
+    FieldTy, FnRow, Nominal, Obligation, Precondition, Tier, Ty, Types, VariantTy, bindings_for,
+};
 
 pub struct Checked {
     pub types: Types,
@@ -88,6 +90,19 @@ struct Carried {
     inside_ok: bool,
 }
 
+/// What a caller has to guarantee, and the names the clauses talk about.
+///
+/// The clauses are kept as written rather than lowered to anything, because a
+/// call site settles them by reading them with its own facts, and lowering
+/// would mean deciding ahead of time which shapes are worth keeping.
+#[derive(Debug)]
+struct Requires {
+    clauses: Vec<Expr>,
+    /// The definition of each parameter, in order, so a clause naming one can
+    /// be told what was passed there.
+    params: Vec<Option<DefId>>,
+}
+
 #[derive(Clone)]
 struct Signature {
     params: Vec<ParamTy>,
@@ -103,6 +118,12 @@ struct Signature {
     /// What a call to this is known to hand back, from the declared return
     /// type and from the `ensures` clause. Promises nothing when nothing is.
     guarantee: Guarantee,
+    /// The `where` clauses, for the call site to answer for.
+    ///
+    /// `None` rather than an empty list for the common case, so a signature
+    /// with no contract costs no allocation. Shared, because a signature is
+    /// cloned to instantiate it at a call and the clauses do not change.
+    requires: Option<Rc<Requires>>,
 }
 
 struct Checker<'a> {
@@ -219,6 +240,7 @@ impl<'a> Checker<'a> {
                         variable: false,
                     }]),
                     guarantee: Guarantee::any(),
+                    requires: None,
                 },
             );
         }
@@ -284,6 +306,7 @@ impl<'a> Checker<'a> {
                     generics: Vec::new(),
                     row: FnRow::Declared(Vec::new()),
                     guarantee,
+                    requires: None,
                 },
             );
         }
@@ -425,6 +448,17 @@ impl<'a> Checker<'a> {
                     signature.guarantee = signature
                         .guarantee
                         .meet(promised_by(&function.contract.ensures, &function.sig));
+                    if !function.contract.requires.is_empty() {
+                        signature.requires = Some(Rc::new(Requires {
+                            clauses: function.contract.requires.clone(),
+                            params: function
+                                .sig
+                                .params
+                                .iter()
+                                .map(|param| self.def_of(&param.name))
+                                .collect(),
+                        }));
+                    }
                     self.check_type_params_are_determined(&signature);
                     self.signatures.insert(def, signature);
                 }
@@ -504,6 +538,7 @@ impl<'a> Checker<'a> {
             // operation performs only its own.
             row: FnRow::Declared(Vec::new()),
             guarantee,
+            requires: None,
         }
     }
 
@@ -570,6 +605,9 @@ impl<'a> Checker<'a> {
             generics: Vec::new(),
             row: signature.row.clone(),
             guarantee: signature.guarantee.clone(),
+            // The clauses talk about parameters by name, and substituting a
+            // type parameter does not change which name is which.
+            requires: signature.requires.clone(),
         }
     }
 
@@ -610,6 +648,11 @@ impl<'a> Checker<'a> {
                 .collect(),
             row: row.clone(),
             guarantee: guarantee.clone(),
+            // A predicate does not cross a module boundary. What travels is
+            // bounds, the same as for an `ensures` clause, so a caller in
+            // another file answers for a precondition at runtime and the
+            // checker says nothing about it either way.
+            requires: None,
         })
     }
 
@@ -681,7 +724,145 @@ impl<'a> Checker<'a> {
                 .then(|| (param.span, "the parameter it is passed to".to_string()));
             self.assign(&actual[index], &param_ty, Some(arg), arg.span(), because);
         }
+
+        if let Some(requires) = signature.requires.clone() {
+            self.check_preconditions(&requires, args, span, name);
+        }
         signature.ret
+    }
+
+    /// Whether the call site can answer for what the callee requires.
+    ///
+    /// `design/02-syntax.md` has always said a precondition is checked at the
+    /// call site when it can be proven there. It was not: a `where` clause was
+    /// a fact for the callee's body and a check inside the callee at runtime,
+    /// and nothing looked at it from where the call was written. So
+    /// `halve(0 - 5)` against `where n >= 0` passed the checker in silence and
+    /// failed when it ran.
+    ///
+    /// The runtime check stays whatever happens here, the same way an
+    /// `ensures` clause is evaluated on every call whatever tier it landed in.
+    /// What this adds is a call that provably breaks the contract being a
+    /// mistake at check time rather than at run time, and a tier that says
+    /// which calls were settled.
+    fn check_preconditions(
+        &mut self,
+        requires: &Requires,
+        args: &'a [Expr],
+        span: Span,
+        name: Option<String>,
+    ) {
+        let facts = self.facts_for_call(requires, args);
+        let called = match &name {
+            Some(name) => format!("`{name}`"),
+            None => "this".to_string(),
+        };
+
+        for clause in &requires.clauses {
+            let outcome = {
+                let (def_of, call) = self.env();
+                let env = facts::Env {
+                    def_of: &def_of,
+                    length: self.resolutions.builtin("length"),
+                    call: &call,
+                };
+                facts::holds(clause, &facts, &env)
+            };
+
+            let tier = match outcome {
+                Truth::Always => Tier::Proven,
+                Truth::Never => {
+                    self.emit(
+                        Diagnostic::error(
+                            codes::BROKEN_PRECONDITION,
+                            self.file,
+                            span,
+                            format!("this call does not satisfy what {called} requires"),
+                        )
+                        .with_primary_label("the precondition does not hold here")
+                        .with_secondary(clause.span(), "the clause it has to satisfy")
+                        .with_note(
+                            "a precondition failure is a mistake in the caller, so it is reported here rather than inside the function",
+                        ),
+                    );
+                    Tier::Guarded
+                }
+                Truth::Unknown => Tier::Guarded,
+            };
+
+            self.types.push_precondition(Precondition {
+                span,
+                tier,
+                callee: name.clone().unwrap_or_default(),
+            });
+        }
+    }
+
+    /// The caller's facts, said in the callee's parameter names.
+    ///
+    /// A clause talks about parameters and the facts are about arguments, so
+    /// one has to be translated into the other. Each parameter gets the range
+    /// of what was passed there, and where the argument is itself a term the
+    /// differences between arguments come across too, which is what lets
+    /// `where index < length(items)` be settled by a caller that checked the
+    /// length.
+    ///
+    /// Nothing else crosses. A fact about a caller's local is not a fact about
+    /// anything the clause can name.
+    fn facts_for_call(&mut self, requires: &Requires, args: &'a [Expr]) -> Facts {
+        let mut mapped = Facts::new();
+        let mut pairs: Vec<(facts::Term, facts::Term)> = Vec::new();
+
+        for (index, arg) in args.iter().enumerate() {
+            let Some(Some(param)) = requires.params.get(index).copied() else {
+                continue;
+            };
+            let range = self.range_of(arg);
+            mapped.set(param, range);
+
+            // How long the argument is, said about the parameter, so a clause
+            // written as `index < length(items)` has something to compare
+            // against. A name brings whatever the caller knows and a literal
+            // brings its own size.
+            let length = {
+                let (def_of, call) = self.env();
+                let env = facts::Env {
+                    def_of: &def_of,
+                    length: self.resolutions.builtin("length"),
+                    call: &call,
+                };
+                facts::length_of(arg, &self.facts, &env)
+            };
+            mapped.narrow(facts::Term::Length(param), length);
+
+            if let Some(term) = self.term_of(arg) {
+                pairs.push((facts::Term::Name(param), term));
+                if let facts::Term::Name(passed) = term {
+                    pairs.push((facts::Term::Length(param), facts::Term::Length(passed)));
+                }
+            }
+        }
+
+        for (left, from_left) in &pairs {
+            for (right, from_right) in &pairs {
+                let known = self.facts.difference(*from_left, *from_right);
+                if !known.is_any() {
+                    mapped.narrow_difference(*left, *right, known);
+                }
+            }
+        }
+        mapped
+    }
+
+    /// What a fact could be attached to, for an expression in this body.
+    fn term_of(&self, expr: &Expr) -> Option<facts::Term> {
+        let (def_of, call) = self.env();
+        let env = facts::Env {
+            def_of: &def_of,
+            length: self.resolutions.builtin("length"),
+            call: &call,
+        };
+        facts::term_of(expr, &env)
     }
 
     /// What a return type alone promises about the value coming back.

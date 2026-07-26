@@ -804,24 +804,41 @@ impl Env<'_> {
     }
 }
 
+/// What is known about how long something is.
+///
+/// A name has a term to hang the answer on. A list or a string written on the
+/// spot has none, and it also has a length nobody has to work out: refusing to
+/// count what the source says out loud would be refusing a fact for want of a
+/// place to put it.
+pub fn length_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
+    match expr {
+        Expr::List { elements, .. } => Range::exactly(elements.len() as i64),
+        Expr::Str { value, .. } => Range::exactly(value.chars().count() as i64),
+        _ => match term_of(expr, env) {
+            Some(Term::Name(def)) => facts.get(Term::Length(def)),
+            _ => Range::between(0, i64::MAX),
+        },
+    }
+}
+
+/// Whether an expression is a call to the `length` the language provides.
+fn is_length_call(callee: &Expr, args: &[Expr], env: &Env<'_>) -> bool {
+    env.length.is_some() && args.len() == 1 && (env.def_of)(callee) == env.length
+}
+
 /// Whether an expression is something a fact can be attached to.
 ///
 /// Two shapes. A name, which is the obvious one, and `length(x)` where `x` is
 /// a name, which is the one that makes an index and a bound comparable. Only a
 /// name inside the call: `length(f(xs))` names nothing that stays put, and a
 /// term that could mean two things across two calls is worse than no term.
-fn term_of(expr: &Expr, env: &Env<'_>) -> Option<Term> {
+pub fn term_of(expr: &Expr, env: &Env<'_>) -> Option<Term> {
     match expr {
         Expr::Ident(_) => (env.def_of)(expr).map(Term::Name),
-        Expr::Call { callee, args, .. } if args.len() == 1 => {
-            if (env.def_of)(callee) != env.length || env.length.is_none() {
-                return None;
-            }
-            match &args[0] {
-                Expr::Ident(_) => (env.def_of)(&args[0]).map(Term::Length),
-                _ => None,
-            }
-        }
+        Expr::Call { callee, args, .. } if is_length_call(callee, args, env) => match &args[0] {
+            Expr::Ident(_) => (env.def_of)(&args[0]).map(Term::Length),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1115,13 +1132,14 @@ fn interval_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
         //
         // A `length` is both: it has a contract like any other call and it is
         // a term the body may have narrowed, so the two are met rather than
-        // one of them winning.
+        // one of them winning. A list written on the spot has no term and an
+        // exact length, which is the other half of the same answer.
         Expr::Call { callee, args, .. } => {
             let promised = (env.call)(callee).value.applied(args, facts, env);
-            match term_of(expr, env) {
-                Some(term) => promised.meet(facts.get(term)),
-                None => promised,
+            if is_length_call(callee, args, env) {
+                return promised.meet(length_of(&args[0], facts, env));
             }
+            promised
         }
         // `f()?` is the number inside the `ok`, which is what the promise on a
         // fallible function was about all along.
