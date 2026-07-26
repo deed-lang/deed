@@ -1,0 +1,188 @@
+// A real program, written to find out what is missing rather than to show off
+// what is there. `vow run examples/todo.vow --dir examples`
+//
+// It reads a list of tasks out of a file it was handed access to, counts them,
+// and prints the ones that are not done. That is the smallest thing anybody
+// would call a program, and until this week none of it could be written down:
+// there was no way to hold four tasks, and no way to turn a count into
+// something you could print.
+//
+// Three things this file found, none of which were obvious from the inside:
+//
+// 1. `walk`, `count_done` and `open_titles` are the same function three times.
+//    Every one of them is "start at 0, look at each element, stop when `at`
+//    fails", and every one of them declares `Diverge` for it. That is the
+//    argument for iteration, made by a program rather than by a design
+//    document.
+//
+// 2. An accumulator has to be a parameter. `open_titles` threads `found`
+//    through the recursion because there is nowhere else to put it: handler
+//    state is the only mutable thing in the language, and reaching for a
+//    handler to collect strings would be using an effect to avoid a loop.
+//
+// 3. The file format is `x|title` because that is what the language can take
+//    apart. `[x] title` would need searching or slicing and there is neither,
+//    so the data was bent to fit the tool. That is worth writing down rather
+//    than hiding behind a tidy-looking example.
+//
+// 4. Splitting on `"\n"` leaves a `\r` on every line of a file written on
+//    Windows, and there is no way to trim one off. The first run of this
+//    program printed its own output backwards over itself for exactly that
+//    reason. The repository forces LF, which is a thing a program should not
+//    have to depend on.
+//
+// What it still cannot do is the other half of a to-do list: adding a task and
+// saving it. `Io` can read a file and open a directory, and there is no
+// operation that writes one. So this is a reader, and 04-capabilities says why
+// writing is a bigger question than it looks.
+
+module examples/todo
+
+record Task {
+    done: Bool,
+    title: String,
+}
+
+// One line to a task. `?` propagates the failure of either `at`, so a line
+// with no separator in it comes back as an error rather than as a task with
+// half of it missing.
+fn parse(line: String) -> Result<Task, String> {
+    let parts = split(line, "|")
+    let mark = at(parts, 0)?
+    let title = at(parts, 1)?
+
+    ok(Task { done: mark == "x", title })
+}
+
+// The three walks. Written out rather than abstracted, because there is
+// nothing to abstract them with: a function that took another function would
+// need a row on the function type, and that is the same missing piece.
+fn walk(lines: List<String>, index: Int) -> Int
+  uses
+    Diverge,
+{
+    match at(lines, index) {
+        ok(line) => counts(line) + walk(lines, index + 1),
+        err(why) => 0,
+    }
+}
+
+fn count_done(lines: List<String>, index: Int) -> Int
+  uses
+    Diverge,
+{
+    match at(lines, index) {
+        ok(line) => finished(line) + count_done(lines, index + 1),
+        err(why) => 0,
+    }
+}
+
+fn open_titles(lines: List<String>, index: Int, found: List<String>) -> List<String>
+  uses
+    Diverge,
+{
+    match at(lines, index) {
+        ok(line) => open_titles(lines, index + 1, keep_open(found, line)),
+        err(why) => found,
+    }
+}
+
+// A blank line is not a task and not an error worth reporting. A file that
+// ends in a newline has one, which is the sort of thing you only find out by
+// running the program.
+fn counts(line: String) -> Int {
+    match parse(line) {
+        ok(task) => 1,
+        err(why) => 0,
+    }
+}
+
+fn finished(line: String) -> Int {
+    match parse(line) {
+        ok(task) => done_or_not(task),
+        err(why) => 0,
+    }
+}
+
+fn done_or_not(task: Task) -> Int {
+    if task.done {
+        1
+    } else {
+        0
+    }
+}
+
+fn keep_open(found: List<String>, line: String) -> List<String> {
+    match parse(line) {
+        ok(task) => unless_done(found, task),
+        err(why) => found,
+    }
+}
+
+fn unless_done(found: List<String>, task: Task) -> List<String> {
+    if task.done {
+        found
+    } else {
+        push(found, task.title)
+    }
+}
+
+fn report(lines: List<String>) -> String
+  uses
+    Diverge,
+{
+    to_string(count_done(lines, 0)) + " of " + to_string(walk(lines, 0)) + " done"
+}
+
+// A file that is not there is not a crash. The capability says which directory
+// this may read from and nothing says what is in it.
+fn read_or(files: Dir, name: String, fallback: String) -> String
+  uses
+    Io.read,
+{
+    match Io.read(files, name) {
+        ok(text) => text,
+        err(why) => fallback,
+    }
+}
+
+fn main(sys: System) -> Int
+  uses
+    Io.write,
+    Io.read,
+    Diverge,
+{
+    let out = sys.console
+    let lines = split(read_or(sys.files, "todo.txt", ""), "\n")
+
+    Io.write(out, report(lines))
+    Io.write(out, "still open: " + join(open_titles(lines, 0, []), ", "))
+
+    0
+}
+
+test "a line becomes a task" {
+    assert parse("x|ship it") == ok(Task { done: true, title: "ship it" })
+    assert parse("-|ship it") == ok(Task { done: false, title: "ship it" })
+}
+
+test "a line with nothing to split is not a task" {
+    assert parse("") == err("index 1 is outside a list of 1")
+    assert parse("no separator") == err("index 1 is outside a list of 1")
+}
+
+test "counting and collecting agree with each other" {
+    let lines = ["x|one", "-|two", "-|three", ""]
+
+    assert walk(lines, 0) == 3
+    assert count_done(lines, 0) == 1
+    assert open_titles(lines, 0, []) == ["two", "three"]
+    assert report(lines) == "1 of 3 done"
+}
+
+test "an empty list is not a special case anywhere" {
+    assert walk([], 0) == 0
+    assert count_done([], 0) == 0
+    assert open_titles([], 0, []) == []
+    assert report([]) == "0 of 0 done"
+}
