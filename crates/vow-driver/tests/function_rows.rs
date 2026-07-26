@@ -211,6 +211,103 @@ fn a_row_the_callback_cannot_reach_is_still_too_wide() {
     assert!(text.contains("VOW5002"), "{text}");
 }
 
+// -- where a function value can come from -------------------------------------
+//
+// The row is part of the type, so anything with a function type has one. The
+// checker used to work it out from the shape of the expression instead, which
+// meant it recognised a closure and a bare name and answered "performs
+// nothing" for everything else. An empty row is a claim rather than an
+// absence, so each shape below was a claim nobody checked, and each one ran an
+// effect through a caller that declared none.
+
+/// `LOG` plus a function that performs `Log.note` and one that performs
+/// nothing, so a test can put either where a function value is wanted.
+const EITHER: &str = "fn logs(n: Int) -> Int uses Log.note { Log.note(\"x\") n }\n\n\
+     fn quiet(n: Int) -> Int { n }\n\n";
+
+#[test]
+fn a_function_that_came_back_from_a_call_keeps_its_row() {
+    let text = expect_refused(&format!(
+        "{LOG}{EITHER}\
+         fn pass(f: Fn(Int) uses Log.note -> Int) -> Fn(Int) uses Log.note -> Int\n\
+         \x20 uses Log.note,\n\
+         {{ f }}\n\n\
+         fn claims_nothing(n: Int) -> Int {{\n\
+         \x20   let handed = pass(logs)\n\
+         \x20   handed(n)\n\
+         }}\n"
+    ));
+    assert!(text.contains("VOW5001"), "{text}");
+    assert!(text.contains("claims_nothing"), "{text}");
+}
+
+#[test]
+fn calling_the_result_of_a_call_on_the_spot_keeps_it_too() {
+    // No name to look anything up by, so this is the shape where reading the
+    // row off the type is the only way to get an answer at all.
+    let text = expect_refused(&format!(
+        "{LOG}{EITHER}\
+         fn pass(f: Fn(Int) uses Log.note -> Int) -> Fn(Int) uses Log.note -> Int\n\
+         \x20 uses Log.note,\n\
+         {{ f }}\n\n\
+         fn claims_nothing(n: Int) -> Int {{ pass(logs)(n) }}\n"
+    ));
+    assert!(text.contains("VOW5001"), "{text}");
+}
+
+#[test]
+fn a_function_chosen_by_an_if_keeps_its_row() {
+    let text = expect_refused(&format!(
+        "{LOG}{EITHER}\
+         fn claims_nothing(n: Int, left: Bool) -> Int {{\n\
+         \x20   let chosen = if left {{ logs }} else {{ quiet }}\n\
+         \x20   chosen(n)\n\
+         }}\n"
+    ));
+    assert!(text.contains("VOW5001"), "{text}");
+}
+
+#[test]
+fn a_function_taken_out_of_a_list_keeps_its_row() {
+    let text = expect_refused(&format!(
+        "{LOG}{EITHER}\
+         fn claims_nothing(n: Int) -> Int {{\n\
+         \x20   let fs = [logs, quiet]\n\
+         \x20   for f in fs with total = 0 {{ total + f(n) }}\n\
+         }}\n"
+    ));
+    assert!(text.contains("VOW5001"), "{text}");
+}
+
+#[test]
+fn a_function_read_out_of_a_field_keeps_its_row() {
+    let text = expect_refused(&format!(
+        "{LOG}{EITHER}\
+         record Boxed {{\n\
+         \x20   step: Fn(Int) uses Log.note -> Int\n\
+         }}\n\n\
+         fn claims_nothing(n: Int) -> Int {{\n\
+         \x20   let boxed = Boxed {{ step: logs }}\n\
+         \x20   boxed.step(n)\n\
+         }}\n"
+    ));
+    assert!(text.contains("VOW5001"), "{text}");
+}
+
+#[test]
+fn declaring_the_row_is_all_it_takes_to_pass() {
+    // The rule is that the caller says so, not that the caller cannot do it.
+    expect_clean(&format!(
+        "{LOG}{EITHER}\
+         fn says_so(n: Int, left: Bool) -> Int\n\
+         \x20 uses Log.note,\n\
+         {{\n\
+         \x20   let chosen = if left {{ logs }} else {{ quiet }}\n\
+         \x20   chosen(n)\n\
+         }}\n"
+    ));
+}
+
 // -- how it reads -------------------------------------------------------------
 
 #[test]

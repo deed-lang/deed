@@ -229,6 +229,57 @@ fn a_function_that_calls_its_callback_without_passing_the_row_on_is_refused() {
     assert!(text.contains("VOW5001"), "{text}");
 }
 
+// -- where a row variable may be written ---------------------------------------
+//
+// It stands for whatever a callback performs, and the only thing that knows
+// what that was is the call that supplied the callback. So it has to be
+// readable off an argument. Written anywhere else it arrives at a caller
+// naming something the caller has no word for, which means it gets dropped,
+// and a dropped entry is an effect that happens and is not declared.
+
+#[test]
+fn a_row_variable_in_a_return_type_is_refused() {
+    let text = expect_refused(
+        "module a\n\n\
+         fn pick<A, uses r>(f: Fn(A) uses r -> A, left: Bool) -> Fn(A) uses r -> A\n\
+         \x20 uses r,\n\
+         { f }\n",
+    );
+    assert!(text.contains("VOW5008"), "{text}");
+    assert!(text.contains("`r` is a row variable"), "{text}");
+}
+
+#[test]
+fn a_row_variable_buried_inside_a_parameter_is_refused_too() {
+    // The same hole from the other side. Only a parameter that is itself a
+    // function type is looked at when a call works out what a variable stood
+    // for, so one hiding inside a `List` would never be filled in.
+    let text = expect_refused(
+        "module a\n\n\
+         fn run<A, uses r>(steps: List<Fn(A) uses r -> A>, start: A) -> A\n\
+         \x20 uses r,\n\
+         {\n\
+         \x20 for step in steps with value = start { step(value) }\n\
+         }\n",
+    );
+    assert!(text.contains("VOW5008"), "{text}");
+}
+
+#[test]
+fn the_one_legal_position_is_still_legal() {
+    // The rule has to leave the shape the whole feature exists for alone.
+    expect_clean(
+        "module a\n\n\
+         fn map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> B) -> List<B>\n\
+         \x20 uses r,\n\
+         {\n\
+         \x20 for item in items with out = [] {\n\
+         \x20   push(out, step(item))\n\
+         \x20 }\n\
+         }\n",
+    );
+}
+
 // -- across a module boundary -----------------------------------------------------
 
 /// A library module holding nothing but a `map` with a row variable.

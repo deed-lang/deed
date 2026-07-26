@@ -325,6 +325,22 @@ travels, for the same reason a type parameter travels as a position: a `DefId` i
 into one module's table. `examples/list.vow` is a list library written in Vow and
 `examples/using_list.vow` imports it, which is the test for whether any of this worked.
 
+**It may only be written where a call can fill it in**, which means the row of a parameter
+whose type is a function type, and the declaration's own `uses` clause. `VOW5008` refuses it
+anywhere else. This follows from the paragraph above rather than being a separate idea: a
+variable is replaced by what was passed, so if there is nothing passed at that position there
+is nothing to replace it with, and the entry reaches a caller naming something the caller has
+no word for. It would then be dropped, and a dropped entry in a row is an effect that happens
+and is not declared.
+
+The two positions this rules out are a return type, as in
+`fn pick<A, uses r>(f: Fn(A) uses r -> A, ..) -> Fn(A) uses r -> A`, and a variable buried
+inside a parameter rather than being that parameter's own row, as in
+`steps: List<Fn(A) uses r -> A>`. Both used to check clean and both let an effect through. It
+is the same rule as `VOW4023`, where a type parameter has to appear in a parameter's type so
+that a call always knows what it is, and it is worth stating for the same reason: a signature
+whose call sites cannot work out what it means is not a signature.
+
 What is deliberately absent is row subtraction, or anything that says "this row minus `Log`".
 A `with` block already handles an effect; saying that in a type is a much larger thing.
 

@@ -410,6 +410,34 @@ impl Types {
         &self.row_required
     }
 
+    /// The row of every expression whose type is a function type that wrote
+    /// one down.
+    ///
+    /// The other half of the same handoff as [`Types::row_required`], in the
+    /// other direction. That one says what a value crossing into a function
+    /// type is allowed to perform; this one says what calling a value performs,
+    /// which is the caller's problem rather than the value's.
+    ///
+    /// It exists because a row is part of a type, so anything that can work out
+    /// a type can work out a row, and the pass that works out types is this
+    /// one. The effect checker used to derive this from the shape of the
+    /// expression instead, which meant a function value arriving as the result
+    /// of a call, a branch of an `if`, an element of a list or a field of a
+    /// record performed nothing as far as it was concerned. An empty row is a
+    /// claim, not an absence, so each of those was a claim nobody checked.
+    pub fn function_rows(&self) -> HashMap<Span, Vec<RowEntry>> {
+        self.exprs
+            .iter()
+            .filter_map(|(span, ty)| match ty {
+                Ty::Fn {
+                    row: FnRow::Declared(entries),
+                    ..
+                } if !entries.is_empty() => Some((*span, entries.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn nominal(&self, def: DefId) -> Option<&Nominal> {
         self.nominals.get(&def)
     }
