@@ -57,6 +57,16 @@ impl Effects {
         self.performed.get(&function)
     }
 
+    /// Every function declared in this module and the row it wrote down.
+    ///
+    /// For handing the rows to something that runs the program, so that what
+    /// actually happens can be compared against what was promised. The rows
+    /// are the point of the language, and until this existed the only thing
+    /// checking them was the pass that produced them.
+    pub fn declarations(&self) -> impl Iterator<Item = (DefId, &Row)> {
+        self.declared.iter().map(|(def, row)| (*def, row))
+    }
+
     /// Whether the row for this function could not be checked at all.
     pub fn is_unverifiable(&self, function: DefId) -> bool {
         self.unverifiable.contains(&function)

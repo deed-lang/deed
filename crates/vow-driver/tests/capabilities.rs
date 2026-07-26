@@ -23,6 +23,7 @@ fn program_of(checked: &Checked) -> Program<'_> {
         &checked.module,
         &checked.resolutions,
         checked.guards(),
+        checked.rows(),
     );
     program
 }

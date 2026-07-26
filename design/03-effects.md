@@ -344,6 +344,36 @@ whose call sites cannot work out what it means is not a signature.
 What is deliberately absent is row subtraction, or anything that says "this row minus `Log`".
 A `with` block already handles an effect; saying that in a type is a much larger thing.
 
+## The run checks too
+
+Everything above is one pass deciding whether a program keeps its promises. For a long time
+that pass was also the only thing that ever read a row, which meant a hole in it was a hole
+nothing could see. Five separate ways of getting an effect past it were open at once, all
+found by hand, all of them the same mistake: a function value arriving from somewhere the
+pass did not recognise, given an empty row, and an empty row means "performs nothing".
+
+So the interpreter holds the program to its own signatures while it runs. Each active call
+carries the row its declaration wrote down, every effect performed is checked against every
+call on the stack, and one that nobody on the stack declared is `VOW6010`. That is reported
+against the compiler rather than against the program: the file was accepted, so if an effect
+got through then the check that accepted it was wrong.
+
+Three things are exempt, and each is a rule stated elsewhere rather than a hole here.
+
+A `with` block discharges what is inside it, so a call is only asked about effects answered
+by a handler installed before that call started. A contract does not contribute to a row, so
+a `where` or `ensures` clause may read state without anything having to admit to it. And a
+declaration whose row holds a row variable is not asked, because the variable stands for
+whatever the caller passed and the declaration alone does not say what that was. The caller's
+own frame is where that question has an answer, and it is still asked.
+
+The gap worth naming is a handler operation, which has no declaration of its own and so no
+row to be held to. That is exactly where an effect is implemented, so it is the half of the
+system this does not cover.
+
+The point is not that the check finds something today. It is that the next hole reports
+itself, with a stack, from a real program, instead of waiting to be noticed.
+
 ## Open questions
 
 - Charging a closure's effects to the call site rather than to its author. Now that a

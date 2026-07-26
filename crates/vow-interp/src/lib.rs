@@ -6,7 +6,7 @@
 //!
 //! ```
 //! use vow_diagnostics::SourceMap;
-//! use vow_interp::{Guards, Program, run_tests};
+//! use vow_interp::{DeclaredRows, Guards, Program, run_tests};
 //! use vow_lexer::tokenize;
 //! use vow_parser::parse;
 //! use vow_resolve::{Universe, resolve};
@@ -32,9 +32,17 @@
 //! // scope, which is why the interpreter needs all of them at once.
 //! //
 //! // `Guards` is what the type checker could not settle. Nothing here is
-//! // refined, so there is nothing to check at runtime.
+//! // refined, so there is nothing to check at runtime. `DeclaredRows` is what
+//! // each function promised, so that the run can hold it to that. Nothing
+//! // here performs anything, so there is nothing to hold it to either.
 //! let mut program = Program::new();
-//! program.add(file, &parsed.module, &resolved.resolutions, Guards::new());
+//! program.add(
+//!     file,
+//!     &parsed.module,
+//!     &resolved.resolutions,
+//!     Guards::new(),
+//!     DeclaredRows::new(),
+//! );
 //!
 //! let outcomes = run_tests(&program, file);
 //! assert_eq!(outcomes.len(), 1);
@@ -47,7 +55,9 @@ pub mod property;
 pub mod sandbox;
 pub mod value;
 
-pub use interp::{Guard, Guards, Program, Run, TestOutcome, run_main, run_tests};
+pub use interp::{
+    DeclaredRows, Guard, Guards, Program, RowItem, Run, TestOutcome, run_main, run_tests,
+};
 pub use property::{PropertyConfig, PropertyOutcome, is_testable, run_properties};
 pub use sandbox::Refused;
 pub use value::{Capability, Fields, Value, VariantValue};

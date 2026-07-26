@@ -39,6 +39,7 @@ fn run(src: &str) -> (SourceMap, Vec<vow_interp::TestOutcome>) {
         &parsed.module,
         &resolved.resolutions,
         vow_interp::Guards::new(),
+        vow_interp::DeclaredRows::new(),
     );
     let outcomes = run_tests(&program, file);
     (sources, outcomes)

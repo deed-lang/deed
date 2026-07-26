@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use vow_ast::{Item, Module, Outcome};
 use vow_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use vow_effects::Effects;
-use vow_interp::{Guard, Guards};
+use vow_interp::{DeclaredRows, Guard, Guards, RowItem};
 use vow_lexer::tokenize;
 use vow_parser::parse;
 use vow_resolve::{Resolutions, Universe};
@@ -126,6 +126,28 @@ impl Checked {
                         inside_ok: obligation.inside_ok,
                     },
                 )
+            })
+            .collect()
+    }
+
+    /// What every function in this file declared it performs.
+    ///
+    /// Handed to the interpreter so that a run can hold the program to its own
+    /// signatures. The rows are what this language is for, and the pass that
+    /// produces them was the only thing that ever read one, which is how five
+    /// separate ways of getting an effect past them stayed open at once.
+    pub fn rows(&self) -> DeclaredRows {
+        self.effects
+            .declarations()
+            .map(|(def, row)| {
+                let items = row
+                    .iter()
+                    .map(|item| RowItem {
+                        effect: item.effect,
+                        operation: item.operation.clone(),
+                    })
+                    .collect();
+                (def, items)
             })
             .collect()
     }

@@ -5,7 +5,7 @@
 //! the product here as much as the evaluation is.
 
 use vow_diagnostics::{SourceMap, render_human};
-use vow_interp::{Guards, Program, TestOutcome, codes, run_tests};
+use vow_interp::{DeclaredRows, Guards, Program, TestOutcome, codes, run_tests};
 use vow_lexer::tokenize;
 use vow_parser::parse;
 use vow_resolve::{Universe, resolve};
@@ -28,7 +28,13 @@ fn run_in(src: &str, universe: &Universe) -> (SourceMap, Vec<TestOutcome>) {
     // One module, so a call that leaves it has nowhere to go. Tests that need
     // the other side use `run_together`.
     let mut program = Program::new();
-    program.add(file, &parsed.module, &resolved.resolutions, Guards::new());
+    program.add(
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        Guards::new(),
+        DeclaredRows::new(),
+    );
     let outcomes = run_tests(&program, file);
     (sources, outcomes)
 }
@@ -63,7 +69,13 @@ fn run_together(sources_text: &[&str]) -> (SourceMap, Vec<TestOutcome>) {
 
     let mut program = Program::new();
     for ((file, entry), resolved) in files.iter().zip(&parsed).zip(&resolutions) {
-        program.add(*file, &entry.module, &resolved.resolutions, Guards::new());
+        program.add(
+            *file,
+            &entry.module,
+            &resolved.resolutions,
+            Guards::new(),
+            DeclaredRows::new(),
+        );
     }
 
     let outcomes = run_tests(&program, files[0]);
@@ -173,7 +185,13 @@ fn the_examples_pass_their_own_tests() {
         assert!(!resolved.has_errors(), "examples/{name} should resolve");
 
         let mut program = Program::new();
-        program.add(file, &parsed.module, &resolved.resolutions, Guards::new());
+        program.add(
+            file,
+            &parsed.module,
+            &resolved.resolutions,
+            Guards::new(),
+            DeclaredRows::new(),
+        );
         let outcomes = run_tests(&program, file);
         assert!(!outcomes.is_empty(), "examples/{name} should have tests");
         for outcome in &outcomes {

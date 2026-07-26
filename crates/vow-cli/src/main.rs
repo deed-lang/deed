@@ -255,6 +255,7 @@ fn program_of(checks: &[Checked]) -> Program<'_> {
             &checked.module,
             &checked.resolutions,
             checked.guards(),
+            checked.rows(),
         );
     }
     program
