@@ -670,6 +670,52 @@ fn a_program_given_no_arguments_leaves_the_file_alone() {
 }
 
 #[test]
+fn a_task_can_be_marked_done() {
+    // The thing the example said for months it could not do. It is one `map`
+    // over the tasks with one of them replaced, and what took so long was
+    // being able to write that `map` once rather than once per element type.
+    let scratch = Scratch::new("todo-done");
+    scratch.write("todo.txt", "[x] one\n[ ] two\n[ ] three\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let output = run(&["run", TODO, "--dir", &dir, "--", "done", "two"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("done: two"), "{text}");
+    assert!(text.contains("2 of 3 done"), "{text}");
+    assert!(text.contains("still open: three"), "{text}");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
+        "[x] one\n[x] two\n[ ] three\n"
+    );
+}
+
+#[test]
+fn finishing_a_task_that_is_not_there_says_so_and_writes_nothing() {
+    // Silently doing nothing is how somebody finds out a week later that they
+    // misspelled it.
+    let scratch = Scratch::new("todo-done-missing");
+    scratch.write("todo.txt", "[ ] two\n");
+    let dir = scratch.path().to_str().unwrap().to_string();
+
+    let before = std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap();
+    let output = run(&["run", TODO, "--dir", &dir, "--", "done", "nope"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    assert!(
+        stdout(&output).contains("no task called: nope"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("todo.txt")).unwrap(),
+        before
+    );
+}
+
+#[test]
 fn a_file_written_on_windows_reads_the_same_as_one_written_anywhere_else() {
     // The example used to print its own output backwards over itself, because
     // splitting on a newline leaves the carriage return on every piece and
@@ -690,7 +736,6 @@ fn a_file_written_on_windows_reads_the_same_as_one_written_anywhere_else() {
 }
 
 // -- finding the files an import needs ---------------------------------------
-
 #[test]
 fn a_program_that_imports_can_be_run_by_naming_its_own_file() {
     // The compiler only looks at the files it was handed, which is a rule

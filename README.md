@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-69 passed, 0 failed
+74 passed, 0 failed
 ```
 
 ```
@@ -198,20 +198,29 @@ each other: [names.vow](examples/names.vow), [sink.vow](examples/sink.vow) and
 own tests.
 
 `todo.vow` is the one written to find out what is missing rather than to show what is there.
-It reads a list of tasks out of a directory it was handed, adds one if it was given anything
-on the command line, counts them, and prints the ones that are not done. That is the smallest
-thing anybody would call a program and it was not writable at all a week ago. It found four
-things. Three of its functions were the same function: start at zero, look at each element,
-stop when the index runs out, and declare `Diverge` for the privilege. An accumulator had to
-be threaded through as a parameter, because handler state is the only mutable thing in the
-language and reaching for a handler to collect strings would be using an effect to avoid a
-loop. Those two are what decided what a loop looks like here, and the three walks are `for`
-loops now with nothing declared. The file format was `x|title` rather than `[x] title`
-because splitting was all there was, so the data got bent to fit the tool. And the first run
-printed its own output backwards over itself, because splitting on `\n` leaves a carriage
-return on every line of a file written on Windows and there was nothing that trimmed one off.
-The last two are what `trim` is for, and the file format is `[x] title` now. None of those
-were obvious from inside the compiler.
+It reads a list of tasks out of a directory it was handed, adds one or marks one done if it
+was given anything on the command line, counts them, and prints the ones that are not done.
+That is the smallest thing anybody would call a program and it was not writable at all a week
+ago. It found four things. Three of its functions were the same function: start at zero, look
+at each element, stop when the index runs out, and declare `Diverge` for the privilege. An
+accumulator had to be threaded through as a parameter, because handler state is the only
+mutable thing in the language and reaching for a handler to collect strings would be using an
+effect to avoid a loop. Those two are what decided what a loop looks like here, and the three
+walks are `for` loops now with nothing declared. The file format was `x|title` rather than
+`[x] title` because splitting was all there was, so the data got bent to fit the tool. And
+the first run printed its own output backwards over itself, because splitting on `\n` leaves
+a carriage return on every line of a file written on Windows and there was nothing that
+trimmed one off. The last two are what `trim` is for, and the file format is `[x] title` now.
+None of those were obvious from inside the compiler.
+
+Marking a task done is the thing that file said for months it could not do, and it turned out
+to be one `map` over the tasks with one of them replaced. What took the time was being able
+to write that `map` once: generic functions, generic types and a row variable all had to
+exist first, and once they did the feature was four lines. It found one more thing on the way
+out, a small one. `state` was a keyword, so `with state = ..` did not parse, and `state`
+means something in exactly one position where the only alternative is `fn`. Reserving a word
+that common for one position is a cost nobody had paid until a program wanted the word, so it
+is a name again and the parser recognises it where it matters.
 
 `for` is a fold with syntax rather than a loop with a variable in it:
 

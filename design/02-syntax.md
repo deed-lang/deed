@@ -920,6 +920,11 @@ handler InMemory implements Counter {
 Assignment is a statement, the target must be state of the enclosing handler, and nothing
 else is assignable. Not a parameter, not a `let` binding, not a field of a record.
 
+`state` is not a reserved word. It is read as a name at the head of a handler member,
+where the only other thing a member can start with is `fn`, so nothing has to be worked
+out and nothing is ambiguous. Everywhere else it is an ordinary identifier, which matters
+because the accumulator of a fold is one of the most natural things to call `state`.
+
 This is a rule rather than a limitation. Mutation exists exactly where effects are
 implemented and nowhere else, which is what lets an empty effect row mean that a function
 cannot observe or cause a change to anything. Without the restriction, purity would be a

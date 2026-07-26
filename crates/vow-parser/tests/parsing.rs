@@ -238,6 +238,33 @@ fn effects_and_handlers_parse() {
 }
 
 #[test]
+fn state_is_a_name_everywhere_except_at_the_head_of_a_handler_member() {
+    // `state` means something in one position, where the only alternative is
+    // `fn`. Reserving it for the whole language cost a name programs want:
+    // this one is the accumulator of a fold.
+    let parsed = parse_ok(
+        "module a\n\
+         \n\
+         handler Counted implements Log {\n\
+         \x20   state seen: Int\n\
+         }\n\
+         \n\
+         fn total(ns: List<Int>) -> Int {\n\
+         \x20   for n in ns with state = 0 { state + n }\n\
+         }\n",
+    );
+
+    match &parsed.module.items[0] {
+        Item::Handler(handler) => {
+            assert_eq!(handler.state.len(), 1);
+            assert_eq!(handler.state[0].name.name, "seen");
+        }
+        other => panic!("expected a handler, got {other:?}"),
+    }
+    assert!(matches!(&parsed.module.items[1], Item::Function(_)));
+}
+
+#[test]
 fn an_absent_uses_clause_means_pure() {
     let parsed = parse_ok("module a\n\nfn double(n: Int) -> Int { n * 2 }\n");
     match &parsed.module.items[0] {
