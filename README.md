@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="vow-cipher-brand-kit/vow-cipher-lockup-dark.svg">
-    <img alt="Vow" src="vow-cipher-brand-kit/vow-cipher-lockup.svg" width="380">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/vow-cipher-lockup-dark.svg">
+    <img alt="Vow" src="assets/brand/vow-cipher-lockup.svg" width="380">
   </picture>
 </p>
 
