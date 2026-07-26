@@ -109,6 +109,7 @@ impl Server {
             }
             "textDocument/hover" => result(id, self.hover(message)),
             "textDocument/definition" => result(id, self.definition(message)),
+            "textDocument/references" => result(id, self.references(message)),
             "textDocument/formatting" => result(id, self.formatting(message)),
             _ => error(
                 id,
@@ -248,6 +249,122 @@ impl Server {
             ("uri", Json::string(&entry.uri)),
             ("range", range_in(text, declared.span)),
         ]))
+    }
+
+    /// Every place a name is used, across the workspace.
+    ///
+    /// Two questions wearing one name. A parameter or a `let` cannot leave the
+    /// module that declared it, so the answer is every span in this file that
+    /// resolves to that one definition, and it is exact. A declaration another
+    /// module can import has no single definition to compare against, because
+    /// a `DefId` is an index into one module's table, so the answer is
+    /// assembled the same way go to definition crosses the boundary: by the
+    /// module path and the name.
+    fn references(&self, message: &Json) -> Json {
+        let Some((_, offset, checked)) = self.locate(message) else {
+            return Json::Null;
+        };
+        let Some((_, def)) = narrowest_name(&checked, offset) else {
+            return Json::Null;
+        };
+
+        let wanted = message
+            .at(&["params", "context", "includeDeclaration"])
+            .map(|value| value == &Json::Bool(true))
+            .unwrap_or(true);
+
+        let data = checked.resolutions.def(def);
+        // Declared nowhere and used everywhere. Listing every mention of
+        // `length` in a workspace is not an answer to any question somebody
+        // was asking.
+        if data.kind == DefKind::Builtin {
+            return Json::Array(Vec::new());
+        }
+
+        let name = data.name.clone();
+        let here = checked
+            .module
+            .name
+            .as_ref()
+            .map(|path| path.to_string_path());
+        let home = match data.kind {
+            DefKind::Import => checked.resolutions.import_module(def).map(str::to_string),
+            // A declaration another module could import. A file with no
+            // `module` line cannot be imported, so it has no name to be known
+            // by and the question stays local.
+            kind if declares(kind) => here,
+            // A parameter, a `let`, a `state` field. It cannot be named
+            // anywhere else, so nothing outside this module can be an answer.
+            _ => None,
+        };
+
+        let (sources, entries) = self.check_workspace();
+        let mut found = Vec::new();
+
+        for entry in &entries {
+            let text = sources.file(entry.checked.file).text();
+            let here = entry
+                .checked
+                .module
+                .name
+                .as_ref()
+                .map(|path| path.to_string_path());
+
+            // Which definition in this file the question is about, if any.
+            let local = match &home {
+                // Not exportable, so only the file it was asked from can hold
+                // an answer, and the definition is the one already in hand.
+                None => {
+                    (entry.uri == text_document_uri(message).unwrap_or_default()).then_some(def)
+                }
+                Some(home) if here.as_deref() == Some(home.as_str()) => entry
+                    .checked
+                    .resolutions
+                    .defs()
+                    .find(|(_, data)| data.name == name && declares(data.kind))
+                    .map(|(id, _)| id),
+                // Somewhere else: the `use` that brought the name in, if it
+                // brought this one in and not another module's name of the
+                // same spelling.
+                Some(home) => entry
+                    .checked
+                    .resolutions
+                    .defs()
+                    .find(|(id, data)| {
+                        data.kind == DefKind::Import
+                            && data.name == name
+                            && entry.checked.resolutions.import_module(*id) == Some(home.as_str())
+                    })
+                    .map(|(id, _)| id),
+            };
+            let Some(local) = local else {
+                continue;
+            };
+
+            let declared = entry.checked.resolutions.def(local).span;
+            let mut spans: Vec<Span> = entry
+                .checked
+                .resolutions
+                .names()
+                .filter(|(span, id)| *id == local && *span != declared)
+                .map(|(span, _)| span)
+                .collect();
+            if wanted && !declared.is_empty() {
+                spans.push(declared);
+            }
+            // Source order, so an editor's list reads down the file rather
+            // than in whatever order a hash map handed things back.
+            spans.sort_by_key(|span| (span.start, span.end));
+
+            found.extend(spans.into_iter().map(|span| {
+                Json::object(vec![
+                    ("uri", Json::string(&entry.uri)),
+                    ("range", range_in(text, span)),
+                ])
+            }));
+        }
+
+        Json::Array(found)
     }
 
     /// The whole document, replaced by its canonical form.
@@ -528,6 +645,7 @@ fn initialize_result() -> Json {
             ("textDocumentSync", Json::number(1)),
             ("hoverProvider", Json::Bool(true)),
             ("definitionProvider", Json::Bool(true)),
+            ("referencesProvider", Json::Bool(true)),
             ("documentFormattingProvider", Json::Bool(true)),
         ]),
     )])
