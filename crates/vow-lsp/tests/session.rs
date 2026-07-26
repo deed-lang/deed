@@ -206,6 +206,7 @@ fn initialize_says_what_the_server_can_do() {
         "hoverProvider",
         "definitionProvider",
         "documentFormattingProvider",
+        "documentSymbolProvider",
     ] {
         assert_eq!(
             sent[0].at(&["result", "capabilities", capability]),
@@ -242,7 +243,7 @@ fn a_method_nobody_implemented_is_an_error_rather_than_silence() {
     // A request with no reply is a request the editor waits on forever.
     let sent = session(&[
         request(1, "initialize"),
-        request(2, "textDocument/documentSymbol"),
+        request(2, "textDocument/signatureHelp"),
     ]);
     assert_eq!(
         sent[1].at(&["error", "code"]).and_then(Json::as_i64),
@@ -766,6 +767,160 @@ fn an_editor_asking_only_for_quick_fixes_gets_them() {
         code_action_only(2, URI, 3, 6, Some("quickfix")),
     ]);
     assert_eq!(actions(&sent[2]).len(), 1, "{:?}", sent[2]);
+}
+
+// -- the outline ------------------------------------------------------------
+
+fn document_symbol(id: i64, uri: &str) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/documentSymbol\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}}}}}}"
+    ))
+}
+
+/// One of everything, so the outline has to say what each of them is.
+const DECLARED: &str = "module a\n\n\
+     type Positive = Int where value > 0\n\n\
+     record Point {\n    x: Int,\n    y: Int,\n}\n\n\
+     choice Flag {\n    On,\n    Off,\n}\n\n\
+     effect Log {\n    fn note(message: String) -> ()\n}\n\n\
+     handler Quiet implements Log {\n    state seen: Int\n\n    fn note(message) -> () {}\n}\n\n\
+     fn f(n: Int) -> Int {\n    n + n\n}\n\n\
+     test \"it doubles\" {\n    assert f(2) == 4\n}\n";
+
+fn outline(message: &Json) -> &[Json] {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("an outline request should answer with a list: {message:?}"))
+}
+
+fn named<'a>(symbols: &'a [Json], name: &str) -> &'a Json {
+    symbols
+        .iter()
+        .find(|symbol| symbol.at(&["name"]).and_then(Json::as_str) == Some(name))
+        .unwrap_or_else(|| panic!("no symbol called {name}: {symbols:?}"))
+}
+
+#[test]
+fn the_outline_says_what_each_declaration_is() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, DECLARED),
+        document_symbol(2, URI),
+    ]);
+    let symbols = outline(&sent[2]);
+
+    // In the order the file declares them, because an outline that sorted
+    // would be a worse version of a list of names.
+    let names: Vec<&str> = symbols
+        .iter()
+        .filter_map(|symbol| symbol.at(&["name"]).and_then(Json::as_str))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "Positive",
+            "Point",
+            "Flag",
+            "Log",
+            "Quiet",
+            "f",
+            "test \"it doubles\""
+        ]
+    );
+
+    for (name, kind) in [
+        ("Positive", 11),
+        ("Point", 23),
+        ("Flag", 10),
+        ("Log", 11),
+        ("Quiet", 5),
+        ("f", 12),
+    ] {
+        assert_eq!(
+            named(symbols, name).at(&["kind"]).and_then(Json::as_i64),
+            Some(kind),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn what_belongs_to_a_declaration_is_nested_under_it() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, DECLARED),
+        document_symbol(2, URI),
+    ]);
+    let symbols = outline(&sent[2]);
+
+    let children = |name: &str| -> Vec<String> {
+        named(symbols, name)
+            .at(&["children"])
+            .and_then(Json::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|child| child.at(&["name"]).and_then(Json::as_str))
+            .map(str::to_string)
+            .collect()
+    };
+
+    assert_eq!(children("Point"), vec!["x", "y"]);
+    assert_eq!(children("Flag"), vec!["On", "Off"]);
+    assert_eq!(children("Log"), vec!["note"]);
+    // State first, then what it is state for.
+    assert_eq!(children("Quiet"), vec!["seen", "note"]);
+    assert!(children("f").is_empty());
+}
+
+/// The whole declaration is what an editor highlights when you pick it. The
+/// name is where the cursor lands. A server that answered the same range twice
+/// would put the cursor on the `record` keyword.
+#[test]
+fn the_range_is_the_declaration_and_the_selection_is_the_name() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, DECLARED),
+        document_symbol(2, URI),
+    ]);
+    let point = named(outline(&sent[2]), "Point");
+
+    assert_eq!(
+        point.at(&["selectionRange", "start", "character"]),
+        Some(&Json::Number(7.0)),
+        "the name starts after `record `"
+    );
+    assert_eq!(
+        point.at(&["range", "start", "character"]),
+        Some(&Json::Number(0.0))
+    );
+    assert!(
+        point.at(&["range", "end", "line"]).and_then(Json::as_i64)
+            > point
+                .at(&["selectionRange", "end", "line"])
+                .and_then(Json::as_i64),
+        "the declaration runs past its own name"
+    );
+}
+
+/// Everything else this server answers is about a name that resolved. An
+/// outline is about what is written, and half a declaration is still worth
+/// drawing while somebody is typing the rest of it.
+#[test]
+fn a_file_that_does_not_check_still_has_an_outline() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, "module a\n\nfn f() -> Nope {\n    missing()\n}\n"),
+        document_symbol(2, URI),
+    ]);
+    assert_eq!(outline(&sent[2]).len(), 1, "{:?}", sent[2]);
+}
+
+#[test]
+fn an_outline_for_a_document_nobody_opened_is_null() {
+    let sent = session(&[request(1, "initialize"), document_symbol(2, URI)]);
+    assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
 }
 
 // -- the workspace ----------------------------------------------------------

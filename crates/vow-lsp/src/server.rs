@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use vow_ast::Item;
 use vow_diagnostics::{Applicability, Diagnostic, Severity, SourceMap, Span};
 use vow_driver::Checked;
 use vow_resolve::{DefId, DefKind};
@@ -28,6 +29,22 @@ use crate::workspace::{Workspace, canonical};
 /// JSON-RPC error codes this server can produce.
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_REQUEST: i64 = -32600;
+
+/// The `SymbolKind` numbers an outline uses.
+///
+/// Spelled out rather than borrowed, for the same reason the JSON reader is
+/// written here: the protocol is a handful of constants and a dependency for
+/// them would be a larger thing to audit than the code it replaced.
+mod kind {
+    pub const CLASS: i64 = 5;
+    pub const METHOD: i64 = 6;
+    pub const FIELD: i64 = 8;
+    pub const ENUM: i64 = 10;
+    pub const INTERFACE: i64 = 11;
+    pub const FUNCTION: i64 = 12;
+    pub const ENUM_MEMBER: i64 = 22;
+    pub const STRUCT: i64 = 23;
+}
 
 /// What the loop should do after a message.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,6 +144,7 @@ impl Server {
             "textDocument/rename" => self.rename(id, message),
             "textDocument/formatting" => result(id, self.formatting(message)),
             "textDocument/codeAction" => result(id, self.code_action(message)),
+            "textDocument/documentSymbol" => result(id, self.document_symbol(message)),
             "textDocument/completion" => result(id, self.completion(message)),
             _ => error(
                 id,
@@ -743,6 +761,196 @@ impl Server {
         Json::Array(actions)
     }
 
+    /// What the file declares, in the order it declares it.
+    ///
+    /// The outline, the breadcrumbs and the jump-to-symbol list are all this
+    /// one answer. Nested rather than flat, because a variant belongs to its
+    /// choice and a handler operation belongs to its handler, and a list that
+    /// said otherwise would be a worse version of scrolling.
+    ///
+    /// Read off the parse tree rather than off the resolutions, so a file
+    /// being typed into still has an outline. Everything else this server
+    /// answers is about a name that resolved; an outline is about what is
+    /// written, and half a declaration is still worth drawing.
+    ///
+    /// Two ranges each, and the difference between them is the point. `range`
+    /// is the whole declaration, which is what an editor highlights when you
+    /// pick it. `selectionRange` is the name, which is where the cursor lands.
+    fn document_symbol(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Null;
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Null;
+        };
+
+        let mut sources = SourceMap::new();
+        let file = sources.add(uri, document.text.clone());
+        let lexed = vow_lexer::tokenize(file, &document.text);
+        let parsed = vow_parser::parse(file, &lexed.tokens);
+
+        let symbols = parsed
+            .module
+            .items
+            .iter()
+            .map(|item| self.symbol_of(document, item))
+            .collect();
+        Json::Array(symbols)
+    }
+
+    fn symbol_of(&self, document: &Document, item: &Item) -> Json {
+        match item {
+            // The protocol has fewer kinds than this language has
+            // declarations. A `type` is a named type with nothing to list
+            // inside it, which is the closest thing to an interface the
+            // protocol offers, and an `effect` is signatures with no bodies,
+            // which is the other thing that word means. Sharing one is more
+            // honest than picking a different icon for one of them because it
+            // looks different.
+            Item::TypeAlias(decl) => self.symbol(
+                document,
+                &decl.name.name,
+                kind::INTERFACE,
+                decl.span,
+                decl.name.span,
+                Vec::new(),
+            ),
+            Item::Record(decl) => self.symbol(
+                document,
+                &decl.name.name,
+                kind::STRUCT,
+                decl.span,
+                decl.name.span,
+                decl.fields
+                    .iter()
+                    .map(|field| {
+                        self.symbol(
+                            document,
+                            &field.name.name,
+                            kind::FIELD,
+                            field.span,
+                            field.name.span,
+                            Vec::new(),
+                        )
+                    })
+                    .collect(),
+            ),
+            Item::Choice(decl) => self.symbol(
+                document,
+                &decl.name.name,
+                kind::ENUM,
+                decl.span,
+                decl.name.span,
+                decl.variants
+                    .iter()
+                    .map(|variant| {
+                        self.symbol(
+                            document,
+                            &variant.name.name,
+                            kind::ENUM_MEMBER,
+                            variant.span,
+                            variant.name.span,
+                            Vec::new(),
+                        )
+                    })
+                    .collect(),
+            ),
+            Item::Effect(decl) => self.symbol(
+                document,
+                &decl.name.name,
+                kind::INTERFACE,
+                decl.span,
+                decl.name.span,
+                decl.operations
+                    .iter()
+                    .map(|operation| {
+                        self.symbol(
+                            document,
+                            &operation.name.name,
+                            kind::METHOD,
+                            operation.span,
+                            operation.name.span,
+                            Vec::new(),
+                        )
+                    })
+                    .collect(),
+            ),
+            // A handler is the one declaration with an implementation in it,
+            // which is what a class is.
+            Item::Handler(decl) => {
+                let mut children: Vec<Json> = decl
+                    .state
+                    .iter()
+                    .map(|field| {
+                        self.symbol(
+                            document,
+                            &field.name.name,
+                            kind::FIELD,
+                            field.span,
+                            field.name.span,
+                            Vec::new(),
+                        )
+                    })
+                    .collect();
+                children.extend(decl.operations.iter().map(|operation| {
+                    self.symbol(
+                        document,
+                        &operation.sig.name.name,
+                        kind::METHOD,
+                        operation.span,
+                        operation.sig.name.span,
+                        Vec::new(),
+                    )
+                }));
+                self.symbol(
+                    document,
+                    &decl.name.name,
+                    kind::CLASS,
+                    decl.span,
+                    decl.name.span,
+                    children,
+                )
+            }
+            Item::Function(decl) => self.symbol(
+                document,
+                &decl.sig.name.name,
+                kind::FUNCTION,
+                decl.span,
+                decl.sig.name.span,
+                Vec::new(),
+            ),
+            // Named by a string, so the name is quoted here too. An outline
+            // that dropped the quotes would be showing a name nothing in the
+            // file is spelled that way.
+            Item::Test(decl) => self.symbol(
+                document,
+                &format!("test {:?}", decl.name),
+                kind::FUNCTION,
+                decl.span,
+                decl.name_span,
+                Vec::new(),
+            ),
+        }
+    }
+
+    fn symbol(
+        &self,
+        document: &Document,
+        name: &str,
+        kind: i64,
+        span: Span,
+        selection: Span,
+        children: Vec<Json>,
+    ) -> Json {
+        Json::object(vec![
+            ("name", Json::string(name)),
+            ("kind", Json::number(kind)),
+            ("range", self.range(document, span)),
+            ("selectionRange", self.range(document, selection)),
+            ("children", Json::Array(children)),
+        ])
+    }
+
     fn notification(&mut self, method: &str, message: &Json) -> Vec<Json> {
         match method {
             "textDocument/didOpen" => {
@@ -1167,6 +1375,7 @@ fn initialize_result() -> Json {
                 Json::object(vec![("prepareProvider", Json::Bool(true))]),
             ),
             ("documentFormattingProvider", Json::Bool(true)),
+            ("documentSymbolProvider", Json::Bool(true)),
             // Quick fixes only. A code action is also how editors offer
             // refactorings and source-wide commands, and this server has
             // neither: what it has is the patch a diagnostic already carries.
