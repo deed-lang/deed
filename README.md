@@ -31,7 +31,7 @@ examples/transfer.vow
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-42 passed, 0 failed
+44 passed, 0 failed
 ```
 
 ```
@@ -186,7 +186,10 @@ could not build a message out of pieces, so nobody could write a program, so eve
 decision here was untested. Fixing it turned up the same bug from the other side: `<` was
 accepted on anything as long as both sides had the same type, so comparing two records passed
 the type checker and failed at runtime with a message blaming the interpreter for not
-implementing something that has nothing to implement.
+implementing something that has nothing to implement. It now also carries `split`, `join`,
+`to_string` and `to_int`, which are two pairs of inverses and are there for one reason: a
+program could hold text and hold a number and get from neither to the other, so it could not
+read input, print a count, or write anything back out.
 
 `lists.vow` is the same complaint one size up. Until it, nothing in the language could hold
 more than one of something, so every program was one that worked on a fixed number of named

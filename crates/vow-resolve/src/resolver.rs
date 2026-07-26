@@ -47,11 +47,32 @@ use crate::exports::{ExportKind, Universe};
 /// element, because an index that is not there is not a bug in the caller and
 /// nothing in this language traps.
 ///
+/// `split`, `join`, `to_string` and `to_int` are two pairs of inverses, and
+/// they are here because until them a program could hold text and a number and
+/// get from neither to the other. Nothing could take input apart, put output
+/// together, or print a count, which is most of what a program does.
+///
 /// The prelude is a place names go to become unavailable to everyone else, so
 /// it stays small and every addition to it is argued for rather than assumed.
 pub const PRELUDE: &[&str] = &[
-    "Int", "String", "Bool", "Result", "ok", "err", "length", "List", "at", "push", "System",
-    "Console", "Clock", "Dir",
+    "Int",
+    "String",
+    "Bool",
+    "Result",
+    "ok",
+    "err",
+    "length",
+    "List",
+    "at",
+    "push",
+    "split",
+    "join",
+    "to_string",
+    "to_int",
+    "System",
+    "Console",
+    "Clock",
+    "Dir",
 ];
 
 /// Operations of the built-in `Io` effect.

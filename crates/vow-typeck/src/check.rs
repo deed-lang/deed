@@ -171,21 +171,60 @@ impl<'a> Checker<'a> {
             );
         }
 
-        // The one prelude function that is not a constructor. A length is never
-        // negative, and saying so here is what lets `where length(name) > 0`
-        // land in the Proven tier instead of becoming a runtime check.
-        if let Some(def) = self.resolutions.builtin("length") {
-            self.types.set_name(def, "length".to_string());
+        // The prelude's own functions, which are not constructors and not
+        // operations of an effect.
+        //
+        // `length` is the only one that promises anything beyond its type: a
+        // length is never negative, and saying so here is what lets
+        // `where length(name) > 0` land in the Proven tier instead of becoming
+        // a runtime check.
+        //
+        // `split` and `join` are inverses, and so are `to_string` and
+        // `to_int`. Each pair is here because a program that cannot take its
+        // input apart or put its output together cannot read or print
+        // anything, which is most of what a program does.
+        let lines = Ty::List(Box::new(Ty::Str));
+        let functions: [(&str, Vec<Ty>, Ty, Guarantee); 5] = [
+            (
+                "length",
+                vec![Ty::Str],
+                Ty::Int,
+                Guarantee::of(Range::between(0, i64::MAX)),
+            ),
+            (
+                "split",
+                vec![Ty::Str, Ty::Str],
+                lines.clone(),
+                Guarantee::any(),
+            ),
+            ("join", vec![lines, Ty::Str], Ty::Str, Guarantee::any()),
+            ("to_string", vec![Ty::Int], Ty::Str, Guarantee::any()),
+            (
+                "to_int",
+                vec![Ty::Str],
+                Ty::Result(Box::new(Ty::Int), Box::new(Ty::Str)),
+                Guarantee::any(),
+            ),
+        ];
+
+        for (name, params, ret, guarantee) in functions {
+            let Some(def) = self.resolutions.builtin(name) else {
+                continue;
+            };
+            self.types.set_name(def, name.to_string());
             self.signatures.insert(
                 def,
                 Signature {
-                    params: vec![ParamTy {
-                        ty: Ty::Str,
-                        span: Span::at(0),
-                    }],
-                    ret: Ty::Int,
+                    params: params
+                        .into_iter()
+                        .map(|ty| ParamTy {
+                            ty,
+                            span: Span::at(0),
+                        })
+                        .collect(),
+                    ret,
                     span: Span::at(0),
-                    guarantee: Guarantee::of(Range::between(0, i64::MAX)),
+                    guarantee,
                 },
             );
         }

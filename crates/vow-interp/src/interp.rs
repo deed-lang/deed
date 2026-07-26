@@ -1042,6 +1042,36 @@ impl<'a> Interp<'a> {
                         extended.push(value.clone());
                         Ok(Value::list(extended))
                     }
+                    ("split", Some(Value::Str(text))) => {
+                        let Some((Value::Str(separator), _)) = values.get(1) else {
+                            return Err(self.not_runnable(callee.span(), "this call"));
+                        };
+                        Ok(Value::list(split(&text, separator)))
+                    }
+                    ("join", Some(Value::List(elements))) => {
+                        let Some((Value::Str(separator), _)) = values.get(1) else {
+                            return Err(self.not_runnable(callee.span(), "this call"));
+                        };
+                        let mut text = String::new();
+                        for (index, element) in elements.iter().enumerate() {
+                            let Value::Str(piece) = element else {
+                                return Err(self.not_runnable(callee.span(), "this call"));
+                            };
+                            if index > 0 {
+                                text.push_str(separator);
+                            }
+                            text.push_str(piece);
+                        }
+                        Ok(Value::str(text))
+                    }
+                    ("to_string", Some(Value::Int(number))) => Ok(Value::str(number.to_string())),
+                    // Text that is not a number is not a mistake in the
+                    // caller: it usually came from a file or an argument, and
+                    // deciding what to do about it is the caller's job.
+                    ("to_int", Some(Value::Str(text))) => Ok(match text.parse::<i64>() {
+                        Ok(number) => Value::ok(Value::Int(number)),
+                        Err(_) => Value::err(Value::str(format!("`{text}` is not a number"))),
+                    }),
                     _ => Err(self.not_runnable(callee.span(), "this call")),
                 }
             }
@@ -1846,6 +1876,20 @@ impl<'a> Interp<'a> {
             _ => {}
         }
     }
+}
+
+/// `split(text, separator)`, in characters rather than bytes.
+///
+/// An empty separator gives the characters. That is not a special case looking
+/// for a home: the alternatives are an error the return type cannot express,
+/// or an empty string between every pair of characters, which is what most
+/// languages do and nobody wants. It also means walking a string needs no
+/// second name in the prelude.
+fn split(text: &str, separator: &str) -> Vec<Value> {
+    if separator.is_empty() {
+        return text.chars().map(|c| Value::str(c.to_string())).collect();
+    }
+    text.split(separator).map(Value::str).collect()
 }
 
 /// The definition `result` refers to inside an obligation, if it is used.
