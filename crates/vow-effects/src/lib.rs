@@ -1,7 +1,7 @@
 //! Checks what a Vow function is allowed to touch.
 //!
 //! ```
-//! use std::collections::HashSet;
+//! use std::collections::HashMap;
 //!
 //! use vow_diagnostics::SourceMap;
 //! use vow_effects::analyse;
@@ -29,9 +29,9 @@
 //! let parsed = parse(file, &lexed.tokens);
 //! let resolved = resolve(file, &parsed.module, &Universe::new());
 //!
-//! // Nothing here hands a function around, so no value has to promise
-//! // anything. The type checker is what works that set out.
-//! let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashSet::new());
+//! // Nothing here hands a function around, so no value owes a row. The type
+//! // checker is what works out which ones do.
+//! let analysis = analyse(file, &parsed.module, &resolved.resolutions, &HashMap::new());
 //!
 //! assert!(!analysis.has_errors());
 //! ```

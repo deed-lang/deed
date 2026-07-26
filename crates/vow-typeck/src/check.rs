@@ -22,12 +22,12 @@ use vow_ast::{
     MatchArm, Module, Outcome, Pattern, Stmt, Type, TypeAlias, UnaryOp,
 };
 use vow_diagnostics::{Diagnostic, FileId, Span};
-use vow_resolve::{DefId, DefKind, Resolutions};
+use vow_resolve::{DefId, DefKind, Resolutions, RowLowering};
 
 use crate::codes;
 use crate::facts::{self, Facts, Guarantee, Promise, Range, Truth};
 use crate::surface::{PRELUDE_MODULE, SurfaceItem, World};
-use crate::ty::{FieldTy, Nominal, Obligation, Tier, Ty, Types, VariantTy};
+use crate::ty::{FieldTy, FnRow, Nominal, Obligation, Tier, Ty, Types, VariantTy};
 
 pub struct Checked {
     pub types: Types,
@@ -46,6 +46,7 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         file,
         resolutions,
         world,
+        rows: RowLowering::of(module),
         types: Types::default(),
         diagnostics: Vec::new(),
         def_types: HashMap::new(),
@@ -90,6 +91,10 @@ struct Signature {
     params: Vec<ParamTy>,
     ret: Ty,
     span: Span,
+    /// What the contract says a call performs, as a function type would write
+    /// it. Named directly rather than called, a function is a value of that
+    /// type, so this is what it has to fit.
+    row: FnRow,
     /// What a call to this is known to hand back, from the declared return
     /// type and from the `ensures` clause. Promises nothing when nothing is.
     guarantee: Guarantee,
@@ -100,6 +105,10 @@ struct Checker<'a> {
     resolutions: &'a Resolutions,
     /// The lowered declarations of every other module being compiled.
     world: &'a World,
+    /// How a row written in this module reads from anywhere else. The same
+    /// lowering the exports table uses, so a row in a type and a row in a
+    /// contract cannot mean two different things.
+    rows: RowLowering,
     types: Types,
     diagnostics: Vec<Diagnostic>,
     /// Types of parameters, locals and handler state.
@@ -175,6 +184,14 @@ impl<'a> Checker<'a> {
                         .collect(),
                     ret,
                     span: Span::at(0),
+                    // An operation performs its own effect and nothing else,
+                    // so naming one where a function type was wanted is only
+                    // allowed if that type made room for it.
+                    row: FnRow::Declared(vec![vow_resolve::RowEntry {
+                        module: PRELUDE_MODULE.to_string(),
+                        effect: "Io".to_string(),
+                        operation: Some(name.to_string()),
+                    }]),
                     guarantee: Guarantee::any(),
                 },
             );
@@ -233,6 +250,7 @@ impl<'a> Checker<'a> {
                         .collect(),
                     ret,
                     span: Span::at(0),
+                    row: FnRow::Declared(Vec::new()),
                     guarantee,
                 },
             );
@@ -366,6 +384,9 @@ impl<'a> Checker<'a> {
                         continue;
                     };
                     let mut signature = self.lower_signature(&function.sig);
+                    // A function named rather than called is a value, and
+                    // what that value performs is what its contract says.
+                    signature.row = FnRow::Declared(self.rows.normalised(&function.contract.uses));
                     signature.guarantee = signature
                         .guarantee
                         .meet(promised_by(&function.contract.ensures, &function.sig));
@@ -410,6 +431,10 @@ impl<'a> Checker<'a> {
             params,
             ret,
             span: sig.span,
+            // Overwritten by the caller for a function with a contract. A
+            // signature on its own says nothing about effects, and an effect
+            // operation performs only its own.
+            row: FnRow::Declared(Vec::new()),
             guarantee,
         }
     }
@@ -533,8 +558,11 @@ impl<'a> Checker<'a> {
                 base
             }
 
-            Type::Fn { params, ret, .. } => Ty::Fn {
+            Type::Fn {
+                params, row, ret, ..
+            } => Ty::Fn {
                 params: params.iter().map(|param| self.lower_type(param)).collect(),
+                row: FnRow::Declared(self.rows.normalised(row)),
                 ret: Box::new(self.lower_type(ret)),
             },
         }
@@ -670,13 +698,18 @@ impl<'a> Checker<'a> {
             // top of the first. Exactly matching otherwise, so a refined
             // parameter is a different function type from an unrefined one and
             // says so, rather than being quietly accepted in one direction.
+            //
+            // The row is the exception, and the only place in this checker
+            // where one type fits another without being it. See [`FnRow`].
             (
                 Ty::Fn {
                     params: a_params,
+                    row: a_row,
                     ret: a_ret,
                 },
                 Ty::Fn {
                     params: e_params,
+                    row: e_row,
                     ret: e_ret,
                 },
             ) => {
@@ -685,6 +718,7 @@ impl<'a> Checker<'a> {
                         .iter()
                         .zip(e_params)
                         .all(|(a, e)| self.compatible(a, e))
+                    && a_row.within(e_row)
                     && self.compatible(a_ret, e_ret)
             }
             _ => actual == expected,
@@ -750,13 +784,17 @@ impl<'a> Checker<'a> {
         span: Span,
         because: Option<(Span, String)>,
     ) {
-        // A function type promises no effects, and whether a value keeps that
-        // promise is a question for the pass that knows about rows. Which
-        // values have to keep it is this pass's question, so it answers it
-        // here, before anything short circuits.
-        if matches!(expected, Ty::Fn { .. }) {
+        // A function type says what a value of it performs, and whether a
+        // value keeps that promise is a question for the pass that knows about
+        // rows. Which values owe which row is this pass's question, so it
+        // answers it here, before anything short circuits.
+        if let Ty::Fn {
+            row: FnRow::Declared(allowed),
+            ..
+        } = expected
+        {
             self.types
-                .require_pure(expr.map(Expr::span).unwrap_or(span));
+                .require_row(expr.map(Expr::span).unwrap_or(span), allowed.clone());
         }
 
         if self.compatible(actual, expected) {
@@ -1870,6 +1908,7 @@ impl<'a> Checker<'a> {
                 let ret = self.infer(body);
                 Ty::Fn {
                     params: param_types,
+                    row: FnRow::Inferred,
                     ret: Box::new(ret),
                 }
             }
@@ -1897,6 +1936,7 @@ impl<'a> Checker<'a> {
             DefKind::Function => match self.signatures.get(&def) {
                 Some(signature) => Ty::Fn {
                     params: signature.params.iter().map(|p| p.ty.clone()).collect(),
+                    row: signature.row.clone(),
                     ret: Box::new(signature.ret.clone()),
                 },
                 None => Ty::Unknown,
@@ -1920,6 +1960,7 @@ impl<'a> Checker<'a> {
             DefKind::Builtin => match self.signatures.get(&def) {
                 Some(signature) => Ty::Fn {
                     params: signature.params.iter().map(|p| p.ty.clone()).collect(),
+                    row: signature.row.clone(),
                     ret: Box::new(signature.ret.clone()),
                 },
                 None if matches!(ident.name.as_str(), "ok" | "err" | "at" | "push") => Ty::Unknown,
@@ -1942,8 +1983,11 @@ impl<'a> Checker<'a> {
             return Ty::Unknown;
         };
         match self.world.get(module, &ident.name) {
-            Some(SurfaceItem::Function { params, ret, .. }) => Ty::Fn {
+            Some(SurfaceItem::Function {
+                params, ret, row, ..
+            }) => Ty::Fn {
                 params: params.clone(),
+                row: row.clone(),
                 ret: Box::new(ret.clone()),
             },
             // A variant is a value of its choice. One with a payload written
@@ -2322,7 +2366,7 @@ impl<'a> Checker<'a> {
 
         let callee_ty = self.infer(callee);
         match callee_ty {
-            Ty::Fn { params, ret } => {
+            Ty::Fn { params, ret, .. } => {
                 if args.len() != params.len() {
                     self.emit(
                         Diagnostic::error(

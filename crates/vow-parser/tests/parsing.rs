@@ -625,6 +625,56 @@ fn a_function_type_is_a_type() {
 }
 
 #[test]
+fn a_function_type_may_carry_a_row() {
+    let (_, parsed) = parse_source(
+        "module a\n\nfn apply(f: Fn(Int) uses Log.note, Audit -> Int) -> Int { f(1) }\n",
+    );
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{:?}",
+        codes_of(&parsed.diagnostics)
+    );
+
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    let Some(vow_ast::Type::Fn { row, .. }) = &function.sig.params[0].ty else {
+        panic!("the parameter should be a function type");
+    };
+    assert_eq!(row.len(), 2);
+    assert_eq!(row[0].effect.name, "Log");
+    assert_eq!(row[0].operation.as_ref().unwrap().name, "note");
+    assert_eq!(row[1].effect.name, "Audit");
+    assert!(row[1].operation.is_none());
+}
+
+#[test]
+fn a_row_on_a_returned_function_type_is_still_the_types_own() {
+    // The row goes before the arrow precisely so this parses. After the return
+    // type it would be the declaration's own contract, and there would be no
+    // way to tell which one was meant.
+    let (_, parsed) = parse_source(
+        "module a\n\nfn make() -> Fn(Int) uses Log.note -> Int\n  uses Audit,\n{ f }\n",
+    );
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{:?}",
+        codes_of(&parsed.diagnostics)
+    );
+
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    let Some(vow_ast::Type::Fn { row, .. }) = &function.sig.ret else {
+        panic!("the return type should be a function type");
+    };
+    assert_eq!(row.len(), 1);
+    assert_eq!(row[0].effect.name, "Log");
+    assert_eq!(function.contract.uses.len(), 1);
+    assert_eq!(function.contract.uses[0].effect.name, "Audit");
+}
+
+#[test]
 fn a_function_type_needs_its_return_type() {
     // One way to write a thing. A function type with no arrow reads like an
     // unfinished one, so it is refused rather than defaulted to `()`.

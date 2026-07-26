@@ -238,11 +238,10 @@ decorative for about an hour. That is now `VOW4019`.
 written with no type, which made it the unknown type, and a closure's effects were charged to
 nobody. Either alone is arguable. Together they meant a closure could carry any effect into
 any function with the row staying empty the whole way. A parameter now needs a type, and a
-closure's effects are charged to whoever wrote it. That is sound because the only closure
-that can leave the function that wrote it is one that performs nothing: `Fn(Int) -> Int` is a
-type, and the second thing it says is that this performs no effects. There is no syntax for a
-row on a function type, and leaving one off cannot mean any row, or a value could carry an
-unstated effect through a signature.
+closure's effects are charged to whoever wrote it. A closure can leave the function that
+wrote it, and the type it leaves through says what it may do on the way: `Fn(Int) -> Int`
+performs nothing, `Fn(Int) uses Log.note -> Int` performs that and no more. Leaving a row off
+cannot mean any row, or a value could carry an unstated effect through a signature.
 
 `diverge.vow` is what a design document claiming something the compiler did not do looks
 like when it gets fixed. "Non-termination is an effect" had a section of its own and

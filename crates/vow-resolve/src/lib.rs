@@ -23,5 +23,5 @@ pub mod exports;
 pub mod resolver;
 
 pub use defs::{DefData, DefId, DefKind, Dot, Resolutions};
-pub use exports::{Export, ExportKind, Exports, RowEntry, Universe};
+pub use exports::{Export, ExportKind, Exports, RowEntry, RowLowering, Universe};
 pub use resolver::{IO_OPERATIONS, PRELUDE, PRELUDE_EFFECTS, PRELUDE_MODULE, Resolved, resolve};

@@ -27,10 +27,10 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use vow_ast::{Expr, FieldDecl, Ident, Item, Module, Outcome, Type};
-use vow_resolve::{DefKind, Resolutions};
+use vow_resolve::{DefKind, Resolutions, RowLowering};
 
 use crate::facts::{self, Guarantee, Range};
-use crate::ty::Ty;
+use crate::ty::{FnRow, Ty};
 
 /// The module path builtin types are named under.
 ///
@@ -45,6 +45,10 @@ pub enum SurfaceItem {
     Function {
         params: Vec<Ty>,
         ret: Ty,
+        /// What its contract says a call performs, so that naming it as a
+        /// value across a module boundary is checked the same way naming one
+        /// at home is.
+        row: FnRow,
         /// What a call is promised to hand back. See the note at the top about
         /// why the bounds cross and the predicate does not.
         guarantee: Guarantee,
@@ -130,6 +134,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
     let lowerer = Lowerer {
         here: Rc::from(path.as_str()),
         resolutions,
+        rows: RowLowering::of(module),
     };
 
     // Refinement predicates, by the name they are declared under. Needed here
@@ -187,6 +192,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                             Some(ty) => lowerer.ty(ty),
                             None => Ty::Unit,
                         },
+                        row: FnRow::Declared(lowerer.rows.normalised(&decl.contract.uses)),
                         guarantee: Guarantee::of(declared).meet(promised),
                     },
                 );
@@ -270,6 +276,9 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
 struct Lowerer<'a> {
     here: Rc<str>,
     resolutions: &'a Resolutions,
+    /// How a row written in this module reads from anywhere else. Shared with
+    /// the exports table so the two cannot drift apart.
+    rows: RowLowering,
 }
 
 impl Lowerer<'_> {
@@ -284,8 +293,11 @@ impl Lowerer<'_> {
         match ty {
             Type::Unit(_) => Ty::Unit,
             Type::Error(_) => Ty::Unknown,
-            Type::Fn { params, ret, .. } => Ty::Fn {
+            Type::Fn {
+                params, row, ret, ..
+            } => Ty::Fn {
                 params: params.iter().map(|param| self.ty(param)).collect(),
+                row: FnRow::Declared(self.rows.normalised(row)),
                 ret: Box::new(self.ty(ret)),
             },
             Type::Named { name, args, .. } => {

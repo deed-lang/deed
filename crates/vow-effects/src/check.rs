@@ -21,9 +21,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use vow_ast::{Block, EffectRef, Expr, FnDecl, Item, Module, Pattern, Stmt};
+use vow_ast::{Block, EffectRef, Expr, FnDecl, Item, Module, Pattern, Stmt, Type};
 use vow_diagnostics::{Diagnostic, FileId, Span};
-use vow_resolve::{DefId, DefKind, Resolutions};
+use vow_resolve::{DefId, DefKind, Resolutions, RowEntry};
 
 use crate::codes;
 use crate::cycles::{self, CallGraph};
@@ -65,15 +65,15 @@ impl Effects {
 
 /// Checks one resolved module.
 ///
-/// `pure_required` is the set of expression spans the type checker decided have
-/// to hand back a function that performs no effects, which is every place a
-/// function value crosses into an `Fn(..) -> ..`. Deciding that needs types and
-/// settling it needs rows, so the two passes each answer the half they can.
+/// `row_required` says, for each expression span the type checker saw a
+/// function value cross into a function type, which effects that type left
+/// room for. Deciding which values owe a row needs types and settling whether
+/// one is kept needs rows, so the two passes each answer the half they can.
 pub fn analyse(
     file: FileId,
     module: &Module,
     resolutions: &Resolutions,
-    pure_required: &HashSet<Span>,
+    row_required: &HashMap<Span, Vec<RowEntry>>,
 ) -> Analysis {
     let mut checker = Checker {
         file,
@@ -88,7 +88,7 @@ pub fn analyse(
         handler_effects: HashMap::new(),
         declared_sites: HashMap::new(),
         recursive: HashSet::new(),
-        pure_required: pure_required.clone(),
+        row_required: row_required.clone(),
         closure_rows: HashMap::new(),
     };
 
@@ -119,8 +119,9 @@ struct Checker<'a> {
     declared_sites: HashMap<DefId, Vec<(EffectItem, Span)>>,
     /// Functions that can reach themselves, so may not return.
     recursive: HashSet<DefId>,
-    /// Expressions the type checker says have to hand back a pure function.
-    pure_required: HashSet<Span>,
+    /// What each expression handing over a function value is allowed to
+    /// perform, as the type it is crossing into wrote it.
+    row_required: HashMap<Span, Vec<RowEntry>>,
     /// The row of each local bound to a closure, within the body being checked.
     ///
     /// A closure is the one value in the language that holds code, and a name
@@ -478,6 +479,22 @@ impl<'a> Checker<'a> {
             None => self.lower_row(&function.contract.uses),
         };
 
+        // A parameter of function type carries its row in its type, and
+        // calling it performs whatever that row says. Without this the row
+        // would be checked where the value was handed over and then forgotten,
+        // so a function taking `Fn() uses Log.note -> ()` and calling it could
+        // declare nothing itself.
+        for param in &function.sig.params {
+            let Some(Type::Fn { row, .. }) = &param.ty else {
+                continue;
+            };
+            let Some(def) = self.resolutions.resolution(param.name.span) else {
+                continue;
+            };
+            let (row, _, _) = self.lower_row(row);
+            self.closure_rows.insert(def, row);
+        }
+
         let mut performed = self.infer_block(&function.body);
 
         // Not returning is something the function does, so it goes in the row
@@ -608,8 +625,8 @@ impl<'a> Checker<'a> {
     }
 
     fn infer_expr(&mut self, expr: &Expr) -> Row {
-        if self.pure_required.contains(&expr.span()) {
-            self.check_pure(expr);
+        if let Some(allowed) = self.row_required.get(&expr.span()).cloned() {
+            self.check_row(expr, &allowed);
         }
         let mut row = Row::new();
 
@@ -699,17 +716,18 @@ impl<'a> Checker<'a> {
             }
 
             // A closure performs its effects when it is called, and the honest
-            // place to charge them is the call site. That needs the row to be
-            // part of the closure's type, which is the row polymorphism
-            // question 03-effects has been putting off.
+            // place to charge them is the call site. That is what happens for
+            // a closure that has been handed over: its type carries a row, the
+            // row is checked where it crossed, and calling it charges the
+            // caller.
             //
-            // Charging the function that writes the closure is the
-            // conservative answer, and it is sound rather than a guess because
-            // a closure cannot leave the function that wrote it: there is no
-            // syntax for a closure type, so it cannot be a parameter, a return
-            // type or a field, and a parameter without a type is now an error.
-            // It over-approximates in one direction only, so a closure defined
-            // and never called still charges its author.
+            // Charging the function that wrote the closure as well is the
+            // conservative answer for the case where it never crosses
+            // anywhere. It over-approximates in one direction only, so a
+            // closure defined and never called still charges its author.
+            // Removing it means deciding what a closure that escapes without
+            // an annotation performs, which is the row variable question
+            // 03-effects has been putting off.
             Expr::Closure { body, .. } => row.extend(&self.infer_expr(body)),
 
             // Specification, not action. See the note at the top of this file.
@@ -780,32 +798,57 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Checks that a value crossing into a function type performs no effects.
+    /// Checks that a value crossing into a function type stays inside the row
+    /// that type wrote down.
     ///
-    /// `Fn(Int) -> Int` promises exactly that, because there is no syntax for a
-    /// row on a function type and leaving one off cannot mean "any row". A
-    /// value carrying an unstated effect through a signature would undo the
-    /// point of having rows.
-    fn check_pure(&mut self, expr: &Expr) {
+    /// `Fn(Int) -> Int` promises to perform nothing, and
+    /// `Fn(Int) uses Log.note -> Int` promises to perform no more than that.
+    /// Leaving a row off cannot mean "any row": a value carrying an unstated
+    /// effect through a signature would undo the point of having rows.
+    fn check_row(&mut self, expr: &Expr, allowed: &[RowEntry]) {
         let row = self.function_value_row(expr);
         if row.is_empty() {
             return;
         }
 
-        let performed: Vec<String> = row.iter().map(|item| self.describe(item)).collect();
+        // Entries the type wrote down that this module has no name for cannot
+        // match anything the value performs anyway, because performing them
+        // here would need a name for them too.
+        let permitted: Row = allowed
+            .iter()
+            .filter_map(|entry| self.item_for(entry))
+            .collect();
+
+        let over: Vec<String> = row
+            .iter()
+            .filter(|item| !permitted.covers(item))
+            .map(|item| self.describe(item))
+            .collect();
+        if over.is_empty() {
+            return;
+        }
+
+        let performed = over.join(", ");
+        let room = if permitted.is_empty() {
+            "a function type with no row promises nothing".to_string()
+        } else {
+            let named: Vec<String> = permitted.iter().map(|item| self.describe(item)).collect();
+            format!(
+                "this function type leaves room only for {}",
+                named.join(", ")
+            )
+        };
+
         self.emit(
             Diagnostic::error(
                 codes::IMPURE_FUNCTION_VALUE,
                 self.file,
                 expr.span(),
-                format!(
-                    "this performs {}, and a function type promises nothing",
-                    performed.join(", ")
-                ),
+                format!("this performs {performed}, and {room}"),
             )
-            .with_primary_label("performs an effect")
+            .with_primary_label("performs an effect the type does not allow")
             .with_note(
-                "there is no syntax for a row on a function type, and leaving one off cannot mean any row: a value carrying an unstated effect through a signature would undo the point of having rows",
+                "write the effect into the function type, as in `Fn(Int) uses Log.note -> Int`; leaving a row off cannot mean any row, because a value carrying an unstated effect through a signature would undo the point of having rows",
             ),
         );
     }
@@ -866,8 +909,25 @@ impl<'a> Checker<'a> {
 
                 Some(self.translate(&entries, span))
             }
+            // A name bound to a function value: a parameter whose type wrote a
+            // row, or a local bound to a closure. Calling it performs what it
+            // said it would.
+            DefKind::Param | DefKind::Local => self.closure_rows.get(&def).cloned(),
             _ => None,
         }
+    }
+
+    /// This module's own way of saying one entry of a row from elsewhere.
+    ///
+    /// `None` when the effect is not in scope here, which is a mistake in some
+    /// callers and simply not interesting in others, so saying so is left to
+    /// them.
+    fn item_for(&self, entry: &RowEntry) -> Option<EffectItem> {
+        let effect = self.name_for(entry)?;
+        Some(match &entry.operation {
+            Some(operation) => EffectItem::operation(effect, operation.clone()),
+            None => EffectItem::whole(effect),
+        })
     }
 
     /// Turns a row from another module into one this module can talk about.
@@ -876,15 +936,12 @@ impl<'a> Checker<'a> {
     /// against a local declaration or an import of the same effect from the
     /// same place. When neither exists the caller performs something it has no
     /// word for, and a row it cannot write is a row it cannot promise.
-    fn translate(&mut self, entries: &[vow_resolve::RowEntry], span: Span) -> Row {
+    fn translate(&mut self, entries: &[RowEntry], span: Span) -> Row {
         let mut row = Row::new();
         for entry in entries {
-            match self.name_for(entry) {
-                Some(effect) => {
-                    row.insert(match &entry.operation {
-                        Some(operation) => EffectItem::operation(effect, operation.clone()),
-                        None => EffectItem::whole(effect),
-                    });
+            match self.item_for(entry) {
+                Some(item) => {
+                    row.insert(item);
                 }
                 None => {
                     let what = match &entry.operation {

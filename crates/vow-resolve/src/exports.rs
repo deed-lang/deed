@@ -54,7 +54,7 @@ impl ExportKind {
 /// The declaring module knows the path from its own syntax and nothing else:
 /// either the effect is declared in it, or it is in its `use` list. That is
 /// what keeps exports computable without resolving anything first.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct RowEntry {
     pub module: String,
     pub effect: String,
@@ -89,35 +89,75 @@ pub struct Export {
     pub row_complete: bool,
 }
 
-/// A declared row, as the far side of an import will read it.
+/// Turns a `uses` clause into the portable form, from syntax alone.
 ///
-/// The flag is false when the row contains something no caller could read,
-/// which today means `sys.*`: it grants everything a capability carries and
-/// there is no name for "everything" on the far side.
-fn row_of(
-    uses: &[vow_ast::EffectRef],
-    here: &str,
-    origins: &BTreeMap<&str, String>,
-) -> (Vec<RowEntry>, bool) {
-    let complete = uses.iter().all(|entry| !entry.all);
-    let entries = uses
-        .iter()
-        .filter(|entry| !entry.all && !entry.effect.name.is_empty())
-        .map(|entry| RowEntry {
-            module: match origins.get(entry.effect.name.as_str()) {
-                Some(path) => path.clone(),
-                // The language provides it, so every module can name it and
-                // no import is involved anywhere.
-                None if PRELUDE_EFFECTS.contains(&entry.effect.name.as_str()) => {
-                    PRELUDE_MODULE.to_string()
-                }
-                None => here.to_string(),
-            },
-            effect: entry.effect.name.clone(),
-            operation: entry.operation.as_ref().map(|op| op.name.clone()),
-        })
-        .collect();
-    (entries, complete)
+/// Exports need this, and so does a row written inside a function type, and
+/// two implementations that agree today are two implementations that stop
+/// agreeing the first time one of them is edited. Nothing here is resolved:
+/// either the effect is declared in this module or it is on a `use` line, and
+/// both are visible in the syntax.
+pub struct RowLowering {
+    here: String,
+    origins: BTreeMap<String, String>,
+}
+
+impl RowLowering {
+    pub fn of(module: &Module) -> Self {
+        let here = module
+            .name
+            .as_ref()
+            .map(|name| name.to_string_path())
+            .unwrap_or_default();
+
+        let mut origins = BTreeMap::new();
+        for entry in &module.uses {
+            let path = entry.path.to_string_path();
+            for name in &entry.names {
+                origins.insert(name.name.clone(), path.clone());
+            }
+        }
+
+        Self { here, origins }
+    }
+
+    /// The entries, and whether they are the whole story.
+    ///
+    /// The flag is false when the clause contains something no caller could
+    /// read, which today means `sys.*`: it grants everything a capability
+    /// carries and there is no name for "everything" on the far side.
+    pub fn row(&self, uses: &[vow_ast::EffectRef]) -> (Vec<RowEntry>, bool) {
+        let complete = uses.iter().all(|entry| !entry.all);
+        let entries = uses
+            .iter()
+            .filter(|entry| !entry.all && !entry.effect.name.is_empty())
+            .map(|entry| RowEntry {
+                module: match self.origins.get(entry.effect.name.as_str()) {
+                    Some(path) => path.clone(),
+                    // The language provides it, so every module can name it
+                    // and no import is involved anywhere.
+                    None if PRELUDE_EFFECTS.contains(&entry.effect.name.as_str()) => {
+                        PRELUDE_MODULE.to_string()
+                    }
+                    None => self.here.clone(),
+                },
+                effect: entry.effect.name.clone(),
+                operation: entry.operation.as_ref().map(|op| op.name.clone()),
+            })
+            .collect();
+        (entries, complete)
+    }
+
+    /// The same, sorted and deduplicated, for a row that has to be compared.
+    ///
+    /// A row inside a type is compared for equality and for containment, and
+    /// two spellings of one row have to be one value or `Fn(Int) uses A, B ->
+    /// Int` and `Fn(Int) uses B, A -> Int` would be different types.
+    pub fn normalised(&self, uses: &[vow_ast::EffectRef]) -> Vec<RowEntry> {
+        let (mut entries, _) = self.row(uses);
+        entries.sort();
+        entries.dedup();
+        entries
+    }
 }
 
 /// Everything one module offers.
@@ -138,18 +178,7 @@ impl Exports {
         // Where each imported name came from, so a row naming an imported
         // effect can say which module declared it. Straight off the `use`
         // lines, so nothing has to be resolved first.
-        let here = module
-            .name
-            .as_ref()
-            .map(|name| name.to_string_path())
-            .unwrap_or_default();
-        let mut origins: BTreeMap<&str, String> = BTreeMap::new();
-        for entry in &module.uses {
-            let path = entry.path.to_string_path();
-            for name in &entry.names {
-                origins.insert(name.name.as_str(), path.clone());
-            }
-        }
+        let rows = RowLowering::of(module);
 
         for item in &module.items {
             // A choice's variants are usable unqualified inside the module
@@ -204,7 +233,7 @@ impl Exports {
                     true,
                 ),
                 Item::Function(decl) => {
-                    let (row, complete) = row_of(&decl.contract.uses, &here, &origins);
+                    let (row, complete) = rows.row(&decl.contract.uses);
                     (
                         &decl.sig.name,
                         ExportKind::Function,

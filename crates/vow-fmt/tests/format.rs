@@ -274,5 +274,7 @@ const SOURCES: &[&str] = &[
     "module a\n\nfn f(ns: List<Int>) -> () {\n    for n in ns {\n        g(n)\n    }\n}\n",
     "module a\n\nfn f() -> List<List<Int>> { [[], [1]] }\n",
     "module a\n\nfn f() -> Int { (1 + 2) * (3 - 4) / (5 % 6) }\n",
+    "module a\n\nfn f(g: Fn(Int, String) -> Int) -> Int { g(1, \"x\") }\n",
+    "module a\n\neffect E {\n    fn op() -> ()\n}\n\nfn f(g: Fn(Int) uses E.op -> Int) -> Int\n  uses\n    E.op,\n{\n    g(1)\n}\n",
     "module a\n\ntest \"a test\" {\n    assert 1 == 1\n}\n",
 ];

@@ -255,14 +255,21 @@ pub enum Type {
         args: Vec<Type>,
         span: Span,
     },
-    /// `Fn(Int, Int) -> Int`
+    /// `Fn(Int, Int) -> Int`, or `Fn(String) uses Io.write -> ()`
     ///
-    /// A function that performs no effects. There is no syntax for a row on a
-    /// function type, and leaving one off cannot mean "any row": a value that
-    /// carried an unstated effect through a signature would undo the whole
-    /// point of having rows.
+    /// The row goes before the arrow, which is not where a contract's `uses`
+    /// goes, and that is the reason. A function declaration's contract also
+    /// starts with `uses` and also comes after a return type, so
+    /// `fn f() -> Fn(Int) -> Int uses Log.note` would have two readings and no
+    /// way to tell them apart. Before the arrow there is nothing to confuse it
+    /// with: the `->` ends the list.
+    ///
+    /// No row means the function performs nothing. Leaving one off cannot mean
+    /// "any row": a value carrying an unstated effect through a signature
+    /// would undo the whole point of having rows.
     Fn {
         params: Vec<Type>,
+        row: Vec<EffectRef>,
         ret: Box<Type>,
         span: Span,
     },

@@ -801,9 +801,17 @@ impl Resolver<'_> {
                     self.resolve_type(arg);
                 }
             }
-            Type::Fn { params, ret, .. } => {
+            Type::Fn {
+                params, row, ret, ..
+            } => {
                 for param in params {
                     self.resolve_type(param);
+                }
+                // A row inside a type names effects the same way a contract
+                // does, so naming one here counts as using the import and
+                // naming something that is not an effect is an error here too.
+                for effect in row {
+                    self.resolve_effect_ref(effect);
                 }
                 self.resolve_type(ret);
             }
