@@ -302,14 +302,31 @@ impl Exports {
                     true,
                     Vec::new(),
                 ),
-                Item::Handler(decl) => (
-                    &decl.name,
-                    ExportKind::Handler,
-                    vec![decl.effect.name.clone()],
-                    Vec::new(),
-                    true,
-                    Vec::new(),
-                ),
+                Item::Handler(decl) => {
+                    // What implementing the effect performs. A `with` block
+                    // discharges the effect a handler implements and not the
+                    // effects the handler itself performs, so those belong to
+                    // whoever installed it, and an importer has to be able to
+                    // read them off the import.
+                    rows.declaring(&[]);
+                    let mut row = Vec::new();
+                    let mut complete = true;
+                    for operation in &decl.operations {
+                        let (entries, whole) = rows.row(&operation.contract.uses);
+                        row.extend(entries);
+                        complete &= whole;
+                    }
+                    row.sort();
+                    row.dedup();
+                    (
+                        &decl.name,
+                        ExportKind::Handler,
+                        vec![decl.effect.name.clone()],
+                        row,
+                        complete,
+                        Vec::new(),
+                    )
+                }
                 Item::Function(decl) => {
                     rows.declaring(&decl.sig.rows);
                     let (row, complete) = rows.row(&decl.contract.uses);

@@ -101,6 +101,7 @@ pub fn analyse(
         effects: Effects::default(),
         diagnostics: Vec::new(),
         handler_effects: HashMap::new(),
+        handler_rows: HashMap::new(),
         declared_sites: HashMap::new(),
         recursive: HashSet::new(),
         row_required: row_required.clone(),
@@ -133,6 +134,14 @@ struct Checker<'a> {
     diagnostics: Vec<Diagnostic>,
     /// Local handler definition to the effect it implements.
     handler_effects: HashMap<DefId, DefId>,
+    /// Local handler definition to what implementing it performs.
+    ///
+    /// A handler is code, and the code has a row. `with` discharges the effect
+    /// the handler implements, which is what a handler is for, and says nothing
+    /// about what the handler does to implement it. Those effects belong to
+    /// whoever installed it, because installing it is the decision that caused
+    /// them.
+    handler_rows: HashMap<DefId, Row>,
     /// Where each declared entry was written, for diagnostics.
     declared_sites: HashMap<DefId, Vec<(EffectItem, Span)>>,
     /// Functions that can reach themselves, so may not return.
@@ -208,6 +217,20 @@ impl<'a> Checker<'a> {
                     ) && self.kind_of(effect_def) == DefKind::Effect
                     {
                         self.handler_effects.insert(handler_def, effect_def);
+                    }
+                    // What implementing the effect costs. A `with` block
+                    // discharges the effect the handler implements and not the
+                    // ones the handler itself performs, and those have to be
+                    // charged to somebody or a function holding a `Console`
+                    // could install a handler that writes to it and still
+                    // declare an empty row.
+                    if let Some(def) = self.resolutions.resolution(handler.name.span) {
+                        let mut row = Row::new();
+                        for operation in &handler.operations {
+                            let (performed, _, _) = self.lower_row(&operation.contract.uses);
+                            row.extend(&performed);
+                        }
+                        self.handler_rows.insert(def, row);
                     }
                 }
                 Item::Function(function) => {
@@ -844,9 +867,15 @@ impl<'a> Checker<'a> {
             Expr::With { handlers, body, .. } => {
                 let mut handled: HashSet<DefId> = HashSet::new();
                 let mut handles_everything = false;
+                // What the handlers themselves perform, kept with the body's
+                // row rather than added straight to this function's, so that
+                // installing a handler for `Log` whose operations perform
+                // `Log` is answered by the same handler like anything else.
+                let mut inside = Row::new();
 
                 for handler in handlers {
                     row.extend(&self.infer_expr(handler));
+                    inside.extend(&self.handler_row(handler));
                     match self.handled_effect(handler) {
                         Some(effect) => {
                             handled.insert(effect);
@@ -855,7 +884,7 @@ impl<'a> Checker<'a> {
                     }
                 }
 
-                let inside = self.infer_block(body);
+                inside.extend(&self.infer_block(body));
                 if !handles_everything {
                     for item in inside.iter() {
                         if !handled.contains(&item.effect) {
@@ -1190,6 +1219,47 @@ impl<'a> Checker<'a> {
                 _ => None,
             }
         })
+    }
+
+    /// What installing a handler performs.
+    ///
+    /// A `with` block answers for the effect the handler implements. It does
+    /// not answer for what the handler does to implement it: a handler for
+    /// `Log` that writes to a console is a program writing to a console, and
+    /// the function that chose to install it is the one that decided so. Before
+    /// this, those effects were charged to nobody, so a function holding a
+    /// `Console` could install such a handler and still declare an empty row,
+    /// which is exactly the claim an empty row is not allowed to make.
+    fn handler_row(&mut self, handler: &Expr) -> Row {
+        let def = match handler {
+            Expr::Ident(ident) => self.resolutions.resolution(ident.span),
+            Expr::StructLit { path, .. } => match &**path {
+                Expr::Ident(ident) => self.resolutions.resolution(ident.span),
+                Expr::Field { name, .. } => self.resolutions.resolution(name.span),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(def) = def else {
+            return Row::new();
+        };
+
+        if let Some(row) = self.handler_rows.get(&def) {
+            return row.clone();
+        }
+
+        // A handler from another module. What it performs is part of its
+        // declaration, so it travels in the export the same way a function's
+        // row does, and for the same reason: without it the effect system
+        // would stop at the module boundary, which is where most calls are.
+        let Some(export) = self.resolutions.import(def) else {
+            return Row::new();
+        };
+        if export.kind != vow_resolve::ExportKind::Handler {
+            return Row::new();
+        }
+        let entries = export.row.clone();
+        self.translate(&entries, handler.span())
     }
 
     /// The effect a handler expression implements, or `None` when that cannot

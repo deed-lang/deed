@@ -402,6 +402,15 @@ which are rules the language already had rather than allowances made here. Point
 that used to slip through. The point is not what it finds today. It is that the next one
 reports itself, with a stack, from a real program.
 
+It found one the same day it was written, which is sooner than I expected and worse than I
+expected. A `with` block discharges the effect the handler implements, which is what a
+handler is for, and it said nothing about what the handler does to implement it. So a
+function handed a `Console` could install a handler whose operation writes to that console,
+run it, and declare an empty row. Everything checked clean and the screen still got written
+to. Those effects go to whoever installed the handler now, which is the function that made
+the decision, and a handler carries what it performs across a module boundary the same way a
+function carries its row.
+
 The worst one so far was found the same afternoon. The `Guarded` tier did not guard a return
 value. `vow check` printed "so it becomes a runtime check" and there was no check: the
 interpreter guarded arguments and annotated `let`s, because those were the two places
