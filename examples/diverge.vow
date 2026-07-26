@@ -14,8 +14,10 @@
 
 module examples/diverge
 
-// Vow has no loop syntax, so this is the only way to count down, and the row
-// says out loud that it might not come back up.
+// A `for` walks a list, and counting down is not walking a list, so this is
+// still recursion and the row still says out loud that it might not come back
+// up. That is the line between the two: iteration over something that already
+// exists terminates, and anything else has to admit it might not.
 fn factorial(n: Int) -> Int
   uses
     Diverge,

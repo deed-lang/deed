@@ -915,6 +915,31 @@ impl Resolver<'_> {
                 }
             }
 
+            Expr::For {
+                binder,
+                iterable,
+                accumulator,
+                body,
+                ..
+            } => {
+                self.resolve_expr(iterable);
+                // What the accumulator starts as is worked out before the loop
+                // exists, so the accumulator is not in scope in it. `with sum =
+                // sum` is a name that does not resolve rather than a value
+                // that refers to itself.
+                if let Some(accumulator) = accumulator {
+                    self.resolve_expr(&accumulator.init);
+                }
+
+                self.push_scope(ScopeKind::Local);
+                self.declare_local(binder, DefKind::Local);
+                if let Some(accumulator) = accumulator {
+                    self.declare_local(&accumulator.name, DefKind::Local);
+                }
+                self.resolve_block(body);
+                self.pop_scope();
+            }
+
             Expr::Block(block) => self.resolve_block(block),
 
             Expr::Closure { params, body, .. } => {

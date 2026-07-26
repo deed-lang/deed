@@ -176,6 +176,15 @@ fn a_long_list_breaks_one_element_per_line() {
 }
 
 #[test]
+fn a_for_keeps_its_head_on_one_line() {
+    let formatted = fmt("module a\n\nfn f() -> Int {\nfor n in ns with sum=0 {sum+n}\n}\n");
+    assert!(
+        formatted.contains("    for n in ns with sum = 0 {\n"),
+        "{formatted}"
+    );
+}
+
+#[test]
 fn a_trailing_comment_stays_on_its_line() {
     let formatted = fmt("module a\n\nfn f() -> Int {\n    let x = 1 // why\n    x\n}\n");
     assert!(formatted.contains("let x = 1 // why"), "{formatted}");
@@ -261,6 +270,8 @@ const SOURCES: &[&str] = &[
     "module a\n\nfn f(v: C) -> Int {\n    match v {\n        One => 1,\n        Two { x, y } => x + y,\n    }\n}\n",
     "module a\n\nfn f() -> Int { g(1)? + h(2)? }\n",
     "module a\n\nfn f() -> List<Int> { [1, 2, 3] }\n",
+    "module a\n\nfn f(ns: List<Int>) -> Int {\n    for n in ns with sum = 0 {\n        sum + n\n    }\n}\n",
+    "module a\n\nfn f(ns: List<Int>) -> () {\n    for n in ns {\n        g(n)\n    }\n}\n",
     "module a\n\nfn f() -> List<List<Int>> { [[], [1]] }\n",
     "module a\n\nfn f() -> Int { (1 + 2) * (3 - 4) / (5 % 6) }\n",
     "module a\n\ntest \"a test\" {\n    assert 1 == 1\n}\n",

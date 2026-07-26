@@ -566,6 +566,19 @@ impl<'a> Interp<'a> {
         self.frames.last_mut().expect("there is always a frame")
     }
 
+    /// Binds a name in the running frame, replacing whatever was there.
+    ///
+    /// The one caller is `for`, and replacing is the point: each turn binds
+    /// the element and the accumulator again rather than assigning to them.
+    /// A binding keyed by definition makes that the same operation, and the
+    /// definition is out of scope after the loop, so nothing can name what is
+    /// left behind.
+    fn rebind(&mut self, ident: &Ident, value: Value) {
+        if let Some(def) = self.def_of(ident) {
+            self.frame().insert(def, value);
+        }
+    }
+
     // -- failures ----------------------------------------------------------
 
     fn fail(&self, diagnostic: Diagnostic) -> Signal {
@@ -686,6 +699,40 @@ impl<'a> Interp<'a> {
                         None => Ok(Value::Unit),
                     }
                 }
+            }
+
+            // A fold, run as one. Nothing is assigned: the binder and the
+            // accumulator are bound again on each turn, and the block's value
+            // is what the next turn starts with.
+            Expr::For {
+                binder,
+                iterable,
+                accumulator,
+                body,
+                ..
+            } => {
+                let walked = self.eval(iterable)?;
+                let Value::List(elements) = walked else {
+                    return Err(self.not_runnable(
+                        iterable.span(),
+                        &format!("a `for` over {}", walked.describe()),
+                    ));
+                };
+
+                let mut carried = match accumulator {
+                    Some(accumulator) => self.eval(&accumulator.init)?,
+                    None => Value::Unit,
+                };
+
+                for element in elements.iter() {
+                    self.rebind(binder, element.clone());
+                    if let Some(accumulator) = accumulator {
+                        self.rebind(&accumulator.name, carried);
+                    }
+                    carried = self.eval_block(body)?;
+                }
+
+                Ok(carried)
             }
 
             Expr::Match {

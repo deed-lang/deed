@@ -50,33 +50,20 @@ fn with_item(items: List<String>, item: String) -> List<String> {
     push(items, item)
 }
 
-// Vow has no loop syntax, so walking a list is recursion, and a function that
-// can reach itself says so in its row.
-fn sum_from(numbers: List<Int>, index: Int) -> Int
-  uses
-    Diverge,
-{
-    match at(numbers, index) {
-        ok(n) => n + sum_from(numbers, index + 1),
-        err(why) => 0,
+// Walking one is a `for`, which is a fold with syntax: `sum` is bound again on
+// every turn rather than assigned, so iteration exists and handler state is
+// still the only mutable thing in the language. It walks a list that already
+// exists, so it stops, so there is nothing to declare.
+fn total(numbers: List<Int>) -> Int {
+    for n in numbers with sum = 0 {
+        sum + n
     }
 }
 
-fn total(numbers: List<Int>) -> Int
-  uses
-    Diverge,
-{
-    sum_from(numbers, 0)
-}
-
-// What is deliberately missing: `for`, a way to declare `List<T>` yourself,
-// maps, sets, and any operation that takes a function. Iteration is not left
-// out because it is hard to parse. The thesis of this language is that handler
-// state is the only mutable thing in it, and an accumulator loop wants either
-// mutation or a fold, so the shape of `for` is a decision about that claim
-// rather than a feature to add. Recursion is what there is until that decision
-// is made, and it is honest about the cost: every walk over a list declares
-// `Diverge`.
+// What is deliberately missing: a way to declare `List<T>` yourself, maps,
+// sets, `break`, and any operation that takes a function. The last one needs a
+// row on a function type, which is the piece the effect system is still short
+// of, so `map` and `filter` are waiting on the same thing.
 
 test "a literal decides its element type" {
     assert digits() == [1, 2, 3]
@@ -102,7 +89,7 @@ test "push leaves the original alone" {
     assert longer == ["milk", "bread"]
 }
 
-test "walking one takes recursion" {
+test "walking one is a fold" {
     assert total([1, 2, 3]) == 6
     assert total([]) == 0
 }

@@ -290,6 +290,18 @@ impl<'a> Checker<'a> {
             }
             Expr::Block(block) => self.calls_in_block(block, found),
             Expr::Closure { body, .. } => self.calls_in(body, found),
+            Expr::For {
+                iterable,
+                accumulator,
+                body,
+                ..
+            } => {
+                self.calls_in(iterable, found);
+                if let Some(accumulator) = accumulator {
+                    self.calls_in(&accumulator.init, found);
+                }
+                self.calls_in_block(body, found);
+            }
             Expr::With { handlers, body, .. } => {
                 for handler in handlers {
                     self.calls_in(handler, found);
@@ -667,6 +679,24 @@ impl<'a> Checker<'a> {
             }
 
             Expr::Block(block) => row.extend(&self.infer_block(block)),
+
+            // A `for` walks a list that is already there, so it stops. That
+            // is the whole point of it being a fold rather than a loop: the
+            // alternative to having one is recursion, and recursion has to
+            // declare `Diverge` every time, which is how a row that was
+            // supposed to mean something drifts into meaning nothing.
+            Expr::For {
+                iterable,
+                accumulator,
+                body,
+                ..
+            } => {
+                row.extend(&self.infer_expr(iterable));
+                if let Some(accumulator) = accumulator {
+                    row.extend(&self.infer_expr(&accumulator.init));
+                }
+                row.extend(&self.infer_block(body));
+            }
 
             // A closure performs its effects when it is called, and the honest
             // place to charge them is the call site. That needs the row to be

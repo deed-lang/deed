@@ -657,6 +657,25 @@ impl Printer<'_> {
                 self.match_expr(&scrutinee, arms)
             }
 
+            Expr::For {
+                binder,
+                iterable,
+                accumulator,
+                body,
+                ..
+            } => {
+                let mut head = format!("for {} in {}", binder.name, self.expr(iterable));
+                if let Some(accumulator) = accumulator {
+                    let _ = write!(
+                        head,
+                        " with {} = {}",
+                        accumulator.name.name,
+                        self.expr(&accumulator.init)
+                    );
+                }
+                format!("{head} {}", self.rendered_block(body))
+            }
+
             Expr::Block(block) => self.rendered_block(block),
 
             Expr::Closure { params, body, .. } => {

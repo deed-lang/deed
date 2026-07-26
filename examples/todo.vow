@@ -3,22 +3,24 @@
 //
 // It reads a list of tasks out of a file it was handed access to, counts them,
 // and prints the ones that are not done. That is the smallest thing anybody
-// would call a program, and until this week none of it could be written down:
+// would call a program, and until recently none of it could be written down:
 // there was no way to hold four tasks, and no way to turn a count into
 // something you could print.
 //
-// Three things this file found, none of which were obvious from the inside:
+// What it found, in the order it found it:
 //
-// 1. `walk`, `count_done` and `open_titles` are the same function three times.
-//    Every one of them is "start at 0, look at each element, stop when `at`
-//    fails", and every one of them declares `Diverge` for it. That is the
-//    argument for iteration, made by a program rather than by a design
-//    document.
+// 1. Three of its functions were the same function. Each was "start at 0, look
+//    at each element, stop when `at` fails", and each declared `Diverge` for
+//    it, because a function that can reach itself may not return. That was the
+//    argument for iteration made by a program rather than by a design
+//    document, and it is what #90 decided. The three walks below are `for`
+//    loops now and none of them declares anything.
 //
-// 2. An accumulator has to be a parameter. `open_titles` threads `found`
-//    through the recursion because there is nowhere else to put it: handler
-//    state is the only mutable thing in the language, and reaching for a
-//    handler to collect strings would be using an effect to avoid a loop.
+// 2. An accumulator had to be threaded through as a parameter, because handler
+//    state is the only mutable thing in the language and reaching for a
+//    handler to collect four strings would be using an effect to get around
+//    not having a loop. The `for` here carries one and still nothing is
+//    mutable: `found` is bound again on every turn rather than assigned.
 //
 // 3. The file format is `x|title` because that is what the language can take
 //    apart. `[x] title` would need searching or slicing and there is neither,
@@ -31,10 +33,9 @@
 //    reason. The repository forces LF, which is a thing a program should not
 //    have to depend on.
 //
-// What it still cannot do is the other half of a to-do list: adding a task and
-// saving it. `Io` can read a file and open a directory, and there is no
-// operation that writes one. So this is a reader, and 04-capabilities says why
-// writing is a bigger question than it looks.
+// What it still cannot do is add a task and save it. `Io.save` exists now, so
+// that is a missing `main` rather than a missing operation, and the reason it
+// is missing is that a program has no way to read an argument.
 
 module examples/todo
 
@@ -54,42 +55,31 @@ fn parse(line: String) -> Result<Task, String> {
     ok(Task { done: mark == "x", title })
 }
 
-// The three walks. Written out rather than abstracted, because there is
-// nothing to abstract them with: a function that took another function would
-// need a row on the function type, and that is the same missing piece.
-fn walk(lines: List<String>, index: Int) -> Int
-  uses
-    Diverge,
-{
-    match at(lines, index) {
-        ok(line) => counts(line) + walk(lines, index + 1),
-        err(why) => 0,
-    }
-}
-
-fn count_done(lines: List<String>, index: Int) -> Int
-  uses
-    Diverge,
-{
-    match at(lines, index) {
-        ok(line) => finished(line) + count_done(lines, index + 1),
-        err(why) => 0,
-    }
-}
-
-fn open_titles(lines: List<String>, index: Int, found: List<String>) -> List<String>
-  uses
-    Diverge,
-{
-    match at(lines, index) {
-        ok(line) => open_titles(lines, index + 1, keep_open(found, line)),
-        err(why) => found,
-    }
-}
-
+// The three walks, which used to be three recursive functions and three
+// `Diverge` declarations. A `for` walks a list that is already there, so it
+// stops, so it has nothing to declare.
+//
 // A blank line is not a task and not an error worth reporting. A file that
 // ends in a newline has one, which is the sort of thing you only find out by
 // running the program.
+fn walk(lines: List<String>) -> Int {
+    for line in lines with total = 0 {
+        total + counts(line)
+    }
+}
+
+fn count_done(lines: List<String>) -> Int {
+    for line in lines with total = 0 {
+        total + finished(line)
+    }
+}
+
+fn open_titles(lines: List<String>) -> List<String> {
+    for line in lines with found = [] {
+        keep_open(found, line)
+    }
+}
+
 fn counts(line: String) -> Int {
     match parse(line) {
         ok(task) => 1,
@@ -127,11 +117,8 @@ fn unless_done(found: List<String>, task: Task) -> List<String> {
     }
 }
 
-fn report(lines: List<String>) -> String
-  uses
-    Diverge,
-{
-    to_string(count_done(lines, 0)) + " of " + to_string(walk(lines, 0)) + " done"
+fn report(lines: List<String>) -> String {
+    to_string(count_done(lines)) + " of " + to_string(walk(lines)) + " done"
 }
 
 // A file that is not there is not a crash. The capability says which directory
@@ -150,13 +137,12 @@ fn main(sys: System) -> Int
   uses
     Io.write,
     Io.read,
-    Diverge,
 {
     let out = sys.console
     let lines = split(read_or(sys.files, "todo.txt", ""), "\n")
 
     Io.write(out, report(lines))
-    Io.write(out, "still open: " + join(open_titles(lines, 0, []), ", "))
+    Io.write(out, "still open: " + join(open_titles(lines), ", "))
 
     0
 }
@@ -174,15 +160,15 @@ test "a line with nothing to split is not a task" {
 test "counting and collecting agree with each other" {
     let lines = ["x|one", "-|two", "-|three", ""]
 
-    assert walk(lines, 0) == 3
-    assert count_done(lines, 0) == 1
-    assert open_titles(lines, 0, []) == ["two", "three"]
+    assert walk(lines) == 3
+    assert count_done(lines) == 1
+    assert open_titles(lines) == ["two", "three"]
     assert report(lines) == "1 of 3 done"
 }
 
 test "an empty list is not a special case anywhere" {
-    assert walk([], 0) == 0
-    assert count_done([], 0) == 0
-    assert open_titles([], 0, []) == []
+    assert walk([]) == 0
+    assert count_done([]) == 0
+    assert open_titles([]) == []
     assert report([]) == "0 of 0 done"
 }

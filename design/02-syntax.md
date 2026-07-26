@@ -154,15 +154,52 @@ value like everything else that can fail. `push` returns a new list: handler sta
 to be the only mutable thing here, and a collection that could be written through would
 quietly be a second one.
 
-What is missing is iteration, and it is missing on purpose rather than by omission. Walking a
-list today is recursion, which means `Diverge` in the row every time. An accumulator loop
-wants either mutation or a fold, so the shape of `for` is a decision about the claim that
-handler state is the only mutable thing, not a feature to bolt on. That decision is an open
-question below, and until it is made the cost is paid in rows.
+## Iteration
 
+```vow
+let total = for n in numbers with sum = 0 {
+    sum + n
+}
 
-What is deliberately absent: slicing, searching, splitting, case, and turning a number into a
-string. All of those want a standard library, and Vow does not have a story for one yet.
+for line in lines {
+    Io.write(out, line)
+}
+```
+
+A `for` is a fold with syntax, not a loop with a variable in it. The block's value is the
+accumulator for the next turn, and the value of the whole expression is the last one. Leaving
+`with` off means an accumulator of `()`, so the body has to produce `()` and the loop is
+there for its effects.
+
+**Nothing here is assigned.** `sum` is a fresh binding on every turn. That is the entire
+reason this shape was chosen over the familiar one: Vow has exactly one mutable thing, a
+handler's `state`, and the claim that an empty effect row means a function cannot observe or
+cause a change to anything rests on there being no second one. A `for` with a mutable
+accumulator would have been the more familiar spelling of a weaker language.
+
+**The other reason is `Diverge`.** There is no termination proving, so a function that can
+reach itself has to declare that it may not return. Without a loop, walking a list is
+recursion, and walking a list is the most ordinary thing a program does, so almost every
+function in a real program would carry `Diverge`. 03-effects says a row that drifts toward
+listing everything stops carrying information, which is exactly what that is. A `for` walks a
+list that is already there, so it stops, so it declares nothing. `examples/todo.vow` had
+three recursive walks and three `Diverge` declarations before this existed and has none of
+either now.
+
+The accumulator is not in scope in what it starts as: `with sum = sum` names something that
+does not exist yet rather than a value that refers to itself. The binder is a binding like
+any other, so shadowing an outer name with it is the same error it is anywhere else.
+
+What can be walked is a `List`, and nothing else. A `for` over a `String` or a `Result` would
+need a way to say what walking one means, which is a trait system, which does not exist.
+
+What is deliberately absent is `while`, `break` and `continue`. A `while` cannot be shown to
+terminate, so it would bring `Diverge` back with it and undo the reason for having `for`.
+`break` and `continue` want a loop with control flow in it rather than a fold, and neither
+has come up yet in a program written here.
+
+What is deliberately absent from lists: slicing, searching, and any operation that takes a
+function. The last one needs a row on a function type, which is the open question below.
 
 ## Functions and the contract block
 
@@ -458,16 +495,21 @@ fn factorial(n: Int) -> Int
 }
 ```
 
-Vow has no loop syntax, so a call cycle is the only way a function can fail to return.
-`Diverge` is a built-in effect with no operations, in the prelude next to `Io` and for the
-same reason: a program that could declare its own would be a program that could opt out of
-saying it might not finish. It goes in the row like anything else a function does, so the
-tightness rule applies as well, and declaring it without recursing is `VOW5002`.
+A call cycle is the only way a function can fail to return. There is a loop now, and it does
+not change that: a `for` walks a list that already exists, so it stops, and it declares
+nothing. `Diverge` is a built-in effect with no operations, in the prelude next to `Io` and
+for the same reason: a program that could declare its own would be a program that could opt
+out of saying it might not finish. It goes in the row like anything else a function does, so
+the tightness rule applies as well, and declaring it without recursing is `VOW5002`.
 
 **There is no termination proving.** The example above obviously terminates and still has to
 declare it. "A loop the compiler cannot show terminates" currently means "any call cycle at
 all", because the compiler shows nothing. That is over-approximation in the direction of
 noise, and it is written here rather than left for someone to discover.
+
+That over-approximation is also why iteration exists. Walking a list is the most ordinary
+thing a program does, and without `for` every walk is a call cycle, so almost every function
+in a real program would carry `Diverge` and the row would stop telling anyone anything.
 
 Mutual recursion counts, worked out from the module's call graph. A cycle that leaves the
 module and comes back does not, because the graph is local, and reading another module's
@@ -719,11 +761,12 @@ claim about IO only, and it is supposed to be a claim about everything.
 It also keeps P1 intact. A mutable local would mean a name's value depends on where you are
 in the function, which is the same objection that made shadowing an error.
 
-The cost is that accumulator loops have to be written some other way, and that bill has now
-arrived. `examples/todo.vow` threads its accumulator through a recursive parameter, because
-there is nowhere else to put it and reaching for a handler to collect four strings would be
-using an effect to get around not having a loop. It is not a bad workaround. It is just the
-only one, and there are three copies of it in one small file.
+The cost is that accumulator loops have to be written some other way, and the other way is a
+fold. `for n in numbers with sum = 0 { ... }` binds `sum` again on every turn rather than
+assigning to it, so iteration exists and this rule is untouched. `examples/todo.vow` is where
+that bill arrived: it threaded an accumulator through a recursive parameter because there was
+nowhere else to put it, and reaching for a handler to collect four strings would have been
+using an effect to get around not having a loop.
 
 ## Open questions
 
@@ -748,10 +791,10 @@ only one, and there are three copies of it in one small file.
   List literals made `[` a real case rather than a hypothetical one, and it still holds only
   because there is no indexing operator. That is a coincidence, not a rule. Either the
   grammar should guarantee it or statements need a real terminator.
-- Iteration. Recursion is the only way to walk a list, so every walk declares `Diverge`. A
-  `for` loop wants an accumulator, an accumulator wants mutation or a fold, and mutation is
-  supposed to be handler state and nothing else. Whichever way that goes is a statement about
-  the central claim of the language rather than a piece of syntax.
+- Whether a `for` should be able to stop early. There is no `break`, so a search over a list
+  walks all of it, and a fold cannot say it has seen enough. The honest version is probably a
+  `for` whose accumulator is a `Result`, which stops meaning "done" and starts meaning
+  "failed", so it needs its own answer rather than a reused one.
 - Generics: how much is needed before P2 breaks. `Result` and `List` are both built in
   because there is no way to declare one, and a third would be the point where the shortcut
   has clearly stopped paying. Higher-kinded types are almost certainly out.

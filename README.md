@@ -173,15 +173,32 @@ own tests.
 `todo.vow` is the one written to find out what is missing rather than to show what is there.
 It reads a list of tasks out of a directory it was handed, counts them, and prints the ones
 that are not done, which is the smallest thing anybody would call a program and was not
-writable at all a week ago. It found four things. Three of its functions are the same
+writable at all a week ago. It found four things. Three of its functions were the same
 function: start at zero, look at each element, stop when the index runs out, and declare
-`Diverge` for the privilege. An accumulator has to be threaded through as a parameter,
+`Diverge` for the privilege. An accumulator had to be threaded through as a parameter,
 because handler state is the only mutable thing in the language and reaching for a handler to
-collect strings would be using an effect to avoid a loop. The file format is `x|title` rather
-than `[x] title` because splitting is all there is, so the data got bent to fit the tool. And
-the first run printed its own output backwards over itself, because splitting on `\n` leaves
-a carriage return on every line of a file written on Windows and there is nothing that trims
-one off. None of those were obvious from inside the compiler.
+collect strings would be using an effect to avoid a loop. Those two are what decided what a
+loop looks like here, and the three walks are `for` loops now with nothing declared. The file
+format is `x|title` rather than `[x] title` because splitting is all there is, so the data got
+bent to fit the tool. And the first run printed its own output backwards over itself, because
+splitting on `\n` leaves a carriage return on every line of a file written on Windows and
+there is nothing that trims one off. None of those were obvious from inside the compiler.
+
+`for` is a fold with syntax rather than a loop with a variable in it:
+
+```vow
+let total = for n in numbers with sum = 0 {
+    sum + n
+}
+```
+
+The block's value is the accumulator for the next turn, and `sum` is a fresh binding every
+time rather than something assigned to, so iteration exists and a handler's `state` is still
+the only mutable thing in the language. The second reason for that shape is `Diverge`: there
+is no termination proving, so a function that can reach itself has to declare it may not
+return, and without a loop every walk over a list is recursion. A row that almost every
+function carries the same entry in has stopped saying anything. A `for` walks a list that is
+already there, so it stops, so it declares nothing.
 
 `journal.vow` is the half `todo.vow` could not write. `Io` could read a file and open a
 directory and there was no operation that wrote one, so `Dir` was a read capability wearing a
