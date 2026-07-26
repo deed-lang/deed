@@ -1,9 +1,15 @@
-//! `split`, `join`, `to_string` and `to_int`.
+//! `split`, `join`, `trim`, `to_string` and `to_int`.
 //!
 //! Two pairs of inverses, and the reason they exist is that before them a
 //! program could hold text and hold a number and get from neither to the
 //! other. Nothing could take input apart, put output together, or print a
 //! count.
+//!
+//! `trim` is the odd one out and is here for a different reason: it is the one
+//! text operation that cannot be written in the language. `contains` is
+//! `length(split(a, b)) > 1` and `replace` is `join(split(a, from), to)`, but
+//! deciding what whitespace is needs to look at characters and taking it off
+//! the ends needs a walk that stops early, which a fold does not do.
 
 use vow_diagnostics::{Diagnostic, SourceMap, render_human};
 use vow_driver::check_text;
@@ -124,6 +130,17 @@ fn to_string_will_not_take_a_string() {
     );
 }
 
+#[test]
+fn trim_takes_text_and_gives_text() {
+    check_ok("module a\n\nfn f(text: String) -> String { trim(text) }\n");
+
+    let (_, checked) = check("module a\n\nfn f(n: Int) -> String { trim(n) }\n");
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![vow_typeck::codes::TYPE_MISMATCH]
+    );
+}
+
 // -- running ----------------------------------------------------------------
 
 #[test]
@@ -184,5 +201,50 @@ fn text_that_is_not_a_number_comes_back_as_an_error() {
          \x20 assert to_int(\" 4\") == err(\"` 4` is not a number\")\n\
          \x20 assert to_int(\"4.5\") == err(\"`4.5` is not a number\")\n\
          \x20 assert to_int(\"99999999999999999999\") == err(\"`99999999999999999999` is not a number\")",
+    );
+}
+
+#[test]
+fn trim_takes_whitespace_off_both_ends_and_nowhere_else() {
+    expect_pass(
+        "\x20 assert trim(\"  a  \") == \"a\"\n\
+         \x20 assert trim(\"a b\") == \"a b\"\n\
+         \x20 assert trim(\"  a  b  \") == \"a  b\"\n\
+         \x20 assert trim(\"a\") == \"a\"",
+    );
+}
+
+#[test]
+fn whitespace_is_four_characters_and_they_are_written_down() {
+    // Space, tab, carriage return and newline, rather than the Unicode
+    // whitespace table. A four letter name should not stand for a table nobody
+    // reading the signature can see.
+    expect_pass(
+        "\x20 assert trim(\" \\t\\r\\na\\n\\r\\t \") == \"a\"\n\
+         \x20 assert trim(\"\") == \"\"\n\
+         \x20 assert trim(\"   \") == \"\"",
+    );
+}
+
+#[test]
+fn trim_is_what_makes_a_line_from_a_windows_file_a_line() {
+    // The reason this exists. Splitting on a newline leaves the carriage
+    // return on every piece, and before there was a way to take it off, the
+    // only thing stopping the example programs from printing over themselves
+    // was the repository forcing LF.
+    expect_pass(
+        "\x20 assert split(\"a\\r\\nb\\r\\n\", \"\\n\") == [\"a\\r\", \"b\\r\", \"\"]\n\
+         \x20 assert trim(\"a\\r\") == \"a\"",
+    );
+}
+
+#[test]
+fn what_trim_is_not_for() {
+    // Everything else people reach for here can already be written, which is
+    // the test for whether a name belongs in the prelude.
+    expect_pass(
+        "\x20 assert length(split(\"hay needle hay\", \"needle\")) > 1\n\
+         \x20 assert length(split(\"hay hay\", \"needle\")) == 1\n\
+         \x20 assert join(split(\"a-b-c\", \"-\"), \"+\") == \"a+b+c\"",
     );
 }

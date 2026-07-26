@@ -1126,6 +1126,14 @@ impl<'a> Interp<'a> {
                         Ok(Value::str(text))
                     }
                     ("to_string", Some(Value::Int(number))) => Ok(Value::str(number.to_string())),
+                    // Space, tab, carriage return and newline, and not the
+                    // Unicode whitespace table. That is a large amount of
+                    // behaviour to hide behind a four letter name, and it
+                    // would make what this does depend on a table nobody
+                    // reading the signature can see.
+                    ("trim", Some(Value::Str(text))) => {
+                        Ok(Value::str(text.trim_matches(WHITESPACE)))
+                    }
                     // Text that is not a number is not a mistake in the
                     // caller: it usually came from a file or an argument, and
                     // deciding what to do about it is the caller's job.
@@ -1972,6 +1980,14 @@ impl<'a> Interp<'a> {
         }
     }
 }
+
+/// What `trim` takes off the ends.
+///
+/// Written out rather than deferred to `char::is_whitespace`, so that what the
+/// function does is as long as its documentation and no longer. The Unicode
+/// whitespace table is a large amount of behaviour to hide behind a four
+/// letter name, and a program that needs it can say so in a name of its own.
+const WHITESPACE: [char; 4] = [' ', '\t', '\r', '\n'];
 
 /// `split(text, separator)`, in characters rather than bytes.
 ///

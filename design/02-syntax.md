@@ -123,6 +123,30 @@ string costs the prelude no second name.
 `to_int` hands back a `Result`. Text that is not a number usually came from a file or an
 argument, so it is not a mistake in the caller and there is nothing to trap about.
 
+One more, on a narrower argument:
+
+```vow
+trim("  a  ")            // "a"
+trim("  a  b  ")         // "a  b"
+trim("line\r")           // "line"
+```
+
+The test for whether something belongs in the prelude is whether it can be written in the
+language, and most of the obvious candidates can. `contains(text, needle)` is
+`length(split(text, needle)) > 1`. `replace(text, from, to)` is `join(split(text, from), to)`.
+An indexed walk is a `for` with a record accumulator holding the index.
+
+`trim` cannot be. Deciding what whitespace is needs to look at characters, and taking it off
+the ends needs a walk that stops early, which a fold does not do. It is also the difference
+between a program working and not: splitting a file on `"\n"` leaves a `\r` on every line of
+a file written on Windows, and `examples/todo.vow` printed its own output backwards over
+itself until there was a way to take one off.
+
+Whitespace here is four characters, space, tab, carriage return and newline, and not the
+Unicode whitespace table. That is a large amount of behaviour to hide behind a four letter
+name, and it would make what `trim` does depend on a table nobody reading the signature can
+see. A program that needs the full definition can say so in a name of its own.
+
 What is still missing is slicing, searching, case and padding. Those want a standard library,
 and there is no story for one yet.
 
@@ -627,8 +651,8 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is eighteen names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `length`, `List`, `at`, `push`, `split`, `join`, `to_string`, `to_int`, `System`,
+**The prelude is nineteen names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `length`, `List`, `at`, `push`, `split`, `join`, `trim`, `to_string`, `to_int`, `System`,
 `Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`, `now`, `open`, `read`,
 `save` and `args` operations, and `Diverge`. Everything else is imported. Each prelude entry is a name that
 cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
