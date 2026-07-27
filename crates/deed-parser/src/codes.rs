@@ -58,3 +58,12 @@ pub const NO_BINDING_MODIFIER: &str = "DEED2009";
 /// line. The shape is safe to read because two names in a row on one line is
 /// not a statement here.
 pub const BINDING_WITHOUT_LET: &str = "DEED2010";
+
+/// `0..10`. A range, which this language does not have.
+///
+/// The two dots used to be left where they were, and the rest of the file paid
+/// for it: `for i in 0..10` produced six diagnostics and the next declaration
+/// was reported as not being one. Two dots in a row are never anything else,
+/// since a field access has a name between them, so the shape can be read and
+/// swallowed whole.
+pub const NO_RANGE: &str = "DEED2011";
