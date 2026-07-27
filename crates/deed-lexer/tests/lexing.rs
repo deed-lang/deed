@@ -112,6 +112,44 @@ fn method_calls_on_integer_literals_are_unambiguous() {
     );
 }
 
+/// The decision not to have floats is in `design/02-syntax.md`, and until now
+/// it was nowhere in the compiler. `1.5` came apart into `1`, a stray `.` the
+/// parser called a missing expression, and a `5`, so the reader was told about
+/// a dot they never thought of as separate.
+#[test]
+fn a_decimal_point_says_there_are_no_floats() {
+    let (sources, lexed) = lex("1.5");
+    assert_eq!(codes_of(&lexed.diagnostics), vec![codes::NO_FLOAT_LITERAL]);
+
+    let text = render_human(&sources, &lexed.diagnostics[0]);
+    assert!(text.contains("there are no float literals"), "{text}");
+    assert!(text.contains("smallest unit"), "{text}");
+}
+
+#[test]
+fn a_decimal_point_is_reported_once_and_the_whole_part_stands_in() {
+    // Reporting it and then handing the parser an invalid token would earn a
+    // second message in the same column saying an expression was expected.
+    let kinds = kinds("1.5");
+    assert_eq!(
+        kinds,
+        vec![TokenKind::Int(1)],
+        "the dot and the fraction are absorbed, not left behind"
+    );
+}
+
+#[test]
+fn taking_the_decimal_point_leaves_the_shapes_around_it_alone() {
+    // A field name is an identifier, so a dot before a digit was never a field
+    // access, and a dot before a dot is not this at all.
+    for src in ["40.try", "0..10", "1 . 5", "0x1f", "1_000"] {
+        assert!(
+            !codes_of(&lex(src).1.diagnostics).contains(&codes::NO_FLOAT_LITERAL),
+            "`{src}` should not be read as a decimal number"
+        );
+    }
+}
+
 #[test]
 fn identifiers_may_be_non_ascii() {
     assert_eq!(

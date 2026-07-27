@@ -23,3 +23,6 @@ pub const INTEGER_OUT_OF_RANGE: &str = "DEED1005";
 
 /// A numeric literal with no digits, a digit invalid for its radix, or a suffix.
 pub const MALFORMED_NUMBER: &str = "DEED1006";
+
+/// A decimal point between two digits, which the language has no literal for.
+pub const NO_FLOAT_LITERAL: &str = "DEED1007";
