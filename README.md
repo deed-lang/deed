@@ -259,7 +259,8 @@ The examples are [transfer.deed](examples/transfer.deed),
 [strings.deed](examples/strings.deed), [lists.deed](examples/lists.deed),
 [generics.deed](examples/generics.deed),
 [generic_types.deed](examples/generic_types.deed), [list.deed](examples/list.deed),
-[using_list.deed](examples/using_list.deed), and the three that see
+[using_list.deed](examples/using_list.deed), [table.deed](examples/table.deed), and the three
+that see
 each other: [names.deed](examples/names.deed), [sink.deed](examples/sink.deed) and
 [greeting.deed](examples/greeting.deed). All are checked by every pass on every commit,
 `hello.deed`, `config.deed`, `todo.deed`, `journal.deed` and `logs.deed` have a `main`, and
