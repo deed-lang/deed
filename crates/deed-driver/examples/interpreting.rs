@@ -12,13 +12,15 @@
 //! cargo run -p deed-driver --example interpreting --release
 //! ```
 //!
-//! Three things are printed. What one turn of a walk costs, with one more
+//! Four things are printed. What one turn of a walk costs, with one more
 //! thing in it each time, so the difference between two rows is what the added
-//! thing costs. What one `push` costs onto a list of a given length, which is
-//! separate because a list is copied rather than extended and the copy was the
-//! thing everyone expected to be expensive. And a real program from
-//! `examples/`, whole and then a stage at a time, which is the only one of the
-//! three that anybody would run.
+//! thing costs. What one call costs by how many arguments it takes, which is
+//! separate because the first table's call rows call different functions and
+//! so cannot say what an argument costs on its own. What one `push` costs onto
+//! a list of a given length, which is separate because a list is copied rather
+//! than extended and the copy was the thing everyone expected to be expensive.
+//! And a real program from `examples/`, whole and then a stage at a time,
+//! which is the only one of the four that anybody would run.
 //!
 //! No dependency and no framework, for the same reason as
 //! `examples/edit_loop.rs`: a question this coarse does not need one.
@@ -48,6 +50,8 @@ const ROUNDS: usize = 5;
 
 fn main() {
     per_turn();
+    println!();
+    per_argument();
     println!();
     per_push();
     println!();
@@ -164,6 +168,16 @@ fn nothing() -> Int {{ 1 }}
 
 fn first(a: Int, b: Int) -> Int {{ a }}
 
+fn takes0() -> Int {{ 1 }}
+
+fn takes1(a: Int) -> Int {{ 1 }}
+
+fn takes2(a: Int, b: Int) -> Int {{ 1 }}
+
+fn takes3(a: Int, b: Int, c: Int) -> Int {{ 1 }}
+
+fn takes4(a: Int, b: Int, c: Int, d: Int) -> Int {{ 1 }}
+
 fn guarded(n: Int) -> Int
   where
     n > 0,
@@ -182,6 +196,111 @@ test \"walking\" {{
 }}
 "
     )
+}
+
+// -- what an argument costs --------------------------------------------------
+
+/// A call by how many arguments it takes, with the callee held still.
+///
+/// The table above cannot answer this. Its two call rows call different
+/// functions: `nothing()` returns a literal and `itself(n)` returns its
+/// parameter, so the step from no arguments to one adds a name read in the
+/// callee as well as the argument, and the step from one to two does not add
+/// one. That made the first argument look several times more expensive than
+/// the second, which is a fact about the two bodies rather than about calls.
+///
+/// Here every callee is `-> Int { 1 }` and only the arity changes, so each row
+/// adds exactly one argument: a name read at the call site, a slot in the
+/// argument list and a binding in the callee. Four of them, because one
+/// difference is a difference and four is a slope.
+///
+/// The first two rows are the same trick on a name. `sum + 1` and `sum + n`
+/// differ by one name read and nothing else, which is the number the question
+/// about giving names slots turns on: a name is two hash lookups today, and
+/// what that is worth cannot be argued from the cost of a call that also
+/// allocates an argument list and a frame.
+const ARGUMENTS: [Row; 7] = [
+    Row {
+        name: "an operator on a literal",
+        body: Some("sum + 1"),
+        claim: "got == turns",
+        over: None,
+    },
+    Row {
+        name: "  + a name instead",
+        body: Some("sum + n"),
+        claim: "got == turns",
+        over: Some(0),
+    },
+    Row {
+        name: "a call taking nothing",
+        body: Some("sum + takes0()"),
+        claim: "got == turns",
+        over: Some(0),
+    },
+    Row {
+        name: "  + one argument",
+        body: Some("sum + takes1(n)"),
+        claim: "got == turns",
+        over: Some(2),
+    },
+    Row {
+        name: "  + a second",
+        body: Some("sum + takes2(n, n)"),
+        claim: "got == turns",
+        over: Some(3),
+    },
+    Row {
+        name: "  + a third",
+        body: Some("sum + takes3(n, n, n)"),
+        claim: "got == turns",
+        over: Some(4),
+    },
+    Row {
+        name: "  + a fourth",
+        body: Some("sum + takes4(n, n, n, n)"),
+        claim: "got == turns",
+        over: Some(5),
+    },
+];
+
+fn per_argument() {
+    println!("{TURNS} turns, one call in the body, by how many arguments it takes");
+    println!("                        total      per turn   added");
+    println!("-------------------------------------------------------");
+
+    let mut taken: Vec<Duration> = Vec::new();
+    for row in &ARGUMENTS {
+        let elapsed = time(&[("bench.deed", walk_source(row.body, row.claim))], 0);
+        let added = match row.over {
+            Some(index) => nanos(elapsed.saturating_sub(taken[index]) / TURNS as u32),
+            None => String::new(),
+        };
+
+        println!(
+            "{:<23} {:<10} {:<10} {added}",
+            row.name,
+            millis(elapsed),
+            nanos(elapsed / TURNS as u32),
+        );
+        taken.push(elapsed);
+    }
+
+    // One difference between two rows is worth less than the slope across
+    // four of them. At this size a single step is inside the noise, and the
+    // question here is what an argument costs rather than what the third one
+    // in particular did on this run.
+    let none = taken[2];
+    let four = taken[6];
+    println!();
+    println!(
+        "an argument, averaged over the four: {}",
+        nanos(four.saturating_sub(none) / (4 * TURNS as u32))
+    );
+    println!(
+        "a name read, from the first two rows: {}",
+        nanos(taken[1].saturating_sub(taken[0]) / TURNS as u32)
+    );
 }
 
 // -- one push ----------------------------------------------------------------
@@ -421,13 +540,21 @@ fn notes() {
     println!("bound, the body walked. `added` is the row minus the one it is one");
     println!("thing more than, so it is what that one thing costs.");
     println!();
-    println!("Read the first two tables against each other. A turn, an operator and");
-    println!("a field read are the walk, and the walk is what a compiler removes. A");
-    println!("call taking nothing is down among them; what a call costs is having a");
-    println!("parameter, which is an argument list, a binding and names read, and a");
-    println!("name is two lookups. Nor is a push the walk: the copy is the");
-    println!("per-element part, and the row for an empty list is what it costs");
-    println!("before a single element has been copied.");
+    println!("Read the first three tables against each other. A turn, an operator");
+    println!("and a field read are the walk, and the walk is what a compiler");
+    println!("removes. A call taking nothing is down among them, so what a call");
+    println!("costs is its arguments: an argument list, a binding, and a name read.");
+    println!();
+    println!("The second table says which of those three it is. An argument is");
+    println!("around 55ns and the name read inside it is under 15ns, which is about");
+    println!("what a field read costs. So a name is not the expensive small thing;");
+    println!("the argument list and the binding are, and they are what a slot per");
+    println!("name would leave exactly where it is. The first table on its own");
+    println!("cannot say this, because its two call rows call different functions.");
+    println!();
+    println!("Nor is a push the walk: the copy is the per-element part, and the row");
+    println!("for an empty list is what it costs before a single element has been");
+    println!("copied.");
 }
 
 // -- printing ----------------------------------------------------------------
