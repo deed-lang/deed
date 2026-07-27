@@ -241,14 +241,28 @@ spends its time on now.
 100000 turns
                       total      per turn   added
 -----------------------------------------------------
-setup, no turns       0.7ms      6ns
-a turn                3.9ms      39ns       32ns
-  + an operator       9.1ms      91ns       52ns
-  + a field read      10.7ms     106ns      15ns
-  + a call taking none 12.7ms     126ns      35ns
-  + a call            23.9ms     239ns      147ns
-  + another argument  28.4ms     284ns      45ns
-  + a contract on it  40.6ms     406ns      166ns
+setup, no turns       0.6ms      5ns
+a turn                3.6ms      35ns       29ns
+  + an operator       7.8ms      78ns       42ns
+  + a field read      10.5ms     104ns      26ns
+  + a call taking none 9.9ms      99ns       21ns
+  + a call            20.9ms     208ns      130ns
+  + another argument  27.5ms     274ns      66ns
+  + a contract on it  38.4ms     384ns      175ns
+
+100000 turns, one call in the body, by how many arguments it takes
+                        total      per turn   added
+-------------------------------------------------------
+an operator on a literal 5.9ms      58ns
+  + a name instead      7.3ms      72ns       14ns
+a call taking nothing   11.6ms     115ns      57ns
+  + one argument        19.4ms     194ns      78ns
+  + a second            26.4ms     264ns      70ns
+  + a third             25.4ms     254ns      0ns
+  + a fourth            34.0ms     340ns      86ns
+
+an argument, averaged over the four: 56ns
+a name read, from the first two rows: 14ns
 
 50000 pushes, onto a list of this length
 length     total      per push   over an empty one
@@ -272,11 +286,24 @@ name in the language was hashed with SipHash, which is chosen to survive an atta
 picking the keys, on keys that are a pair of byte offsets out of a file the compiler was
 handed. Neither of those is a machine.
 
-**What a call costs is having a parameter.** A call to a function taking nothing is 35ns,
-which is less than an operator. The first parameter costs 147ns and the second 45ns: an
-argument list, a binding, and names read where the row above read one. Reading a name is
-still the most expensive small thing in the language and it is still two lookups, the span to
-the definition and then the definition to the value.
+**What a call costs is its arguments, and not the names in them.** A call to a function
+taking nothing is around 20 to 55ns, which is an operator or less. Each argument after that
+is about 56ns, averaged over four of them because a single step at this size is inside the
+noise.
+
+The first table used to be read as saying the first argument costs three times what the
+second does. It does not. Its two call rows call different functions: `nothing()` returns a
+literal and `itself(n)` returns its parameter, so the step from no arguments to one adds a
+name read in the callee that the step from one to two does not add. Holding the callee still
+at `-> Int { 1 }` and only changing the arity, the arguments cost about the same as each
+other, which is what an argument list and a binding per argument would predict.
+
+The same table prices a name read on its own, since `sum + 1` and `sum + n` differ by one and
+by nothing else. It is about 14ns, which is roughly a field read. That was the thing this
+section previously called the most expensive small thing in the language, on the grounds that
+it is two lookups where a field read is one. Two lookups it still is, and it is not expensive:
+the hash change took the cost out of it. About a quarter of an argument is the name; the rest
+is the argument list and the binding.
 
 **Copying a list is nearly free per element and not free per call.** Values are immutable, so
 `push` hands back a copy, and that copy is what everyone points at. It is about 2.5ns an
@@ -301,11 +328,22 @@ out rather than argued about. And one thing did less than expected: the hash cha
 resolution tables a check reads too, and `edit_loop` came out the same either way. Whatever a
 check spends its time on, it is not this.
 
-**What would falsify this:** make a name read cost what a field read costs, since a field
-read is a lookup in a map that is already in hand and a name read is two lookups that are
-not, and measure again. If dispatch is on top afterwards then the shape question has a basis
-and the numbers will say which parts of the walk are worth compiling away. If it is not, code
-generation was never the next thing and there will be a number saying so rather than a
+**Giving every name a slot is not the next thing, and there is a number saying so.** This
+section used to end by proposing exactly that: make a name read cost what a field read costs,
+since a field read is one lookup into a map already in hand and a name read is two into maps
+that are not, and then measure again to see whether dispatch comes out on top. Measuring the
+name read directly rather than inferring it from the cost of a call answers it without the
+work. It already costs about what a field read costs. There is no third of a call sitting
+behind it to be recovered, so a slot per name would move the total by whatever part of 14ns
+an indexed load saves over a hash lookup, and the argument list and the binding it does not
+touch would still be there.
+
+**What would falsify this:** take the other three quarters of an argument, the list and the
+binding, and make them cost nothing, then measure again. A frame pool was already tried
+against the allocation half of that and nothing moved, so what is left is the binding itself,
+which is a hash insert per parameter into a map that is thrown away when the call returns. If
+removing it puts dispatch on top then the shape question has a basis. If it does not, code
+generation was never the next thing and there will again be a number saying so rather than a
 preference.
 
 ---
