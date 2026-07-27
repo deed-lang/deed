@@ -668,6 +668,66 @@ fn the_shorthand_form_is_type_checked() {
     assert!(rendered(&sources, &checked.diagnostics).contains("the field it is assigned to"));
 }
 
+/// A literal is the one form whose head has to be a declaration rather than a
+/// value, and the head is written exactly like a name being read.
+///
+/// So the mistake is easy: a function is a value with a type, `g { a: 1 }`
+/// parses, and what it says is that the answer of calling `g` has fields. The
+/// message names the type it found rather than saying the shape was wrong,
+/// because the shape was fine and the head was not.
+#[test]
+fn a_function_is_not_something_a_literal_can_build() {
+    let (sources, checked) = check_source(
+        "module a\n\nfn g() -> Int { 0 }\n\nfn f() -> Int {\n    let a = g { x: 1 }\n    0\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&codes::NOT_A_CONSTRUCTOR),
+        "{:?}",
+        codes_of(&checked.diagnostics)
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`Fn() -> Int` is not a record or a variant"),
+        "{text}"
+    );
+    assert!(text.contains("cannot be built with a literal"), "{text}");
+}
+
+/// The same for an ordinary value, which is the shape somebody reaches for
+/// when they have forgotten which of two names is the type.
+#[test]
+fn a_value_is_not_something_a_literal_can_build_either() {
+    let (sources, checked) =
+        check_source("module a\n\nfn f(n: Int) -> Int {\n    let b = n { x: 1 }\n    0\n}\n");
+    assert!(
+        codes_of(&checked.diagnostics).contains(&codes::NOT_A_CONSTRUCTOR),
+        "{:?}",
+        codes_of(&checked.diagnostics)
+    );
+    assert!(
+        rendered(&sources, &checked.diagnostics).contains("`Int` is not a record or a variant")
+    );
+}
+
+/// A type name in that position is a different mistake with a message of its
+/// own, and this one has to stay out of its way. `Int` is not a value at all,
+/// so saying it is not a record would be answering the second question first.
+#[test]
+fn a_type_name_gets_the_message_about_being_a_type() {
+    let (_, checked) =
+        check_source("module a\n\nfn f() -> Int {\n    let c = Int { x: 1 }\n    0\n}\n");
+    assert!(
+        !codes_of(&checked.diagnostics).contains(&codes::NOT_A_CONSTRUCTOR),
+        "{:?}",
+        codes_of(&checked.diagnostics)
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&codes::NOT_A_VALUE),
+        "{:?}",
+        codes_of(&checked.diagnostics)
+    );
+}
+
 #[test]
 fn field_access_on_a_missing_field_lists_what_is_there() {
     let (sources, checked) =
