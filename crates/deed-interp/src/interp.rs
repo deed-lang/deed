@@ -1261,6 +1261,22 @@ impl<'a> Interp<'a> {
                         extended.push(value.clone());
                         Ok(Value::list(extended))
                     }
+                    // Having something a number of times, which a `for` cannot
+                    // give because a `for` needs a list before it starts.
+                    //
+                    // A count of zero or less is the empty list rather than a
+                    // refusal. The call this exists for is
+                    // `repeat(" ", width - length(text))`, which goes negative
+                    // exactly when the text is already wider than the column,
+                    // and what it means there is no padding.
+                    ("repeat", Some(value)) => {
+                        let Some(count) = values.get(1).and_then(|(value, _)| value.as_int())
+                        else {
+                            return Err(self.not_runnable(callee.span(), "this call"));
+                        };
+                        let count = usize::try_from(count).unwrap_or(0);
+                        Ok(Value::list(vec![value; count]))
+                    }
                     ("split", Some(Value::Str(text))) => {
                         let Some((Value::Str(separator), _)) = values.get(1) else {
                             return Err(self.not_runnable(callee.span(), "this call"));

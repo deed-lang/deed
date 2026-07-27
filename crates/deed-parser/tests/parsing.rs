@@ -689,7 +689,11 @@ fn a_range_is_one_message_rather_than_six() {
     let text = render_human(&sources, &parsed.diagnostics[0]);
     assert!(text.contains("there is no range"), "{text}");
     assert!(text.contains("walks a list that already exists"), "{text}");
-    assert!(text.contains("for item at i in items"), "{text}");
+    assert!(
+        text.contains("`repeat(value, count)` makes the list"),
+        "{text}"
+    );
+    assert!(text.contains("for item at i in"), "{text}");
 }
 
 /// The bound is read and thrown away, so the block after it is still a block

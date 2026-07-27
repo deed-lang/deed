@@ -1638,8 +1638,8 @@ impl<'a> Parser<'a> {
                  a second",
             )
             .with_note(
-                "the position of an element is written `for item at i in items`, which is \
-                 where a count usually came from",
+                "`repeat(value, count)` makes the list to walk, and `for item at i in ...` \
+                 binds the position, which is where a count usually came from",
             ),
         );
 

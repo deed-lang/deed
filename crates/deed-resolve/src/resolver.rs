@@ -61,6 +61,14 @@ use crate::exports::{ExportKind, Universe};
 /// is needs to look at characters and dropping it off the ends needs a walk
 /// that stops early, which a fold does not do.
 ///
+/// `repeat` is here on the same argument and it was a real program that found
+/// it. A `for` walks a list that already exists, so having something a number
+/// of times has nothing to hand it, and the only way left is a function that
+/// calls itself. That makes padding a column declare `Diverge`, and it spreads
+/// to everything that builds a line, which is the outcome `design/02-syntax.md`
+/// gives as the reason iteration exists at all. One name closes it, and `at`
+/// turns the list back into the count it came from.
+///
 /// The prelude is a place names go to become unavailable to everyone else, so
 /// it stays small and every addition to it is argued for rather than assumed.
 pub const PRELUDE: &[&str] = &[
@@ -74,6 +82,7 @@ pub const PRELUDE: &[&str] = &[
     "List",
     "at",
     "push",
+    "repeat",
     "split",
     "join",
     "trim",
