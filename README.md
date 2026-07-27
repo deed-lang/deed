@@ -47,6 +47,10 @@ obligations: 7 proven, 0 tested, 6 guarded
   proven   examples/transfer.deed:202:76  Positive
 ```
 
+For an editor, `editors/vscode` colours `.deed` files. It is three JSON files and no
+code, so copying the directory into `~/.vscode/extensions` is the whole install. The
+language server is not wired up to it yet.
+
 ## The idea
 
 Most of the code being written today is not typed out by a person. That changes which
