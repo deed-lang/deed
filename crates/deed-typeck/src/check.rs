@@ -1890,6 +1890,7 @@ impl<'a> Checker<'a> {
                         let declared = self.operation_signature(handler, operation);
                         self.check_fn_against(operation, declared);
                     }
+                    self.check_handler_is_whole(handler);
                 }
                 Item::Test(test) => {
                     self.check_block(&test.body);
@@ -1983,6 +1984,97 @@ impl<'a> Checker<'a> {
             return None;
         };
         operations.get(name).cloned()
+    }
+
+    /// Checks that a handler implements every operation its effect declares.
+    ///
+    /// The other direction has been checked all along, in
+    /// [`Checker::operation_signature`]: writing an operation the effect does
+    /// not declare is DEED4021. Leaving one out was not checked anywhere, and
+    /// the two are the same claim read from opposite ends.
+    ///
+    /// It matters because a `with` block discharges the effect and not the
+    /// operations written inside the handler. So a caller declaring
+    /// `uses Counter.total`, which is the caller doing everything right, could
+    /// be handed a handler with no `total` and find out when the call reached
+    /// it. Reporting it here means the handler is wrong where the handler is
+    /// written, rather than at whichever call happened to need the gap.
+    fn check_handler_is_whole(&mut self, handler: &'a HandlerDecl) {
+        let Some(effect) = self.def_of(&handler.effect) else {
+            return;
+        };
+        let declared = match self.resolutions.def(effect).kind {
+            DefKind::Import => self.imported_operation_names(effect),
+            DefKind::Effect => self.local_operation_names(effect),
+            // Not an effect at all. The resolver has already said so, and a
+            // list of operations it does not have would be piling on.
+            _ => return,
+        };
+
+        let written: HashSet<&str> = handler
+            .operations
+            .iter()
+            .map(|operation| operation.sig.name.name.as_str())
+            .collect();
+        let missing: Vec<String> = declared
+            .into_iter()
+            .filter(|name| !written.contains(name.as_str()))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+
+        let effect_name = self.types.name_of(effect).to_string();
+        let handler_name = &handler.name.name;
+        let listed = missing
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let counted = if missing.len() == 1 {
+            "one operation".to_string()
+        } else {
+            format!("{} operations", missing.len())
+        };
+
+        self.emit(
+            Diagnostic::error(
+                codes::HANDLER_MISSING_OPERATION,
+                self.file,
+                handler.name.span,
+                format!("`{handler_name}` does not implement {listed}"),
+            )
+            .with_primary_label(format!("{counted} still to write"))
+            .with_secondary(
+                handler.effect.span,
+                format!("`{effect_name}` declares them"),
+            )
+            .with_note(
+                "a `with` block discharges the effect rather than the operations written inside the handler, so installing one is a claim that every call underneath has somewhere to go",
+            ),
+        );
+    }
+
+    /// The operations of an effect declared in this module, in declaration
+    /// order.
+    fn local_operation_names(&self, effect: DefId) -> Vec<String> {
+        self.resolutions
+            .defs()
+            .filter(|(_, data)| data.kind == DefKind::EffectOp && data.parent == Some(effect))
+            .map(|(_, data)| data.name.clone())
+            .collect()
+    }
+
+    /// The operations of an effect from another module.
+    fn imported_operation_names(&self, effect: DefId) -> Vec<String> {
+        let Some(module) = self.resolutions.import_module(effect) else {
+            return Vec::new();
+        };
+        let effect_name = &self.resolutions.def(effect).name;
+        let Some(SurfaceItem::Effect { operations }) = self.world.get(module, effect_name) else {
+            return Vec::new();
+        };
+        operations.keys().cloned().collect()
     }
 
     fn check_fn(&mut self, function: &'a FnDecl) {

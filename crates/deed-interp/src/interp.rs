@@ -1465,6 +1465,11 @@ impl<'a> Interp<'a> {
             .iter()
             .find(|candidate| candidate.sig.name.name == name)
         else {
+            // Unreachable from a file that checked, since DEED4029 refuses a
+            // handler that leaves an operation out. Kept, and pointed at the
+            // compiler rather than the program for the same reason DEED6010
+            // is: the file was accepted, so a gap reaching here means the
+            // check that accepted it was wrong.
             let handler_name = declaration.name.name.clone();
             return Err(self.fail(
                 Diagnostic::error(
@@ -1474,7 +1479,10 @@ impl<'a> Interp<'a> {
                     format!("the handler `{handler_name}` does not implement `{name}`"),
                 )
                 .with_primary_label("not implemented")
-                .with_secondary(declaration.name.span, "this handler"),
+                .with_secondary(declaration.name.span, "this handler")
+                .with_note(
+                    "a handler has to implement every operation its effect declares, and this file was accepted, so this is a hole in the type checker rather than a mistake in the program; please report it",
+                ),
             ));
         };
 
