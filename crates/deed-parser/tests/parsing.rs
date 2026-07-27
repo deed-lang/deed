@@ -431,6 +431,74 @@ fn a_variant_with_named_fields_is_untouched() {
     parse_ok("module a\n\nchoice C {\n    One,\n    Two { x: Int, y: Int },\n}\n");
 }
 
+// -- words from other languages --------------------------------------------
+
+/// The first thing anybody writes in a new language is the thing they wrote in
+/// the last one. `struct` used to be answered with the list of all seven
+/// declaration forms, which is correct and is a slower way to say `record`.
+#[test]
+fn struct_is_answered_with_record() {
+    let (sources, parsed) = parse_source("module a\n\nstruct Point {\n    x: Int,\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics)[0],
+        codes::EXPECTED_DECLARATION
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("this language spells it `record`"), "{text}");
+
+    // Machine applicable, so `deed fix` repairs the file rather than offering
+    // to. There is one thing `struct` can mean here and this is it.
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    assert_eq!(fix.edits[0].replacement, "record");
+    assert_eq!(
+        fix.applicability,
+        deed_diagnostics::Applicability::MachineApplicable
+    );
+}
+
+#[test]
+fn the_other_renamings_are_answered_the_same_way() {
+    for (theirs, ours) in [
+        ("class", "record"),
+        ("enum", "choice"),
+        ("import", "use"),
+        ("function", "fn"),
+    ] {
+        let source = format!("module a\n\n{theirs} Thing {{\n}}\n");
+        let (sources, parsed) = parse_source(&source);
+        let text = render_human(&sources, &parsed.diagnostics[0]);
+        assert!(
+            text.contains(&format!("this language spells it `{ours}`")),
+            "`{theirs}` should point at `{ours}`: {text}"
+        );
+    }
+}
+
+/// A word for a thing the language decided not to have gets the decision
+/// rather than a replacement, because there is nothing to replace it with.
+#[test]
+fn pub_is_answered_with_the_reason_there_is_no_such_word() {
+    let (sources, parsed) = parse_source("module a\n\npub fn f() -> Int { 0 }\n");
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("every declaration is exported"), "{text}");
+    assert!(text.contains("no wildcard imports"), "{text}");
+    assert!(
+        parsed.diagnostics[0].fix.is_none(),
+        "there is no word to put in its place, so offering one would be inventing a change"
+    );
+}
+
+/// Everything else still gets the list. A name that is nobody's keyword is
+/// somebody's typo, and the seven forms are the answer to that.
+#[test]
+fn a_word_from_nowhere_still_gets_the_list() {
+    let (sources, parsed) = parse_source("module a\n\nwidget Thing {\n}\n");
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("`record`, `choice`, `effect`"), "{text}");
+    assert!(!text.contains("spells it"), "{text}");
+}
+
 #[test]
 fn a_closure_with_typed_parameters_parses() {
     parse_ok(
