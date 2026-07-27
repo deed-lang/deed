@@ -1,0 +1,127 @@
+name: Release
+
+# A tag is the whole trigger. Nothing here decides what to release, because a
+# workflow that picks its own version is a second place the version lives.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Every platform is built even when one of them fails, so a broken
+      # release is diagnosed once rather than one platform at a time. Nothing
+      # is published unless all of them worked: a release missing a binary
+      # somebody was told to download is worse than a release that is late.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # Apple silicon only. An Intel Mac builds from source, which is one
+          # more platform's worth of maintenance than a machine nobody has
+          # asked about yet is worth.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The tests already ran on the commit this tag points at. What is worth
+      # checking here is the thing CI cannot: that the binary each platform
+      # produces runs, and says the version the tag claims.
+      - name: cargo build
+        run: cargo build --release --locked -p deed-cli --target ${{ matrix.target }}
+
+      - name: the binary runs and knows its version
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/deed"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            binary="$binary.exe"
+          fi
+          "$binary" --version
+          tagged="${GITHUB_REF_NAME#v}"
+          reported="$("$binary" --version | cut -d' ' -f2)"
+          if [ "$reported" != "$tagged" ]; then
+            echo "the tag says $tagged and the binary says $reported"
+            exit 1
+          fi
+
+      # It also has to work on a program, because a compiler that starts and
+      # cannot compile anything is a compiler that passed its own test.
+      - name: it checks and runs the examples
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/deed"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            binary="$binary.exe"
+          fi
+          "$binary" check examples
+          "$binary" test examples
+
+      - name: package
+        shell: bash
+        run: |
+          mkdir -p dist
+          name="deed-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          staging="dist/$name"
+          mkdir -p "$staging"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/deed.exe" "$staging/"
+          else
+            cp "target/${{ matrix.target }}/release/deed" "$staging/"
+          fi
+          # The licence travels with the binary, and so does the one page that
+          # says what to type first.
+          cp LICENSE "$staging/"
+          cp README.md "$staging/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd dist && 7z a "$name.zip" "$name" > /dev/null)
+            echo "asset=dist/$name.zip" >> "$GITHUB_ENV"
+          else
+            (cd dist && tar czf "$name.tar.gz" "$name")
+            echo "asset=dist/$name.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*

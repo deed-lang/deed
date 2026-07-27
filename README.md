@@ -13,8 +13,34 @@ Built for code that machines write and humans review.
 > contracts enforced at runtime. Programs get their authority from a `System` capability
 > handed to `main`, and a `Dir` narrows to a subdirectory and cannot be walked back out of.
 > There is no code generation. Criticism of the design is still the most useful
-> contribution. See [issue #1](https://github.com/deed-lang/deed/issues/1) for where this is
-> going.
+> contribution. See [issue #228](https://github.com/deed-lang/deed/issues/228) for where
+> this is going.
+
+## Getting it
+
+Every release carries a `deed` binary for Linux, macOS and Windows. Take the one for your
+machine from [releases](https://github.com/deed-lang/deed/releases), unpack it, and run it.
+There is nothing else to install: the compiler, the formatter, the test runner and the
+language server are all in that one file.
+
+```
+$ tar xzf deed-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+$ ./deed-v0.1.0-x86_64-unknown-linux-gnu/deed --version
+deed 0.1.0
+```
+
+From source instead, which needs Rust 1.85 or newer:
+
+```
+$ cargo install --path crates/deed-cli
+```
+
+**What the version promises.** `0.x` says the language can still move. A file that compiles
+against one release may not compile against the next, and when that happens the release
+notes say what changed and `deed fix` applies whatever part of it is mechanical. Two things
+are steadier than the syntax, because tools are built on them: a diagnostic code is never
+reused, so `DEED4009` means today what it meant when it was assigned, and `--format json`
+is an output something else can read.
 
 ```
 $ cargo run -p deed-cli -- run examples/config.deed --dir examples
