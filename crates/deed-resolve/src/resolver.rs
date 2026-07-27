@@ -467,6 +467,26 @@ impl Resolver<'_> {
             return None;
         }
 
+        // A name that means something in another language and nothing here.
+        // The suggester works on edit distance, so `null` used to be answered
+        // with whatever short name happened to be nearby, which is worse than
+        // a typo hint on a typo: it is a confident answer to a question that
+        // was never asked.
+        if let Some(elsewhere) = name_from_elsewhere(&ident.name) {
+            self.diagnostics.push(match elsewhere {
+                Elsewhere::Operator(op) => diagnostic
+                    .with_note(format!("this is spelled `{op}`"))
+                    .with_fix(
+                        format!("write `{op}`"),
+                        ident.span,
+                        op,
+                        Applicability::MachineApplicable,
+                    ),
+                Elsewhere::Absent(reason) => diagnostic.with_note(reason),
+            });
+            return None;
+        }
+
         if let Some(candidate) = suggestion {
             diagnostic = diagnostic.with_fix(
                 format!("there is a `{candidate}` in scope"),
@@ -1245,6 +1265,37 @@ impl Resolver<'_> {
 
 fn starts_upper(name: &str) -> bool {
     name.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// What a name that is not here means somewhere else.
+enum Elsewhere {
+    /// The same thing under a different spelling, and the spelling is a
+    /// straight substitution for the name.
+    Operator(&'static str),
+    /// Not in the language at all, with the reason.
+    Absent(&'static str),
+}
+
+/// A name only a language other than this one would have had.
+///
+/// Nothing here can shadow anything: a name that resolves never reaches this
+/// point, so somebody who declared a function called `and` still has it.
+fn name_from_elsewhere(name: &str) -> Option<Elsewhere> {
+    Some(match name {
+        "and" => Elsewhere::Operator("&&"),
+        "or" => Elsewhere::Operator("||"),
+        "not" => Elsewhere::Operator("!"),
+        "null" | "nil" | "undefined" | "None" | "none" => Elsewhere::Absent(
+            "there is no empty value: something that might be absent is a `Result`, or a \
+             `choice` with a variant for the absence, which is how `Option` is declared \
+             when a program wants one",
+        ),
+        "self" | "this" => Elsewhere::Absent(
+            "there are no methods, so a function takes the thing it works on as an argument \
+             like anything else",
+        ),
+        _ => return None,
+    })
 }
 
 /// The nearest candidate to `name`, when there is an unambiguous one.
