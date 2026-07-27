@@ -19,7 +19,7 @@ members = [
 version = "0.0.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/onatozmenn/deed"
+repository = "https://github.com/deed-lang/deed"
 rust-version = "1.85"
 
 [workspace.lints.clippy]

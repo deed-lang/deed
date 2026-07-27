@@ -13,7 +13,7 @@ Built for code that machines write and humans review.
 > contracts enforced at runtime. Programs get their authority from a `System` capability
 > handed to `main`, and a `Dir` narrows to a subdirectory and cannot be walked back out of.
 > There is no code generation. Criticism of the design is still the most useful
-> contribution. See [issue #1](https://github.com/onatozmenn/deed/issues/1) for where this is
+> contribution. See [issue #1](https://github.com/deed-lang/deed/issues/1) for where this is
 > going.
 
 ```
