@@ -93,6 +93,27 @@ fn a_file_with_nothing_to_fix_is_left_alone() {
     assert_eq!(result.source, source);
 }
 
+/// A function full of bindings written the way the last language wrote them.
+///
+/// Each line carries its own fix, so one pass turns the file into one that
+/// compiles. The type-first form keeps the type it was given, which is the
+/// point of writing `let k: Int` rather than `let k`.
+#[test]
+fn bindings_written_without_let_all_come_out_in_one_pass() {
+    let source = "module a\n\nfn f() -> Int {\n    var n = 1\n    const m = 2\n    Int k = 3\n    n + m + k\n}\n";
+    let result = fix(source, diagnose);
+    assert_eq!(result.applied, 3);
+    assert_eq!(
+        result.source,
+        "module a\n\nfn f() -> Int {\n    let n = 1\n    let m = 2\n    let k: Int = 3\n    n + m + k\n}\n"
+    );
+    assert!(
+        diagnose(&result.source).is_empty(),
+        "it should check clean now: {:?}",
+        diagnose(&result.source)
+    );
+}
+
 // -- rows ------------------------------------------------------------------
 //
 // The row diagnostics say what to type and, for a long time, did not type it.
