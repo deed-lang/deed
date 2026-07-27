@@ -195,63 +195,7 @@ impl<'a> Checker<'a> {
     // -- collecting --------------------------------------------------------
 
     fn collect(&mut self, module: &'a Module) {
-        // Every `Io` operation takes the capability it acts on as its first
-        // argument. The row says what kind of thing is happening, the argument
-        // says which resource it happens to, and neither is enough alone.
-        let console = capability("Console");
-        let clock = capability("Clock");
-        let dir = capability("Dir");
-
-        // `open` hands back a narrower `Dir` and `read` hands back the file's
-        // contents. Both can fail, because a path that is not there is not a
-        // bug in the caller. So can `save`, for the same reason and for every
-        // reason a disk has.
-        let io_error = |ok: Ty| Ty::Result(Box::new(ok), Box::new(Ty::Str));
-
-        let operations: [(&str, Vec<Ty>, Ty); 10] = [
-            ("write", vec![console, Ty::Str], Ty::Unit),
-            ("now", vec![clock.clone()], Ty::Int),
-            // The machine's clock, in milliseconds since 1970. A separate
-            // entry in the row for the same reason `save` is separate from
-            // `read`: holding a `Clock` says nothing about which of these a
-            // function may do, and the difference between them is whether the
-            // program gives the same answer twice.
-            ("epoch", vec![clock], Ty::Int),
-            ("open", vec![dir.clone(), Ty::Str], io_error(dir.clone())),
-            ("read", vec![dir.clone(), Ty::Str], io_error(Ty::Str)),
-            (
-                "save",
-                vec![dir.clone(), Ty::Str, Ty::Str],
-                io_error(Ty::Unit),
-            ),
-            // Destroying rather than replacing. A separate entry in the row
-            // for the same reason `save` is separate from `read`: what a
-            // caller is handing over is which of these a function may do, and
-            // holding the directory says nothing about that.
-            ("remove", vec![dir.clone(), Ty::Str], io_error(Ty::Unit)),
-            // Making a place rather than putting something in one. The `Dir`
-            // it hands back is rooted inside the one it was given, so this is
-            // `open` on a directory that did not exist yet rather than a way
-            // to reach anything new.
-            ("make", vec![dir.clone(), Ty::Str], io_error(dir)),
-            // Enumerating rather than naming, which is why it takes the
-            // directory and nothing else: there is no name to give, and
-            // finding out what the names are is the whole operation.
-            (
-                "list",
-                vec![capability("Dir")],
-                io_error(Ty::List(Box::new(Ty::Str))),
-            ),
-            // The arguments a program was invoked with, which cannot fail to
-            // exist: a program with none was given an empty list.
-            (
-                "args",
-                vec![capability("System")],
-                Ty::List(Box::new(Ty::Str)),
-            ),
-        ];
-
-        for (name, params, ret) in operations {
+        for (name, params, ret) in io_signatures() {
             let Some(def) = self.resolutions.builtin(name) else {
                 continue;
             };
@@ -4392,7 +4336,6 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// `a`, `a` and `b`, `a`, `b` and `c`.
 /// A builtin capability type.
 ///
 /// Named under the prelude rather than under whichever module mentioned it,
@@ -4405,6 +4348,88 @@ fn capability(name: &str) -> Ty {
         name: Rc::from(name),
         args: Vec::new(),
     }
+}
+
+/// The signature of every `Io` operation.
+///
+/// Public because it is the only place the compiler writes down which
+/// operations hand a capability back, and that is the claim the capability
+/// argument rests on: authority narrows on the way down and there is no
+/// operation that widens it. Two operations return a `Dir`, both of them
+/// rooted inside the one they were given, and each has a test that climbing
+/// out of what came back is refused. A third would need the same, and a
+/// declaration nothing outside this file can read is a declaration nobody
+/// checks that against.
+pub fn io_signatures() -> Vec<(&'static str, Vec<Ty>, Ty)> {
+    // Every `Io` operation takes the capability it acts on as its first
+    // argument. The row says what kind of thing is happening, the argument
+    // says which resource it happens to, and neither is enough alone.
+    let console = capability("Console");
+    let clock = capability("Clock");
+    let dir = capability("Dir");
+
+    // `open` hands back a narrower `Dir` and `read` hands back the file's
+    // contents. Both can fail, because a path that is not there is not a
+    // bug in the caller. So can `save`, for the same reason and for every
+    // reason a disk has.
+    let io_error = |ok: Ty| Ty::Result(Box::new(ok), Box::new(Ty::Str));
+
+    vec![
+        ("write", vec![console, Ty::Str], Ty::Unit),
+        ("now", vec![clock.clone()], Ty::Int),
+        // The machine's clock, in milliseconds since 1970. A separate
+        // entry in the row for the same reason `save` is separate from
+        // `read`: holding a `Clock` says nothing about which of these a
+        // function may do, and the difference between them is whether the
+        // program gives the same answer twice.
+        ("epoch", vec![clock], Ty::Int),
+        ("open", vec![dir.clone(), Ty::Str], io_error(dir.clone())),
+        ("read", vec![dir.clone(), Ty::Str], io_error(Ty::Str)),
+        (
+            "save",
+            vec![dir.clone(), Ty::Str, Ty::Str],
+            io_error(Ty::Unit),
+        ),
+        // Destroying rather than replacing. A separate entry in the row
+        // for the same reason `save` is separate from `read`: what a
+        // caller is handing over is which of these a function may do, and
+        // holding the directory says nothing about that.
+        ("remove", vec![dir.clone(), Ty::Str], io_error(Ty::Unit)),
+        // Making a place rather than putting something in one. The `Dir`
+        // it hands back is rooted inside the one it was given, so this is
+        // `open` on a directory that did not exist yet rather than a way
+        // to reach anything new.
+        ("make", vec![dir.clone(), Ty::Str], io_error(dir)),
+        // Enumerating rather than naming, which is why it takes the
+        // directory and nothing else: there is no name to give, and
+        // finding out what the names are is the whole operation.
+        (
+            "list",
+            vec![capability("Dir")],
+            io_error(Ty::List(Box::new(Ty::Str))),
+        ),
+        // The arguments a program was invoked with, which cannot fail to
+        // exist: a program with none was given an empty list.
+        (
+            "args",
+            vec![capability("System")],
+            Ty::List(Box::new(Ty::Str)),
+        ),
+    ]
+}
+
+/// Whether `ty` is one of the four builtin capabilities.
+///
+/// The names live here rather than in a list somewhere, because this is the
+/// function that builds them and a second copy is a second thing to keep in
+/// step.
+pub fn is_capability(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::External { module, name, .. }
+            if &**module == PRELUDE_MODULE
+                && matches!(&**name, "Console" | "Clock" | "Dir" | "System")
+    )
 }
 
 /// `carried` with the parts it did not know filled in from `produced`.

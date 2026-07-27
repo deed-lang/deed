@@ -3,12 +3,20 @@
 //! Most of these are about what a program cannot do, because that is the whole
 //! claim. A capability system that only demonstrates the things that work has
 //! demonstrated nothing.
+//!
+//! The claim is narrowing rather than scarcity. Two operations hand a
+//! capability back, and what makes the mechanism hold is that both are rooted
+//! inside the one they were given and nothing widens. For a long time the
+//! comment on the function implementing all of this said no operation hands
+//! one back at all, which is the flat version and the false one, so the set of
+//! two is counted here now.
 
 use std::path::{Path, PathBuf};
 
 use deed_diagnostics::{Diagnostic, SourceMap, render_human};
 use deed_driver::{Checked, check_text};
 use deed_interp::{Program, Run, run_main};
+use deed_typeck::{Ty, io_signatures, is_capability};
 
 /// A directory nothing was granted, for programs that do not touch files.
 fn nowhere() -> &'static Path {
@@ -72,6 +80,63 @@ fn rendered(sources: &SourceMap, diagnostics: &[Diagnostic]) -> String {
 }
 
 // -- what a program cannot do ----------------------------------------------
+
+/// Whether a capability appears anywhere in `ty`.
+///
+/// Through a `Result`, because that is how both of them come back: the
+/// operation can fail, and the capability is in the success arm.
+fn hands_back_a_capability(ty: &Ty) -> bool {
+    if is_capability(ty) {
+        return true;
+    }
+    match ty {
+        Ty::Result(ok, err) => hands_back_a_capability(ok) || hands_back_a_capability(err),
+        Ty::List(element) => hands_back_a_capability(element),
+        _ => false,
+    }
+}
+
+/// The two halves of the sentence that describes the whole mechanism.
+///
+/// A capability is reached only by being handed one, which is the first half
+/// and is why every operation takes one first. The second half is not that a
+/// capability cannot be produced, because two operations produce one; it is
+/// that what comes back reaches strictly less than what went in.
+///
+/// Both of those two have a test right below this one. A third would need the
+/// same argument made for it, and the way that goes wrong is quietly: `Io.make`
+/// joined the set in #152 and the prose about the set was not revisited, which
+/// is the second time that happened. So the set is counted rather than
+/// described.
+#[test]
+fn the_operations_that_hand_a_capability_back_are_the_two_with_an_escape_test() {
+    let signatures = io_signatures();
+
+    for (name, params, _) in &signatures {
+        let first = params
+            .first()
+            .unwrap_or_else(|| panic!("`Io.{name}` takes no arguments at all"));
+        assert!(
+            is_capability(first),
+            "`Io.{name}` does not take a capability as its first argument"
+        );
+    }
+
+    let mut producing: Vec<&str> = signatures
+        .iter()
+        .filter(|(_, _, ret)| hands_back_a_capability(ret))
+        .map(|(name, _, _)| *name)
+        .collect();
+    producing.sort();
+
+    assert_eq!(
+        producing,
+        vec!["make", "open"],
+        "the operations handing a capability back have changed, so the narrowing argument \
+         in design/04-capabilities.md needs making for the new one, with a test beside \
+         `opening_narrows_and_there_is_no_way_back`"
+    );
+}
 
 #[test]
 fn a_function_with_no_console_has_no_way_to_name_one() {

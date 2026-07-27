@@ -128,6 +128,12 @@ given and no string it could build that would get it back out.
 That holds because narrowing is the only operation. `Io.open` goes down, nothing goes up,
 and a `Dir` carries a canonical path the program can neither read nor compare.
 
+Two operations hand a `Dir` back, `Io.open` and `Io.make`, and both are rooted inside the one
+they were given. That set is counted rather than described. The paragraph further down about
+`Io.make` is a record of this prose going stale the last time the set changed, and the
+comment on the function implementing all of it still said no operation hands a capability
+back at all, so a test now names the two and fails on a third.
+
 ### Reading, writing, listing, deleting and making are different authorities over the same capability
 `Io.save(files, name, contents)` writes a file, and it takes the same `Dir` `Io.read` does.
 What separates them is not the type but the row: a function that declares `uses Io.read` and

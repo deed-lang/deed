@@ -1496,9 +1496,13 @@ impl<'a> Interp<'a> {
     /// Performs a built-in operation.
     ///
     /// Every one of these takes the capability it acts on as its first
-    /// argument, and there is no way to make a capability, so a function that
-    /// was not handed one cannot reach the outside world. That is the whole
-    /// mechanism, and it is smaller than the sentence describing it.
+    /// argument, so a function that was not handed one cannot reach the
+    /// outside world. Two of them, `open` and `make`, hand one back, and the
+    /// rule that keeps the mechanism honest is not that a capability cannot be
+    /// produced but that what comes back reaches strictly less than what went
+    /// in. Nothing widens. `crates/deed-driver/tests/capabilities.rs` tests
+    /// that for both, and `deed_typeck::io_signatures` is where the set of two
+    /// is counted.
     fn perform_io(&mut self, name: &str, args: &[(Value, Span)], span: Span) -> Eval<Value> {
         let capability = match args.first() {
             Some((Value::Capability(capability), _)) => capability.clone(),
