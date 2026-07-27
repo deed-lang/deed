@@ -1255,6 +1255,33 @@ impl Resolver<'_> {
                     }
                 }
             }
+
+            Pattern::OneOf { alternatives, .. } => {
+                for alternative in alternatives {
+                    if let Some(span) = binder_in(alternative) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                codes::BINDING_IN_AN_ALTERNATIVE,
+                                self.file,
+                                span,
+                                "an alternative cannot bind a name",
+                            )
+                            .with_primary_label("this would only be bound when this side matched")
+                            .with_note(
+                                "the body of the arm runs whichever alternative matched, so a name bound by one of them would not be there for the others",
+                            )
+                            .with_note(
+                                "a variant with fields can be named on its own, without the braces",
+                            ),
+                        );
+                    }
+                    // Bound anyway, including when it was just refused. The
+                    // body was written expecting the name, and letting it fail
+                    // to resolve as well would answer one mistake with a
+                    // second complaint about a line that is not wrong.
+                    self.bind_pattern(alternative);
+                }
+            }
         }
     }
 
@@ -1277,6 +1304,36 @@ impl Resolver<'_> {
 
 fn starts_upper(name: &str) -> bool {
     name.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// Where `pattern` would bind a name, if it would.
+///
+/// The same capitalisation rule [`Resolver::bind_pattern`] uses, asked ahead
+/// of time rather than acted on, because an alternative that binds is refused
+/// rather than resolved and the answer has to come before anything is
+/// declared.
+fn binder_in(pattern: &Pattern) -> Option<Span> {
+    match pattern {
+        Pattern::Wildcard(_)
+        | Pattern::Int { .. }
+        | Pattern::Str { .. }
+        | Pattern::Bool { .. }
+        | Pattern::Error(_) => None,
+
+        Pattern::Path { segments, span } => match segments.split_first() {
+            Some((first, [])) if !starts_upper(&first.name) => Some(*span),
+            _ => None,
+        },
+
+        Pattern::Tuple { elements, .. } => elements.iter().find_map(binder_in),
+
+        Pattern::Record { fields, .. } => fields.iter().find_map(|field| match &field.pattern {
+            Some(pattern) => binder_in(pattern),
+            None => Some(field.span),
+        }),
+
+        Pattern::OneOf { alternatives, .. } => alternatives.iter().find_map(binder_in),
+    }
 }
 
 /// What a name that is not here means somewhere else.

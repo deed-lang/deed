@@ -2218,7 +2218,7 @@ impl<'a> Parser<'a> {
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            let pattern = self.parse_pattern();
+            let pattern = self.parse_arm_pattern();
             self.expect(TokenKind::FatArrow, "a match arm");
             let body = self.parse_expr();
             arms.push(MatchArm {
@@ -2274,6 +2274,35 @@ impl<'a> Parser<'a> {
     }
 
     // -- patterns ----------------------------------------------------------
+
+    /// One arm's pattern, which may name more than one variant.
+    ///
+    /// Only here. A `let` and a parameter take a single pattern, because the
+    /// thing that makes alternatives cheap is that they bind nothing, and a
+    /// binding form that binds nothing is a form with no reason to exist.
+    ///
+    /// There is nothing to disambiguate against. A closure also starts with
+    /// `|`, and a closure is an expression, so the only `|` that can follow a
+    /// pattern in an arm is this one.
+    fn parse_arm_pattern(&mut self) -> Pattern {
+        let first = self.parse_pattern();
+        if !self.at(&TokenKind::Pipe) {
+            return first;
+        }
+
+        let start = first.span();
+        let mut alternatives = vec![first];
+        while self.eat(&TokenKind::Pipe) {
+            let before = self.pos;
+            alternatives.push(self.parse_pattern());
+            if self.pos == before {
+                break;
+            }
+        }
+
+        let span = start.to(alternatives.last().map_or(start, Pattern::span));
+        Pattern::OneOf { alternatives, span }
+    }
 
     fn parse_pattern(&mut self) -> Pattern {
         let span = self.span();

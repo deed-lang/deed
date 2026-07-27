@@ -666,6 +666,22 @@ pub enum Pattern {
         value: bool,
         span: Span,
     },
+    /// `Plus | Times | Close`, in a match arm and nowhere else.
+    ///
+    /// Every alternative is written out, so adding a variant to the choice
+    /// still breaks every match that has to care, which is the whole of what
+    /// the no catch-all rule asks for. What it does not ask for is repeating
+    /// the body once per variant.
+    ///
+    /// No alternative binds anything. That is what keeps this small: a
+    /// language where alternatives can bind has to require that all of them
+    /// bind the same names, and the question does not come up if none of them
+    /// binds at all. A variant with fields is matched by name alone here, the
+    /// same way it can be anywhere else.
+    OneOf {
+        alternatives: Vec<Pattern>,
+        span: Span,
+    },
     Error(Span),
 }
 
@@ -679,6 +695,7 @@ impl Pattern {
             | Pattern::Int { span, .. }
             | Pattern::Str { span, .. }
             | Pattern::Bool { span, .. }
+            | Pattern::OneOf { span, .. }
             | Pattern::Error(span) => *span,
         }
     }

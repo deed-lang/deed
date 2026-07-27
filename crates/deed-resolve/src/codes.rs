@@ -37,3 +37,17 @@ pub const UNKNOWN_EXPORT: &str = "DEED3008";
 /// by looking rather than by tracking. A leading underscore is how a program
 /// says it meant to ignore something.
 pub const UNUSED_BINDING: &str = "DEED3009";
+
+/// An alternative in a match arm that would bind a name.
+///
+/// `Plus | Times` names two variants so that one body can serve both, and it
+/// is cheap precisely because neither side binds. A language whose
+/// alternatives can bind has to require that every one of them binds the same
+/// names, so that the body finds what it reads whichever side matched, and
+/// that rule is the entire cost of the feature. Refusing to bind at all is the
+/// version with none of it.
+///
+/// Nothing is lost. A variant with fields can be matched by name alone, which
+/// is what every arm that wanted this was already doing with the fields it
+/// never read.
+pub const BINDING_IN_AN_ALTERNATIVE: &str = "DEED3010";

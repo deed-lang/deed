@@ -946,6 +946,96 @@ fn a_wildcard_is_fine_where_the_cases_cannot_be_listed() {
     check_ok("module a\n\nfn f(n: Int) -> Int {\n  match n {\n    0 => 1,\n    _ => 2,\n  }\n}\n");
 }
 
+// -- an arm naming more than one variant -----------------------------------
+
+#[test]
+fn one_arm_can_name_several_variants() {
+    check_ok(
+        "module a\n\n\
+         choice E { A, B, C }\n\n\
+         fn f(e: E) -> Int {\n\
+         \x20 match e {\n\
+         \x20   A | B => 1,\n\
+         \x20   C => 2,\n\
+         \x20 }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn naming_several_does_not_make_a_match_complete() {
+    // The point of the whole rule. An arm covers what it names and no more,
+    // so leaving `C` out is as much an error as it was when each variant had
+    // its own arm.
+    let (sources, checked) = check_source(
+        "module a\n\n\
+         choice E { A, B, C }\n\n\
+         fn f(e: E) -> Int {\n\
+         \x20 match e {\n\
+         \x20   A | B => 1,\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::NON_EXHAUSTIVE_MATCH]
+    );
+    assert!(rendered(&sources, &checked.diagnostics).contains("cover `C`"));
+}
+
+#[test]
+fn a_wildcard_inside_an_alternative_is_still_a_catch_all() {
+    // `A | _` reaches every variant, and standing next to a name it is easier
+    // to miss than a wildcard on its own, which is the reason to check it.
+    let (_, checked) = check_source(
+        "module a\n\n\
+         choice E { A, B, C }\n\n\
+         fn f(e: E) -> Int {\n\
+         \x20 match e {\n\
+         \x20   A | _ => 1,\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::CATCH_ALL_ON_CHOICE]
+    );
+}
+
+#[test]
+fn a_variant_with_fields_can_be_named_among_alternatives() {
+    // Matched by name, without the braces. This is what makes binding nothing
+    // cost nothing: the arms that wanted this were binding fields they never
+    // read.
+    check_ok(
+        "module a\n\n\
+         choice E { A { n: Int }, B, C }\n\n\
+         fn f(e: E) -> Int {\n\
+         \x20 match e {\n\
+         \x20   A | B => 1,\n\
+         \x20   C => 2,\n\
+         \x20 }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn alternatives_work_across_a_module_boundary() {
+    // A second exhaustiveness walk, matching by name rather than by
+    // definition, and it had to learn the same thing.
+    check_ok_in(
+        "module a\n\n\
+         use other.{E, A, B, C}\n\n\
+         fn f(e: E) -> Int {\n\
+         \x20 match e {\n\
+         \x20   A | B => 1,\n\
+         \x20   C => 2,\n\
+         \x20 }\n\
+         }\n",
+        &universe_of(&["module other\n\nchoice E { A, B, C }\n"]),
+    );
+}
+
 #[test]
 fn all_arms_must_agree() {
     let (_, checked) = check_source(
