@@ -1,10 +1,11 @@
 // A Deed program that actually runs. `deed test examples/counter.deed` executes
 // the tests at the bottom.
 //
-// examples/transfer.deed is checked but cannot run. It imports `AccountId`,
-// `Currency` and its handlers from modules that do not exist, and there is no
-// cross module loading. `Result` used to be on that list too, which is why it
-// is now part of the language rather than a library.
+// examples/transfer.deed could not run when this was written. It named types and
+// handlers that lived in modules the compiler had no way to load, and `Result`
+// was on that list too, which is why `Result` is part of the language rather
+// than a library. Cross module loading arrived later and transfer.deed runs its
+// own tests now.
 
 module examples/counter
 

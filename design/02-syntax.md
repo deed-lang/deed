@@ -5,7 +5,7 @@ enough to argue with, and concrete enough to write a lexer against.
 
 Most of what follows is now built, and the rest is not, and a reader cannot tell the two
 apart by looking. So: every rule stated as a rule, and every diagnostic code named, describes
-what the compiler does today. Four constructs appear in the illustrations and do not parse at
+what the compiler does today. Three constructs appear in the illustrations and do not parse at
 all, because the sections around them would be thin without something to name:
 
 - traits, which have no keyword and no node
@@ -1236,4 +1236,3 @@ using an effect to get around not having a loop.
 - Whether traits can be implemented outside the defining module, and what that does to
   local reasoning.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
-- Concrete syntax for effect handlers, currently only sketched in 03.

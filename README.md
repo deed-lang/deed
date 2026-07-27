@@ -268,8 +268,10 @@ both because a title is being used as a name and it is not one. `done 2` finishe
 task now, and no part of the language changed to allow it, which is what makes it worth
 reporting. A position is a fact about where an element is and a callback is only ever handed
 the element, so `map` and `filter` stop being enough the moment position matters and the walk
-goes back to a counter in a record written out by hand. There are three of those in that file
-now, one of them replacing a `map(filter(..))` that used to be a single line.
+goes back to a counter in a record written out by hand. There were three of those in that file
+when this was written, one of them replacing a `map(filter(..))` that used to be a single
+line. `for task at here in tasks` came out of exactly that and took all three back to one
+line each.
 
 And nothing bounds the number. `done 9` on a file with two tasks walks both, marks neither
 and hands back the list it started with, so whether it meant anything has to be asked again
@@ -499,8 +501,9 @@ declared with.
 
 `list.deed` and `using_list.deed` are the point of the three changes above. `list.deed` is a
 list library written in Deed: `map`, `map_at`, `filter`, `fold`, `any`, `all`, `count_where`,
-`filtered_with`, none of them known to the compiler, no builtin, no special case, no name in
-the prelude. It is the first thing in this repository anybody else could have written.
+`filtered_with`, `first`, `last`, `reversed` and `prepend`, none of them known to the
+compiler, no builtin, no special case, no name in the prelude. It is the first thing in this
+repository anybody else could have written.
 
 It is also what got the language a way to stop a walk. `any` and `all` in it both used to
 open with a branch whose only job was to notice that the answer was already in, which is
