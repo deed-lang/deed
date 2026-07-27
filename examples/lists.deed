@@ -7,11 +7,16 @@
 // problem worth writing down. That is a bigger hole than any of the ones the
 // type checker had.
 //
-// `List` is built in rather than declared, because there is still no way to
-// declare a generic type. It is the same shortcut `Result` takes: the checker
-// compares the element types componentwise and lets an unknown one absorb, so
-// none of this needed unification. Whether that shortcut can carry a third
-// type is the question that decides whether generics get written.
+// `List` is built in rather than declared, and it was once because there was
+// no way to declare a generic type. There is now: `examples/generic_types.deed`
+// declares `Pair` and `Option`, and `examples/table.deed` declares `Entry`. So
+// the shortcut it takes, comparing element types componentwise and letting an
+// unknown one absorb, is a choice rather than the only thing available.
+//
+// It stayed a choice on purpose. Moving `List` out would move the type, which
+// lives in one crate, and leave behind the syntax over it, which does not:
+// `[1, 2, 3]` has to build something, and `for` is the only loop in the
+// language and walks nothing else. That is measured in design/02-syntax.md.
 
 module examples/lists
 

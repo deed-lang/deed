@@ -1,9 +1,12 @@
 //! `List`, `at` and `push`, which the language provides rather than a library.
 //!
-//! There is still no way to declare a generic type, so this is `Result`'s
-//! trick applied a second time: the element type is compared componentwise and
-//! an unknown one absorbs. Most of these are about what that buys and where it
-//! stops.
+//! `Result`'s trick applied a second time: the element type is compared
+//! componentwise and an unknown one absorbs, so none of this needs
+//! unification. That was the only thing available when it was written and is
+//! not any more, since a generic type can be declared now. What keeps `List`
+//! built in is the syntax rather than the type: `[1, 2, 3]` has to build
+//! something and `for` walks nothing else. Most of these are about what the
+//! trick buys and where it stops.
 
 use deed_diagnostics::{Diagnostic, SourceMap, render_human};
 use deed_driver::check_text;

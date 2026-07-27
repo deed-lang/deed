@@ -1,4 +1,5 @@
-// The running example. Every design document refers back to this file.
+// The running example, and two of the five design documents work through it:
+// design/02-syntax.md and design/03-effects.md.
 //
 // It lexes, parses, resolves, type checks, has its effect row checked against
 // what its body actually performs, and runs. Nothing is imported: everything it
