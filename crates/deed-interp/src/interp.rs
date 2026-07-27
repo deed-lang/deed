@@ -427,8 +427,11 @@ struct Promise {
 /// A closure expression, kept where a [`Value`] can point at it.
 ///
 /// Filled in as closures are evaluated rather than by walking every module up
-/// front, because a closure value has to name a body and Deed has no loops, so
-/// this grows once per closure expression actually reached.
+/// front, because most of them are never reached. One entry per closure
+/// expression, not one per evaluation: a closure literal written inside a
+/// `for` body or a function that calls itself is evaluated again on every turn,
+/// and a table that grew each time would grow with what the program does rather
+/// than with how much of it there is.
 struct Closure<'a> {
     module: usize,
     params: &'a [Param],
@@ -463,6 +466,10 @@ pub(crate) struct Interp<'a> {
 
     /// Bodies of the closures evaluated so far. See [`Closure`].
     closures: Vec<Closure<'a>>,
+    /// Where each of those went, so evaluating the same literal twice finds
+    /// the entry it made the first time. A module and a span name exactly one
+    /// expression in the program.
+    closure_at: HashMap<(usize, Span), usize>,
 
     /// Lines written through a `Console`. Collected rather than printed so the
     /// caller decides what to do with them, and so a test can read them.
@@ -504,6 +511,7 @@ impl<'a> Interp<'a> {
             olds: Vec::new(),
             entry_states: Vec::new(),
             closures: Vec::new(),
+            closure_at: HashMap::new(),
             output: Vec::new(),
             ticks: 0,
             root: None,
@@ -900,18 +908,28 @@ impl<'a> Interp<'a> {
 
             Expr::Block(block) => self.eval_block(block),
 
-            Expr::Closure { params, body, .. } => {
-                self.closures.push(Closure {
-                    module: self.current,
-                    params,
-                    body,
-                });
+            Expr::Closure {
+                params, body, span, ..
+            } => {
+                let code = match self.closure_at.get(&(self.current, *span)) {
+                    Some(found) => *found,
+                    None => {
+                        self.closures.push(Closure {
+                            module: self.current,
+                            params,
+                            body,
+                        });
+                        let index = self.closures.len() - 1;
+                        self.closure_at.insert((self.current, *span), index);
+                        index
+                    }
+                };
                 // Everything visible right now, by value. A closure cannot
                 // leave the function that wrote it, so copying the frame is
                 // never strictly necessary today; doing it anyway means the
                 // answer does not depend on that staying true.
                 Ok(Value::Closure(Rc::new(ClosureValue {
-                    code: self.closures.len() - 1,
+                    code,
                     captured: self.frames.last().cloned().unwrap_or_default(),
                 })))
             }
@@ -2459,5 +2477,99 @@ fn collect_olds<'a>(expr: &'a Expr, out: &mut Vec<(Span, &'a Expr)>) {
         }
         Expr::Try { operand, .. } => collect_olds(operand, out),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Interp;
+    use crate::{DeclaredRows, Guards, Program};
+    use deed_ast::Item;
+    use deed_diagnostics::SourceMap;
+    use deed_resolve::Universe;
+
+    /// Runs the first `test` block and hands back the interpreter that ran it,
+    /// which is the only way to see a table nothing outside the crate can.
+    fn ran(source: &str) -> usize {
+        let mut sources = SourceMap::new();
+        let file = sources.add("test.deed", source);
+
+        let lexed = deed_lexer::tokenize(file, sources.file(file).text());
+        assert!(!lexed.has_errors(), "should lex cleanly");
+        let parsed = deed_parser::parse(file, &lexed.tokens);
+        assert!(!parsed.has_errors(), "should parse cleanly");
+        let resolved = deed_resolve::resolve(file, &parsed.module, &Universe::new());
+        assert!(!resolved.has_errors(), "should resolve cleanly");
+
+        let mut program = Program::new();
+        program.add(
+            file,
+            &parsed.module,
+            &resolved.resolutions,
+            Guards::new(),
+            DeclaredRows::new(),
+        );
+
+        let module = program.module(file).expect("the module should be there");
+        let body = module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Test(test) => Some(&test.body),
+                _ => None,
+            })
+            .expect("a test block");
+
+        let mut interp = Interp::new(&program, file);
+        assert!(interp.eval_block(body).is_ok(), "it should run");
+        interp.closures.len()
+    }
+
+    /// The table holds closure expressions, so it is the size of the program
+    /// and not of the work.
+    ///
+    /// It used to push on every evaluation, which is once per turn for a
+    /// closure literal inside a `for` body and once per call for one inside a
+    /// function that calls itself. Nothing in `examples/` writes either, so
+    /// nothing noticed, and the entries are never read again: the value points
+    /// at the first one.
+    #[test]
+    fn a_closure_written_once_is_kept_once() {
+        let one_turn = ran("module a\n\n\
+             fn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\n\
+             test \"t\" {\n\
+             \x20   let total = for n in [1] with sum = 0 {\n\
+             \x20       sum + apply(|x: Int| x + n, 1)\n\
+             \x20   }\n\
+             \x20   assert total > 0\n\
+             }\n");
+        let many_turns = ran("module a\n\n\
+             fn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\n\
+             test \"t\" {\n\
+             \x20   let total = for n in [1, 2, 3, 4, 5, 6, 7, 8] with sum = 0 {\n\
+             \x20       sum + apply(|x: Int| x + n, 1)\n\
+             \x20   }\n\
+             \x20   assert total > 0\n\
+             }\n");
+
+        assert_eq!(one_turn, 1);
+        assert_eq!(
+            many_turns, one_turn,
+            "eight turns over one closure literal should keep one closure"
+        );
+    }
+
+    /// Two literals are two entries, or the fix would be sharing bodies that
+    /// have nothing to do with each other.
+    #[test]
+    fn two_closures_written_are_two_kept() {
+        let kept = ran("module a\n\n\
+             fn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\n\
+             test \"t\" {\n\
+             \x20   let a = apply(|x: Int| x + 1, 1)\n\
+             \x20   let b = apply(|x: Int| x + 2, 1)\n\
+             \x20   assert a + b > 0\n\
+             }\n");
+        assert_eq!(kept, 2);
     }
 }
