@@ -5,12 +5,15 @@ enough to argue with, and concrete enough to write a lexer against.
 
 Most of what follows is now built, and the rest is not, and a reader cannot tell the two
 apart by looking. So: every rule stated as a rule, and every diagnostic code named, describes
-what the compiler does today. Three constructs appear in the illustrations and do not parse at
+what the compiler does today. Two constructs appear in the illustrations and do not parse at
 all, because the sections around them would be thin without something to name:
 
-- traits, which have no keyword and no node
 - `matches(value, EMAIL_PATTERN)`, which is not in the prelude
 - `Int.parse(input)`, since a builtin type has no members
+
+Traits used to be the third. They are off this list because no illustration uses one any
+more: the open questions at the end say why there are none, so the document no longer needs
+to borrow the word to describe how behaviour gets attached.
 
 The reason to be exact about this is that a document once described `Diverge` as an effect
 the compiler tracked, and the word did not resolve anywhere in the repository. Sketching is
@@ -70,7 +73,10 @@ choice TransferError {
 ```
 
 `record` is a product, `choice` is a sum. No classes, no inheritance, no interfaces with
-default bodies. Behaviour is attached with traits, and a trait cannot carry state.
+default bodies. Behaviour is attached by writing a function that takes the value, and where
+different callers need different behaviour, by taking the function as a parameter. There are
+no traits, and the open questions at the end of this document say why that is a decision
+rather than a gap.
 
 Refinements are part of the type, which is how most validation stops needing to exist:
 
@@ -102,8 +108,10 @@ concatenation any other way would be a tax on the most ordinary thing a program 
 Ordering is deliberately narrow. Comparing two records used to pass the type checker and
 fail at runtime, and the runtime message blamed the interpreter for not implementing
 something that has nothing to implement: there is no order on a record that anyone could
-define, because there is no trait to define it in. Refusing the comparison is the honest
-answer until there is one. Equality is different, because structural equality is total and
+define, because there is nowhere to define it. The same refusal covers a bare type
+parameter, which is the case that would decide whether this language wants bounds, and it
+is refused for the same reason and pinned by its own test. A caller that needs an order
+passes the comparison. Equality is different, because structural equality is total and
 wanting to know whether two records are the same is reasonable.
 
 Strings order by character. For text in one script that is the order anyone expects, and for
@@ -269,8 +277,11 @@ callback something the walk never knew. With this, the library builds its own in
 `examples/todo.deed` had three walks carrying a counter in a record, all the same shape, each
 with branches that existed only to remember to bump it.
 
-What can be walked is a `List`, and nothing else. A `for` over a `String` or a `Result` would
-need a way to say what walking one means, which is a trait system, which does not exist.
+What can be walked is a `List`, and nothing else. A `for` over a `Result` would need a way to
+say what walking one means, and there is no way to say it. A `for` over a `String` sounds like
+the same question and is not: `split(s, "")` already produces the characters, correct on
+characters rather than bytes, and hands `for` the one thing it walks. That is a spelling
+nobody has minded enough to shorten, not a missing abstraction.
 
 There is no range either, and that one is refused for a different reason. `for i in 0..10` is
 the first thing anyone writes who wants to count, and a range would terminate perfectly well,
@@ -1271,6 +1282,25 @@ using an effect to get around not having a loop.
   else it wants out of that. What is still unanswered is whether an indexed form of every
   walk belongs in that library at all, since one of each doubles it and nobody has wanted
   more than `map_at` yet.
-- Whether traits can be implemented outside the defining module, and what that does to
-  local reasoning.
+- Whether there should be traits at all. Answered for now: no, and this is the reasoning
+  rather than a shrug. The question was measured against the code instead of argued, and the
+  motivation people expect to find here was absorbed years ago by three decisions made for
+  other reasons. Equality is structural and total, so `==` works on a bare type parameter and
+  `examples/table.deed` keys on any `K` without saying anything about it; the first bound
+  anyone reaches for is not a bound here but the ambient rule. A function is a value, so a
+  caller that needs different behaviour passes it, and `examples/logs.deed` counts by level
+  and by source through one walk that takes the question as an argument. Rows travel with
+  those function types, so a passed operation says what it is allowed to do, which is more
+  than a trait would have said. What is left is four specific pressures, and each has a
+  cheaper answer than a trait system: `ok` and `err` are a rule about return positions, not
+  dispatch, and the entry above says what to do about it; `length` covering a `String` and a
+  list is one name and one branch; ordering on a type parameter is refused, and a comparator
+  parameter is the answer the language already supports; a `for` over a `String` is
+  `split(s, "")`. What would change this is a measurement rather than an argument: write a
+  program that needs a generic sort over a user type, or needs to print a `T`, and find that
+  it is not merely uglier with a passed function but unwritable. Nobody in this corpus has
+  tried. Until one does, a trait system is machinery bought against a bill nobody has been
+  handed. The old form of this question, whether a trait could be implemented outside the
+  module that defines the type, is a coherence problem worth having only after there is
+  something to implement.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
