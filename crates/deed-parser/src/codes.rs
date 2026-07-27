@@ -30,3 +30,14 @@ pub const CONTRACT_CLAUSE_ORDER: &str = "DEED2006";
 /// everything, so every mistake made with it was invisible and a closure could
 /// carry any effect through it into a function that declared none.
 pub const MISSING_PARAMETER_TYPE: &str = "DEED2007";
+
+/// A choice variant given its payload by position rather than by name.
+///
+/// `Circle(Int)` is what anyone arriving from a language with tuple variants
+/// writes first, and it is refused. Saying so as "expected `}`" reads as a
+/// typo in a line that has none, so it has a code of its own.
+///
+/// Whether it should be refused at all is open. `ok` and `err` carry a value
+/// positionally and are built in, which is the shortcut `design/02-syntax.md`
+/// records under what holds `Result` in the language.
+pub const POSITIONAL_VARIANT: &str = "DEED2008";

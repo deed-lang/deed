@@ -557,6 +557,54 @@ impl<'a> Parser<'a> {
         Some((fields, end))
     }
 
+    /// A variant written `Circle(Int)`, which this language does not have.
+    ///
+    /// Reported here rather than left to `expect`, which would say "expected
+    /// `}`" and send somebody looking for a missing brace in a line that has
+    /// none. Anyone arriving from a language with tuple variants writes this
+    /// first, so it is worth a sentence rather than a token name.
+    ///
+    /// The payload is skipped so that the rest of the declaration still parses
+    /// and the reader gets the whole file's worth of errors rather than this
+    /// one and a cascade behind it.
+    fn positional_variant(&mut self, name: &Ident) -> Span {
+        let open = self.bump().span;
+
+        let mut depth = 1usize;
+        let mut end = open;
+        while depth > 0 && !self.at_eof() {
+            match self.kind() {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => depth -= 1,
+                // An unclosed `(` is a different mistake, and running to the
+                // end of the file looking for its partner would bury it.
+                TokenKind::RBrace => break,
+                _ => {}
+            }
+            end = self.bump().span;
+        }
+
+        self.diagnostics.push(
+            Diagnostic::error(
+                codes::POSITIONAL_VARIANT,
+                self.file,
+                open.to(end),
+                format!("`{}` carries its payload by position", name.name),
+            )
+            .with_primary_label("a variant's fields are named")
+            .with_note(
+                "a variant is written `Variant { field: Type }`, with a name chosen for every \
+                 field, and it is matched the same way",
+            )
+            .with_note(
+                "`ok` and `err` are the exception and they are built into the language rather than declared, \
+                 which is what keeps `Result` in it",
+            ),
+        );
+
+        name.span.to(end)
+    }
+
     fn parse_choice(&mut self) -> Option<ChoiceDecl> {
         let start = self.bump().span;
         let name = self.expect_ident("a choice declaration")?;
@@ -575,6 +623,8 @@ impl<'a> Parser<'a> {
                     Some((fields, end)) => (Some(fields), end),
                     None => (None, variant_name.span),
                 }
+            } else if self.at(&TokenKind::LParen) {
+                (None, self.positional_variant(&variant_name))
             } else {
                 (None, variant_name.span)
             };

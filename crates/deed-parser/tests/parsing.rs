@@ -343,6 +343,94 @@ fn a_closure_parameter_needs_one_too() {
     );
 }
 
+// -- positional variants ---------------------------------------------------
+
+/// The first thing somebody arriving from a language with tuple variants
+/// writes, and it is refused. It used to be refused as "expected `}`", which
+/// reads as a missing brace in a line that has none.
+#[test]
+fn a_variant_written_by_position_says_so() {
+    let (sources, parsed) =
+        parse_source("module a\n\nchoice Shape {\n    Nothing,\n    Circle(Int),\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::POSITIONAL_VARIANT]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(
+        text.contains("`Circle` carries its payload by position"),
+        "{text}"
+    );
+    assert!(text.contains("`Variant { field: Type }`"), "{text}");
+    // Where the argument about whether it should be refused at all lives.
+    assert!(text.contains("`ok` and `err`"), "{text}");
+}
+
+/// The payload is skipped rather than left for the next rule to trip over, so
+/// one of these is one error and the reader gets the rest of the file.
+#[test]
+fn the_declaration_survives_and_keeps_its_other_variants() {
+    let (_, parsed) = parse_source(
+        "module a\n\nchoice Shape {\n    Nothing,\n    Circle(Int),\n    Named { label: String },\n}\n\nfn f() -> Int { 0 }\n",
+    );
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::POSITIONAL_VARIANT]
+    );
+
+    let Item::Choice(decl) = &parsed.module.items[0] else {
+        panic!("the choice should still be there");
+    };
+    let names: Vec<&str> = decl
+        .variants
+        .iter()
+        .map(|variant| variant.name.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["Nothing", "Circle", "Named"]);
+    // And the declaration after it, which a cascade would have swallowed.
+    assert!(matches!(parsed.module.items[1], Item::Function(_)));
+}
+
+/// Each one is its own mistake. Reporting the first and giving up would mean
+/// a second pass for somebody translating a type over from another language.
+#[test]
+fn every_positional_variant_is_reported() {
+    let (_, parsed) =
+        parse_source("module a\n\nchoice Shape {\n    Circle(Int),\n    Rect(Int, Int),\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::POSITIONAL_VARIANT, codes::POSITIONAL_VARIANT]
+    );
+}
+
+/// A payload with brackets of its own, which a scan looking for the first `)`
+/// would have stopped in the middle of.
+#[test]
+fn a_nested_payload_is_skipped_whole() {
+    let (_, parsed) =
+        parse_source("module a\n\nchoice C {\n    Run(Fn(Int) -> Int),\n    After,\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::POSITIONAL_VARIANT]
+    );
+
+    let Item::Choice(decl) = &parsed.module.items[0] else {
+        panic!("the choice should still be there");
+    };
+    let names: Vec<&str> = decl
+        .variants
+        .iter()
+        .map(|variant| variant.name.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["Run", "After"]);
+}
+
+#[test]
+fn a_variant_with_named_fields_is_untouched() {
+    parse_ok("module a\n\nchoice C {\n    One,\n    Two { x: Int, y: Int },\n}\n");
+}
+
 #[test]
 fn a_closure_with_typed_parameters_parses() {
     parse_ok(
