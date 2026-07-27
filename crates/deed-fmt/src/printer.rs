@@ -402,16 +402,23 @@ impl Printer<'_> {
     // -- functions ---------------------------------------------------------
 
     fn function(&mut self, decl: &FnDecl) {
+        let before = self.out.len();
         self.signature(&decl.sig, &decl.contract);
-        if decl.contract.is_empty() {
-            self.push(" ");
-        } else {
-            // The brace goes back to the left margin, because the contract is
-            // indented past it and a brace tucked on the end of the last
-            // obligation reads as part of that obligation.
+
+        // A signature that stayed on one line keeps its brace on the end of
+        // it. One that did not puts the brace back at the left margin, because
+        // everything a signature wraps onto is indented past that margin and a
+        // brace tucked on the end of an indented line reads as part of it. A
+        // contract is the usual reason to wrap and used to be the only one
+        // asked about, so a return type long enough to wrap got the other
+        // answer to the same question.
+        if self.out[before..].contains('\n') {
             self.newline();
             self.line_start();
+        } else {
+            self.push(" ");
         }
+
         self.block(&decl.body);
         self.newline();
     }

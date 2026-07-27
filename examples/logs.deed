@@ -2,11 +2,31 @@
 //
 // This is the second file written to find out what is missing rather than to
 // show what is there. `examples/todo.deed` was the first and it found four
-// things, every one of which became part of the language. This one found one
-// before it had read a file: a report has columns, columns need padding, and
-// padding could not be written without a function that calls itself, so
-// aligning a column made a function declare `Diverge` and spread it to
-// everything that built a line. `repeat` closed that.
+// things, every one of which became part of the language. This one found
+// three, and they did not all end in the same place.
+//
+// The first arrived before it had read a file. A report has columns, columns
+// need padding, and padding could not be written without a function that calls
+// itself, so aligning a column made a function declare `Diverge` and spread it
+// to everything that built a line. That is a gap in the language and `repeat`
+// closed it.
+//
+// The second was a hole in the type checker. A list built by a fold was a list
+// of unknown, so a walk over one bound an element nothing was known about and
+// every question asked about it was answered yes. This file happened to
+// contain both spellings of a filter, which is the only reason it showed.
+//
+// The third was neither. Counting by key took two walks and a branch, and the
+// answer was not a keyed collection in the language: it is
+// `examples/table.deed`, written in Deed, which the compiler knows nothing
+// about. `or_else` makes adding the first one and bumping a later one the same
+// sentence. The test for the prelude is whether something can be written here,
+// and this one could.
+//
+// One awkward shape is left and it is staying. `placed` sorts by walking three
+// times, because there is no `insert` and no way to join two lists except by
+// walking one onto the other. A better sort is a better algorithm rather than
+// a change to the language.
 //
 // What is worth reading here is the split between the two halves. Everything
 // down to `report` is pure: it takes text and gives back text, declares
@@ -25,12 +45,7 @@
 
 module examples/logs
 
-// How many times one key was seen. A record rather than a pair, because
-// `tally.seen` reads and `at(tally, 1)` does not.
-record Tally {
-    key: String,
-    seen: Int,
-}
+use examples/table.{Entry, or_else, set}
 
 // The words of a line, with the gaps thrown away.
 //
@@ -65,44 +80,24 @@ fn source_of(line: String) -> String {
     word(line, 2)
 }
 
-// Whether anything here is already counting that key.
-fn holds(tallies: List<Tally>, key: String) -> Bool {
-    for one in tallies with found = false while !found {
-        one.key == key
-    }
-}
-
-// One more of `key`, whether or not it has been seen before.
-//
-// Two walks and a branch, because a list is what there is: adding the first one
-// and bumping a later one are different shapes and there is no keyed
-// collection to make them the same shape. Worth watching. If this file grows a
-// second one of these it stops being an inconvenience and starts being a gap.
-fn counted(tallies: List<Tally>, key: String) -> List<Tally> {
-    if holds(tallies, key) {
-        for one in tallies with out = [] {
-            if one.key == key {
-                push(out, Tally { key: one.key, seen: one.seen + 1 })
-            } else {
-                push(out, one)
-            }
-        }
-    } else {
-        push(tallies, Tally { key: key, seen: 1 })
-    }
-}
-
 // Every line counted by whatever `key_of` says the line is about.
 //
 // The caller passes the question. Counting by level and counting by source are
 // the same walk asking a different thing, and writing it twice would be two
 // places for the same mistake.
-fn tallied(lines: List<String>, key_of: Fn(String) -> String) -> List<Tally> {
-    for line in lines with tallies = [] {
+//
+// This used to hold a `List<Tally>` and a `counted` of its own, which was two
+// walks and a branch: one to find out whether the key was there, another to
+// bump it, and a separate case to add it. `or_else` makes adding the first one
+// and bumping a later one the same sentence, and the table it walks is written
+// in Deed rather than built in.
+fn tallied(lines: List<String>, key_of: Fn(String) -> String) -> List<Entry<String, Int>> {
+    for line in lines with counts = [] {
         if length(trim(line)) == 0 {
-            tallies
+            counts
         } else {
-            counted(tallies, key_of(line))
+            let key = key_of(line)
+            set(counts, key, or_else(counts, key, 0) + 1)
         }
     }
 }
@@ -112,17 +107,24 @@ fn tallied(lines: List<String>, key_of: Fn(String) -> String) -> List<Tally> {
 // `sorted` is already in order, so where `one` goes is decided by walking it
 // twice: everything that outranks it, then everything that does not. There is
 // no `insert` and no way to join two lists except by walking one onto the
-// other, which is what `rest` does.
-fn placed(sorted: List<Tally>, one: Tally) -> List<Tally> {
+// other, which is the last thing this does.
+//
+// The second awkward shape in this file, and unlike the counting it did not
+// turn out to be a library that was missing. It is three walks because a list
+// is a list; a better sort is a better algorithm rather than a change to the
+// language.
+fn placed(sorted: List<Entry<String, Int>>, one: Entry<String, Int>)
+    -> List<Entry<String, Int>>
+{
     let ahead = for s in sorted with kept = [] {
-        if s.seen >= one.seen {
+        if s.value >= one.value {
             push(kept, s)
         } else {
             kept
         }
     }
     let behind = for s in sorted with kept = [] {
-        if s.seen >= one.seen {
+        if s.value >= one.value {
             kept
         } else {
             push(kept, s)
@@ -133,8 +135,8 @@ fn placed(sorted: List<Tally>, one: Tally) -> List<Tally> {
     }
 }
 
-fn ranked(tallies: List<Tally>) -> List<Tally> {
-    for one in tallies with sorted = [] {
+fn ranked(counts: List<Entry<String, Int>>) -> List<Entry<String, Int>> {
+    for one in counts with sorted = [] {
         placed(sorted, one)
     }
 }
@@ -147,8 +149,8 @@ fn padded(text: String, width: Int) -> String {
     text + join(repeat(" ", width - length(text)), "")
 }
 
-fn line_for(one: Tally) -> String {
-    padded(one.key, 16) + to_string(one.seen)
+fn line_for(one: Entry<String, Int>) -> String {
+    padded(one.key, 16) + to_string(one.value)
 }
 
 // The whole report, as lines. Pure, so a test can read it.
@@ -222,11 +224,11 @@ test "a line that is not a log line is empty rather than a failure" {
 }
 
 test "counting adds a key it has not seen and bumps one it has" {
-    let once = counted([], "ERROR")
+    let once = tallied(["d ERROR b x"], level_of)
     assert length(once) == 1
-    let twice = counted(once, "ERROR")
+    let twice = tallied(["d ERROR b x", "d ERROR c x"], level_of)
     assert length(twice) == 1
-    assert at(twice, 0) == ok(Tally { key: "ERROR", seen: 2 })
+    assert at(twice, 0) == ok(Entry { key: "ERROR", value: 2 })
 }
 
 test "blank lines are not a level" {
@@ -237,14 +239,14 @@ test "blank lines are not a level" {
 test "the most seen comes first" {
     let lines = ["d INFO a x", "d ERROR b x", "d ERROR b x", "d WARN c x", "d ERROR b x"]
     let order = ranked(tallied(lines, level_of))
-    assert at(order, 0) == ok(Tally { key: "ERROR", seen: 3 })
+    assert at(order, 0) == ok(Entry { key: "ERROR", value: 3 })
     assert length(order) == 3
 }
 
 test "counting by source is the same walk asking a different question" {
     let lines = ["d INFO ledger x", "d ERROR audit x", "d WARN ledger x"]
     let order = ranked(tallied(lines, source_of))
-    assert at(order, 0) == ok(Tally { key: "ledger", seen: 2 })
+    assert at(order, 0) == ok(Entry { key: "ledger", value: 2 })
 }
 
 test "a column is as wide as it was asked for" {

@@ -306,4 +306,8 @@ const SOURCES: &[&str] = &[
     // The arguments go a level further in than the line that could not hold
     // them, and everything they contain goes with them.
     "module a\n\nfn f(xs: List<Int>) -> List<Int> {\n    map(\n        xs,\n        |n: Int| {\n            let doubled = n + n\n            doubled + 1\n        },\n    )\n}\n",
+    // A signature that wraps for a reason other than a contract. The brace
+    // goes to the left margin either way, because what it wraps onto is
+    // indented and a brace on the end of an indented line reads as part of it.
+    "module a\n\nfn placed(sorted: List<Entry<String, Int>>, one: Entry<String, Int>)\n    -> List<Entry<String, Int>>\n{\n    sorted\n}\n",
 ];
