@@ -302,4 +302,8 @@ const SOURCES: &[&str] = &[
     "module a\n\ntest \"a test\" {\n    assert 1 == 1\n}\n",
     "module a\n\ntest \"a test\" {\n    assert refuses order_of(0)\n}\n",
     "module a\n\ntest \"t\" {\n    with H {} {\n        f()\n    }\n}\n",
+    // A call that has to break with something inside it that breaks as well.
+    // The arguments go a level further in than the line that could not hold
+    // them, and everything they contain goes with them.
+    "module a\n\nfn f(xs: List<Int>) -> List<Int> {\n    map(\n        xs,\n        |n: Int| {\n            let doubled = n + n\n            doubled + 1\n        },\n    )\n}\n",
 ];

@@ -96,6 +96,92 @@ fn any_layout_of_a_real_program_formats_back_to_the_canonical_one() {
     }
 }
 
+/// A block's closing brace sits under the line that opened it.
+///
+/// Nothing ever said so, and a call that broke over several lines did not do
+/// it. The arguments were rendered at the indent of the line that could not
+/// hold them and then moved in by putting spaces in front, which moves the
+/// first line and nothing after it, so `map(xs, |n: Int| { ... })` came out
+/// with the closure's body and its closing brace a level short of where they
+/// belong. `examples/using_list.deed` had two of those checked in.
+///
+/// Neither test above could see it. Both ask whether formatting lands on the
+/// file that is there, and the file that was there was the wrong one. This is
+/// the first thing here that asks what the output looks like rather than what
+/// it is equal to.
+#[test]
+fn a_closing_brace_sits_under_the_line_that_opened_it() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    collect(&root, &mut files);
+    files.sort();
+    assert!(!files.is_empty(), "no `.deed` files found under {root:?}");
+
+    for path in &files {
+        let source = std::fs::read_to_string(path).unwrap();
+        let mut opened: Vec<(usize, usize)> = Vec::new();
+
+        for (number, line) in source.lines().enumerate() {
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
+            let mut leading = trimmed.starts_with('}');
+
+            for brace in braces(line) {
+                if brace == '{' {
+                    opened.push((number + 1, indent));
+                    leading = false;
+                    continue;
+                }
+                let (at, was) = opened.pop().unwrap_or_else(|| {
+                    panic!(
+                        "{}:{} closes a block nothing opened",
+                        path.display(),
+                        number + 1
+                    )
+                });
+                if leading {
+                    assert_eq!(
+                        indent,
+                        was,
+                        "{}:{} closes the block opened on line {at}, so it belongs at {was} \
+                         spaces and is at {indent}",
+                        path.display(),
+                        number + 1
+                    );
+                }
+                leading = false;
+            }
+        }
+
+        assert!(
+            opened.is_empty(),
+            "{} leaves a block open at line {}",
+            path.display(),
+            opened[0].0
+        );
+    }
+}
+
+/// The braces on a line, with the ones inside text and comments left out.
+fn braces(line: &str) -> Vec<char> {
+    let mut found = Vec::new();
+    let mut chars = line.chars().peekable();
+    let mut in_string = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if in_string => {
+                chars.next();
+            }
+            '"' => in_string = !in_string,
+            '/' if !in_string && chars.peek() == Some(&'/') => break,
+            '{' | '}' if !in_string => found.push(c),
+            _ => {}
+        }
+    }
+    found
+}
+
 /// The same program, laid out by somebody who was not paying attention.
 ///
 /// Indentation and trailing space only. A line break is not free in this

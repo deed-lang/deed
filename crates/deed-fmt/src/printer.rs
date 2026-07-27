@@ -600,7 +600,7 @@ impl Printer<'_> {
                 if self.fits(&one_line) {
                     return one_line;
                 }
-                self.broken_list(&format!("{callee}("), &rendered, ")")
+                self.broken(&format!("{callee}("), args, ")", |me, arg| me.expr(arg))
             }
 
             Expr::List { elements, .. } => {
@@ -612,7 +612,7 @@ impl Printer<'_> {
                 if self.fits(&one_line) {
                     return one_line;
                 }
-                self.broken_list("[", &rendered, "]")
+                self.broken("[", elements, "]", |me, element| me.expr(element))
             }
 
             Expr::StructLit { path, fields, .. } => {
@@ -626,7 +626,9 @@ impl Printer<'_> {
                 if self.fits(&one_line) {
                     return one_line;
                 }
-                self.broken_list(&format!("{path} {{"), &rendered, "}")
+                self.broken(&format!("{path} {{"), fields, "}", |me, field| {
+                    me.field_init(field)
+                })
             }
 
             Expr::Unary { op, operand, .. } => {
@@ -877,15 +879,34 @@ impl Printer<'_> {
     }
 
     /// One element per line, for a list that did not fit.
-    fn broken_list(&mut self, open: &str, elements: &[String], close: &str) -> String {
+    ///
+    /// The elements are rendered here rather than handed in already rendered,
+    /// because they are going one level further in than the line that tried to
+    /// hold them, and an element that breaks across lines has to know that.
+    /// Rendering at the outer indent and then pushing spaces in front only
+    /// moves the first line, so `map(xs, |n: Int| { ... })` came out with the
+    /// closure's body and its closing brace a level short of where they belong.
+    ///
+    /// Nothing is on the line either, so whatever prefix the caller was
+    /// carrying is put down for the duration.
+    fn broken<T>(
+        &mut self,
+        open: &str,
+        items: &[T],
+        close: &str,
+        mut render: impl FnMut(&mut Self, &T) -> String,
+    ) -> String {
         let mut text = format!("{open}\n");
+        let pending = std::mem::take(&mut self.pending);
         self.indent += 1;
-        for element in elements {
+        for item in items {
+            let element = render(self, item);
             text.push_str(&INDENT.repeat(self.indent));
-            text.push_str(element);
+            text.push_str(&element);
             text.push_str(",\n");
         }
         self.indent -= 1;
+        self.pending = pending;
         text.push_str(&INDENT.repeat(self.indent));
         text.push_str(close);
         text
