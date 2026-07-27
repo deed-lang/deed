@@ -4,12 +4,12 @@ An effect is anything a function does that is not returning a value: reading a d
 getting the time, writing a log, failing to terminate.
 
 In most languages these are invisible. A function typed `String -> String` might hit the
-network and you would never know. Vow makes the effect row part of the signature, which is
+network and you would never know. Deed makes the effect row part of the signature, which is
 what lets absence mean something.
 
 ## Declaring an effect
 
-```vow
+```deed
 effect Ledger {
     fn balance(account: AccountId) -> Money
     fn post(entry: Entry) -> Result<(), LedgerError>
@@ -29,7 +29,7 @@ nothing more.
 
 ## Using effects
 
-```vow
+```deed
 fn daily_report(account: AccountId) -> Report
   uses Ledger.balance, Clock.now
 {
@@ -53,7 +53,7 @@ distinction is carried by which operations you ask for.
 
 Rows are inferred bottom up and checked against declarations.
 
-```vow
+```deed
 fn a() uses Ledger.balance { ... }
 fn b() uses Audit.append { ... }
 
@@ -126,9 +126,9 @@ The block below does not parse. `Map`, datetime literals, method calls and `Mone
 all invented for it, because a handler is worth showing with something in its state and
 there is nothing to put there yet. List literals used to be on that list and are real now,
 which is one item off it and no more: a `Map` is still invented, and so is every method call
-here. `examples/counter.vow` and `examples/transfer.vow` are the versions that run.
+here. `examples/counter.deed` and `examples/transfer.deed` are the versions that run.
 
-```vow
+```deed
 handler InMemoryLedger implements Ledger {
     state accounts: Map<AccountId, Money>
 
@@ -143,7 +143,7 @@ handler InMemoryLedger implements Ledger {
 }
 ```
 
-```vow
+```deed
 test "transfer moves the money" {
     with InMemoryLedger { accounts: [alice -> 100.try, bob -> 0.try] },
          FrozenClock { at: 2026-01-01T00:00:00Z },
@@ -169,7 +169,7 @@ the state and talking to the outside world was the least checked in the language
 parameter raised no obligation, no warning and no runtime check.
 
 The types come from the effect now, including one from another module, and a handler
-operation that does not line up with the effect is `VOW4021`: an operation the effect never
+operation that does not line up with the effect is `DEED4021`: an operation the effect never
 declared, or one taking a different number of arguments.
 
 **Installing a handler is a decision, and it costs what the handler costs.** A `with` block
@@ -177,7 +177,7 @@ answers for the effect the handler implements, which is what a handler is for. I
 nothing about what the handler does to implement it, and a handler that writes to a console
 is a program writing to a console. Those effects go to whoever installed it:
 
-```vow
+```deed
 fn looks_pure(n: Int, screen: Console) -> Int
   uses
     Io.write,
@@ -190,7 +190,7 @@ fn looks_pure(n: Int, screen: Console) -> Int
 
 `Log.note` is discharged, because that is what `Loud` is for. `Io.write` is not, because
 nothing discharged it, and without the `uses` clause this function holds a console, writes to
-it, and declares an empty row. That was true for a while. It is `VOW5001` now, and it works
+it, and declares an empty row. That was true for a while. It is `DEED5001` now, and it works
 across a module boundary too, because a handler carries what it performs in its export the
 same way a function carries its row.
 
@@ -219,7 +219,7 @@ Effect systems have been understood for decades and keep failing to escape resea
 reason is almost never expressiveness, it is that annotations propagate and real programs
 end up drowning in rows nobody wants to maintain.
 
-Vow does not have a complete solution to that yet. The ideas on the table are:
+Deed does not have a complete solution to that yet. The ideas on the table are:
 
 - Infer rows everywhere except at module boundaries, so most functions never write one
 - Effect aliases, so `uses Storage` expands to a named group
@@ -256,7 +256,7 @@ Closure parameters still need types, for the same reason every other parameter d
 A function value can cross a boundary, and the type it crosses through says what it may do
 on the way:
 
-```vow
+```deed
 fn apply(f: Fn(Int) -> Int, n: Int) -> Int {
     f(n)
 }
@@ -315,7 +315,7 @@ question above, and rows on function types are what makes it possible to ask.
 A row on a function type names an effect. What a combinator needs is to name *whichever* row
 its callback has and pass it through to its own:
 
-```vow
+```deed
 fn map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> B) -> List<B>
   uses
     r,
@@ -338,7 +338,7 @@ reader has to work out, and `uses` is already a keyword so this costs the gramma
 **Inside the body it is an ordinary row entry.** Calling `step` performs `r`, the contract
 says `uses r`, and the same two rules that check every other function check this one. That is
 why a variable that reaches no parameter is already an error: nothing can fill it, so nothing
-performs it, so the row is too wide and `VOW5002` says so with no new code behind it.
+performs it, so the row is too wide and `DEED5002` says so with no new code behind it.
 
 **At a call site it is replaced by what was passed.** The variable is dropped, because it
 names nothing a caller could declare, and the row of whatever went in at that parameter goes
@@ -351,7 +351,7 @@ callbacks to have the same row. A variable is not a name for one row that every 
 carrying it has to agree on; it is a name for the places a call reads a row off, and the
 declaration's `uses` is charged with the sum of them. So
 
-```vow
+```deed
 fn filtered_with<T, uses r>(
     items: List<T>,
     keep: Fn(T) uses r -> Bool,
@@ -372,11 +372,11 @@ name has to be performed for its own entry in `uses` to be justified.
 
 **It crosses a module boundary as a position.** Which parameter a variable comes from is what
 travels, for the same reason a type parameter travels as a position: a `DefId` is an index
-into one module's table. `examples/list.vow` is a list library written in Vow and
-`examples/using_list.vow` imports it, which is the test for whether any of this worked.
+into one module's table. `examples/list.deed` is a list library written in Deed and
+`examples/using_list.deed` imports it, which is the test for whether any of this worked.
 
 **It may only be written where a call can fill it in**, which means the row of a parameter
-whose type is a function type, and the declaration's own `uses` clause. `VOW5008` refuses it
+whose type is a function type, and the declaration's own `uses` clause. `DEED5008` refuses it
 anywhere else. This follows from the paragraph above rather than being a separate idea: a
 variable is replaced by what was passed, so if there is nothing passed at that position there
 is nothing to replace it with, and the entry reaches a caller naming something the caller has
@@ -387,7 +387,7 @@ The two positions this rules out are a return type, as in
 `fn pick<A, uses r>(f: Fn(A) uses r -> A, ..) -> Fn(A) uses r -> A`, and a variable buried
 inside a parameter rather than being that parameter's own row, as in
 `steps: List<Fn(A) uses r -> A>`. Both used to check clean and both let an effect through. It
-is the same rule as `VOW4023`, where a type parameter has to appear in a parameter's type so
+is the same rule as `DEED4023`, where a type parameter has to appear in a parameter's type so
 that a call always knows what it is, and it is worth stating for the same reason: a signature
 whose call sites cannot work out what it means is not a signature.
 
@@ -404,7 +404,7 @@ pass did not recognise, given an empty row, and an empty row means "performs not
 
 So the interpreter holds the program to its own signatures while it runs. Each active call
 carries the row its declaration wrote down, every effect performed is checked against every
-call on the stack, and one that nobody on the stack declared is `VOW6010`. That is reported
+call on the stack, and one that nobody on the stack declared is `DEED6010`. That is reported
 against the compiler rather than against the program: the file was accepted, so if an effect
 got through then the check that accepted it was wrong.
 

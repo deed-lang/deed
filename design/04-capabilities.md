@@ -14,10 +14,10 @@ and `args`, and a `System` carrying `console`,
 
 ## What actually exists
 
-Enough to run a program, and not much more. `vow run` calls `main`, hands it the one
+Enough to run a program, and not much more. `deed run` calls `main`, hands it the one
 `System` there is, and everything below it holds whatever it was passed.
 
-```vow
+```deed
 fn greet(out: Console, name: String) -> ()
   uses
     Io.write,
@@ -47,7 +47,7 @@ The parts that are real:
 - Holding a `Console` is not enough on its own. `uses Io.write` still has to be there, and
   declaring it without performing it is also an error.
 - Writing `Io.write(Console, "hi")` does not work. `Console` is a type, and a type in
-  expression position is `VOW4019`, not a value.
+  expression position is `DEED4019`, not a value.
 
 That last one is the whole thing in one rule, and it was not true when this was first
 written. The type checker gave a type name in expression position no type at all, and a
@@ -65,10 +65,10 @@ the same authority as your own code.
 This is the root of software supply chain attacks, and it is not a vulnerability in any
 particular package. It is the default that every language chose.
 
-Vow has no ambient authority. There is no global `File.open`, no importable network module,
+Deed has no ambient authority. There is no global `File.open`, no importable network module,
 no `System.getenv`. A module gets exactly what it was passed.
 
-```vow
+```deed
 fn read_config(fs: Dir, name: String) -> Result<Config, ConfigError>
   uses Fs.read
 {
@@ -83,7 +83,7 @@ because it has no way to name that path.
 
 ## Authority enters at `main` and only there
 
-```vow
+```deed
 fn main(sys: System) -> Result<(), Error>
   uses sys.*
 {
@@ -108,7 +108,7 @@ from.
 
 Capabilities narrow as they are passed down.
 
-```vow
+```deed
 fn describe(files: Dir, name: String) -> String
   uses
     Io.read,
@@ -210,7 +210,7 @@ component, and the root is canonical, so there is no traversal left and nothing 
 ### The part that has to be right
 
 Refusing `..` is the obvious half and the useless half on its own. The rules, in
-`crates/vow-interp/src/sandbox.rs`:
+`crates/deed-interp/src/sandbox.rs`:
 
 - a name is one component, so no separator of either flavour
 - `.` and `..` are refused by name, and so is the empty string
@@ -248,12 +248,12 @@ Recursive listing is not there, and does not need to be: it is a third amount of
 that a caller can build out of `Io.list` and `Io.open` if it declares both, which is the
 model working.
 
-`examples/journal.vow` is the file to argue with. It reads a journal, appends a line and
+`examples/journal.deed` is the file to argue with. It reads a journal, appends a line and
 saves it, and everything it is refused is refused in front of you.
 
 ### Where the root comes from
 
-`vow run --dir <path>` decides, defaulting to the working directory. The runtime does not
+`deed run --dir <path>` decides, defaulting to the working directory. The runtime does not
 pick one on its own: a program given no directory gets no `sys.files` rather than a quiet
 fallback to wherever the process happens to be. Defaulting to the working directory at all
 is not obviously right, and the reason it is not `--dir` or nothing is that a flag people
@@ -321,7 +321,7 @@ The list is longer than I would like, and this is the least settled document her
   that killed explicit dependency passing before, and "just use a container" won that
   argument for a reason. Implicit parameters would fix the plumbing and would put a hole
   straight through P1.
-- **Interop.** The moment Vow calls C or WASM, ambient authority comes back with it. A
+- **Interop.** The moment Deed calls C or WASM, ambient authority comes back with it. A
   foreign function can do whatever the host process can. This is currently unsolved and it
   is the most likely place the whole model leaks.
 - **Serialization.** A capability must not be forgeable, so it cannot be a plain value that

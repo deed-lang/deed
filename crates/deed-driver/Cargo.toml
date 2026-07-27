@@ -1,0 +1,29 @@
+[package]
+name = "deed-driver"
+description = "Runs every Deed compiler pass over a file"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deed-ast = { path = "../deed-ast" }
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-effects = { path = "../deed-effects" }
+deed-interp = { path = "../deed-interp" }
+deed-lexer = { path = "../deed-lexer" }
+deed-parser = { path = "../deed-parser" }
+deed-resolve = { path = "../deed-resolve" }
+deed-typeck = { path = "../deed-typeck" }
+
+[dev-dependencies]
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-effects = { path = "../deed-effects" }
+deed-fmt = { path = "../deed-fmt" }
+deed-interp = { path = "../deed-interp" }
+deed-resolve = { path = "../deed-resolve" }
+deed-typeck = { path = "../deed-typeck" }
+
+[lints]
+workspace = true

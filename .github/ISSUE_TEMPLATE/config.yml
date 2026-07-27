@@ -1,10 +1,10 @@
 blank_issues_enabled: true
 contact_links:
   - name: Roadmap and what is open
-    url: https://github.com/onatozmenn/vow/issues/1
+    url: https://github.com/onatozmenn/deed/issues/1
     about: What is built, what is not, and the four questions that are actually open.
   - name: Read this before a feature request
-    url: https://github.com/onatozmenn/vow/blob/main/CONTRIBUTING.md
+    url: https://github.com/onatozmenn/deed/blob/main/CONTRIBUTING.md
     about: >
       The specification has a size budget, so a feature is a cost before it is a benefit.
       Open one anyway if you think the trade is worth it, but say what it buys.

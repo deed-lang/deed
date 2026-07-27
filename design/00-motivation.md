@@ -131,7 +131,7 @@ mind.
 Worth stating up front, because a design that cannot be wrong is not a design.
 
 - If contracts turn out to be as easy to get wrong as implementations, the review argument
-  collapses and Vow is just a slower language.
+  collapses and Deed is just a slower language.
 - If effect and capability annotations propagate so painfully that real programs drown in
   them, the ergonomics kill it, the way they have killed every effect system that stayed in
   academia.

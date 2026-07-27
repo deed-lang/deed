@@ -27,7 +27,7 @@ and assumes was an oversight.
 - [ ] `cargo fmt --check`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo test --workspace`
-- [ ] `cargo run -p vow-cli -- check examples/` and `test examples/`, if this touches the compiler
+- [ ] `cargo run -p deed-cli -- check examples/` and `test examples/`, if this touches the compiler
 - [ ] A design document under `design/` updated in this PR, if this changes behaviour one of
       them describes. A design that lags the code is worse than no design.
 - [ ] Tests added for the thing that was wrong, not only for the thing that is now right. A

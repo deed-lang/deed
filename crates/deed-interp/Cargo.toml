@@ -1,0 +1,20 @@
+[package]
+name = "deed-interp"
+description = "Runs Deed programs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deed-ast = { path = "../deed-ast" }
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-resolve = { path = "../deed-resolve" }
+
+[dev-dependencies]
+deed-lexer = { path = "../deed-lexer" }
+deed-parser = { path = "../deed-parser" }
+
+[lints]
+workspace = true

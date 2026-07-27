@@ -1,0 +1,117 @@
+// An import that is actually checked, in both halves.
+//
+// Everything in the `use` line is verified against what `examples/names.deed`
+// declares, and so is everything done with it afterwards. Asking for a name
+// that file does not have is DEED3008. Asking for a field a record does not
+// have, calling a function with the wrong number of arguments, or forgetting a
+// variant in a `match` are all errors here for the same reasons they would be
+// if the declarations were written in this file.
+//
+// None of that was true two commits ago. An imported name had no type, and a
+// name with no type agrees with everything, so a module boundary was a place
+// where checking stopped.
+
+module examples/greeting
+
+use examples/names.{Greeting, Loud, Plain, Tone, louder}
+
+use examples/sink.{Collect, Discard, Sink, emit_twice}
+
+// The effect comes from `sink.deed` and the row is checked against the
+// declaration there. Dropping `Sink.emit` from this clause is DEED5001, adding
+// `Sink.count` to it is DEED5002, and neither depends on the effect being
+// declared in this file.
+fn announce(greeting: Greeting) -> ()
+  uses
+    Sink.emit,
+{
+    Sink.emit(render(greeting))
+}
+
+// Nothing here performs an effect directly. `emit_twice` does, in another
+// file, and its row arrives with it. A call into another module used to be
+// free, so this function could have declared nothing and been believed.
+//
+// The row is also why `Sink` is imported at all. Declaring an effect means
+// naming it, and a row that could not name what it grants would not be one.
+fn announce_loudly(greeting: Greeting) -> ()
+  uses
+    Sink.emit,
+{
+    emit_twice(render(greeting))
+}
+
+// Exhaustive over a choice declared somewhere else. Adding a third `Tone` to
+// `names.deed` breaks this function, which is the point of exhaustiveness and
+// the reason a catch-all arm is refused here the same as anywhere.
+fn describe(tone: Tone) -> String {
+    match tone {
+        Plain => "speaking",
+        Loud => "shouting",
+    }
+}
+
+// `greeting.tone` is a `Tone` because that is what `names.deed` says it is.
+// Writing `greeting.tune` is DEED4004 and the message says which record it is
+// and which module the record came from.
+fn render(greeting: Greeting) -> String {
+    describe(greeting.tone)
+}
+
+// These run. The interpreter holds the code of every module it was handed, so
+// `describe` walks into the arms built from `names.deed`, and `Loud` here is the
+// same value as the `Loud` built there. That last part is not free: a variant
+// carries the module that declared it, because a `DefId` is an index into one
+// module's table and the same variant reached two ways would otherwise compare
+// unequal to itself.
+test "a plain tone is not a loud one" {
+    assert describe(Plain) != describe(Loud)
+}
+
+test "a record from another module is read here" {
+    let greeting = Greeting { who: "world", tone: Loud }
+
+    assert render(greeting) == "shouting"
+    assert greeting.who == "world"
+}
+
+test "a call goes into the other module and comes back" {
+    assert louder(Plain) == Loud
+    assert describe(louder(Plain)) == "shouting"
+}
+
+// The handler is installed here and its operations run in `sink.deed`, reading
+// that module's names. Which handler is a decision this block makes, and
+// `announce` cannot tell the difference, which is the point of an effect.
+test "a handler from another module collects what was emitted" {
+    let greeting = Greeting { who: "world", tone: Loud }
+
+    with Collect { seen: 0 } {
+        announce(greeting)
+        announce(greeting)
+
+        assert Sink.count() == 2
+    }
+}
+
+test "a different handler makes the same call mean something else" {
+    let greeting = Greeting { who: "world", tone: Loud }
+
+    with Discard { seen: 0 } {
+        announce(greeting)
+
+        assert Sink.count() == 0
+    }
+}
+
+// The effects of a function in another module reach this one, so the handler
+// installed here still decides what they mean.
+test "an effect performed a module away still lands here" {
+    let greeting = Greeting { who: "world", tone: Loud }
+
+    with Collect { seen: 0 } {
+        announce_loudly(greeting)
+
+        assert Sink.count() == 2
+    }
+}

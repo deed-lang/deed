@@ -1,0 +1,61 @@
+// A Deed program with a `main`. `deed run examples/hello.deed` executes it.
+//
+// This file is about one thing: where authority comes from.
+//
+// There is no ambient authority in Deed. No importable console, no global
+// filesystem, no `print`. `main` receives a `System` and that is the only one
+// that exists, so reading `main` tells you the entire attack surface of the
+// program. Everything below it received exactly what it was handed.
+
+module examples/hello
+
+// This function can write, and only to the console it was given. It cannot
+// read a clock, because it has no `Clock`, and it cannot obtain one, because
+// there is nowhere to obtain one from.
+fn greet(out: Console, name: String) -> ()
+  uses
+    Io.write,
+{
+    Io.write(out, "hello, ")
+    Io.write(out, name)
+}
+
+// This one can read a clock and nothing else. Handing it `sys.clock` rather
+// than `sys` is delegation, and delegation only ever narrows.
+fn stamp(time: Clock) -> Int
+  uses
+    Io.now,
+{
+    Io.now(time)
+}
+
+// This one is pure. Not by convention, not by review: it declares no effects,
+// so it cannot perform any, and it holds no capability, so there is nothing it
+// could reach even if it could.
+//
+// The `where` clause is not decoration. Without it the property test runner
+// generates inputs until it finds one where `n + n` overflows, which it does,
+// and then the postcondition is a promise the function cannot keep.
+fn twice(n: Int) -> Int
+  where
+    n < 1000000000,
+    n > -1000000000,
+  ensures
+    ok  => result == n + n,
+{
+    n + n
+}
+
+fn main(sys: System) -> Int
+  uses
+    Io.write,
+    Io.now,
+{
+    greet(sys.console, "world")
+    Io.write(sys.console, "")
+
+    let started = stamp(sys.clock)
+    Io.write(sys.console, "the pure part does not need any of this")
+
+    twice(21) + started
+}

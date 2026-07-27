@@ -7,18 +7,18 @@ bugs rather than vulnerabilities. Two things are different, and both are claims 
 makes out loud.
 
 **The `Dir` sandbox.** A function holding a `Dir` rooted at some directory must have no way
-to reach outside it. `crates/vow-interp/src/sandbox.rs` refuses separators, `.` and `..`,
+to reach outside it. `crates/deed-interp/src/sandbox.rs` refuses separators, `.` and `..`,
 absolute paths, drive prefixes and empty names, and canonicalizes before comparing so that a
 symlink cannot walk out. If you find any input that escapes the root, that is a
 vulnerability, not a bug report. `design/04-capabilities.md` is the claim it is measured
 against.
 
 **Capability safety.** A function that was never handed a capability must have no way to
-obtain one. Naming a capability type where a value belongs is `VOW4019` precisely because it
+obtain one. Naming a capability type where a value belongs is `DEED4019` precisely because it
 was once a way to conjure authority out of a type name. Any other route from "holds nothing"
 to "holds a `Console`, a `Clock` or a `Dir`" is the same class of problem.
 
-Running untrusted Vow source through `vow run` is not otherwise a supported threat model.
+Running untrusted Deed source through `deed run` is not otherwise a supported threat model.
 The interpreter has a depth limit and traps on overflow, but it has not been hardened
 against a program written to attack it, and the sandbox is about the filesystem rather than
 about CPU or memory.

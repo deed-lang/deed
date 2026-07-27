@@ -1,0 +1,203 @@
+// Writing a file, which until now the language could not do at all.
+//
+// `examples/todo.deed` reads a list of tasks and reports on them, and the thing
+// it could not do was add one. `Io` could read a file and open a directory and
+// there was no operation that wrote one, so half of the smallest useful
+// program was missing and `Dir` was a read capability wearing a more general
+// name.
+//
+// This one appends a line to a journal and saves it. It writes into whichever
+// directory it was handed, so point it somewhere you do not mind:
+//
+//   deed run examples/journal.deed --dir /tmp/journal
+//
+// The part worth reading is what stops it writing anywhere else. Two separate
+// things do, and they are separate on purpose.
+//
+// The row. `note` declares `uses Io.save`, and a function that does not
+// declare it cannot write, whatever it happens to be holding. `render` and
+// `entries_in` declare nothing at all, so they cannot touch anything, and that
+// is checked rather than hoped for.
+//
+// The capability. `Io.save` takes the `Dir` it writes into as an argument, and
+// there is no way to construct one. Naming `..` is refused, so is an absolute
+// path, and so is a symlink pointing out of the directory. Those are the same
+// rules reading obeys, because it is the same check and not a second one that
+// happens to agree today.
+//
+// There are five authorities over one `Dir` here, and they are five row
+// entries rather than five types. `Io.read` lets a function read the file
+// somebody told it about. `Io.save` lets it write one. `Io.list` lets it find
+// out what is there, which is strictly more than reading and is the one most
+// easily given away by accident: a directory handed over for one purpose
+// usually has other things in it. `Io.remove` lets it destroy one, which is
+// the only one that cannot be undone from what it replaced. `Io.make` lets it
+// create a place to put things.
+//
+// The last one is the one that looks like it breaks the rule and does not.
+// `Io.make` hands back a `Dir`, and a `Dir` is authority, so it reads like
+// authority being made. It is not: the directory it names is inside the one it
+// was given, so what comes back reaches strictly less than what went in. Which
+// paths happen to exist was never what a `Dir` granted, which is why `Io.save`
+// writing a file that was not there a moment ago is not authority creation
+// either.
+
+module examples/journal
+
+// A file with nothing in it has no entries, rather than one empty entry.
+// Splitting is honest about the edges, which is what makes it the inverse of
+// joining, and this is where somebody has to decide what an empty file means.
+fn entries_in(text: String) -> List<String> {
+    if length(text) == 0 {
+        []
+    } else {
+        split(text, "\n")
+    }
+}
+
+fn render(entries: List<String>, line: String) -> String {
+    join(push(entries, line), "\n")
+}
+
+// The only function here that can write. Everything above it is pure and stays
+// that way, which is the ordinary shape: deciding what to write is not the
+// same job as writing it.
+fn note(files: Dir, name: String, line: String) -> Result<(), String>
+  uses
+    Io.read,
+    Io.save,
+{
+    let existing = match Io.read(files, name) {
+        ok(text) => text,
+        err(why) => "",
+    }
+
+    Io.save(files, name, render(entries_in(existing), line))
+}
+
+// Enumerating, which is the third thing a `Dir` can be used for and the one
+// that is not reading. Nothing was told which files are here; this is how a
+// program finds out. Take `Io.list` out of the row and this does not compile,
+// even though the `Dir` it is holding has not changed at all.
+fn what_is_here(files: Dir) -> String
+  uses
+    Io.list,
+{
+    match Io.list(files) {
+        ok(names) => join(names, ", "),
+        err(why) => why,
+    }
+}
+
+// Making a place to put things, and the only function here whose answer is a
+// capability. What comes back reaches inside `files` and nothing else, so a
+// caller that hands over a `Dir` and `uses Io.make` has not handed over
+// anything it was not already holding.
+//
+// Take `Io.make` out of the row and this does not compile, even though the
+// `Dir` it is holding has not changed at all. That is the same sentence as the
+// one above `what_is_here`, and it is the fifth time it has been true.
+fn shelf(files: Dir, name: String) -> Result<Dir, String>
+  uses
+    Io.make,
+{
+    Io.make(files, name)
+}
+
+// Handed a real `Dir` and a name it must not be able to use. Every one of
+// these comes back as an error naming the rule it hit, and the first three
+// never reach the filesystem at all.
+fn refusal(files: Dir, name: String) -> String
+  uses
+    Io.save,
+{
+    match Io.save(files, name, "this should never be written") {
+        ok(nothing) => "allowed, which is a bug: " + name,
+        err(why) => why,
+    }
+}
+
+// The `Dir` that came back from `Io.make` is a `Dir` like any other, so every
+// rule that applies to the one above applies to it. Climbing out of it with
+// `..` is refused by the same check, which is what "authority only shrinks"
+// has to mean if it means anything.
+fn refusal_inside(files: Dir) -> String
+  uses
+    Io.save,
+{
+    refusal(files, "..")
+}
+
+// The same split about something other than authority. `Io.now` counts calls,
+// because P8 says the default is deterministic and a wall clock would make
+// every run different. `Io.epoch` reads the machine's clock, and it is a
+// separate entry in the row on the same `Clock`. Take `Io.epoch` out and this
+// does not compile; put `Io.now` in instead and it still does not.
+//
+// What the row buys here is not narrower authority. It is that this function
+// is one whose answer changes between two runs of the same program, and the
+// signature says so without anybody reading the body.
+fn stamped(clock: Clock, line: String) -> String
+  uses
+    Io.epoch,
+{
+    to_string(Io.epoch(clock)) + " " + line
+}
+
+fn main(sys: System) -> Int
+  uses
+    Io.write,
+    Io.read,
+    Io.save,
+    Io.make,
+    Io.list,
+    Io.epoch,
+{
+    let out = sys.console
+
+    match note(sys.files, "journal.txt", stamped(sys.clock, "wrote a file for the first time")) {
+        ok(nothing) => Io.write(out, "saved"),
+        err(why) => Io.write(out, why),
+    }
+
+    Io.write(out, refusal(sys.files, ".."))
+    Io.write(out, refusal(sys.files, "../escape.txt"))
+    Io.write(out, refusal(sys.files, "/etc/passwd"))
+    Io.write(out, "here: " + what_is_here(sys.files))
+
+    // A place to put things, and then the same refusal from inside it. Making
+    // a directory hands back authority over somewhere the caller could already
+    // reach, and what comes back is narrower rather than wider.
+    match shelf(sys.files, "shelf") {
+        ok(inside) => Io.write(out, "made a shelf, and " + refusal_inside(inside)),
+        err(why) => Io.write(out, why),
+    }
+
+    0
+}
+
+// Nothing here is missing any more. Reading, listing, writing, deleting and
+// making are five entries in the row over one `Dir`, and each of the last
+// three was added believing it would need a second kind of capability. None of
+// them did.
+//
+// Also `read_only()`, and it is the interesting one. Nothing here needs it,
+// because a function that cannot write is a function that did not declare
+// `Io.save`, and that is a row rather than a type. It starts to matter the
+// moment a row can be a wildcard, which `sys.*` already is.
+
+test "a line is added to whatever was there" {
+    assert render([], "first") == "first"
+    assert render(["one"], "two") == "one\ntwo"
+    assert render(["one", "two"], "three") == "one\ntwo\nthree"
+}
+
+test "an empty file has no entries rather than one empty one" {
+    assert entries_in("") == []
+    assert entries_in("one") == ["one"]
+    assert entries_in("one\ntwo") == ["one", "two"]
+}
+
+test "reading back what was rendered gives the same entries" {
+    assert entries_in(render(["one"], "two")) == ["one", "two"]
+}

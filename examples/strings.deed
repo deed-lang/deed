@@ -1,0 +1,159 @@
+// Strings, which until recently you could hold and not use.
+//
+// There was no way to join two of them. A program could not build a message
+// out of pieces, which meant nobody could write a program, which meant every
+// other decision in this language was untested. Eight passes, a formatter, an
+// autofixer and a proof tier, and you could not say hello to someone by name.
+//
+// The other half of the same bug: `<` was accepted on anything, as long as
+// both sides had the same type. Comparing two records passed the type checker
+// and failed at runtime with a message blaming the interpreter for not
+// implementing something that has nothing to implement.
+
+module examples/strings
+
+type NonEmpty = String where length(value) > 0
+
+record Person {
+    name: NonEmpty,
+    town: String,
+}
+
+// `+` joins two strings. It is the one operator with two meanings, and they
+// never overlap: there is no conversion between `Int` and `String`, so no
+// expression is ambiguous about which one it wanted.
+fn greeting(person: Person) -> String {
+    "hello, " + person.name + " of " + person.town
+}
+
+// A length is never negative, and the prelude says so, so this lands in the
+// Proven tier rather than being checked again at runtime.
+fn width(text: String) -> Counted {
+    length(text)
+}
+
+type Counted = Int where value >= 0
+
+// Nothing here knows anything about the length of `text`, so this one is a
+// real check that really runs. Interval reasoning is about integers, and a
+// string is not one.
+fn shout(text: String) -> String {
+    let loud = announce(text)
+
+    loud + "!"
+}
+
+fn announce(text: NonEmpty) -> String {
+    text
+}
+
+// Strings are ordered, by character. For text in one script that is the order
+// anybody expects, and for text that mixes them it is a decision nobody should
+// be making without knowing the locale, so this is the plain answer rather
+// than a wrong clever one.
+fn earlier(a: String, b: String) -> String {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+// Taking a string apart and putting one back together. `split` and `join` are
+// inverses, and so are `to_string` and `to_int`. Before them a program could
+// hold a number and hold some text and get from neither to the other, which
+// meant it could not read input or print a count.
+fn words(line: String) -> List<String> {
+    split(line, " ")
+}
+
+fn line(parts: List<String>) -> String {
+    join(parts, " ")
+}
+
+// Text that is not a number is not a mistake in the caller. It usually came
+// from a file or an argument, so it is an error value and whoever asked
+// decides what to do about it.
+fn total_or(text: String, fallback: Int) -> Int {
+    match to_int(text) {
+        ok(n) => n,
+        err(why) => fallback,
+    }
+}
+
+fn report(count: Int) -> String {
+    "found " + to_string(count)
+}
+
+// The one text operation that cannot be written in the language, which is the
+// test for whether a name belongs in the prelude at all. `contains(a, b)` is
+// `length(split(a, b)) > 1` and `replace(a, from, to)` is
+// `join(split(a, from), to)`, but deciding what whitespace is needs to look at
+// characters and taking it off the ends needs a walk that stops early, which a
+// fold does not do.
+//
+// It is also the difference between a program working and not. Splitting a
+// file on "\n" leaves a "\r" on every line of a file written on Windows, and
+// `examples/todo.deed` printed its own output backwards over itself until there
+// was a way to take one off.
+fn cleaned(raw: String) -> String {
+    trim(raw)
+}
+
+// What is deliberately missing: slicing, searching, case, padding, and any
+// formatting beyond `+`. Those want a standard library and Deed has no story
+// for one yet. This file is the minimum that makes a program writable, not a
+// claim that strings are finished.
+
+test "joining" {
+    assert greeting(Person { name: "onat", town: "istanbul" }) == "hello, onat of istanbul"
+    assert "" + "a" == "a"
+}
+
+test "measuring" {
+    assert width("hello") == 5
+    assert width("") == 0
+    // Characters, not bytes. A length that counted bytes would mean something
+    // different depending on which letters turned up.
+    assert width("gün") == 3
+}
+
+test "ordering" {
+    assert earlier("b", "a") == "a"
+    assert earlier("abc", "abd") == "abc"
+    assert !("b" <= "a")
+}
+
+test "the refinement is real" {
+    assert shout("hey") == "hey!"
+}
+
+test "taking a line apart and putting it back" {
+    assert words("a b c") == ["a", "b", "c"]
+    assert line(["a", "b", "c"]) == "a b c"
+    assert words("") == [""]
+    assert line([]) == ""
+    // An empty separator gives the characters. There is nothing else it could
+    // usefully mean, and it saves the prelude a second name.
+    assert split("gün", "") == ["g", "ü", "n"]
+}
+
+test "numbers and text" {
+    assert report(3) == "found 3"
+    assert to_string(0 - 12) == "-12"
+    assert total_or("41", 0) == 41
+    assert total_or("forty one", 7) == 7
+    assert to_int("") == err("`` is not a number")
+}
+
+test "trimming" {
+    assert cleaned("  spaced out  ") == "spaced out"
+    // Both ends, and nowhere else. What is between two words is the program's
+    // business rather than this function's.
+    assert cleaned("  a  b  ") == "a  b"
+    // Whitespace is four characters, written down rather than deferred to a
+    // table nobody reading the signature can see.
+    assert cleaned(" \t\r\nboth ends\n\r\t ") == "both ends"
+    // The reason it exists: a line off the end of a file written on Windows.
+    assert cleaned(at(split("first\r\nsecond\r\n", "\n"), 0)?) == "first"
+}
