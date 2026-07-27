@@ -158,3 +158,16 @@ pub const WHILE_WITHOUT_ACCUMULATOR: &str = "DEED4027";
 /// can say. `length(value) > 0` over an unknown `T` is not a question with an
 /// answer, so the parameters are refused rather than accepted and ignored.
 pub const REFINEMENT_TYPE_PARAM: &str = "DEED4028";
+
+/// A handler that leaves out an operation the effect it implements declares.
+///
+/// `implements` is a claim, and the check for it only ran one way: an
+/// operation the effect does not declare was DEED4021, and an operation the
+/// effect declares and the handler leaves out was nothing at all until the
+/// missing one was reached at run time.
+///
+/// Half a handler is not a smaller handler. A `with` block discharges the
+/// effect rather than the operations named inside it, so installing one is a
+/// claim that every call underneath has somewhere to go, and a row saying
+/// `uses Counter.total` is a caller taking that claim at its word.
+pub const HANDLER_MISSING_OPERATION: &str = "DEED4029";

@@ -190,6 +190,14 @@ The types come from the effect now, including one from another module, and a han
 operation that does not line up with the effect is `DEED4021`: an operation the effect never
 declared, or one taking a different number of arguments.
 
+The same claim read from the other end is `DEED4029`: a handler implements every operation
+its effect declares, or it is not a handler for that effect. Only one of those two directions
+was checked for a while, so a handler could leave an operation out and the program found out
+when a call reached the gap. Half a handler is not a smaller handler, because a `with` block
+discharges the effect rather than the operations written inside the braces. Installing one is
+a claim that every call underneath has somewhere to go, and a caller declaring
+`uses Counter.total` is taking that claim at its word.
+
 **Installing a handler is a decision, and it costs what the handler costs.** A `with` block
 answers for the effect the handler implements, which is what a handler is for. It says
 nothing about what the handler does to implement it, and a handler that writes to a console

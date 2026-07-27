@@ -460,6 +460,82 @@ fn a_handler_operation_with_the_wrong_arity_is_an_error() {
 }
 
 #[test]
+fn a_handler_that_leaves_an_operation_out_is_an_error() {
+    // The mirror of the test above, and the half that was never checked. A
+    // `with` block discharges the effect rather than the operations written
+    // inside the handler, so this used to typecheck, install, and fail at the
+    // first call that reached `value`.
+    let (sources, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: Int\n\n\
+         \x20 fn set(to) -> () {{\n    count = to\n  }}\n\
+         }}\n"
+    ));
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::HANDLER_MISSING_OPERATION]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("does not implement `value`"), "{text}");
+    assert!(text.contains("one operation still to write"), "{text}");
+}
+
+#[test]
+fn every_operation_left_out_is_named_at_once() {
+    // One diagnostic rather than one per operation. The mistake is the
+    // handler, not each of the things it did not write, and a reader fixing it
+    // wants the list in front of them.
+    let (sources, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler Empty implements Counter {{\n\
+         \x20 state count: Int\n\
+         }}\n"
+    ));
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::HANDLER_MISSING_OPERATION]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("`set`") && text.contains("`value`"), "{text}");
+    assert!(text.contains("2 operations still to write"), "{text}");
+}
+
+#[test]
+fn a_whole_handler_is_accepted() {
+    // Worth having next to the two above: without it they would both pass on a
+    // checker that rejected every handler there is.
+    check_ok(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: Int\n\n\
+         \x20 fn set(to) -> () {{\n    count = to\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    count\n  }}\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn an_imported_effect_is_counted_the_same_way() {
+    let (sources, checked) = check_source_in(
+        "module a\n\n\
+         use other.{Ledger}\n\n\
+         handler InMemory implements Ledger {\n\
+         \x20 state total: Int\n\n\
+         \x20 fn post(amount) -> () {\n    total = total + amount\n  }\n\
+         }\n",
+        &universe_of(&[
+            "module other\n\neffect Ledger {\n    fn post(amount: Int) -> ()\n    fn balance() -> Int\n}\n",
+        ]),
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::HANDLER_MISSING_OPERATION]
+    );
+    assert!(rendered(&sources, &checked.diagnostics).contains("does not implement `balance`"));
+}
+
+#[test]
 fn a_handler_for_an_imported_effect_gets_its_types_too() {
     check_ok_in(
         "module a\n\n\
