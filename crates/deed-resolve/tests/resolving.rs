@@ -710,3 +710,61 @@ fn an_empty_module_resolves_to_nothing() {
         deed_resolve::PRELUDE.len()
     );
 }
+
+// -- alternatives in a match arm -------------------------------------------
+
+#[test]
+fn an_alternative_that_would_bind_is_refused() {
+    let (sources, _, resolved) = resolve_source(
+        "module a\n\n\
+         choice E { A { n: Int }, B }\n\n\
+         fn f(e: E) -> Int {\n\
+         \x20 match e {\n\
+         \x20   A { n } | B => n,\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&resolved.diagnostics),
+        vec![codes::BINDING_IN_AN_ALTERNATIVE]
+    );
+    let text: Vec<String> = resolved
+        .diagnostics
+        .iter()
+        .map(|d| render_human(&sources, d))
+        .collect();
+    assert!(text.join("\n").contains("cannot bind a name"));
+}
+
+#[test]
+fn the_body_still_resolves_after_that() {
+    // One mistake, one complaint. The name is bound anyway, so the body that
+    // reads it does not raise a second error about a line that is not wrong.
+    let (_, _, resolved) = resolve_source(
+        "module a\n\n\
+         choice E { A { n: Int }, B }\n\n\
+         fn f(e: E) -> Int {\n\
+         \x20 match e {\n\
+         \x20   A { n } | B => n,\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert!(
+        !codes_of(&resolved.diagnostics).contains(&codes::UNKNOWN_NAME),
+        "the refused binding cascaded into a name error"
+    );
+}
+
+#[test]
+fn alternatives_that_bind_nothing_resolve() {
+    resolve_ok(
+        "module a\n\n\
+         choice E { A { n: Int }, B, C }\n\n\
+         fn f(e: E) -> Int {\n\
+         \x20 match e {\n\
+         \x20   A | B => 1,\n\
+         \x20   C => 2,\n\
+         \x20 }\n\
+         }\n",
+    );
+}

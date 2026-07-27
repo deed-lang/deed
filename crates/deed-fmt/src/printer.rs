@@ -995,6 +995,15 @@ impl Printer<'_> {
             Pattern::Int { value, .. } => value.to_string(),
             Pattern::Str { value, .. } => string_literal(value),
             Pattern::Bool { value, .. } => value.to_string(),
+            // On one line however many there are. An alternative binds
+            // nothing, so each one is a name or a literal and the list stays
+            // short enough to read; breaking it would put the `|` at the start
+            // of a line, where it is the one place this language would rather
+            // it did not appear.
+            Pattern::OneOf { alternatives, .. } => {
+                let rendered: Vec<String> = alternatives.iter().map(|p| self.pattern(p)).collect();
+                rendered.join(" | ")
+            }
             Pattern::Error(_) => String::new(),
         }
     }

@@ -3839,31 +3839,33 @@ impl<'a> Checker<'a> {
         let mut catch_all: Option<Span> = None;
 
         for arm in arms {
-            match &arm.pattern {
-                Pattern::Wildcard(span) => {
-                    catch_all.get_or_insert(*span);
-                }
-                Pattern::Path { segments, .. } => {
-                    if let Some(last) = segments.last() {
-                        match self.resolutions.resolution(last.span) {
-                            Some(def) if self.resolutions.def(def).kind == DefKind::Variant => {
-                                covered.insert(def);
-                            }
-                            // A bare binding matches every variant.
-                            _ => {
-                                catch_all.get_or_insert(arm.pattern.span());
+            for pattern in alternatives_of(&arm.pattern) {
+                match pattern {
+                    Pattern::Wildcard(span) => {
+                        catch_all.get_or_insert(*span);
+                    }
+                    Pattern::Path { segments, .. } => {
+                        if let Some(last) = segments.last() {
+                            match self.resolutions.resolution(last.span) {
+                                Some(def) if self.resolutions.def(def).kind == DefKind::Variant => {
+                                    covered.insert(def);
+                                }
+                                // A bare binding matches every variant.
+                                _ => {
+                                    catch_all.get_or_insert(pattern.span());
+                                }
                             }
                         }
                     }
-                }
-                Pattern::Tuple { path, .. } | Pattern::Record { path, .. } => {
-                    if let Some(last) = path.last()
-                        && let Some(def) = self.resolutions.resolution(last.span)
-                    {
-                        covered.insert(def);
+                    Pattern::Tuple { path, .. } | Pattern::Record { path, .. } => {
+                        if let Some(last) = path.last()
+                            && let Some(def) = self.resolutions.resolution(last.span)
+                        {
+                            covered.insert(def);
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -3924,25 +3926,27 @@ impl<'a> Checker<'a> {
         let mut catch_all: Option<Span> = None;
 
         for arm in arms {
-            match &arm.pattern {
-                Pattern::Wildcard(span) => {
-                    catch_all.get_or_insert(*span);
+            for pattern in alternatives_of(&arm.pattern) {
+                match pattern {
+                    Pattern::Wildcard(span) => {
+                        catch_all.get_or_insert(*span);
+                    }
+                    Pattern::Path { segments, .. } => match segments.last() {
+                        Some(last) if variants.contains(&last.name) => {
+                            covered.insert(last.name.clone());
+                        }
+                        // A bare binding matches every variant.
+                        _ => {
+                            catch_all.get_or_insert(pattern.span());
+                        }
+                    },
+                    Pattern::Tuple { path, .. } | Pattern::Record { path, .. } => {
+                        if let Some(last) = path.last() {
+                            covered.insert(last.name.clone());
+                        }
+                    }
+                    _ => {}
                 }
-                Pattern::Path { segments, .. } => match segments.last() {
-                    Some(last) if variants.contains(&last.name) => {
-                        covered.insert(last.name.clone());
-                    }
-                    // A bare binding matches every variant.
-                    _ => {
-                        catch_all.get_or_insert(arm.pattern.span());
-                    }
-                },
-                Pattern::Tuple { path, .. } | Pattern::Record { path, .. } => {
-                    if let Some(last) = path.last() {
-                        covered.insert(last.name.clone());
-                    }
-                }
-                _ => {}
             }
         }
 
@@ -3989,35 +3993,36 @@ impl<'a> Checker<'a> {
 
     /// A `Result` has two cases and the same rules apply: both have to be
     /// handled, and neither can be swallowed by a catch-all.
-    /// handled, and neither can be swallowed by a catch-all.
     fn check_result_exhaustive(&mut self, arms: &[MatchArm], span: Span) {
         let mut covered: HashSet<&'static str> = HashSet::new();
         let mut catch_all: Option<Span> = None;
 
         for arm in arms {
-            match &arm.pattern {
-                Pattern::Wildcard(span) => {
-                    catch_all.get_or_insert(*span);
-                }
-                Pattern::Path { .. } => {
-                    catch_all.get_or_insert(arm.pattern.span());
-                }
-                Pattern::Tuple { path, .. } => {
-                    let name = path.last().and_then(|last| {
-                        let def = self.resolutions.resolution(last.span)?;
-                        Some(self.resolutions.def(def).name.clone())
-                    });
-                    match name.as_deref() {
-                        Some("ok") => {
-                            covered.insert("ok");
-                        }
-                        Some("err") => {
-                            covered.insert("err");
-                        }
-                        _ => {}
+            for pattern in alternatives_of(&arm.pattern) {
+                match pattern {
+                    Pattern::Wildcard(span) => {
+                        catch_all.get_or_insert(*span);
                     }
+                    Pattern::Path { .. } => {
+                        catch_all.get_or_insert(pattern.span());
+                    }
+                    Pattern::Tuple { path, .. } => {
+                        let name = path.last().and_then(|last| {
+                            let def = self.resolutions.resolution(last.span)?;
+                            Some(self.resolutions.def(def).name.clone())
+                        });
+                        match name.as_deref() {
+                            Some("ok") => {
+                                covered.insert("ok");
+                            }
+                            Some("err") => {
+                                covered.insert("err");
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -4084,6 +4089,9 @@ impl<'a> Checker<'a> {
             | Pattern::Int { .. }
             | Pattern::Str { .. }
             | Pattern::Bool { .. }
+            // An alternative binds nothing, which the resolver enforces, so
+            // there is nothing here to give a type to.
+            | Pattern::OneOf { .. }
             | Pattern::Error(_) => {}
 
             Pattern::Path { segments, .. } => {
@@ -4336,10 +4344,23 @@ impl<'a> Checker<'a> {
     }
 }
 
+/// The patterns an arm actually tests against.
+///
+/// One, unless the arm names alternatives, in which case it is each of them.
+/// Every exhaustiveness walk wants this and none of them wants to know the
+/// difference: an arm reading `Plus | Times` covers both, exactly as two arms
+/// would have, which is the point of the feature and the reason the rule about
+/// catch-alls did not have to change to allow it.
+fn alternatives_of(pattern: &Pattern) -> &[Pattern] {
+    match pattern {
+        Pattern::OneOf { alternatives, .. } => alternatives,
+        other => std::slice::from_ref(other),
+    }
+}
+
 /// A builtin capability type.
 ///
-/// Named under the prelude rather than under whichever module mentioned it,
-/// because there is exactly one `Console` and every module has to agree about
+/// Named under the prelude rather than under whichever module mentioned it,/// because there is exactly one `Console` and every module has to agree about
 /// that. Naming it after the module would make the same capability compare
 /// unequal to itself across a file boundary, which a test caught.
 fn capability(name: &str) -> Ty {

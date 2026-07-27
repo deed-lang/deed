@@ -359,10 +359,7 @@ fn written(text: String, asked: Asked) -> String {
 fn wipes(asked: Asked) -> Bool {
     match asked {
         Clear => true,
-        Nothing => false,
-        Add { title } => false,
-        Finish { title } => false,
-        FinishAt { position } => false,
+        Nothing | Add | Finish | FinishAt => false,
     }
 }
 

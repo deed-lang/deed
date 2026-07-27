@@ -2455,6 +2455,9 @@ impl<'a> Interp<'a> {
                 },
                 _ => false,
             },
+            Pattern::OneOf { alternatives, .. } => alternatives
+                .iter()
+                .any(|alternative| self.matches(value, alternative)),
             Pattern::Error(_) => false,
         }
     }

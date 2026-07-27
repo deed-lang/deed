@@ -877,6 +877,31 @@ Exhaustive. No fallthrough, and no catch-all arm when the scrutinee is a `choice
 the entire value of having variants. Where the cases cannot be enumerated, such as matching
 an `Int`, a wildcard is fine and necessary.
 
+One arm may name more than one case:
+
+```deed
+match token {
+    Plus | Times => Operator,
+    Open | Close => Bracket,
+    Number => Value,
+}
+```
+
+Every variant is still written down, so adding one to `Token` still breaks every match that
+has to care. That was the whole of what the rule asked for, and repeating the body once per
+variant was never part of it. A parser for a five token language wrote eleven arms whose
+bodies were a word already on the line above; a real token set is twenty or more and the
+repetition is one arm per variant per match.
+
+**An alternative binds nothing.** A language whose alternatives bind has to require that
+every one of them binds the same names, so that the body finds what it reads whichever side
+matched, and that rule is the whole cost of the feature. Refusing to bind is the version
+without it, and it costs nothing here because a variant with fields can be matched by name
+alone. Every arm that wanted this was already binding fields it never read.
+
+Only in a match arm. A `let` and a parameter take one pattern, since a binding form that
+cannot bind has no reason to exist.
+
 `ok(x)` and `err(e)` are the only patterns that carry a value positionally. Variants have
 named fields, so they are matched as `Variant { field }`, and `Variant(x)` is an error
 rather than a pattern that can never match.

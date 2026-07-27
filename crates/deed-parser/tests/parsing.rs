@@ -1302,6 +1302,44 @@ fn match_arms_cover_the_pattern_forms() {
     assert!(matches!(arms[3].pattern, Pattern::Wildcard(_)));
 }
 
+#[test]
+fn an_arm_can_name_alternatives() {
+    let stmts = body_of(
+        "match token {\n\
+         \x20 Plus | Times | Close => a(),\n\
+         \x20 Open => b(),\n\
+         }",
+    );
+    let Stmt::Expr(Expr::Match { arms, .. }) = &stmts[0] else {
+        panic!("expected a match, got {:?}", stmts[0]);
+    };
+    let Pattern::OneOf { alternatives, .. } = &arms[0].pattern else {
+        panic!("expected alternatives, got {:?}", arms[0].pattern);
+    };
+    assert_eq!(alternatives.len(), 3);
+    // A single pattern is still a single pattern, so nothing that already
+    // parsed gained a wrapper.
+    assert!(matches!(arms[1].pattern, Pattern::Path { .. }));
+}
+
+#[test]
+fn a_closure_after_an_arm_is_still_a_closure() {
+    // The only `|` that can follow a pattern in an arm is an alternative, and
+    // the only `|` that can start an expression is a closure. Worth pinning,
+    // because they are the same character in adjacent positions.
+    let stmts = body_of(
+        "match token {\n\
+         \x20 Open => apply(|n: Int| n + 1),\n\
+         \x20 Close => b(),\n\
+         }",
+    );
+    let Stmt::Expr(Expr::Match { arms, .. }) = &stmts[0] else {
+        panic!("expected a match");
+    };
+    assert_eq!(arms.len(), 2);
+    assert!(matches!(arms[0].pattern, Pattern::Path { .. }));
+}
+
 // -- spans -----------------------------------------------------------------
 
 #[test]
