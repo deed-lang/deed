@@ -499,6 +499,50 @@ fn a_word_from_nowhere_still_gets_the_list() {
     assert!(!text.contains("spells it"), "{text}");
 }
 
+/// `let mut n = 1` used to take `mut` as the name and produce six messages: an
+/// unused binding called `mut` offering to rename it `_mut`, a missing `=`,
+/// `n` not found twice, a stray `=`, and a `1` going nowhere. Not one of them
+/// mentioned the word that was actually written.
+#[test]
+fn a_word_in_front_of_a_let_name_is_one_message_and_not_six() {
+    let (sources, parsed) =
+        parse_source("module a\n\nfn f() -> Int {\n    let mut n = 1\n    n\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::NO_BINDING_MODIFIER]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("there is no `mut`"), "{text}");
+    assert!(text.contains("handler's `state` field"), "{text}");
+    assert!(text.contains("with sum = 0"), "{text}");
+
+    // The name after it stands in, so the rest of the function is read as
+    // written rather than collapsing into names that cannot be found.
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    assert_eq!(fix.edits[0].replacement, "");
+}
+
+#[test]
+fn a_word_that_asks_for_what_a_let_already_gives_says_so() {
+    let (sources, parsed) =
+        parse_source("module a\n\nfn f() -> Int {\n    let mutable n = 1\n    n\n}\n");
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("there is no `mutable`"), "{text}");
+}
+
+/// Two names in a row is not a pattern, which is what makes the reading above
+/// safe, and is the same fact `assert refuses f(x)` rests on. Anything that
+/// was already a `let` has to keep parsing as one.
+#[test]
+fn an_ordinary_let_is_not_read_as_a_word_in_front_of_a_name() {
+    parse_ok("module a\n\nfn f() -> Int {\n    let n = 1\n    n\n}\n");
+    // A binding that happens to be called `mut` is still a binding, because
+    // what follows it is `=` and not another name.
+    parse_ok("module a\n\nfn f() -> Int {\n    let mut = 1\n    mut\n}\n");
+    parse_ok("module a\n\nfn f() -> Int {\n    let n: Int = 1\n    n\n}\n");
+}
+
 #[test]
 fn a_closure_with_typed_parameters_parses() {
     parse_ok(

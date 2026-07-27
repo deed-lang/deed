@@ -137,6 +137,15 @@ fn spelled_elsewhere(word: &str) -> Option<Elsewhere> {
     })
 }
 
+/// A word in front of a `let` name that another language would have accepted.
+///
+/// Only the words that really follow a binding keyword elsewhere are here.
+/// `var n = 1` and `const n = 1` are written without a `let` in front, so they
+/// arrive somewhere else entirely and are not this.
+fn binding_modifier(word: &str) -> bool {
+    matches!(word, "mut" | "mutable")
+}
+
 struct Parser<'a> {
     file: FileId,
     tokens: &'a [Token],
@@ -1277,6 +1286,50 @@ impl<'a> Parser<'a> {
     fn parse_stmt(&mut self) -> Stmt {
         if self.at_kw(Keyword::Let) {
             let start = self.bump().span;
+
+            // `let mut n = 1`. Nothing here is a keyword, so `mut` used to be
+            // taken as the name, and the reader got six messages: an unused
+            // binding called `mut` offering to rename it `_mut`, a missing
+            // `=`, `n` not found twice, a stray `=`, and a `1` going nowhere.
+            // None of them mentioned the word they had actually written.
+            //
+            // A pattern could never have been two names in a row, which is
+            // what makes this safe to read, and it is the same fact that
+            // `assert refuses f(x)` relies on below.
+            if let TokenKind::Ident(word) = self.kind()
+                && binding_modifier(word)
+                && matches!(self.nth_kind(1), TokenKind::Ident(_))
+            {
+                let word = word.clone();
+                let word_span = self.span();
+                self.bump();
+                let name_span = self.span();
+                self.emit(
+                    Diagnostic::error(
+                        codes::NO_BINDING_MODIFIER,
+                        self.file,
+                        word_span,
+                        format!("there is no `{word}`, and a `let` binds a name once"),
+                    )
+                    .with_primary_label("no such word")
+                    .with_note(
+                        "exactly one thing is mutable, a handler's `state` field, which is \
+                         what lets an empty effect row mean a function cannot cause a change \
+                         to anything",
+                    )
+                    .with_note(
+                        "an accumulator is written `for n in numbers with sum = 0 { ... }`, \
+                         which binds `sum` again on every turn rather than assigning to it",
+                    )
+                    .with_fix(
+                        format!("drop `{word}`"),
+                        Span::new(word_span.start, name_span.start),
+                        String::new(),
+                        Applicability::MachineApplicable,
+                    ),
+                );
+            }
+
             let pattern = self.parse_pattern();
             let ty = if self.eat(&TokenKind::Colon) {
                 Some(self.parse_type())
