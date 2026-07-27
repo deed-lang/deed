@@ -63,8 +63,13 @@ fn earlier(a: String, b: String) -> String {
 // inverses, and so are `to_string` and `to_int`. Before them a program could
 // hold a number and hold some text and get from neither to the other, which
 // meant it could not read input or print a count.
-fn words(line: String) -> List<String> {
-    split(line, " ")
+//
+// The parameter is `text` rather than `line` because `line` is the function
+// below it. Naming it that shadowed a declaration this module can still see,
+// which is a warning, and being unable to call `line` from inside `words` is
+// exactly what the warning is about.
+fn words(text: String) -> List<String> {
+    split(text, " ")
 }
 
 fn line(parts: List<String>) -> String {
