@@ -1568,6 +1568,16 @@ impl<'a> Parser<'a> {
     fn parse_expr_bp(&mut self, min_bp: u8) -> Expr {
         let mut lhs = self.parse_unary();
 
+        // `0..10`. Two dots in a row are never anything else in this grammar,
+        // because a field access has a name between them, so the shape can be
+        // read here rather than left to fall apart further down.
+        if self.at(&TokenKind::Dot)
+            && self.nth_kind(1) == &TokenKind::Dot
+            && !self.continues_a_new_line()
+        {
+            lhs = self.no_such_range(lhs);
+        }
+
         while let Some((op, bp)) = binary_op(self.kind()) {
             if bp < min_bp || self.continues_a_new_line() {
                 break;
@@ -1584,6 +1594,52 @@ impl<'a> Parser<'a> {
         }
 
         lhs
+    }
+
+    /// Reports `a..b` and takes the whole thing with it.
+    ///
+    /// Leaving the dots where they were cost the rest of the file. The `for`
+    /// they were usually written in went looking for its block, found a dot,
+    /// and from there the body became a struct literal, its call became a
+    /// missing brace, and the next declaration was reported as not being one:
+    /// six diagnostics, none of them the mistake. Reading the bound and
+    /// throwing it away means the block after it is still a block.
+    fn no_such_range(&mut self, lhs: Expr) -> Expr {
+        let mut dots = self.span().to(self.nth(1).span);
+
+        // `..=` is the same mistake with one more character in it.
+        let inclusive = self.nth_kind(2) == &TokenKind::Eq;
+        if inclusive {
+            dots = dots.to(self.nth(2).span);
+        }
+
+        self.emit(
+            Diagnostic::error(
+                codes::NO_RANGE,
+                self.file,
+                dots,
+                "there is no range in this language",
+            )
+            .with_primary_label("no such operator")
+            .with_note(
+                "a `for` walks a list that already exists, which is what lets it declare \
+                 nothing and still stop, so there is one thing to walk and a range would be \
+                 a second",
+            )
+            .with_note(
+                "the position of an element is written `for item at i in items`, which is \
+                 where a count usually came from",
+            ),
+        );
+
+        self.bump();
+        self.bump();
+        if inclusive {
+            self.bump();
+        }
+
+        let rhs = self.parse_unary();
+        Expr::Error(lhs.span().to(rhs.span()))
     }
 
     fn parse_unary(&mut self) -> Expr {

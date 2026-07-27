@@ -674,6 +674,59 @@ fn var_at_the_top_level_still_gets_the_declaration_answer() {
     assert!(text.contains("a file holds declarations"), "{text}");
 }
 
+// -- a range -----------------------------------------------------------------
+//
+// `for i in 0..10` is what anybody writes who wants to count, and the dots
+// used to be left where they were. The `for` went looking for its block, found
+// a dot, and the rest of the file came apart behind it.
+
+#[test]
+fn a_range_is_one_message_rather_than_six() {
+    let (sources, parsed) =
+        parse_source("module a\n\nfn f() -> () {\n    for i in 0..10 {\n        i\n    }\n}\n");
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::NO_RANGE]);
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("there is no range"), "{text}");
+    assert!(text.contains("walks a list that already exists"), "{text}");
+    assert!(text.contains("for item at i in items"), "{text}");
+}
+
+/// The bound is read and thrown away, so the block after it is still a block
+/// and the declaration after that is still a declaration. This is the whole
+/// reason for reading the shape rather than reporting the first dot.
+#[test]
+fn what_comes_after_a_range_still_parses() {
+    let (_, parsed) = parse_source(
+        "module a\n\nfn f() -> () {\n    for i in 0..10 {\n        i\n    }\n}\n\nfn g() -> Int { 1 }\n",
+    );
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::NO_RANGE]);
+    assert_eq!(parsed.module.items.len(), 2, "{:?}", parsed.module.items);
+}
+
+#[test]
+fn an_inclusive_range_is_the_same_mistake_with_one_more_character() {
+    let (_, parsed) =
+        parse_source("module a\n\nfn f() -> () {\n    for i in 0..=10 {\n        i\n    }\n}\n");
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::NO_RANGE]);
+}
+
+/// Nothing about this is specific to a `for`. The dots are the mistake
+/// wherever they are written.
+#[test]
+fn a_range_anywhere_else_gets_the_same_answer() {
+    let (_, parsed) =
+        parse_source("module a\n\nfn f(n: Int) -> Int {\n    let r = 0..n\n    n\n}\n");
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::NO_RANGE]);
+}
+
+/// Two dots in a row are only ever this, because a field access has a name
+/// between them. That is what makes the reading safe, so it has a test.
+#[test]
+fn a_chain_of_field_accesses_is_not_a_range() {
+    parse_ok("module a\n\nfn f(r: R) -> Int {\n    r.inner.n\n}\n");
+}
+
 // -- where one statement stops ---------------------------------------------
 //
 // Statements are separated by nothing, so what ends one is the next token not

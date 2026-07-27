@@ -272,6 +272,14 @@ with branches that existed only to remember to bump it.
 What can be walked is a `List`, and nothing else. A `for` over a `String` or a `Result` would
 need a way to say what walking one means, which is a trait system, which does not exist.
 
+There is no range either, and that one is refused for a different reason. `for i in 0..10` is
+the first thing anyone writes who wants to count, and a range would terminate perfectly well,
+so the paragraph above is not the argument. The argument is that every walk in `examples/`
+walks a list that was already there, and the ones that wanted a number took it from `at`, so a
+range would be a second walkable thing bought for a shape nothing written here has asked for.
+It is `DEED2011`, which says that rather than leaving somebody to work it out from a parse
+error about a missing brace.
+
 **A `for` can stop early, and it does it in the head rather than in the body.**
 
 ```deed
