@@ -15,6 +15,8 @@
 
 use std::path::{Path, PathBuf};
 
+use deed_diagnostics::SourceMap;
+use deed_interp::{Program, PropertyConfig, run_properties, run_tests};
 use deed_resolve::{IO_OPERATIONS, PRELUDE};
 
 /// The repository root, from this crate's manifest.
@@ -267,4 +269,77 @@ fn the_documents_these_read_are_all_there() {
         let path: &Path = &root().join(name);
         assert!(path.is_file(), "{name} should be there");
     }
+}
+
+/// The number in the README's own transcript of `deed test examples/`.
+///
+/// The transcript is the first thing anybody sees and it is the claim that is
+/// easiest to leave behind, because every change that adds a test to the
+/// corpus falsifies it and none of them has any reason to look. It said 84
+/// for the eighteen tests it took to notice.
+#[test]
+fn the_readme_reports_the_number_of_tests_the_corpus_runs() {
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+    for name in examples() {
+        let path = root().join("examples").join(&name);
+        let text = std::fs::read_to_string(&path).expect("an example should be readable");
+        ids.push(sources.add(format!("examples/{name}"), text));
+    }
+
+    // Together, because they import each other, and every file runs only its
+    // own tests, which is what `deed test examples/` does.
+    let checks = deed_driver::check_all(&sources, &ids);
+    let mut program = Program::new();
+    for checked in &checks {
+        assert!(
+            !checked.has_errors(),
+            "{} should check cleanly",
+            sources.file(checked.file).name()
+        );
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+            checked.rows(),
+        );
+    }
+
+    let mut passed = 0;
+    for checked in &checks {
+        for outcome in run_tests(&program, checked.file) {
+            assert!(
+                outcome.failure.is_none(),
+                "`{}` should pass in `{}`",
+                outcome.name,
+                sources.file(checked.file).name()
+            );
+            passed += 1;
+        }
+        // A property is a line in that transcript too, so it is one of the
+        // numbers being claimed.
+        for property in run_properties(
+            &program,
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            PropertyConfig::default(),
+        ) {
+            assert!(
+                property.failure.is_none(),
+                "`{}` should hold in `{}`",
+                property.function,
+                sources.file(checked.file).name()
+            );
+            passed += 1;
+        }
+    }
+
+    assert!(passed > 0, "the corpus ran no tests at all");
+    let claim = format!("{passed} passed, 0 failed");
+    assert!(
+        read("README.md").contains(&claim),
+        "the corpus runs {passed} tests, so the transcript should read {claim:?}"
+    );
 }
