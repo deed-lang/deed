@@ -1111,3 +1111,89 @@ fn the_examples_have_nothing_left_to_fix() {
     let output = run(&["fix", "--check", EXAMPLES]);
     assert_eq!(code(&output), 0, "{}", stdout(&output));
 }
+
+// -- the library that ships with the compiler ------------------------------
+
+#[test]
+fn a_program_anywhere_can_import_a_shipped_module() {
+    // The whole point. This directory has no relationship to the repository
+    // and there is nothing beside the binary to find.
+    let scratch = Scratch::new("shipped");
+    let file = scratch.write(
+        "report.deed",
+        "module scratch/report\n\n\
+         use std/string.{pad_right}\n\n\
+         test \"a column\" {\n\
+         \x20 assert pad_right(\"ab\", 4) == \"ab  \"\n\
+         }\n",
+    );
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_shipped_module_is_context_rather_than_subject() {
+    // Its tests are not the ones you asked about, the same way an imported
+    // file's are not. Otherwise every program that used the library would
+    // report the library's tests as its own.
+    let scratch = Scratch::new("shipped-context");
+    let file = scratch.write(
+        "one.deed",
+        "module scratch/one\n\n\
+         use std/string.{pad_left}\n\n\
+         test \"only this one\" {\n\
+         \x20 assert pad_left(\"a\", 2) == \" a\"\n\
+         }\n",
+    );
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_file_of_their_own_wins_over_the_shipped_one() {
+    // Shadowing, and it goes this way round because the file they can read is
+    // the one they can change. The shipped module is only ever the answer when
+    // nothing under their own root is.
+    let scratch = Scratch::new("shipped-shadow");
+    scratch.write(
+        "std/string.deed",
+        "module std/string\n\n\
+         fn pad_right(text: String, width: Int) -> String {\n\
+         \x20 \"theirs\"\n\
+         }\n",
+    );
+    let file = scratch.write(
+        "app.deed",
+        "module app\n\n\
+         use std/string.{pad_right}\n\n\
+         test \"theirs\" {\n\
+         \x20 assert pad_right(\"ab\", 4) == \"theirs\"\n\
+         }\n",
+    );
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_module_that_ships_with_nothing_is_still_unknown() {
+    // The mechanism adds one place to look and not a fallback for everything.
+    let scratch = Scratch::new("shipped-missing");
+    let file = scratch.write(
+        "app.deed",
+        "module app\n\nuse std/nonesuch.{f}\n\nfn g() -> Int { 0 }\n",
+    );
+
+    let output = run(&["check", file.to_str().unwrap()]);
+    assert_ne!(code(&output), 0);
+    assert!(
+        stdout(&output).contains("no module `std/nonesuch`"),
+        "{}",
+        stdout(&output)
+    );
+}

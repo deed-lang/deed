@@ -1,0 +1,108 @@
+// The string operations that are missing from the prelude on purpose.
+//
+// design/02-syntax.md has said for a long time that slicing, searching, case
+// and padding are missing and that they want a standard library. Three of the
+// four are here. They are not in the prelude because of the rule that decides
+// what goes there: a thing that can be written in Deed is written in Deed, and
+// every function below is. `trim` is in the prelude because it cannot be, and
+// `contains` is not because it can.
+//
+// Case is the fourth and it is not here. Deciding what an uppercase letter is
+// needs a table, and a table is not a library problem.
+//
+// Everything walks. `slice` is a fold over the characters, `index_of` is a
+// `split`, and a program that holds enough text for that to matter wants a
+// different representation rather than a different language. That is the same
+// answer `examples/table.deed` gives about lookups.
+
+module std/string
+
+// The characters from `from` up to but not including `to`.
+//
+// Out of range rather than an error, on both ends: asking for more than is
+// there is answered by what is there. An index is a position between
+// characters, so `slice(text, 0, 0)` and `slice(text, n, n)` are both empty and
+// neither is a mistake.
+fn slice(text: String, from: Int, to: Int) -> String {
+    let characters = split(text, "")
+    let kept = for c at i in characters with out = [] {
+        if i >= from && i < to {
+            push(out, c)
+        } else {
+            out
+        }
+    }
+    join(kept, "")
+}
+
+// Where `needle` starts, or the length of `text` when it is not there.
+//
+// The length rather than a `Result`, because every caller of this compares the
+// answer with something, and the position one past the end compares the way a
+// missing needle should: no slice starts there and no prefix reaches it.
+fn index_of(text: String, needle: String) -> Int {
+    let before = split(text, needle)
+    if length(before) > 1 {
+        match at(before, 0) {
+            ok(head) => length(head),
+            err(why) => length(text),
+        }
+    } else {
+        length(text)
+    }
+}
+
+fn starts_with(text: String, prefix: String) -> Bool {
+    slice(text, 0, length(prefix)) == prefix
+}
+
+fn ends_with(text: String, suffix: String) -> Bool {
+    slice(text, length(text) - length(suffix), length(text)) == suffix
+}
+
+// `text` in a column `width` wide, or `text` when it is already wider.
+//
+// Wider is not an error. The call that wants this is building a report, and a
+// report with one long name in it should come out crooked rather than not come
+// out. `repeat` already answers a negative count with an empty list, which is
+// the same decision one layer down.
+fn pad_right(text: String, width: Int) -> String {
+    text + join(repeat(" ", width - length(text)), "")
+}
+
+fn pad_left(text: String, width: Int) -> String {
+    join(repeat(" ", width - length(text)), "") + text
+}
+
+test "a slice is the characters between two positions" {
+    assert slice("abcdef", 1, 4) == "bcd"
+    assert slice("abcdef", 0, 6) == "abcdef"
+    assert slice("abc", 2, 2) == ""
+}
+
+test "a slice asking for more than is there gets what is there" {
+    assert slice("abc", 0, 99) == "abc"
+    assert slice("abc", 0 - 5, 2) == "ab"
+    assert slice("abc", 99, 200) == ""
+}
+
+test "a needle that is not there answers past the end" {
+    assert index_of("hello world", "world") == 6
+    assert index_of("hello world", "hello") == 0
+    assert index_of("hello", "z") == 5
+}
+
+test "the ends" {
+    assert starts_with("hello", "he") == true
+    assert starts_with("hello", "lo") == false
+    assert ends_with("hello", "lo") == true
+    assert ends_with("hello", "he") == false
+    assert starts_with("hello", "") == true
+}
+
+test "padding fills to a width and never cuts" {
+    assert pad_right("ab", 5) == "ab   "
+    assert pad_left("ab", 5) == "   ab"
+    assert pad_right("abcdef", 3) == "abcdef"
+    assert pad_left("abcdef", 3) == "abcdef"
+}

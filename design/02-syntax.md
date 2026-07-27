@@ -46,6 +46,10 @@ already says where to look. That rule had been true of every file in this reposi
 the first one and nothing said it out loud, which meant a program that imported anything
 could not be run by naming its own file.
 
+One family of names is not under a root. A module named `std/x` lives inside the compiler,
+which is still its name saying where it lives, and a file of your own at the same path wins
+over it. See "A library that ships with the compiler" below.
+
 What was named on the command line is the subject, and what an import needed is context. So
 `deed test app.deed` does not run the tests of a library it happens to import, and
 `deed check app.deed` does report an error in that library, because a program that cannot
@@ -173,8 +177,32 @@ Unicode whitespace table. That is a large amount of behaviour to hide behind a f
 name, and it would make what `trim` does depend on a table nobody reading the signature can
 see. A program that needs the full definition can say so in a name of its own.
 
-What is still missing is slicing, searching, case and padding. Those want a standard library,
-and there is no story for one yet.
+What is still missing is case. Deciding what an uppercase letter is needs a table, which is
+the same reason `trim` is in the prelude rather than written in the language.
+
+Slicing, searching and padding are not missing any more, and they are not in the prelude
+either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `pad_left` and
+`pad_right`, all of them written in Deed, because the prelude test says a thing that can be
+written in the language is written in the language. What they were waiting for was somewhere
+to live.
+
+## A library that ships with the compiler
+
+A module named `std/x` lives inside the compiler.
+
+This is the same rule as everything else. A module's name says where it lives, and `std/x`
+lives in the binary, which is as determinate as a directory and does not need looking for.
+Nothing is fetched, nothing is versioned, there is no manifest and no search path. The source
+is embedded, so a downloaded binary carries the library and there is no second thing that can
+be missing.
+
+A file of your own at the same module path wins. Roots are asked first and the compiler only
+last, because the file you can read is the file you can change.
+
+What goes here is what the prelude turns away. `contains` and `replace` can be written in the
+language and so they are not prelude names; before this they were not anywhere. `trim` stays
+in the prelude because it cannot be written, and case will stay out of both until it is one or
+the other.
 
 ## Lists
 
