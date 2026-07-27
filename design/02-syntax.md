@@ -538,10 +538,9 @@ whose type is not decided yet has nothing it can say: `length(value) > 0` over a
 is not a question with an answer. Deciding what it could mean is a larger question than
 naming a shape.
 
-What is still missing is an alias crossing a module boundary with its parameters. A module's
-surface lowers an alias to its name rather than to what it expands to, so a signature written
-with one arrives on the far side as a type nothing can be compared to. `examples/table.deed`
-says `List<Entry<K, V>>` in the signatures other files read for exactly that reason.
+An alias expands on the way out of its module as well as inside it, because it is a name for
+a type rather than a type and a boundary does not make it one. A refinement does not, for the
+same reason it stays nominal at home.
 
 A declaration's list may also hold a **row variable**, written `uses r`:
 
@@ -1238,11 +1237,11 @@ using an effect to get around not having a loop.
   stop on something about the element rather than on what has been worked out so far. Today
   that means folding the answer into the accumulator and asking about it next turn, which is
   one turn later than the element that settled it.
-- An alias crossing a module boundary with its parameters. A `type` may carry them now and
-  the substitution happens where it is used, but a module's surface lowers an alias to its
-  name rather than expanding it, so one written into an exported signature arrives as a type
-  nothing can compare. Inside one file it works. Higher-kinded types are almost certainly
-  out either way.
+- Higher-kinded types. A `record`, a `choice` and a `type` may all carry type parameters now,
+  and an alias expands with them on both sides of a module boundary. What none of them can
+  take is a parameter that is itself applied to something, so there is no way to write "a
+  container of `T`, whichever container". Almost certainly out: it is a large amount of
+  machinery for a language whose size budget is the point.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
   `Option` already is, and the comparison that used to be the reason is not one any more: a
   declared generic type is compared componentwise with an unknown argument absorbing, exactly

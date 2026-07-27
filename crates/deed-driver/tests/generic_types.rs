@@ -364,3 +364,70 @@ fn a_refinement_with_no_parameters_is_untouched() {
          fn f(n: Positive) -> Int { n }\n",
     );
 }
+
+/// An alias is a name for a type rather than a type, and a boundary does not
+/// make it one. Leaving it nominal on the way out sent the far side a head it
+/// had nothing to compare against, so every call through such a signature was
+/// a mismatch between a type and its own definition.
+#[test]
+fn an_alias_expands_on_its_way_out_of_a_module() {
+    let mut sources = SourceMap::new();
+    let ids: Vec<_> = [
+        "module app\n\n\
+         use lib.{Entry, Table, put}\n\n\
+         type Counts = Table<String, Int>\n\n\
+         fn one() -> Counts {\n\
+         \x20   put([], \"a\", 1)\n\
+         }\n\n\
+         fn plain() -> List<Entry<String, Int>> {\n\
+         \x20   one()\n\
+         }\n\n\
+         fn size(c: Counts) -> Int { length(c) }\n",
+        "module lib\n\n\
+         record Entry<K, V> { key: K, value: V }\n\n\
+         type Table<K, V> = List<Entry<K, V>>\n\n\
+         fn put<K, V>(t: Table<K, V>, key: K, value: V) -> Table<K, V> {\n\
+         \x20   push(t, Entry { key: key, value: value })\n\
+         }\n",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, text)| sources.add(format!("file{index}.deed"), *text))
+    .collect();
+
+    for checked in check_all(&sources, &ids) {
+        assert!(
+            !checked.has_errors(),
+            "{}",
+            rendered(&sources, &checked.diagnostics)
+        );
+    }
+}
+
+/// A refinement is not an alias and stays nominal on the way out, because a
+/// predicate makes it a distinct type on both sides of the boundary.
+#[test]
+fn a_refinement_still_crosses_as_itself() {
+    let mut sources = SourceMap::new();
+    let ids: Vec<_> = [
+        "module app\n\n\
+         use lib.{Positive, halve}\n\n\
+         fn f(n: Positive) -> Int { halve(n) }\n\n\
+         fn g() -> Int { halve(0 - 4) }\n",
+        "module lib\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn halve(n: Positive) -> Int { n / 2 }\n",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, text)| sources.add(format!("file{index}.deed"), *text))
+    .collect();
+
+    let mut checks = check_all(&sources, &ids);
+    let checked = checks.remove(0);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        checked.has_errors(),
+        "a negative number is not `Positive`:\n{text}"
+    );
+}
