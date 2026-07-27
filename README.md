@@ -12,7 +12,9 @@ Built for code that machines write and humans review.
 > effect rows, and a tree walking interpreter executes `test` blocks and `main` with
 > contracts enforced at runtime. Programs get their authority from a `System` capability
 > handed to `main`, and a `Dir` narrows to a subdirectory and cannot be walked back out of.
-> There is no code generation. Criticism of the design is still the most useful
+> There is no code generation, and what a run costs without it has been measured rather
+> than guessed at: `design/01-principles.md` has the table and the reason a compiler is not
+> the next thing. Criticism of the design is still the most useful
 > contribution. See [issue #228](https://github.com/deed-lang/deed/issues/228) for where
 > this is going.
 
