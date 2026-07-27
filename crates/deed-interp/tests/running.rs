@@ -662,6 +662,38 @@ fn unchanged_catches_a_function_that_writes() {
     assert!(render_human(&sources, &failure).contains("`sneaky` did not keep this promise"));
 }
 
+/// `unchanged` compares against what entering the call captured, and entering
+/// captures for the sake of the `ensures` clauses. Outside a contract there is
+/// nothing captured for it to be about, so it is refused, which is the rule
+/// `old` has had all along.
+///
+/// It used to answer, because every call captured whether or not anything
+/// could read it, and what it answered from once calls stopped doing that
+/// would have been a different call's snapshot.
+#[test]
+fn unchanged_outside_a_contract_is_refused() {
+    let (sources, failure) = expect_failure(&counter(
+        "fn peek() -> Bool\n\
+         \x20 uses Counter.value,\n\
+         {\n\
+         \x20 let _seen = Counter.value()\n\
+         \x20 unchanged(Counter)\n\
+         }\n\n\
+         test \"outside a contract\" {\n\
+         \x20 with InMemory { count: 7 } {\n\
+         \x20   assert peek()\n\
+         \x20 }\n\
+         }\n",
+    ));
+
+    assert_eq!(failure.code, codes::NOT_RUNNABLE);
+    assert!(
+        render_human(&sources, &failure).contains("`unchanged` outside a contract"),
+        "{}",
+        render_human(&sources, &failure)
+    );
+}
+
 // Refinements at runtime live in `deed-driver/tests/guards.rs`. What has to be
 // checked is what the type checker gave up on, so a test for it has to run the
 // checker, and these tests deliberately do not.
