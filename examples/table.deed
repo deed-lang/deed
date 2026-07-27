@@ -29,19 +29,18 @@ record Entry<K, V> {
     value: V,
 }
 
-// A name for the shape, used by everything in this file. It does not travel:
-// a module's surface lowers an alias to its name rather than expanding it, so
-// a signature written with `Table` here arrives on the far side as a type
-// nothing can be compared to. That is measured and written down in the issue
-// rather than worked around quietly, and it is why the functions below say
-// `List<Entry<K, V>>` in the one place it crosses a boundary.
+// A name for the shape, used by every signature below. An alias with no
+// predicate expands to what it names and there is no `Table` afterwards, which
+// is the whole of what it is: the same substitution a `record` does, spelled
+// once. It expands on the way out of this module too, so a file that imports
+// `set` sees the list it really takes.
 type Table<K, V> = List<Entry<K, V>>
 
 // Whether anything under this key is already here.
 //
 // Stops at the first match, which is what a `while` on the accumulator is for:
 // the answer cannot change once it is `true`.
-fn holds<K, V>(entries: List<Entry<K, V>>, key: K) -> Bool {
+fn holds<K, V>(entries: Table<K, V>, key: K) -> Bool {
     for one in entries with found = false while !found {
         one.key == key
     }
@@ -52,7 +51,7 @@ fn holds<K, V>(entries: List<Entry<K, V>>, key: K) -> Bool {
 // A `Result` rather than a value, for the reason `at` hands one back: a key
 // that is not there is not a mistake in the caller, and nothing in this
 // language traps.
-fn get<K, V>(entries: List<Entry<K, V>>, key: K) -> Result<V, String> {
+fn get<K, V>(entries: Table<K, V>, key: K) -> Result<V, String> {
     for one in entries with found = err("no such key") {
         if one.key == key {
             ok(one.value)
@@ -66,7 +65,7 @@ fn get<K, V>(entries: List<Entry<K, V>>, key: K) -> Result<V, String> {
 //
 // Replaces rather than appends, which is the invariant every other function
 // here leans on.
-fn set<K, V>(entries: List<Entry<K, V>>, key: K, value: V) -> List<Entry<K, V>> {
+fn set<K, V>(entries: Table<K, V>, key: K, value: V) -> Table<K, V> {
     if holds(entries, key) {
         for one in entries with out = [] {
             if one.key == key {
@@ -84,27 +83,25 @@ fn set<K, V>(entries: List<Entry<K, V>>, key: K, value: V) -> List<Entry<K, V>> 
 //
 // The shape a counter wants: `set(t, k, or_else(t, k, 0) + 1)` adds the first
 // one and bumps the rest without asking which case it is in.
-fn or_else<K, V>(entries: List<Entry<K, V>>, key: K, fallback: V) -> V {
+fn or_else<K, V>(entries: Table<K, V>, key: K, fallback: V) -> V {
     match get(entries, key) {
         ok(found) => found,
         err(why) => fallback,
     }
 }
 
-fn keys<K, V>(entries: List<Entry<K, V>>) -> List<K> {
+fn keys<K, V>(entries: Table<K, V>) -> List<K> {
     for one in entries with out = [] {
         push(out, one.key)
     }
 }
 
-fn values<K, V>(entries: List<Entry<K, V>>) -> List<V> {
+fn values<K, V>(entries: Table<K, V>) -> List<V> {
     for one in entries with out = [] {
         push(out, one.value)
     }
 }
 
-// The alias is not decoration even while it cannot travel: this is what the
-// signatures above would say, and it typechecks here.
 fn size<K, V>(entries: Table<K, V>) -> Int {
     length(entries)
 }

@@ -23,7 +23,8 @@
 //! the conclusion of one. A caller gets what it needs to reason, and nothing
 //! about how the callee decided it.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use deed_ast::{Expr, FieldDecl, Ident, Item, Module, Outcome, Type};
@@ -146,8 +147,30 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
         here: Rc::from(path.as_str()),
         resolutions,
         rows: RowLowering::of(module),
-        type_params: BTreeMap::new(),
+        type_params: RefCell::new(BTreeMap::new()),
+        aliases: BTreeMap::new(),
+        expanding: RefCell::new(Vec::new()),
     };
+
+    // Transparent aliases, so a signature written with one crosses as what it
+    // names. An alias is a name for a type rather than a type, and a boundary
+    // does not make it one: leaving `Table<K, V>` in an exported signature
+    // sent the far side a head it had nothing to compare against, and every
+    // call through it was a mismatch between a type and its own definition.
+    //
+    // Refinements are not here on purpose. A predicate makes a distinct type
+    // and it stays nominal across the boundary for the same reason it does at
+    // home.
+    for item in &module.items {
+        if let Item::TypeAlias(decl) = item
+            && decl.refinement.is_none()
+            && let Some(def) = resolutions.resolution(decl.name.span)
+        {
+            lowerer
+                .aliases
+                .insert(def, (&decl.ty, positions(&decl.generics, resolutions)));
+        }
+    }
 
     // Refinement predicates, by the name they are declared under. Needed here
     // and nowhere else: a function returning `Positive` promises a positive
@@ -169,7 +192,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 // What this module's own checker calls them, so an imported
                 // generic function arrives with its parameters still in it and
                 // the call site does the same substitution it does at home.
-                lowerer.type_params = positions(&decl.sig.generics, resolutions);
+                *lowerer.type_params.borrow_mut() = positions(&decl.sig.generics, resolutions);
                 lowerer.rows.declaring(&decl.sig.rows);
 
                 let declared = match &decl.sig.ret {
@@ -222,7 +245,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 );
             }
             Item::Record(decl) => {
-                lowerer.type_params = positions(&decl.generics, resolutions);
+                *lowerer.type_params.borrow_mut() = positions(&decl.generics, resolutions);
                 items.insert(
                     decl.name.name.clone(),
                     SurfaceItem::Record {
@@ -232,7 +255,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 );
             }
             Item::Choice(decl) => {
-                lowerer.type_params = positions(&decl.generics, resolutions);
+                *lowerer.type_params.borrow_mut() = positions(&decl.generics, resolutions);
                 let choice: Rc<str> = Rc::from(decl.name.name.as_str());
                 let mut variants = Vec::new();
                 for variant in &decl.variants {
@@ -259,7 +282,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 );
             }
             Item::TypeAlias(decl) => {
-                lowerer.type_params = positions(&decl.generics, resolutions);
+                *lowerer.type_params.borrow_mut() = positions(&decl.generics, resolutions);
                 let base = lowerer.ty(&decl.ty);
                 items.insert(
                     decl.name.name.clone(),
@@ -337,6 +360,10 @@ fn named(generics: &[Ident]) -> Vec<String> {
         .collect()
 }
 
+/// Where each type parameter of one declaration sits, by the name it was
+/// declared under.
+type Params = BTreeMap<deed_resolve::DefId, (usize, Rc<str>)>;
+
 struct Lowerer<'a> {
     here: Rc<str>,
     resolutions: &'a Resolutions,
@@ -345,8 +372,18 @@ struct Lowerer<'a> {
     rows: RowLowering,
     /// The type parameters of the declaration being lowered, and nothing else.
     /// Replaced per item, because they mean nothing outside the one that
-    /// declared them.
-    type_params: BTreeMap<deed_resolve::DefId, (usize, Rc<str>)>,
+    /// declared them, and swapped again while an alias is expanded so its
+    /// target reads its own parameters rather than the caller's.
+    type_params: RefCell<Params>,
+    /// What each transparent alias in this module names, with its own
+    /// parameters. Collected once, expanded wherever one is mentioned.
+    aliases: BTreeMap<deed_resolve::DefId, (&'a Type, Params)>,
+    /// Which aliases are being expanded right now.
+    ///
+    /// `type A = List<A>` is a cycle the checker reports at the declaration,
+    /// but this runs whether or not the file checked, so it has to stop by
+    /// itself rather than by trusting that somebody else already refused.
+    expanding: RefCell<Vec<deed_resolve::DefId>>,
 }
 
 impl Lowerer<'_> {
@@ -400,13 +437,14 @@ impl Lowerer<'_> {
                         Some(module) => self.external(&Rc::from(module), name, lowered),
                         None => Ty::Unknown,
                     },
-                    DefKind::Type | DefKind::Record | DefKind::Choice => {
+                    DefKind::Type => self.alias(def, lowered, name),
+                    DefKind::Record | DefKind::Choice => {
                         self.external(&Rc::clone(&self.here), name, lowered)
                     }
                     // A type parameter of the function being lowered. It
                     // crosses as a position rather than as a name, which is
                     // all a call site on the far side needs to substitute it.
-                    DefKind::TypeParam => match self.type_params.get(&def) {
+                    DefKind::TypeParam => match self.type_params.borrow().get(&def) {
                         Some((index, name)) => Ty::Param {
                             index: *index,
                             name: Rc::clone(name),
@@ -425,5 +463,32 @@ impl Lowerer<'_> {
             name: Rc::from(name.name.as_str()),
             args,
         }
+    }
+
+    /// What a transparent alias names, with its arguments put in.
+    ///
+    /// A refinement never gets here: it is not in the table, so it falls
+    /// through to the nominal answer, which is what it should cross as.
+    fn alias(&self, def: deed_resolve::DefId, args: Vec<Ty>, name: &Ident) -> Ty {
+        let Some((target, params)) = self.aliases.get(&def) else {
+            return self.external(&Rc::clone(&self.here), name, args);
+        };
+        if self.expanding.borrow().contains(&def) {
+            return Ty::Unknown;
+        }
+
+        self.expanding.borrow_mut().push(def);
+        // The alias's own parameters, not the ones belonging to whatever
+        // declaration mentioned it.
+        let outer = std::mem::replace(&mut *self.type_params.borrow_mut(), params.clone());
+        let expanded = self.ty(target);
+        *self.type_params.borrow_mut() = outer;
+        self.expanding.borrow_mut().pop();
+
+        if args.is_empty() {
+            return expanded;
+        }
+        let bindings: HashMap<usize, Ty> = args.into_iter().enumerate().collect();
+        expanded.substitute(&bindings)
     }
 }

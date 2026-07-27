@@ -45,12 +45,12 @@
 
 module examples/logs
 
-use examples/table.{Entry, or_else, set}
+use examples/table.{Entry, Table, or_else, set}
 
 // What this program counts: a key, and how many times it turned up. Naming it
-// is why the signatures below fit on one line. Written out rather than
-// imported, because an alias does not survive a module's surface yet.
-type Counts = List<Entry<String, Int>>
+// is why the signatures below fit on one line, and the name it is built from
+// came across the module boundary as the shape it stands for.
+type Counts = Table<String, Int>
 
 // The words of a line, with the gaps thrown away.
 //
