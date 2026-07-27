@@ -172,7 +172,7 @@ mod tests {
             "file:",
             "file://",
             "file://host/a.deed",
-            "vscode-vfs://github/onatozmenn/deed/a.deed",
+            "vscode-vfs://github/deed-lang/deed/a.deed",
         ] {
             assert_eq!(to_path(uri), None, "should have refused {uri}");
         }
