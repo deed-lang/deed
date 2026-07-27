@@ -4,14 +4,14 @@ version = 4
 
 [[package]]
 name = "deed-ast"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-diagnostics",
 ]
 
 [[package]]
 name = "deed-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-diagnostics",
  "deed-driver",
@@ -23,11 +23,11 @@ dependencies = [
 
 [[package]]
 name = "deed-diagnostics"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "deed-driver"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
@@ -42,7 +42,7 @@ dependencies = [
 
 [[package]]
 name = "deed-effects"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "deed-fmt"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "deed-interp"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
@@ -74,14 +74,14 @@ dependencies = [
 
 [[package]]
 name = "deed-lexer"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-diagnostics",
 ]
 
 [[package]]
 name = "deed-lsp"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "deed-parser"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "deed-resolve"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "deed-typeck"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
