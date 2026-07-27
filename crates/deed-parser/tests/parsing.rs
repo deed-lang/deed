@@ -550,6 +550,130 @@ fn a_closure_with_typed_parameters_parses() {
     );
 }
 
+// -- a binding written without `let` ---------------------------------------
+//
+// `var n = 1` and `Int n = 1` used to be read as the two halves they look
+// like, a name on its own and an assignment to another name, so the reader was
+// told twice that a name could not be found and never that the line wanted a
+// `let`.
+
+#[test]
+fn another_languages_binding_keyword_is_answered_with_let() {
+    let (sources, parsed) = parse_source("module a\n\nfn f() -> Int {\n    var n = 1\n    n\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::BINDING_WITHOUT_LET]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("there is no `var`"), "{text}");
+    assert!(text.contains("binds its name once"), "{text}");
+
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    assert_eq!(fix.edits[0].replacement, "let");
+}
+
+/// The word that asked for something the language refuses hears why, and the
+/// word that asked for what a `let` already is does not need to.
+#[test]
+fn only_the_word_that_asked_for_a_mutable_one_hears_about_state() {
+    let (sources, parsed) = parse_source("module a\n\nfn f() -> Int {\n    var n = 1\n    n\n}\n");
+    let mutable = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(mutable.contains("handler's `state` field"), "{mutable}");
+    assert!(mutable.contains("with sum = 0"), "{mutable}");
+
+    for word in ["const", "val"] {
+        let source = format!("module a\n\nfn f() -> Int {{\n    {word} n = 1\n    n\n}}\n");
+        let (sources, parsed) = parse_source(&source);
+        let text = render_human(&sources, &parsed.diagnostics[0]);
+        assert!(text.contains(&format!("there is no `{word}`")), "{text}");
+        assert!(
+            !text.contains("handler's `state` field"),
+            "`{word}` is asking for what a `let` already is: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_type_in_front_of_the_name_is_told_where_the_type_goes() {
+    let (sources, parsed) = parse_source("module a\n\nfn f() -> Int {\n    Int k = 3\n    k\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::BINDING_WITHOUT_LET]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("`Int` is the type of `k`"), "{text}");
+    assert!(text.contains("let name: Type = value"), "{text}");
+
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    assert_eq!(fix.edits[0].replacement, "let k: Int");
+}
+
+/// The statement goes on being read as the `let` it was meant to be, so one
+/// mistake stays one message rather than taking the lines below it down too.
+/// The type keeps its place, which is the whole reason for reporting it here
+/// rather than dropping it.
+#[test]
+fn the_line_is_still_read_as_the_binding_it_meant() {
+    for (source, typed) in [
+        (
+            "module a\n\nfn f() -> Int {\n    var n = 1\n    n\n}\n",
+            false,
+        ),
+        (
+            "module a\n\nfn f() -> Int {\n    Int n = 1\n    n\n}\n",
+            true,
+        ),
+    ] {
+        let (_, parsed) = parse_source(source);
+        let Item::Function(function) = &parsed.module.items[0] else {
+            panic!("expected a function");
+        };
+        match &function.body.stmts[0] {
+            Stmt::Let { pattern, ty, .. } => {
+                assert!(
+                    matches!(pattern, Pattern::Path { segments, .. } if segments[0].name == "n"),
+                    "the name has to be bound or the lines below it cannot find it"
+                );
+                assert_eq!(ty.is_some(), typed, "{source}");
+            }
+            other => panic!("expected a `let`, got {other:?}"),
+        }
+    }
+}
+
+/// The line break is the other half of what makes the reading safe. An
+/// expression and an assignment on two lines is a program.
+#[test]
+fn a_name_on_the_line_below_is_not_part_of_the_line_above() {
+    // `Total` is capitalised, so this would be read as a type in front of a
+    // name if the parser only counted tokens.
+    parse_ok("module a\n\nfn f(m: Int) -> () {\n    Total\n    n = m\n}\n");
+}
+
+/// A word that is neither of the two readings keeps the answer it has today.
+/// The shape is wrong either way, but guessing `let` at anything would put a
+/// word in somebody's file on no evidence.
+#[test]
+fn a_word_that_is_neither_is_left_alone() {
+    let (_, parsed) = parse_source("module a\n\nfn f() -> Int {\n    widget n = 1\n    n\n}\n");
+    assert!(
+        !codes_of(&parsed.diagnostics).contains(&codes::BINDING_WITHOUT_LET),
+        "{:?}",
+        parsed.diagnostics
+    );
+}
+
+/// At the top level the same word gets a different answer, because there the
+/// reading is not a binding at all: a file holds declarations.
+#[test]
+fn var_at_the_top_level_still_gets_the_declaration_answer() {
+    let (sources, parsed) = parse_source("module a\n\nvar n = 1\n");
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("a file holds declarations"), "{text}");
+}
+
 // -- where one statement stops ---------------------------------------------
 //
 // Statements are separated by nothing, so what ends one is the next token not

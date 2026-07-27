@@ -141,9 +141,36 @@ fn spelled_elsewhere(word: &str) -> Option<Elsewhere> {
 ///
 /// Only the words that really follow a binding keyword elsewhere are here.
 /// `var n = 1` and `const n = 1` are written without a `let` in front, so they
-/// arrive somewhere else entirely and are not this.
+/// arrive somewhere else entirely, which is `declared_elsewhere` below.
 fn binding_modifier(word: &str) -> bool {
     matches!(word, "mut" | "mutable")
+}
+
+/// How `word name = value` was meant to be read.
+///
+/// The statement is not one this language has either way. What this decides is
+/// which sentence to say about it, and both sentences end in `let`.
+enum Declared {
+    /// `var n = 1`. Another language's binding keyword, and whether it asked
+    /// for something that can be assigned to again.
+    Keyword { rebindable: bool },
+    /// `Int n = 1`. The type in front of the name rather than after it.
+    TypeFirst,
+}
+
+fn declared_elsewhere(word: &str) -> Option<Declared> {
+    match word {
+        "var" | "local" => Some(Declared::Keyword { rebindable: true }),
+        "const" | "val" => Some(Declared::Keyword { rebindable: false }),
+        // Every type in the language is written with a capital and every value
+        // without one, so an initial capital is what tells `Int n = 1` from
+        // two names that have nothing to do with each other. The parser cannot
+        // ask what `Int` resolves to and does not need to: the shape is
+        // already wrong, and a word that is neither of these keeps the answer
+        // it gets today rather than being guessed at.
+        _ if word.starts_with(char::is_uppercase) => Some(Declared::TypeFirst),
+        _ => None,
+    }
 }
 
 struct Parser<'a> {
@@ -172,6 +199,11 @@ impl<'a> Parser<'a> {
     fn nth_kind(&self, n: usize) -> &TokenKind {
         let index = (self.pos + n).min(self.tokens.len() - 1);
         &self.tokens[index].kind
+    }
+
+    fn nth(&self, n: usize) -> &Token {
+        let index = (self.pos + n).min(self.tokens.len() - 1);
+        &self.tokens[index]
     }
 
     fn span(&self) -> Span {
@@ -1383,6 +1415,120 @@ impl<'a> Parser<'a> {
             return Stmt::Assert {
                 span: start.to(condition.span()),
                 condition,
+            };
+        }
+
+        // `var n = 1`, `const n = 1`, `Int n = 1`. A binding written the way
+        // the last language wrote it. All three used to be read as the two
+        // halves they look like, an expression statement holding one name and
+        // an assignment to another, so the reader was told twice that a name
+        // could not be found and never that the line wanted a `let`.
+        //
+        // Two names in a row is not a statement, which is what makes this safe
+        // to read, and it is the same fact `let mut n = 1` and
+        // `assert refuses f(x)` rest on. The line break is the other half of
+        // it: `foo` on one line and `n = 1` on the next really are an
+        // expression and an assignment, and that is a program.
+        if let TokenKind::Ident(word) = self.kind()
+            && matches!(self.nth_kind(1), TokenKind::Ident(_))
+            && self.nth_kind(2) == &TokenKind::Eq
+            && !self.nth(1).starts_line
+            && !self.nth(2).starts_line
+            && let Some(reading) = declared_elsewhere(word)
+        {
+            let word = word.clone();
+            let word_span = self.span();
+            let name_span = self.nth(1).span;
+            let name = match self.nth_kind(1) {
+                TokenKind::Ident(name) => name.clone(),
+                _ => unreachable!("guarded by the lookahead above"),
+            };
+
+            let diagnostic = match reading {
+                Declared::Keyword { rebindable } => {
+                    let mut diagnostic = Diagnostic::error(
+                        codes::BINDING_WITHOUT_LET,
+                        self.file,
+                        word_span,
+                        format!("there is no `{word}`, and a binding is written `let`"),
+                    )
+                    .with_primary_label("no such word")
+                    .with_note(
+                        "a `let` binds its name once and nothing assigns to it again, so the \
+                         language has no second word for the bindings that were never going \
+                         to change",
+                    );
+
+                    // Only the words that asked for something the language
+                    // refuses need to hear why. `const` and `val` are asking
+                    // for exactly what a `let` already is.
+                    if rebindable {
+                        diagnostic = diagnostic
+                            .with_note(
+                                "exactly one thing is mutable, a handler's `state` field, \
+                                 which is what lets an empty effect row mean a function \
+                                 cannot cause a change to anything",
+                            )
+                            .with_note(
+                                "an accumulator is written `for n in numbers with sum = 0 \
+                                 { ... }`, which binds `sum` again on every turn rather than \
+                                 assigning to it",
+                            );
+                    }
+
+                    diagnostic.with_fix(
+                        "write `let`",
+                        word_span,
+                        "let".to_string(),
+                        Applicability::MachineApplicable,
+                    )
+                }
+                Declared::TypeFirst => Diagnostic::error(
+                    codes::BINDING_WITHOUT_LET,
+                    self.file,
+                    word_span,
+                    format!(
+                        "`{word}` is the type of `{name}`, and a type is written after the name"
+                    ),
+                )
+                .with_primary_label("the type comes second")
+                .with_note(
+                    "a binding is written `let name: Type = value`, and the type can be left \
+                     off when the value already says it",
+                )
+                .with_note(
+                    "a signature is the one place a type has to be written, because it is \
+                     the boundary somebody else reads",
+                )
+                .with_fix(
+                    format!("write `let {name}: {word}`"),
+                    word_span.to(name_span),
+                    format!("let {name}: {word}"),
+                    Applicability::MachineApplicable,
+                ),
+            };
+            self.emit(diagnostic);
+
+            // Read the rest as the `let` it was meant to be. The name is bound
+            // and the initialiser is checked, so one mistake stays one
+            // message instead of taking the lines below it down as well.
+            self.bump();
+            let pattern = self.parse_pattern();
+            let ty = match reading {
+                Declared::TypeFirst => Some(Type::Named {
+                    name: Ident::new(word, word_span),
+                    args: Vec::new(),
+                    span: word_span,
+                }),
+                Declared::Keyword { .. } => None,
+            };
+            self.expect(TokenKind::Eq, "a `let` statement");
+            let init = self.parse_expr();
+            return Stmt::Let {
+                span: word_span.to(init.span()),
+                pattern,
+                ty,
+                init,
             };
         }
 

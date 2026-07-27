@@ -49,3 +49,12 @@ pub const POSITIONAL_VARIANT: &str = "DEED2008";
 /// that produces the most and the least useful messages of any single word a
 /// newcomer writes, and none of them names the word.
 pub const NO_BINDING_MODIFIER: &str = "DEED2009";
+
+/// A binding written without `let`, either behind another language's keyword
+/// (`var n = 1`) or behind its type (`Int n = 1`).
+///
+/// Both used to arrive as a name nobody declared and an assignment to a name
+/// nobody declared, which is two messages about the halves and none about the
+/// line. The shape is safe to read because two names in a row on one line is
+/// not a statement here.
+pub const BINDING_WITHOUT_LET: &str = "DEED2010";
