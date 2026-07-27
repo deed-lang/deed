@@ -241,9 +241,14 @@ fn a_question_before_initialize_is_refused() {
 #[test]
 fn a_method_nobody_implemented_is_an_error_rather_than_silence() {
     // A request with no reply is a request the editor waits on forever.
+    //
+    // The method named here has to be one this server will not grow. A colour
+    // picker needs colour literals and the language has none, so it is safe
+    // in a way that picking whatever is unimplemented today is not: this test
+    // used to name `signatureHelp` and started failing the day that landed.
     let sent = session(&[
         request(1, "initialize"),
-        request(2, "textDocument/signatureHelp"),
+        request(2, "textDocument/colorPresentation"),
     ]);
     assert_eq!(
         sent[1].at(&["error", "code"]).and_then(Json::as_i64),
@@ -1578,4 +1583,191 @@ fn the_stream_ending_is_not_an_error() {
     // Editors do not always get to say goodbye.
     let sent = session(&[request(1, "initialize")]);
     assert_eq!(sent.len(), 1);
+}
+
+// -- signature help -----------------------------------------------------------
+
+fn signature_help(id: i64, uri: &str, line: u32, character: u32) -> String {
+    at(id, "textDocument/signatureHelp", uri, line, character)
+}
+
+/// The one signature offered, and which parameter it says is being written.
+fn signature(message: &Json) -> (String, i64) {
+    let signatures = message
+        .at(&["result", "signatures"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("expected a signature, got {message:?}"));
+    let label = signatures
+        .first()
+        .and_then(|first| first.at(&["label"]))
+        .and_then(Json::as_str)
+        .expect("a signature has a label")
+        .to_string();
+    let active = message
+        .at(&["result", "activeParameter"])
+        .and_then(Json::as_i64)
+        .expect("an active parameter");
+    (label, active)
+}
+
+const CALLS: &str = "module a\n\n\
+     fn add(left: Int, right: Int) -> Int {\n\
+     \x20   left + right\n\
+     }\n\n\
+     fn go() -> Int {\n\
+     \x20   add(1, 2)\n\
+     }\n";
+
+#[test]
+fn a_call_says_what_it_takes_and_what_it_gives_back() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CALLS),
+        // Just inside the `(` of `add(1, 2)`.
+        signature_help(2, URI, 7, 8),
+    ]);
+
+    let (label, active) = signature(sent.last().unwrap());
+    assert_eq!(label, "add(Int, Int) -> Int");
+    assert_eq!(active, 0);
+}
+
+#[test]
+fn a_comma_moves_to_the_next_parameter() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CALLS),
+        // After the comma in `add(1, 2)`.
+        signature_help(2, URI, 7, 11),
+    ]);
+
+    assert_eq!(signature(sent.last().unwrap()).1, 1);
+}
+
+#[test]
+fn the_row_is_part_of_the_signature() {
+    // What a call performs is what it costs, and the call site is the one
+    // place it is not written down. This is the reason to have the feature at
+    // all rather than let an editor show types alone.
+    let source = "module a\n\n\
+         fn shout(console: Console, message: String) -> () uses Io.write {\n\
+         \x20   Io.write(console, message)\n\
+         }\n\n\
+         fn go(console: Console) -> () uses Io.write {\n\
+         \x20   shout(console, \"hi\")\n\
+         }\n";
+
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        signature_help(2, URI, 7, 10),
+    ]);
+
+    let (label, _) = signature(sent.last().unwrap());
+    assert!(label.contains("uses Io.write"), "{label}");
+}
+
+#[test]
+fn a_call_inside_an_argument_is_the_one_answered_about() {
+    // `add(add(1, |2), 3)`. The cursor is on the second argument of the inner
+    // call, and a counter rather than a stack would have said the third of
+    // the outer one.
+    let source = "module a\n\n\
+         fn add(left: Int, right: Int) -> Int {\n\
+         \x20   left + right\n\
+         }\n\n\
+         fn go() -> Int {\n\
+         \x20   add(add(1, 2), 3)\n\
+         }\n";
+
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // Just before the `2`.
+        signature_help(2, URI, 7, 15),
+    ]);
+
+    assert_eq!(signature(sent.last().unwrap()).1, 1);
+}
+
+#[test]
+fn a_comma_in_a_list_belongs_to_the_list() {
+    let source = "module a\n\n\
+         fn total(items: List<Int>, extra: Int) -> Int {\n\
+         \x20   extra\n\
+         }\n\n\
+         fn go() -> Int {\n\
+         \x20   total([1, 2, 3], 4)\n\
+         }\n";
+
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // Inside the list, after its second comma.
+        signature_help(2, URI, 7, 18),
+    ]);
+
+    // Still the first argument of `total`, because the commas counted so far
+    // were the list's.
+    assert_eq!(signature(sent.last().unwrap()).1, 0);
+}
+
+#[test]
+fn a_bracket_that_opens_nothing_is_not_a_call() {
+    let source = "module a\n\nfn go() -> Int {\n    (1 + 2)\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        signature_help(2, URI, 3, 6),
+    ]);
+
+    assert!(
+        sent.last()
+            .unwrap()
+            .at(&["result"])
+            .is_some_and(Json::is_null),
+        "grouping is not a call and has no signature to show"
+    );
+}
+
+#[test]
+fn a_parenthesis_inside_a_string_does_not_open_a_call() {
+    // Without skipping strings this `(` never closes, and every later
+    // position in the file would be answered about a call that is not there.
+    let source = "module a\n\n\
+         fn go(console: Console) -> () uses Io.write {\n\
+         \x20   Io.write(console, \"a ( in a message\")\n\
+         \x20   let n = 1\n\
+         }\n";
+
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // On the line after the string, well outside any call.
+        signature_help(2, URI, 4, 13),
+    ]);
+
+    assert!(
+        sent.last()
+            .unwrap()
+            .at(&["result"])
+            .is_some_and(Json::is_null),
+        "the `(` inside the string should not have opened a call"
+    );
+}
+
+#[test]
+fn the_server_says_it_answers_signature_help() {
+    let sent = session(&[request(1, "initialize")]);
+    let triggers = sent[0]
+        .at(&[
+            "result",
+            "capabilities",
+            "signatureHelpProvider",
+            "triggerCharacters",
+        ])
+        .and_then(Json::as_array)
+        .expect("signature help should be advertised");
+    let triggers: Vec<&str> = triggers.iter().filter_map(Json::as_str).collect();
+    assert_eq!(triggers, vec!["(", ","]);
 }
