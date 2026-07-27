@@ -101,6 +101,42 @@ enum TypesRequired {
     No,
 }
 
+/// Words the language spells differently, and words it does not have.
+///
+/// The first thing anybody writes in a new language is the thing they wrote in
+/// the last one. Answering `struct` with a list of the seven declaration forms
+/// is correct and slow. Answering it with `record` is what was asked.
+///
+/// Only words with one honest answer are here. `trait` and `interface` are
+/// near `effect` and near nothing, `impl` is near `handler` and near a record
+/// literal, and guessing on those would put a word in somebody's file that
+/// does not mean what they meant.
+enum Elsewhere {
+    /// The same idea under another name.
+    SpelledHere(&'static str),
+    /// A form this language decided not to have, and why.
+    NotAThing(&'static str),
+}
+
+fn spelled_elsewhere(word: &str) -> Option<Elsewhere> {
+    Some(match word {
+        "struct" | "class" => Elsewhere::SpelledHere("record"),
+        "enum" => Elsewhere::SpelledHere("choice"),
+        "import" | "include" | "require" => Elsewhere::SpelledHere("use"),
+        "func" | "function" | "def" | "fun" => Elsewhere::SpelledHere("fn"),
+        "pub" | "public" | "export" => Elsewhere::NotAThing(
+            "every declaration is exported and there is no visibility modifier, because a \
+             language with no wildcard imports already shows the reader every name a file \
+             pulled in",
+        ),
+        "const" | "var" | "val" => Elsewhere::NotAThing(
+            "a file holds declarations rather than statements, so a named value at the top \
+             level is a `fn` that returns it",
+        ),
+        _ => return None,
+    })
+}
+
 struct Parser<'a> {
     file: FileId,
     tokens: &'a [Token],
@@ -397,18 +433,43 @@ impl<'a> Parser<'a> {
         let TokenKind::Keyword(kw) = self.kind() else {
             let span = self.span();
             let found = self.kind().describe();
-            self.emit(
-                Diagnostic::error(
-                    codes::EXPECTED_DECLARATION,
-                    self.file,
-                    span,
-                    format!("expected a declaration, found {found}"),
-                )
-                .with_primary_label("not the start of a declaration")
-                .with_note(
-                    "a file contains `type`, `record`, `choice`, `effect`, `handler`, `fn` and `test` declarations",
-                ),
-            );
+            let elsewhere = match self.kind() {
+                TokenKind::Ident(name) => spelled_elsewhere(name),
+                _ => None,
+            };
+
+            let mut diagnostic = Diagnostic::error(
+                codes::EXPECTED_DECLARATION,
+                self.file,
+                span,
+                format!("expected a declaration, found {found}"),
+            )
+            .with_primary_label("not the start of a declaration");
+
+            // Somebody who wrote `struct` did not make a mistake about this
+            // language, they made an assumption from another one, and the
+            // list of every declaration form is a slower way to answer them
+            // than the one word they were reaching for.
+            match elsewhere {
+                Some(Elsewhere::SpelledHere(word)) => {
+                    diagnostic = diagnostic
+                        .with_note(format!("this language spells it `{word}`"))
+                        .with_fix(
+                            format!("write `{word}`"),
+                            span,
+                            word,
+                            Applicability::MachineApplicable,
+                        );
+                }
+                Some(Elsewhere::NotAThing(note)) => diagnostic = diagnostic.with_note(note),
+                None => {
+                    diagnostic = diagnostic.with_note(
+                        "a file contains `type`, `record`, `choice`, `effect`, `handler`, `fn` and `test` declarations",
+                    );
+                }
+            }
+
+            self.emit(diagnostic);
             return None;
         };
 
