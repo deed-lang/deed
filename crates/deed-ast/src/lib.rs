@@ -108,6 +108,12 @@ impl Item {
 #[derive(Clone, Debug)]
 pub struct TypeAlias {
     pub name: Ident,
+    /// `<K, V>` in `type Table<K, V> = List<Entry<K, V>>`.
+    ///
+    /// Only on an alias with no refinement. A predicate over a value whose
+    /// type is not known yet is a different question, and `DEED4028` says so
+    /// rather than guessing an answer to it.
+    pub generics: Vec<Ident>,
     pub ty: Type,
     pub refinement: Option<Expr>,
     pub span: Span,

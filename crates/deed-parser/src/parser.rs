@@ -543,6 +543,7 @@ impl<'a> Parser<'a> {
     fn parse_type_alias(&mut self) -> Option<TypeAlias> {
         let start = self.bump().span;
         let name = self.expect_ident("a type alias")?;
+        let generics = self.parse_type_params();
         self.expect(TokenKind::Eq, "a type alias")?;
         let ty = self.parse_type();
 
@@ -558,6 +559,7 @@ impl<'a> Parser<'a> {
             .unwrap_or_else(|| ty.span());
         Some(TypeAlias {
             name,
+            generics,
             ty,
             refinement,
             span: start.to(end),

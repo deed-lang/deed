@@ -80,7 +80,11 @@ pub enum SurfaceItem {
     /// A refinement, opaque from outside. See the note at the top of the file.
     Refinement { base: Ty },
     /// A transparent alias, which is just its target.
-    Alias { target: Ty },
+    ///
+    /// The parameters travel with it because the substitution happens where
+    /// it is used, and a use on the far side of a boundary is a use like any
+    /// other.
+    Alias { target: Ty, generics: Vec<String> },
     Effect {
         operations: BTreeMap<String, (Vec<Ty>, Ty)>,
     },
@@ -255,6 +259,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                 );
             }
             Item::TypeAlias(decl) => {
+                lowerer.type_params = positions(&decl.generics, resolutions);
                 let base = lowerer.ty(&decl.ty);
                 items.insert(
                     decl.name.name.clone(),
@@ -262,7 +267,10 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                         // A predicate makes it a distinct type, so it has to be
                         // nominal from outside as well as inside.
                         Some(_) => SurfaceItem::Refinement { base },
-                        None => SurfaceItem::Alias { target: base },
+                        None => SurfaceItem::Alias {
+                            target: base,
+                            generics: named(&decl.generics),
+                        },
                     },
                 );
             }

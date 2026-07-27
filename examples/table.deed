@@ -29,6 +29,14 @@ record Entry<K, V> {
     value: V,
 }
 
+// A name for the shape, used by everything in this file. It does not travel:
+// a module's surface lowers an alias to its name rather than expanding it, so
+// a signature written with `Table` here arrives on the far side as a type
+// nothing can be compared to. That is measured and written down in the issue
+// rather than worked around quietly, and it is why the functions below say
+// `List<Entry<K, V>>` in the one place it crosses a boundary.
+type Table<K, V> = List<Entry<K, V>>
+
 // Whether anything under this key is already here.
 //
 // Stops at the first match, which is what a `while` on the accumulator is for:
@@ -93,6 +101,12 @@ fn values<K, V>(entries: List<Entry<K, V>>) -> List<V> {
     for one in entries with out = [] {
         push(out, one.value)
     }
+}
+
+// The alias is not decoration even while it cannot travel: this is what the
+// signatures above would say, and it typechecks here.
+fn size<K, V>(entries: Table<K, V>) -> Int {
+    length(entries)
 }
 
 test "a table remembers what was put in it" {

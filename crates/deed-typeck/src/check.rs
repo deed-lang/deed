@@ -399,6 +399,37 @@ impl<'a> Checker<'a> {
                         continue;
                     };
                     if let Some(predicate) = &alias.refinement {
+                        // A predicate over a value whose type is not known yet
+                        // is a different question from expanding a name, and
+                        // it is not one this language has answered. What could
+                        // `length(value) > 0` mean about a `T`? So the
+                        // parameters are refused rather than accepted and
+                        // quietly ignored.
+                        if let Some(parameter) = alias.generics.first() {
+                            self.emit(
+                                Diagnostic::error(
+                                    codes::REFINEMENT_TYPE_PARAM,
+                                    self.file,
+                                    parameter.span,
+                                    format!(
+                                        "`{}` has a predicate, so it cannot take `{}`",
+                                        alias.name.name, parameter.name
+                                    ),
+                                )
+                                .with_primary_label("a refinement takes no type parameters")
+                                .with_secondary(predicate.span(), "the predicate it carries")
+                                .with_note(
+                                    "an alias with no predicate expands to what it names, so \
+                                     parameters on one are the same substitution a `record` \
+                                     does",
+                                )
+                                .with_note(
+                                    "a predicate about a value whose type is not decided yet \
+                                     has nothing it can say, and deciding what it could is a \
+                                     larger question than this",
+                                ),
+                            );
+                        }
                         let base = self.lower_type(&alias.ty);
                         self.types.set_nominal(
                             def,
@@ -409,6 +440,7 @@ impl<'a> Checker<'a> {
                             },
                         );
                     } else {
+                        self.declare_type_params(def, &alias.generics);
                         // Force the expansion now so a cycle is reported once,
                         // at the declaration, rather than at every use.
                         self.alias_ty(def);
@@ -1008,7 +1040,24 @@ impl<'a> Checker<'a> {
                             args: lowered_args,
                         };
                     }
-                    DefKind::Type => self.alias_ty(def),
+                    DefKind::Type => {
+                        // An alias expands, so its parameters are substituted
+                        // here rather than carried. `Table<String, Int>` is
+                        // `List<Entry<String, Int>>` and there is no `Table`
+                        // afterwards, which is what makes it a name for a type
+                        // rather than a type.
+                        let arity = self.nominal_generics.get(&def).map_or(0, Vec::len);
+                        if !self.check_type_arity(&name.name, arity, lowered_args.len(), *span) {
+                            return Ty::Unknown;
+                        }
+                        let target = self.alias_ty(def);
+                        if lowered_args.is_empty() {
+                            return target;
+                        }
+                        let bindings: HashMap<usize, Ty> =
+                            lowered_args.iter().cloned().enumerate().collect();
+                        return target.substitute(&bindings);
+                    }
                     // A type parameter of the function being checked. It only
                     // means anything inside that declaration, and every call
                     // site substitutes it away.
@@ -1109,9 +1158,11 @@ impl<'a> Checker<'a> {
         };
 
         let arity = match self.world.get(module, &name.name) {
-            Some(SurfaceItem::Record { generics, .. } | SurfaceItem::Choice { generics, .. }) => {
-                generics.len()
-            }
+            Some(
+                SurfaceItem::Record { generics, .. }
+                | SurfaceItem::Choice { generics, .. }
+                | SurfaceItem::Alias { generics, .. },
+            ) => generics.len(),
             _ => 0,
         };
         let external = Ty::External {
@@ -1122,15 +1173,19 @@ impl<'a> Checker<'a> {
 
         match self.world.get(module, &name.name) {
             // An alias is expanded, so it is whatever it was declared as and
-            // takes nothing of its own. A parameter on an alias is a different
-            // question about what a refinement's predicate may say, and it is
-            // not answered yet.
-            Some(SurfaceItem::Alias { target }) => {
+            // takes nothing of its own beyond the parameters it wrote down. A
+            // parameter on a refinement is a different question about what a
+            // predicate may say, and `DEED4028` refuses it at the declaration.
+            Some(SurfaceItem::Alias { target, .. }) => {
                 let target = target.clone();
-                if !self.check_type_arity(&name.name, 0, args.len(), span) {
+                if !self.check_type_arity(&name.name, arity, args.len(), span) {
                     return Ty::Unknown;
                 }
-                target
+                if args.is_empty() {
+                    return target;
+                }
+                let bindings: HashMap<usize, Ty> = args.iter().cloned().enumerate().collect();
+                target.substitute(&bindings)
             }
             Some(
                 SurfaceItem::Record { .. }

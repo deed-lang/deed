@@ -520,9 +520,28 @@ unknown absorbs, so it fits wherever an `Option` was wanted. That is not a speci
 is a `List<unknown>` and `ok(x)` is a `Result<T, unknown>` for the same reason. Three places,
 one answer.
 
-What is still missing is a type parameter on an alias. An alias with no predicate is expanded
-away and one with a predicate is a refinement, and a generic refinement is a different
-question about what the predicate may say about a value whose type nobody knows yet.
+An alias takes them too, and it is the same substitution rather than a new idea:
+
+```deed
+record Entry<K, V> { key: K, value: V }
+
+type Table<K, V> = List<Entry<K, V>>
+```
+
+`Table<String, Int>` is `List<Entry<String, Int>>` and there is nothing called `Table`
+afterwards, which is the whole of what an alias is. `examples/table.deed` asked for this by
+writing the shape out eight times.
+
+An alias with a predicate may not take them, and that is `DEED4028` rather than an oversight.
+A refinement is a distinct type whose predicate is checked, and a predicate about a value
+whose type is not decided yet has nothing it can say: `length(value) > 0` over an unknown `T`
+is not a question with an answer. Deciding what it could mean is a larger question than
+naming a shape.
+
+What is still missing is an alias crossing a module boundary with its parameters. A module's
+surface lowers an alias to its name rather than to what it expands to, so a signature written
+with one arrives on the far side as a type nothing can be compared to. `examples/table.deed`
+says `List<Entry<K, V>>` in the signatures other files read for exactly that reason.
 
 A declaration's list may also hold a **row variable**, written `uses r`:
 
@@ -1219,10 +1238,11 @@ using an effect to get around not having a loop.
   stop on something about the element rather than on what has been worked out so far. Today
   that means folding the answer into the accumulator and asking about it next turn, which is
   one turn later than the element that settled it.
-- Generic types on an alias. A `record` and a `choice` may carry type parameters and a `type`
-  may not, because an alias with no predicate is expanded away and one with a predicate is a
-  refinement, and a generic refinement is a different question. Higher-kinded types are
-  almost certainly out.
+- An alias crossing a module boundary with its parameters. A `type` may carry them now and
+  the substitution happens where it is used, but a module's surface lowers an alias to its
+  name rather than expanding it, so one written into an exported signature arrives as a type
+  nothing can compare. Inside one file it works. Higher-kinded types are almost certainly
+  out either way.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
   `Option` already is, and the comparison that used to be the reason is not one any more: a
   declared generic type is compared componentwise with an unknown argument absorbing, exactly
