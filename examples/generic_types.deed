@@ -60,8 +60,16 @@ fn found<T>(option: Option<T>) -> Bool {
 // `Option<unknown>`, and unknown agrees with whatever it is compared against.
 // That is not a special case: `[]` is a `List<unknown>` and `ok(x)` is a
 // `Result<T, unknown>` for exactly the same reason. Three places, one answer.
+//
+// It stops, and the `while` is what makes the name true. Without it this walks
+// every remaining name after the answer is already in, and what it hands back
+// is the last match rather than the first. Those are the same value here
+// because both are equal to `wanted`, which is exactly why a walk like this
+// goes unnoticed. The condition is about the accumulator, which is what
+// `while` reads, and `found` is an ordinary function rather than anything the
+// loop knows about.
 fn first_matching(names: List<String>, wanted: String) -> Option<String> {
-    for name in names with seen = None {
+    for name in names with seen = None while !found(seen) {
         if name == wanted {
             Some { value: name }
         } else {
