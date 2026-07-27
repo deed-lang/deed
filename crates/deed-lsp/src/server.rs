@@ -147,6 +147,7 @@ impl Server {
             "textDocument/codeAction" => result(id, self.code_action(message)),
             "textDocument/documentSymbol" => result(id, self.document_symbol(message)),
             "textDocument/signatureHelp" => result(id, self.signature_help(message)),
+            "workspace/symbol" => result(id, self.workspace_symbol(message)),
             "textDocument/completion" => result(id, self.completion(message)),
             _ => error(
                 id,
@@ -1021,6 +1022,79 @@ impl Server {
         }
     }
 
+    /// Every declaration in the workspace whose name contains the query.
+    ///
+    /// The outline answers "what is in this file" and this answers "where is
+    /// the thing I can only remember the name of", which is the question
+    /// somebody has when they arrive in a workspace they did not write.
+    ///
+    /// Substring and case insensitive rather than fuzzy. An editor filters and
+    /// ranks the answer again on its own terms, so a server that guessed at
+    /// ranking would be guessing twice, and a substring is the one rule a
+    /// person can predict without being told it.
+    ///
+    /// An empty query is every declaration. That is what an editor sends when
+    /// the box is first opened, and answering it is how the list appears
+    /// before anything is typed.
+    fn workspace_symbol(&self, message: &Json) -> Json {
+        let query = message
+            .at(&["params", "query"])
+            .and_then(Json::as_str)
+            .unwrap_or_default()
+            .to_lowercase();
+
+        let (sources, entries) = self.check_workspace();
+        let mut symbols = Vec::new();
+
+        for entry in &entries {
+            let text = sources.file(entry.checked.file).text();
+            let container = entry
+                .checked
+                .module
+                .name
+                .as_ref()
+                .map(|path| path.to_string_path());
+
+            for (_, data) in entry.checked.resolutions.defs() {
+                // A parameter or a `let` cannot be named from outside the
+                // function that has it, so it is not something to jump to
+                // across a workspace. An empty span is a name the compiler
+                // supplied rather than one somebody wrote.
+                if !declares(data.kind) || data.span.is_empty() {
+                    continue;
+                }
+                if !data.name.to_lowercase().contains(&query) {
+                    continue;
+                }
+
+                let mut fields = vec![
+                    ("name", Json::string(&data.name)),
+                    ("kind", Json::number(kind_of(data.kind))),
+                    (
+                        "location",
+                        Json::object(vec![
+                            ("uri", Json::string(&entry.uri)),
+                            ("range", range_in(text, data.span)),
+                        ]),
+                    ),
+                ];
+                if let Some(container) = &container {
+                    fields.push(("containerName", Json::string(container)));
+                }
+                symbols.push((
+                    data.name.to_string(),
+                    entry.uri.clone(),
+                    Json::object(fields),
+                ));
+            }
+        }
+
+        // By name, then by where it is, so that two files declaring the same
+        // name come back in an order that does not move between calls.
+        symbols.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+        Json::Array(symbols.into_iter().map(|(_, _, symbol)| symbol).collect())
+    }
+
     fn symbol(
         &self,
         document: &Document,
@@ -1528,6 +1602,7 @@ fn initialize_result() -> Json {
             ),
             ("documentFormattingProvider", Json::Bool(true)),
             ("documentSymbolProvider", Json::Bool(true)),
+            ("workspaceSymbolProvider", Json::Bool(true)),
             // A `(` opens an argument list and a `,` moves to the next one.
             // Nothing else changes which parameter is being written, and an
             // editor asks again on its own after that.

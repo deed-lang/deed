@@ -1771,3 +1771,142 @@ fn the_server_says_it_answers_signature_help() {
     let triggers: Vec<&str> = triggers.iter().filter_map(Json::as_str).collect();
     assert_eq!(triggers, vec!["(", ","]);
 }
+
+// -- workspace symbol ---------------------------------------------------------
+
+fn workspace_symbol(id: i64, query: &str) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"workspace/symbol\",\
+         \"params\":{{\"query\":\"{query}\"}}}}"
+    ))
+}
+
+fn symbol_names(message: &Json) -> Vec<String> {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("expected symbols, got {message:?}"))
+        .iter()
+        .filter_map(|symbol| symbol.at(&["name"]).and_then(Json::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+const ONE: &str = "module scratch/one\n\n\
+     record Ledger {\n\
+     \x20   total: Int,\n\
+     }\n\n\
+     fn deposit(into: Int, amount: Int) -> Int {\n\
+     \x20   into + amount\n\
+     }\n";
+
+const TWO: &str = "module scratch/two\n\n\
+     fn withdraw(from: Int, amount: Int) -> Int {\n\
+     \x20   from - amount\n\
+     }\n";
+
+#[test]
+fn an_empty_query_is_every_declaration_in_the_workspace() {
+    // What an editor sends the moment the box opens, and answering it is how
+    // the list appears before anything is typed.
+    let scratch = Scratch::new("workspace-symbol-all");
+    scratch.write("one.deed", ONE);
+    scratch.write("two.deed", TWO);
+
+    let sent = session(&[initialize_in(1, &scratch), workspace_symbol(2, "")]);
+    let found = symbol_names(sent.last().unwrap());
+
+    assert!(found.contains(&"deposit".to_string()), "{found:?}");
+    assert!(found.contains(&"withdraw".to_string()), "{found:?}");
+    assert!(found.contains(&"Ledger".to_string()), "{found:?}");
+}
+
+#[test]
+fn a_query_is_a_substring_and_ignores_case() {
+    let scratch = Scratch::new("workspace-symbol-query");
+    scratch.write("one.deed", ONE);
+    scratch.write("two.deed", TWO);
+
+    let sent = session(&[initialize_in(1, &scratch), workspace_symbol(2, "DRAW")]);
+    let found = symbol_names(sent.last().unwrap());
+
+    assert_eq!(found, vec!["withdraw".to_string()]);
+}
+
+#[test]
+fn a_parameter_is_not_something_to_jump_to_across_a_workspace() {
+    // `amount` is written in both files and cannot be named from outside the
+    // function that has it, so it is not an answer to "where is the thing I
+    // half remember the name of".
+    let scratch = Scratch::new("workspace-symbol-locals");
+    scratch.write("one.deed", ONE);
+    scratch.write("two.deed", TWO);
+
+    let sent = session(&[initialize_in(1, &scratch), workspace_symbol(2, "amount")]);
+    assert!(
+        symbol_names(sent.last().unwrap()).is_empty(),
+        "a parameter is not a workspace symbol"
+    );
+}
+
+#[test]
+fn a_symbol_says_which_module_it_is_in_and_where() {
+    let scratch = Scratch::new("workspace-symbol-where");
+    let one = scratch.write("one.deed", ONE);
+    scratch.write("two.deed", TWO);
+
+    let sent = session(&[initialize_in(1, &scratch), workspace_symbol(2, "deposit")]);
+    let result = sent.last().unwrap().at(&["result"]).unwrap();
+    let first = result
+        .as_array()
+        .and_then(|all| all.first())
+        .expect("one symbol");
+
+    assert_eq!(
+        first.at(&["containerName"]).and_then(Json::as_str),
+        Some("scratch/one")
+    );
+    assert_eq!(
+        first.at(&["location", "uri"]).and_then(Json::as_str),
+        Some(one.as_str())
+    );
+    // Counting from zero: the module line, a blank, the three lines of the
+    // record, a blank, and then `deposit`.
+    assert_eq!(
+        first
+            .at(&["location", "range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(6)
+    );
+}
+
+#[test]
+fn an_unsaved_change_is_searched_rather_than_what_is_on_disk() {
+    // The same rule every other answer follows: the file on the screen is the
+    // file, and it may not have been saved.
+    let scratch = Scratch::new("workspace-symbol-unsaved");
+    let two = scratch.write("two.deed", TWO);
+
+    let renamed = "module scratch/two\n\nfn refund(to: Int) -> Int {\n    to\n}\n";
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, renamed),
+        workspace_symbol(2, "re"),
+    ]);
+
+    let found = symbol_names(sent.last().unwrap());
+    assert!(found.contains(&"refund".to_string()), "{found:?}");
+    assert!(
+        !found.contains(&"withdraw".to_string()),
+        "the saved name is gone from the buffer: {found:?}"
+    );
+}
+
+#[test]
+fn the_server_says_it_answers_workspace_symbol() {
+    let sent = session(&[request(1, "initialize")]);
+    assert_eq!(
+        sent[0].at(&["result", "capabilities", "workspaceSymbolProvider"]),
+        Some(&Json::Bool(true))
+    );
+}
