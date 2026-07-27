@@ -123,19 +123,21 @@ applying guesses is a flag someone turns on once and then forgets about.
 
 Two of its rules are about declining. Fixes whose spans overlap are both dropped, since
 applying either would leave the other pointing at text that moved and no order makes both
-right. And a fix that leaves more errors than it found is treated as a compiler bug and
-nothing is written, which is the version of the check that catches a fix that was wrong
-rather than merely unhelpful.
+right. A fix is refused whole rather than in pieces, because a repair that wraps something is
+two edits and half of it is not a smaller repair. And a fix that leaves more errors than it
+found is treated as a compiler bug and nothing is written, which is the version of the check
+that catches a fix that was wrong rather than merely unhelpful.
 
-A fix is a span and a replacement, so most of them are written where the problem is found.
-The row diagnostics are the exception and were missing for a while because of it: `DEED5001`
-names the effect, names the function and tells the reader to add it to the `uses` clause, and
-saying that as a span means knowing about commas, about indentation, and about a clause that
-may not exist yet. The effect checker has the answer and no business knowing any of that, so
-the driver writes those, where the text, the tree and the one canonical layout are all in
-scope. It declines when the contract holds a `where` or an `ensures`, because nothing in the
-tree says where one clause stops and the next starts, and when a comment sits in the region,
-because a machine-applicable fix that deletes a comment is a fix nobody should have applied.
+A fix is usually a span and a replacement, so most of them are written where the problem is
+found. The row diagnostics are the exception and were missing for a while because of it:
+`DEED5001` names the effect, names the function and tells the reader to add it to the `uses`
+clause, and saying that as a span means knowing about commas, about indentation, and about a
+clause that may not exist yet. The effect checker has the answer and no business knowing any
+of that, so the driver writes those, where the text, the tree and the one canonical layout are
+all in scope. It declines when the contract holds a `where` or an `ensures`, because nothing in
+the tree says where one clause stops and the next starts, and when a comment sits in the
+region, because a machine-applicable fix that deletes a comment is a fix nobody should have
+applied.
 
 ---
 

@@ -6,7 +6,7 @@
 //! trip or four.
 
 use deed_ast::{BinaryOp, Expr, Item, Outcome, Pattern, Stmt, UnaryOp};
-use deed_diagnostics::{Diagnostic, SourceMap, render_human};
+use deed_diagnostics::{Applicability, Diagnostic, SourceMap, render_human};
 use deed_lexer::tokenize;
 use deed_parser::{Parsed, codes, parse};
 
@@ -725,6 +725,74 @@ fn a_range_anywhere_else_gets_the_same_answer() {
 #[test]
 fn a_chain_of_field_accesses_is_not_a_range() {
     parse_ok("module a\n\nfn f(r: R) -> Int {\n    r.inner.n\n}\n");
+}
+
+// -- a cast ------------------------------------------------------------------
+//
+// `as` is an ordinary name, so `n as String` used to be answered with "cannot
+// find `as` in this scope", which is true of a word nobody wrote as a name.
+
+#[test]
+fn a_cast_says_the_conversion_is_a_call() {
+    let (sources, parsed) =
+        parse_source("module a\n\nfn f(n: Int) -> String {\n    n as String\n}\n");
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::NO_CAST]);
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("there is no cast"), "{text}");
+    assert!(text.contains("whether it can fail"), "{text}");
+    assert!(text.contains("to_string(n)"), "{text}");
+}
+
+/// Wrapping the value is an insertion in front of it and a replacement behind
+/// it, which is the first fix in this compiler that takes two edits.
+#[test]
+fn the_fix_for_a_cast_wraps_the_value() {
+    let (_, parsed) = parse_source("module a\n\nfn f(n: Int) -> String {\n    n as String\n}\n");
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    assert_eq!(fix.edits.len(), 2);
+    assert_eq!(fix.edits[0].replacement, "to_string(");
+    assert_eq!(fix.edits[1].replacement, ")");
+}
+
+/// `to_int` gives a `Result`, so what to do with it is the reader's decision
+/// and not a rewrite anyone can make on their behalf.
+#[test]
+fn the_conversion_that_can_fail_is_offered_rather_than_applied() {
+    let (sources, parsed) = parse_source("module a\n\nfn f(s: String) -> Int {\n    s as Int\n}\n");
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("to_int(s)"), "{text}");
+    assert!(text.contains("gives a `Result`"), "{text}");
+
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    assert_eq!(fix.applicability, Applicability::MaybeIncorrect);
+}
+
+/// A target with no conversion to point at gets the list and no fix, because
+/// inventing a call nobody wrote is worse than saying there is not one.
+#[test]
+fn a_target_with_no_conversion_gets_no_fix() {
+    let (sources, parsed) = parse_source("module a\n\nfn f(n: Int) -> Bool {\n    n as Bool\n}\n");
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("the conversions the prelude has"), "{text}");
+    assert!(parsed.diagnostics[0].fix.is_none(), "{text}");
+}
+
+/// The type is parsed rather than skipped, so an argument list does not turn
+/// into comparisons that never close.
+#[test]
+fn a_cast_to_a_generic_type_is_still_one_message() {
+    let (_, parsed) =
+        parse_source("module a\n\nfn f(n: Int) -> Int {\n    let xs = n as List<Int>\n    n\n}\n");
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::NO_CAST]);
+}
+
+/// `as` stays an ordinary name. Only a value followed by two names on one line
+/// is the cast, and nothing else in the grammar is that.
+#[test]
+fn as_is_still_a_name() {
+    parse_ok("module a\n\nfn f(as: Int) -> Int {\n    as + 1\n}\n");
+    parse_ok("module a\n\nfn f() -> Int {\n    let as = 1\n    as\n}\n");
 }
 
 // -- where one statement stops ---------------------------------------------
