@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use deed_diagnostics::Span;
+use deed_diagnostics::{ByNumber, Span};
 
 use crate::exports::Export;
 
@@ -117,8 +117,12 @@ pub enum Dot {
 #[derive(Default)]
 pub struct Resolutions {
     defs: Vec<DefData>,
-    names: HashMap<Span, DefId>,
-    dots: HashMap<Span, Dot>,
+    /// Keyed by number rather than by SipHash. Looking a name up here is half
+    /// of what reading a name costs, and reading a name is what a running
+    /// program mostly does; the keys are spans out of a file this compiler was
+    /// handed, so there is nobody to be defended against.
+    names: HashMap<Span, DefId, ByNumber>,
+    dots: HashMap<Span, Dot, ByNumber>,
     builtins: HashMap<String, DefId>,
     /// What each `use`d name turned out to be in the module it came from.
     ///

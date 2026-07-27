@@ -15,7 +15,16 @@ use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
 
+use deed_diagnostics::ByNumber;
 use deed_resolve::DefId;
+
+/// What names a running call can see, and what they are bound to.
+///
+/// Keyed by definition, which resolution already made unique, and hashed as a
+/// number rather than with SipHash: looking a name up in one of these is half
+/// of what reading a name costs, and reading a name is most of what a run
+/// does. See `deed_diagnostics::hashing`.
+pub type Frame = HashMap<DefId, Value, ByNumber>;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Value {
@@ -65,7 +74,7 @@ pub enum Value {
 #[derive(Debug)]
 pub struct ClosureValue {
     pub code: usize,
-    pub captured: HashMap<DefId, Value>,
+    pub captured: Frame,
 }
 
 /// Two closures are the same closure, not the same code.

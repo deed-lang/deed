@@ -19,12 +19,12 @@ use deed_ast::{
     BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item, Module, Outcome,
     Param, Pattern, Stmt, UnaryOp,
 };
-use deed_diagnostics::{Diagnostic, FileId, Span};
+use deed_diagnostics::{ByNumber, Diagnostic, FileId, Span};
 use deed_resolve::{DefId, DefKind, ExportKind, Resolutions};
 
 use crate::codes;
 use crate::sandbox;
-use crate::value::{Capability, ClosureValue, Fields, Value, VariantValue};
+use crate::value::{Capability, ClosureValue, Fields, Frame, Value, VariantValue};
 
 /// How deep a chain of calls may go before the interpreter gives up.
 ///
@@ -291,15 +291,15 @@ fn index_module<'a>(entry: &Entry<'a>) -> Code<'a> {
         path: Rc::clone(&entry.path),
         file: entry.file,
         resolutions,
-        functions: HashMap::new(),
-        handler_decls: HashMap::new(),
-        refinements: HashMap::new(),
-        subjects: HashMap::new(),
+        functions: HashMap::default(),
+        handler_decls: HashMap::default(),
+        refinements: HashMap::default(),
+        subjects: HashMap::default(),
         guards: entry.guards.clone(),
         rows: entry.rows.clone(),
-        state_names: HashMap::new(),
-        variant_names: HashMap::new(),
-        plans: HashMap::new(),
+        state_names: HashMap::default(),
+        variant_names: HashMap::default(),
+        plans: HashMap::default(),
     };
 
     for item in &entry.module.items {
@@ -378,24 +378,24 @@ struct Code<'a> {
     path: Rc<str>,
     file: FileId,
     resolutions: &'a Resolutions,
-    functions: HashMap<DefId, &'a FnDecl>,
-    handler_decls: HashMap<DefId, &'a HandlerDecl>,
+    functions: HashMap<DefId, &'a FnDecl, ByNumber>,
+    handler_decls: HashMap<DefId, &'a HandlerDecl, ByNumber>,
     /// Type alias definition to the predicate it refines by.
-    refinements: HashMap<DefId, &'a Expr>,
+    refinements: HashMap<DefId, &'a Expr, ByNumber>,
     /// Type alias definition to the `value` its predicate talks about.
-    subjects: HashMap<DefId, DefId>,
+    subjects: HashMap<DefId, DefId, ByNumber>,
     /// Expressions the checker could not settle, and what they have to satisfy.
     guards: Guards,
     /// What each function in this module declared it performs.
     rows: DeclaredRows,
     /// Handler state definition to the field name it stands for.
-    state_names: HashMap<DefId, String>,
-    variant_names: HashMap<DefId, String>,
+    state_names: HashMap<DefId, String, ByNumber>,
+    variant_names: HashMap<DefId, String, ByNumber>,
     /// What a call to each function here needs, keyed by where the name was
     /// written. Filled in as functions are called. A handler operation has no
     /// definition of its own but does have a span, which is the same reason
     /// `rows` is keyed that way.
-    plans: HashMap<Span, Rc<CallPlan>>,
+    plans: HashMap<Span, Rc<CallPlan>, ByNumber>,
 }
 
 /// What one active call promised, so that what it does can be held to it.
@@ -478,7 +478,10 @@ pub(crate) struct Interp<'a> {
 
     /// One per active call. Bindings are keyed by definition, which resolution
     /// already made unique, so blocks need no scopes of their own.
-    frames: Vec<HashMap<DefId, Value>>,
+    ///
+    /// Keyed by number rather than by SipHash, which is the other half of what
+    /// reading a name costs. See `deed_diagnostics::hashing`.
+    frames: Vec<Frame>,
     /// What each active call is allowed to perform, and what was already
     /// handled when it started. See [`Interp::check_row`].
     rows: Vec<RowFrame>,
@@ -501,7 +504,7 @@ pub(crate) struct Interp<'a> {
     /// Where each of those went, so evaluating the same literal twice finds
     /// the entry it made the first time. A module and a span name exactly one
     /// expression in the program.
-    closure_at: HashMap<(usize, Span), usize>,
+    closure_at: HashMap<(usize, Span), usize, ByNumber>,
 
     /// Lines written through a `Console`. Collected rather than printed so the
     /// caller decides what to do with them, and so a test can read them.
@@ -535,7 +538,7 @@ impl<'a> Interp<'a> {
             current: program.index_of(file).unwrap_or(0),
             modules,
             by_path,
-            frames: vec![HashMap::new()],
+            frames: vec![Frame::default()],
             rows: Vec::new(),
             in_contract: 0,
             handlers: Vec::new(),
@@ -543,7 +546,7 @@ impl<'a> Interp<'a> {
             olds: Vec::new(),
             entry_states: Vec::new(),
             closures: Vec::new(),
-            closure_at: HashMap::new(),
+            closure_at: HashMap::default(),
             output: Vec::new(),
             ticks: 0,
             root: None,
@@ -712,7 +715,7 @@ impl<'a> Interp<'a> {
         self.resolutions().def(def).kind
     }
 
-    fn frame(&mut self) -> &mut HashMap<DefId, Value> {
+    fn frame(&mut self) -> &mut Frame {
         self.frames.last_mut().expect("there is always a frame")
     }
 
@@ -1748,7 +1751,7 @@ impl<'a> Interp<'a> {
     ) -> Eval<Value> {
         let plan = self.plan_of(function);
 
-        let mut frame = HashMap::new();
+        let mut frame = Frame::default();
         for (def, (value, _)) in plan.params.iter().zip(&args) {
             if let Some(def) = def {
                 frame.insert(*def, value.clone());
@@ -2132,7 +2135,7 @@ impl<'a> Interp<'a> {
     /// `length(value) > 0` was unrunnable while `value > 0` was fine, for no
     /// reason anybody could have predicted from the language.
     fn eval_predicate(&mut self, alias: DefId, predicate: &'a Expr, value: &Value) -> Eval<bool> {
-        let mut frame = HashMap::new();
+        let mut frame = Frame::default();
         if let Some(subject) = self.subject(alias) {
             frame.insert(subject, value.clone());
         }

@@ -241,61 +241,65 @@ spends its time on now.
 100000 turns
                       total      per turn   added
 -----------------------------------------------------
-setup, no turns       0.6ms      6ns
-a turn                9.5ms      94ns       88ns
-  + an operator       18.9ms     189ns      94ns
-  + a field read      21.7ms     217ns      28ns
-  + a call taking none 24.5ms     244ns      55ns
-  + a call            41.3ms     412ns      223ns
-  + another argument  47.3ms     472ns      59ns
-  + a contract on it  62.3ms     623ns      210ns
+setup, no turns       0.7ms      6ns
+a turn                3.9ms      39ns       32ns
+  + an operator       9.1ms      91ns       52ns
+  + a field read      10.7ms     106ns      15ns
+  + a call taking none 12.7ms     126ns      35ns
+  + a call            23.9ms     239ns      147ns
+  + another argument  28.4ms     284ns      45ns
+  + a contract on it  40.6ms     406ns      166ns
 
 50000 pushes, onto a list of this length
 length     total      per push   over an empty one
 -----------------------------------------------------
-0          27.2ms     543ns
-16         34.4ms     688ns      144ns
-64         39.9ms     798ns      254ns
-256        67.7ms     1353ns     809ns
-1024       159.9ms    3197ns     2653ns
+0          21.6ms     431ns
+16         25.8ms     515ns      83ns
+64         31.2ms     624ns      192ns
+256        56.7ms     1133ns     702ns
+1024       151.7ms    3033ns     2602ns
 ```
 
 Four things fall out of it and none of them is the one that was expected.
 
-**A call to a function taking nothing costs less than an operator.** It did not when this was
-first measured: a call cost about four turns whatever it was calling, because the row the
-declaration promised was rebuilt from its span on every call, the definition each parameter
-binds was looked up again on every call, and every call captured two maps for `old(...)` and
-`unchanged(...)` on functions with no `ensures` to read either. All of that is a property of
-the declaration rather than of the call, and working it out once per declaration took about a
-quarter off. What is left of the mechanism itself is nearly nothing.
+**The walk is cheap and it was not obvious that it would be.** A turn is 32ns, an operator
+52ns, a field read 15ns. The first time this was measured they were 88, 94 and 28, and
+nothing about the tree walker changed in between. Two things did. A call used to rebuild the
+row its declaration promised, look up what each parameter binds, and capture two maps for
+`old(...)` and `unchanged(...)` on functions with no `ensures` to read either, all of it once
+per call although none of it can change between two calls to the same function. And every
+name in the language was hashed with SipHash, which is chosen to survive an attacker
+picking the keys, on keys that are a pair of byte offsets out of a file the compiler was
+handed. Neither of those is a machine.
 
-**Almost all of what a call still costs is having a parameter.** The first one costs 223ns
-and the second 59ns. That is an argument list, a binding, and three names read where the row
-above read one, and a name read is two hash lookups: the span to the definition, then the
-definition to the value. Reading a name is what a run mostly does, and it is the most
-expensive small thing in the language. A pool that stopped a call allocating a fresh frame
-made no measurable difference, which is how the allocation was ruled out rather than argued
-about.
+**What a call costs is having a parameter.** A call to a function taking nothing is 35ns,
+which is less than an operator. The first parameter costs 147ns and the second 45ns: an
+argument list, a binding, and names read where the row above read one. Reading a name is
+still the most expensive small thing in the language and it is still two lookups, the span to
+the definition and then the definition to the value.
 
 **Copying a list is nearly free per element and not free per call.** Values are immutable, so
-`push` hands back a copy, and that copy is what everyone points at. It is about 3ns an
+`push` hands back a copy, and that copy is what everyone points at. It is about 2.5ns an
 element. A list has to get past a hundred elements before the copy costs what entering the
 built-in cost before a single element was touched, and the lists in `examples/logs.deed` are
 words in a line and keys in a table: six and four.
 
-**A real program is calls.** `examples/logs.deed` costs about 34us a line, flat from 240
-lines to 1920, so nothing in it is accidentally quadratic. Splitting one line into its words
-is 6us of that, and one line's worth of splitting is one declared call, one `split`, nine
-turns and fifteen more entries into a built-in.
+**A real program is calls.** `examples/logs.deed` costs about 24us a line, flat from 240
+lines to 1920, so nothing in it is accidentally quadratic. It was 34us before the two changes
+above and not a line of it moved. Splitting one line into its words is 6us of that, and one
+line's worth of splitting is one declared call, one `split`, nine turns and fifteen more
+entries into a built-in.
 
-**So the shape question has nothing to decide between yet.** What a machine shape decides is
-how an expression is dispatched, and dispatch is not what a run spends its time on: a turn is
-94ns, a field read is 28ns, and both of those are already small next to what it costs to say
-a name. Nothing about which machine reads the name changes what reading it costs, and the
-thing that would, resolving a name to a slot instead of hashing a span and then a definition,
-can be done here. Choosing between two machines on this evidence would be choosing on the
-strength of a straw man.
+**So the shape question still has nothing to decide between.** What a machine shape decides
+is how an expression is dispatched, and a run got about a third faster without one being
+chosen. The two things that did it were a table worked out once instead of every time and a
+hash function; both are things a bytecode machine would also have needed, and neither is a
+reason to prefer one machine over another. Choosing between two on this evidence would be
+choosing on the strength of a straw man. One thing was tried and reverted because nothing
+moved: a pool that stopped a call allocating a frame, which is how the allocation was ruled
+out rather than argued about. And one thing did less than expected: the hash change is in the
+resolution tables a check reads too, and `edit_loop` came out the same either way. Whatever a
+check spends its time on, it is not this.
 
 **What would falsify this:** make a name read cost what a field read costs, since a field
 read is a lookup in a map that is already in hand and a name read is two lookups that are

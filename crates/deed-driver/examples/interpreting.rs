@@ -423,11 +423,11 @@ fn notes() {
     println!();
     println!("Read the first two tables against each other. A turn, an operator and");
     println!("a field read are the walk, and the walk is what a compiler removes. A");
-    println!("call taking nothing is now down among them; what a call still costs is");
-    println!("having a parameter, which is an argument list, a binding and names");
-    println!("read, and a name is two hash lookups. Nor is a push the walk: the copy");
-    println!("is the per-element part, and the row for an empty list is what it");
-    println!("costs before a single element has been copied.");
+    println!("call taking nothing is down among them; what a call costs is having a");
+    println!("parameter, which is an argument list, a binding and names read, and a");
+    println!("name is two lookups. Nor is a push the walk: the copy is the");
+    println!("per-element part, and the row for an empty list is what it costs");
+    println!("before a single element has been copied.");
 }
 
 // -- printing ----------------------------------------------------------------
