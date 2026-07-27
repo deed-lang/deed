@@ -263,15 +263,22 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
         })
         .collect();
 
-    let mut world = World::new();
-    for (entry, (resolved, _)) in parsed.iter().zip(&resolutions) {
-        if let Some(name) = &entry.module.name {
-            world.insert(
-                name.to_string_path(),
-                deed_typeck::surface(&entry.module, &resolved.resolutions),
-            );
-        }
-    }
+    // Every module together rather than one at a time. Lowering a module does
+    // not ask about another, so the order does not matter here, but a
+    // signature can name a transparent alias a third module declared and what
+    // that names needs the whole set.
+    let world = World::of(
+        parsed
+            .iter()
+            .zip(&resolutions)
+            .filter_map(|(entry, (resolved, _))| {
+                let name = entry.module.name.as_ref()?;
+                Some((
+                    name.to_string_path(),
+                    deed_typeck::surface(&entry.module, &resolved.resolutions),
+                ))
+            }),
+    );
 
     parsed
         .into_iter()

@@ -63,18 +63,20 @@ fn universe_of(modules: &[&str]) -> Deps {
     // A second pass, because a module's surface needs its own names resolved
     // and that needs every module already registered.
     let mut sources = SourceMap::new();
+    let mut surfaces = Vec::new();
     for (index, source) in modules.iter().enumerate() {
         let file = sources.add(format!("dep{index}.deed"), *source);
         let lexed = tokenize(file, sources.file(file).text());
         let parsed = parse(file, &lexed.tokens);
         let resolved = resolve(file, &parsed.module, &deps.universe);
         if let Some(name) = &parsed.module.name {
-            deps.world.insert(
+            surfaces.push((
                 name.to_string_path(),
                 surface(&parsed.module, &resolved.resolutions),
-            );
+            ));
         }
     }
+    deps.world = World::of(surfaces);
 
     deps
 }

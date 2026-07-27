@@ -554,7 +554,11 @@ naming a shape.
 
 An alias expands on the way out of its module as well as inside it, because it is a name for
 a type rather than a type and a boundary does not make it one. A refinement does not, for the
-same reason it stays nominal at home.
+same reason it stays nominal at home. That holds however far the alias came from: a module
+that imported one and wrote a signature with it cannot see what it names, so writing it out
+happens once every module has been lowered rather than while one is being lowered. A
+benchmark found the half that was missing, by calling a function that hands back a table and
+watching `length` refuse the same table it had taken two lines above.
 
 A declaration's list may also hold a **row variable**, written `uses r`:
 
