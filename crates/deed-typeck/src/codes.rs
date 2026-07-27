@@ -105,6 +105,15 @@ pub const NOT_A_LIST: &str = "DEED4022";
 /// It is also the same claim the rest of the language makes: a signature is
 /// complete, and one with a hole a caller has to fill from somewhere else is
 /// not.
+///
+/// Two things in the language break it and are allowed to, because they are
+/// built in rather than declared. `ok(x)` is a `Result<T, unknown>` and
+/// `err(e)` is a `Result<unknown, E>`, so each mentions a parameter no
+/// argument decides and answers it with the unknown type, which absorbs. That
+/// is the shortcut holding `Result` in the language: a declared `choice` can
+/// already be built and matched with named fields, and what nobody can write
+/// is the constructor. See the open question in `design/02-syntax.md`, where
+/// letting the rule take that answer generally is one of the three ways out.
 pub const UNDETERMINED_TYPE_PARAM: &str = "DEED4023";
 
 /// A generic function used as a value rather than called.

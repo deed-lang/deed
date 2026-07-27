@@ -1245,14 +1245,18 @@ using an effect to get around not having a loop.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
   `Option` already is, and the comparison that used to be the reason is not one any more: a
   declared generic type is compared componentwise with an unknown argument absorbing, exactly
-  the way these two are. They are held in place by different things now, and only one of them
-  is written down above. `List` is held by `[1, 2, 3]`, a literal with syntax of its own, so
-  moving it out means deciding what that literal builds. `Result` is held by `ok(x)` and
-  `err(x)` being calls and `ok(v)` being a pattern, because a `choice` variant is either bare
-  or carries named fields and nothing declarable is that shape. Moving `Result` out means
-  either positional variants, which is new syntax in a specification with a size budget, or
-  respelling it `Ok { value: x }` at every use, which leaves the tuple pattern form matching
-  nothing at all.
+  the way these two are. `List` is held by `[1, 2, 3]`, a literal with syntax of its own, so
+  moving it out means deciding what that literal builds. `Result` was written down here as
+  being held by its positional payload, and that turned out to be wrong when somebody
+  measured it: a declared `choice` with named fields can already be built and matched, and
+  `Good { value: x }` is an `Outcome<String, unknown>` in exactly the way `ok(x)` is a
+  `Result<T, unknown>`. What cannot be written is the constructor. `ok` and `err` each
+  mention a type parameter that appears in no parameter, which is the one thing `DEED4023`
+  exists to refuse, and they escape it by being built in. So moving `Result` out means one of
+  three things: positional variants, which is new syntax; respelling it `Ok { value: x }` at
+  every use, which needs no new machinery at all; or letting a parameter that appears only in
+  a return type be unknown at the call site, which is what `ok` already does and would make
+  it an ordinary function. The third changes a rule rather than a spelling.
 - An index into a list has nowhere to say it is in range, and most of that is now fixed. A
   length is a term the prover can hold, so `index < length(items)` is a relation like any
   other, and a `where` clause saying it is read at the call site, so a caller that checked the
