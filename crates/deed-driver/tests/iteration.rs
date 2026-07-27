@@ -452,9 +452,16 @@ fn a_condition_with_nothing_to_be_about_is_refused() {
 
 /// The element belongs to the turn this is deciding whether to take, so it is
 /// not in scope yet. Nor is the index.
+///
+/// The message matters more here than in any other unresolved name. Every
+/// other one is a misspelling, and this one is spelled right: somebody who
+/// wanted to stop on the element wrote exactly what they meant and the
+/// language cannot take it. Telling them the name cannot be found sends them
+/// looking for a typo that is not there, so the diagnostic says why it is not
+/// in scope and what the shape is instead.
 #[test]
 fn the_element_is_not_in_scope_in_the_condition() {
-    let (_, checked) = check(
+    let (sources, checked) = check(
         "module a\n\n\
          fn f(items: List<Int>) -> Int {\n\
          \x20 for item at here in items with total = 0 while item > 0 {\n\
@@ -466,6 +473,62 @@ fn the_element_is_not_in_scope_in_the_condition() {
         codes_of(&checked.diagnostics),
         vec![deed_resolve::codes::UNKNOWN_NAME]
     );
+
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("not in scope yet"), "{text}");
+    assert!(
+        text.contains("belongs to the turn this condition decides whether to take"),
+        "{text}"
+    );
+    assert!(text.contains("put it in the accumulator"), "{text}");
+    // A suggestion would offer `items`, which is in scope, is not what was
+    // meant, and would type check.
+    assert!(!text.contains("did you mean"), "{text}");
+    assert!(!text.contains("there is a"), "{text}");
+}
+
+/// The index is the other half of the same turn.
+#[test]
+fn the_index_is_not_in_scope_in_the_condition_either() {
+    let (sources, checked) = check(
+        "module a\n\n\
+         fn f(items: List<Int>) -> Int {\n\
+         \x20 for item at here in items with total = 0 while here < 3 {\n\
+         \x20   total + item\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![deed_resolve::codes::UNKNOWN_NAME]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`here` belongs to the turn"),
+        "the index gets the same explanation: {text}"
+    );
+}
+
+/// Only inside that one condition. A name that is genuinely misspelled
+/// somewhere else in the same loop is still a misspelling, and explaining the
+/// turn at it would be answering a question nobody asked.
+#[test]
+fn a_misspelling_in_the_body_is_still_a_misspelling() {
+    let (sources, checked) = check(
+        "module a\n\n\
+         fn f(items: List<Int>) -> Int {\n\
+         \x20 for item in items with total = 0 while total < 10 {\n\
+         \x20   total + itme\n\
+         \x20 }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![deed_resolve::codes::UNKNOWN_NAME]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("not found"), "{text}");
+    assert!(!text.contains("belongs to the turn"), "{text}");
 }
 
 /// `while` is a name everywhere else, and the only thing that can come between

@@ -169,6 +169,7 @@ pub fn resolve(file: FileId, module: &Module, universe: &Universe) -> Resolved {
         used: HashSet::new(),
         named: Vec::new(),
         suggestions: SUGGESTION_BUDGET,
+        turn_names: Vec::new(),
     };
 
     resolver.push_scope(ScopeKind::Prelude);
@@ -261,6 +262,13 @@ struct Resolver<'a> {
     /// How many more "did you mean" suggestions this file gets. See
     /// [`Resolver::suggest`].
     suggestions: usize,
+    /// The element and index of the `for` whose `while` is being resolved.
+    ///
+    /// Empty everywhere else. A name in that one condition matching one of
+    /// these is the one unresolved name in the language that is not a
+    /// misspelling, and telling somebody a correctly spelled word cannot be
+    /// found sends them looking for a mistake that is not there.
+    turn_names: Vec<String>,
 }
 
 impl Resolver<'_> {
@@ -436,6 +444,28 @@ impl Resolver<'_> {
             format!("cannot find `{}` in this scope", ident.name),
         )
         .with_primary_label("not found");
+
+        // The one unresolved name that is spelled right. A `while` is read
+        // before the turn starts, so the element it would be deciding about
+        // does not exist yet, and a suggestion here would send somebody to
+        // whatever name happens to look similar.
+        if self.turn_names.contains(&ident.name) {
+            self.diagnostics.push(
+                diagnostic
+                    .with_primary_label("not in scope yet")
+                    .with_note(format!(
+                        "`{}` belongs to the turn this condition decides whether to take, \
+                         so it is not in scope until that turn starts",
+                        ident.name
+                    ))
+                    .with_note(
+                        "a walk that stops on something about the element has to work that \
+                         out in the body and put it in the accumulator, which `while` reads \
+                         on the turn after",
+                    ),
+            );
+            return None;
+        }
 
         if let Some(candidate) = suggestion {
             diagnostic = diagnostic.with_fix(
@@ -1086,7 +1116,13 @@ impl Resolver<'_> {
                 // item` is a name that does not resolve rather than a value
                 // from a turn that has not happened.
                 if let Some(keep) = keep {
+                    // Named while this one expression is resolved, so that the
+                    // failure can say why rather than offering a spelling.
+                    self.turn_names = std::iter::once(binder.name.to_string())
+                        .chain(index.iter().map(|index| index.name.to_string()))
+                        .collect();
                     self.resolve_expr(keep);
+                    self.turn_names.clear();
                 }
                 self.declare_local(binder, DefKind::Local);
                 if let Some(index) = index {
