@@ -162,8 +162,9 @@ struct Checker<'a> {
     ///
     /// The answer for every function value that did not come from a closure
     /// written on the spot. Deriving it from the shape of the expression
-    /// instead used to leave four routes out, and each of those routes was a
-    /// function that performed an effect and declared nothing.
+    /// instead used to leave five routes out, one per test under "where a
+    /// function value can come from" in `function_rows.rs`, and each of those
+    /// routes was a function that performed an effect and declared nothing.
     function_rows: HashMap<Span, Vec<RowEntry>>,
     /// Expressions already complained about, so that walking one twice does
     /// not say the same thing twice.

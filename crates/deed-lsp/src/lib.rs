@@ -14,10 +14,10 @@
 //! "cannot find `lenght`, did you mean `length`" knew the answer and made the
 //! reader type it.
 //!
-//! One answer does not go through a check at all. Everything else here is
-//! about a name that resolved; an outline is about what is written, so it
-//! reads the parse tree of the one file and a document that does not check
-//! still has one.
+//! Two answers do not go through a check at all. Most of what is here is
+//! about a name that resolved, and neither of these is: formatting is a
+//! question about layout, and an outline is about what is written, so both
+//! stop after parsing and a document that does not check still has one.
 //!
 //! No dependencies, for the same reason the rest of the compiler has none. The
 //! protocol needed here is a header, a blank line and a handful of object
