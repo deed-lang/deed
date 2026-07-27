@@ -112,7 +112,8 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // library a program uses is compiled alongside it and checked, and its
     // tests and its `main` are not the ones you asked about.
     let subject = files.len();
-    if let Err(error) = resolve_imports(&mut files) {
+    let mut shipped: Vec<&'static str> = Vec::new();
+    if let Err(error) = resolve_imports(&mut files, &mut shipped) {
         eprintln!("error: {error}");
         return ExitCode::from(EXIT_USAGE);
     }
@@ -129,6 +130,15 @@ fn run_check(args: CheckArgs) -> ExitCode {
             }
         };
         ids.push(sources.add(display_path(path), text));
+    }
+
+    // Last, so that the subject is still the first `subject` of them. A module
+    // that came out of the compiler is context by definition: nobody named it.
+    for module in &shipped {
+        let Some(text) = deed_driver::shipped_source(module) else {
+            continue;
+        };
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
     }
 
     // Every file at once, so a `use` has something to point at. Checking them
@@ -655,12 +665,19 @@ fn plural(count: usize, noun: &str) -> String {
 ///
 /// This is not a package manager. Nothing is fetched, nothing is versioned,
 /// and the search stops at the root the named files imply.
-fn resolve_imports(files: &mut Vec<PathBuf>) -> io::Result<()> {
+///
+/// One thing is not under a root: a module that ships inside the compiler.
+/// Those are looked at only after every root has been asked, so a file called
+/// `std/string.deed` sitting under somebody's own root is the one that wins.
+/// Nobody should have to know which is which, and the one that is right there
+/// is the one they can read.
+fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) -> io::Result<()> {
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut have: HashSet<String> = HashSet::new();
     let mut wanted: Vec<String> = Vec::new();
 
     let mut next = 0usize;
+    let mut next_shipped = 0usize;
     loop {
         // Read what has arrived since the last pass, which on the first pass
         // is everything that was named.
@@ -683,11 +700,27 @@ fn resolve_imports(files: &mut Vec<PathBuf>) -> io::Result<()> {
             wanted.extend(uses);
         }
 
+        // A shipped module can import another one, and it says so the same way
+        // anything else does. It contributes no root: it is not under one.
+        while next_shipped < shipped.len() {
+            let module = shipped[next_shipped];
+            next_shipped += 1;
+            let Some(text) = deed_driver::shipped_source(module) else {
+                continue;
+            };
+            let Some((name, uses)) = deed_driver::imports_of(text) else {
+                continue;
+            };
+            have.insert(name);
+            wanted.extend(uses);
+        }
+
         let mut added = false;
         for module in std::mem::take(&mut wanted) {
             if have.contains(&module) {
                 continue;
             }
+            let mut found = false;
             for root in &roots {
                 let mut candidate = root.clone();
                 for segment in module.split('/') {
@@ -698,8 +731,17 @@ fn resolve_imports(files: &mut Vec<PathBuf>) -> io::Result<()> {
                 if candidate.is_file() && !files.contains(&candidate) {
                     files.push(candidate);
                     added = true;
+                    found = true;
                     break;
                 }
+            }
+
+            if !found
+                && let Some(name) = deed_driver::shipped_modules().find(|name| *name == module)
+                && !shipped.contains(&name)
+            {
+                shipped.push(name);
+                added = true;
             }
         }
 

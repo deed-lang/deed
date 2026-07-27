@@ -20,6 +20,9 @@
 pub mod fix;
 mod imports;
 mod rows;
+mod shipped;
+
+pub use shipped::{shipped_modules, shipped_source};
 
 use std::time::{Duration, Instant};
 
