@@ -241,8 +241,10 @@ impl Server {
         let offset = document.lines.offset(&document.text, position) as usize;
         let before = &document.text[..offset.min(document.text.len())];
 
-        // A `use` line is answered from the exporting module and needs no
-        // types, so it is settled before anything is checked.
+        // A `use` line is answered from the exporting module rather than from
+        // this one, so it takes the workspace path rather than the single file
+        // one below. It needs no types, only the other module's names, but the
+        // way to reach another module's names is the check that produced them.
         if let Some(module) = importing_from(before) {
             return self.exported_names(&module);
         }
@@ -277,6 +279,12 @@ impl Server {
     ///
     /// The one place a name has to match another file exactly, and so the one
     /// most likely to be wrong when it is typed by hand.
+    ///
+    /// This is the most expensive completion there is, because the names it
+    /// wants belong to another file and the way to have them is to have checked
+    /// it. Reading them out of that file's text instead is what this used to
+    /// do, and it meant a second, worse answer to the question `check_all`
+    /// already answers.
     fn exported_names(&self, path: &str) -> Json {
         let (_, entries) = self.check_workspace();
         let Some(entry) = entries.iter().find(|entry| {

@@ -1294,8 +1294,10 @@ impl<'a> Checker<'a> {
             // parameter is a different function type from an unrefined one and
             // says so, rather than being quietly accepted in one direction.
             //
-            // The row is the exception, and the only place in this checker
-            // where one type fits another without being it. See [`FnRow`].
+            // The row is the exception, and the only give in this function.
+            // Refinements widen to their base, which is the checker's other
+            // one, but that happens in `assign_carrying` after this has
+            // already said no. See [`FnRow`].
             (
                 Ty::Fn {
                     params: a_params,

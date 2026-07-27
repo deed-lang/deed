@@ -14,9 +14,14 @@
 //!
 //! The walk is the walk the command line tool does, skipping build output and
 //! version control, and it happens on every check. That is O(workspace) per
-//! keystroke and it is fine at this size. P9 is the principle about the edit
-//! loop, nothing has measured it yet, and this is the thing that will make the
-//! measurement interesting.
+//! keystroke, and this file used to say P9 had never been measured and that
+//! this was the thing that would make measuring it interesting. It was, in
+//! `crates/deed-driver/examples/edit_loop.rs`, which rechecks workspaces of 1
+//! to 512 files and reports both the wall clock and the share of it spent on
+//! files that did not change. It comes out linear at about 70us a file, so 512
+//! files is 38ms a keystroke, inside the 100ms P9 asks for. Roughly all of that
+//! is spent rechecking files nothing touched, which is where a cache would go
+//! if the number ever stopped being fine.
 
 use std::path::{Path, PathBuf};
 

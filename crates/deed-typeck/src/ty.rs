@@ -31,11 +31,17 @@ pub enum FnRow {
 impl FnRow {
     /// Whether a value with this row may be used where `expected` was wanted.
     ///
-    /// Containment rather than equality, and this is the one place in the
-    /// checker where a type fits another without being it. It gives way in the
-    /// direction that is safe: a function that performs less than it was given
-    /// room for breaks nothing, and one that performs more is the mistake the
-    /// row was written to catch.
+    /// Containment rather than equality, and the only give inside `compatible`,
+    /// which is otherwise structural. It gives way in the direction that is
+    /// safe: a function that performs less than it was given room for breaks
+    /// nothing, and one that performs more is the mistake the row was written
+    /// to catch.
+    ///
+    /// The checker has one other place where a type fits another without being
+    /// it, and it is a level up rather than in here: a refinement widens to its
+    /// base, so a `Positive` goes where an `Int` was wanted. That one is
+    /// directional in the same way and for the same kind of reason, and going
+    /// the other way is an obligation rather than a fit.
     pub fn within(&self, expected: &FnRow) -> bool {
         let (FnRow::Declared(actual), FnRow::Declared(expected)) = (self, expected) else {
             return true;

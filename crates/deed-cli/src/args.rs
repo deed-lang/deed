@@ -1,6 +1,6 @@
 //! Argument parsing.
 //!
-//! Hand written, because the workspace has no dependencies and four flags do
+//! Hand written, because the workspace has no dependencies and five flags do
 //! not justify starting. If this grows past a page, that is the signal to
 //! reach for a real parser rather than to make this cleverer.
 
