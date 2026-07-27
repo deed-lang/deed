@@ -12,9 +12,17 @@
 //! checkable and is not attempted. The point is that the claims which go stale
 //! are almost always the countable ones, because those are the claims a later
 //! change quietly falsifies without touching the sentence.
+//!
+//! The documents are not the only prose that does this. A header comment on a
+//! corpus file is the first thing read after the README, and two of them were
+//! wrong at once: `lists.deed` said a generic type could not be declared while
+//! three files in the same directory declared one, and `transfer.deed` said
+//! every design document referred back to it when two of the five did. Those
+//! are checked here too.
 
 use std::path::{Path, PathBuf};
 
+use deed_ast::Item;
 use deed_diagnostics::SourceMap;
 use deed_interp::{Program, PropertyConfig, run_properties, run_tests};
 use deed_resolve::{IO_OPERATIONS, PRELUDE};
@@ -426,4 +434,111 @@ fn the_readme_reports_the_number_of_tests_the_corpus_runs() {
         read("README.md").contains(&claim),
         "the corpus runs {passed} tests, so the transcript should read {claim:?}"
     );
+}
+
+// -- what the corpus says about itself -------------------------------------
+
+/// Every generic type the corpus declares, as `(file, name)`.
+///
+/// Read off the parse tree rather than the text, because the claim being
+/// checked is about what the language can express and the parser is the thing
+/// that decides that.
+fn generic_types_declared() -> Vec<(String, String)> {
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+    for name in examples() {
+        let text = read(&format!("examples/{name}"));
+        ids.push(sources.add(format!("examples/{name}"), text));
+    }
+
+    let mut found = Vec::new();
+    for checked in deed_driver::check_all(&sources, &ids) {
+        let file = sources.file(checked.file).name().to_string();
+        for item in &checked.module.items {
+            let name = match item {
+                Item::Record(record) if !record.generics.is_empty() => &record.name.name,
+                Item::Choice(choice) if !choice.generics.is_empty() => &choice.name.name,
+                _ => continue,
+            };
+            found.push((file.clone(), name.to_string()));
+        }
+    }
+    found
+}
+
+/// The paragraph in `lists.deed` explaining why `List` is built in.
+///
+/// It used to say a generic type could not be declared, which was the stated
+/// reason for the builtin and had been true when written. Three files in the
+/// same directory declare one now, so the sentence argued the losing side of a
+/// question that had already been decided the other way. Whoever adds a fourth
+/// should be the one to read it again.
+#[test]
+fn the_generic_types_the_list_example_points_at_are_the_ones_declared() {
+    let declared = generic_types_declared();
+    assert!(
+        !declared.is_empty(),
+        "the corpus declares no generic type, so `lists.deed` should go back to saying they cannot be declared"
+    );
+
+    let header = read("examples/lists.deed");
+    let paragraph = between(&header, "`List` is built in", "module ");
+
+    for (file, name) in &declared {
+        assert!(
+            paragraph.contains(&format!("`{name}`")),
+            "`{file}` declares the generic type `{name}` and the paragraph in lists.deed does not name it"
+        );
+        assert!(
+            paragraph.contains(file),
+            "`{file}` declares a generic type and the paragraph in lists.deed does not name the file"
+        );
+    }
+}
+
+/// How many design documents work through `transfer.deed`.
+///
+/// The file called itself the running example and said every design document
+/// referred back to it. Two of the five did. This is the one claim in the
+/// repository made from the corpus about the documents rather than the other
+/// way round, which is why nothing above it was ever going to catch it.
+#[test]
+fn the_documents_that_work_through_the_running_example_are_the_ones_that_do() {
+    let mut documents: Vec<String> = std::fs::read_dir(root().join("design"))
+        .expect("design/ should be there")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .filter_map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .collect();
+    documents.sort();
+    assert!(!documents.is_empty(), "no .md files found under design/");
+
+    let working: Vec<String> = documents
+        .iter()
+        .filter(|name| read(&format!("design/{name}")).contains("transfer"))
+        .cloned()
+        .collect();
+
+    let header = read("examples/transfer.deed");
+    let claim = format!(
+        "{} of the {} design documents work through it",
+        spelled(working.len()),
+        spelled(documents.len())
+    );
+    assert!(
+        header.contains(&claim),
+        "{} of {} design documents mention it ({working:?}), so the header should read {claim:?}",
+        working.len(),
+        documents.len()
+    );
+    for name in &working {
+        assert!(
+            header.contains(&format!("design/{name}")),
+            "design/{name} works through transfer.deed and the header does not name it"
+        );
+    }
 }
