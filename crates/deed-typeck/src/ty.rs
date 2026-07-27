@@ -105,17 +105,25 @@ pub enum Ty {
     },
     /// `Result<T, E>`, which the language provides.
     ///
-    /// Not a `Named` type over a builtin definition, because the arguments have
-    /// to be compared componentwise and an unknown on either side has to
-    /// absorb. That is what lets `ok(x)` produce `Result<T, unknown>` and still
-    /// fit where a `Result<T, E>` was wanted, with no unification anywhere.
+    /// A variant of its own rather than a `Named` type over a builtin
+    /// definition. That used to be because the arguments have to be compared
+    /// componentwise with an unknown on either side absorbing, and nothing
+    /// else in the language did that. A declared generic type does it now, so
+    /// that is no longer the reason: see the `Ty::Named` arm of
+    /// `check::compatible`, which is what lets a bare `None` be an
+    /// `Option<Int>`.
+    ///
+    /// What holds it here is the surface syntax. `ok(x)` and `err(x)` are
+    /// calls and `ok(v)` is a pattern, while a `choice` variant is either bare
+    /// or carries named fields, so nothing declarable is that shape.
     Result(Box<Ty>, Box<Ty>),
     /// `List<T>`, which the language provides.
     ///
-    /// Built in for the same reason `Result` is, and compared the same way:
-    /// componentwise, with an unknown element type absorbing. That is what
-    /// lets `[]` be a `List<unknown>` and still fit where a `List<Int>` was
-    /// wanted, with no unification anywhere.
+    /// Compared the same way, componentwise with an unknown element type
+    /// absorbing, which is what lets `[]` be a `List<unknown>` and still fit
+    /// where a `List<Int>` was wanted, with no unification anywhere. That
+    /// comparison is not what keeps it built in either. `[1, 2, 3]` is, and
+    /// moving `List` out means deciding what that literal builds.
     List(Box<Ty>),
     /// A type parameter of the generic function being checked, such as the `T`
     /// in `fn first<T>(items: List<T>) -> Result<T, String>`.
