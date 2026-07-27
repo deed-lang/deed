@@ -33,6 +33,15 @@ impl Parsed {
     }
 }
 
+/// Words the parser reads in one position but which are not keywords.
+///
+/// `state` opens a handler field, `at` names the index of a `for`, and `while`
+/// is the condition a `for` stops on. None of them is reserved: a variable may
+/// still be called `at`, which is why they are read with `eat_named` rather
+/// than lexed. An editor still has to colour them, so the set is written down
+/// here rather than being three string literals scattered through the file.
+pub const SOFT_KEYWORDS: [&str; 3] = ["state", "at", "while"];
+
 /// Parses a token stream. Always produces a module, possibly containing error nodes.
 pub fn parse(file: FileId, tokens: &[Token]) -> Parsed {
     Parser {

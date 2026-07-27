@@ -19,4 +19,4 @@
 pub mod codes;
 pub mod parser;
 
-pub use parser::{Parsed, parse};
+pub use parser::{Parsed, SOFT_KEYWORDS, parse};

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Deed",
+  "scopeName": "source.deed",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#constant" },
+    { "include": "#declaration" },
+    { "include": "#control" },
+    { "include": "#contract" },
+    { "include": "#type" },
+    { "include": "#call" },
+    { "include": "#operator" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-slash.deed",
+      "match": "//.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.deed",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.deed",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.deed",
+      "match": "\\b[0-9]+\\b"
+    },
+    "constant": {
+      "name": "constant.language.deed",
+      "match": "\\b(true|false)\\b"
+    },
+    "declaration": {
+      "name": "keyword.declaration.deed",
+      "match": "\\b(module|use|type|record|choice|effect|handler|implements|fn|test|let|state)\\b"
+    },
+    "control": {
+      "name": "keyword.control.deed",
+      "match": "\\b(if|else|match|for|in|while|return|with|assert)\\b"
+    },
+    "contract": {
+      "name": "keyword.other.contract.deed",
+      "match": "\\b(where|uses|ensures|old|unchanged|at)\\b"
+    },
+    "type": {
+      "name": "entity.name.type.deed",
+      "match": "\\b[A-Z][A-Za-z0-9_]*"
+    },
+    "call": {
+      "name": "entity.name.function.deed",
+      "match": "\\b[a-z_][A-Za-z0-9_]*(?=\\s*\\()"
+    },
+    "operator": {
+      "name": "keyword.operator.deed",
+      "match": "(=>|==|!=|<=|>=|->|\\?|[+\\-*/%<>=!])"
+    }
+  }
+}

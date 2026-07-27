@@ -195,6 +195,41 @@ pub enum Keyword {
 }
 
 impl Keyword {
+    /// Every keyword, in the order they are declared above.
+    ///
+    /// Here so that anything which has to stay in step with the set can walk
+    /// it rather than repeat it. The editor grammar in `editors/vscode` is a
+    /// second copy of these words living outside the compiler, and
+    /// `crates/deed-parser/tests/grammar.rs` holds it to this list.
+    pub const ALL: [Keyword; 26] = [
+        Keyword::Module,
+        Keyword::Use,
+        Keyword::Type,
+        Keyword::Record,
+        Keyword::Choice,
+        Keyword::Effect,
+        Keyword::Handler,
+        Keyword::Implements,
+        Keyword::Fn,
+        Keyword::Where,
+        Keyword::Uses,
+        Keyword::Ensures,
+        Keyword::Old,
+        Keyword::Unchanged,
+        Keyword::Let,
+        Keyword::If,
+        Keyword::Else,
+        Keyword::Match,
+        Keyword::For,
+        Keyword::In,
+        Keyword::Return,
+        Keyword::True,
+        Keyword::False,
+        Keyword::Test,
+        Keyword::With,
+        Keyword::Assert,
+    ];
+
     pub fn from_ident(text: &str) -> Option<Keyword> {
         let kw = match text {
             "module" => Keyword::Module,
