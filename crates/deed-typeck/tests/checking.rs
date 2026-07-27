@@ -736,6 +736,40 @@ fn field_access_on_a_missing_field_lists_what_is_there() {
     assert!(rendered(&sources, &checked.diagnostics).contains("it has `alpha`"));
 }
 
+/// `xs.length()` is what somebody writes on their first day here, because
+/// every language they came from has methods. `length` exists, so "no such
+/// field" left them looking for a field.
+#[test]
+fn a_method_call_says_the_function_is_called_the_other_way_round() {
+    let (sources, checked) =
+        check_source("module a\n\nfn f(xs: List<Int>) -> Int { xs.length() }\n");
+    assert!(
+        codes_of(&checked.diagnostics).contains(&codes::NO_SUCH_FIELD),
+        "{:?}",
+        codes_of(&checked.diagnostics)
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("there are no methods"), "{text}");
+    assert!(
+        text.contains("`length(x)` rather than `x.length()`"),
+        "{text}"
+    );
+}
+
+/// Only for names that are actually functions. A misspelled field is still a
+/// misspelled field, and telling its author to call it would be worse than
+/// saying nothing.
+#[test]
+fn a_missing_field_that_is_not_a_function_is_not_called_a_method() {
+    let (sources, checked) =
+        check_source("module a\n\nrecord R { alpha: Int }\n\nfn f(r: R) -> Int { r.beta }\n");
+    assert!(
+        !rendered(&sources, &checked.diagnostics).contains("there are no methods"),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
 #[test]
 fn a_variant_literal_has_the_type_of_its_choice() {
     let types = check_ok(

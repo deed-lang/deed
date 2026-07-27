@@ -3010,6 +3010,18 @@ impl<'a> Checker<'a> {
             diagnostic = diagnostic.with_note(format!("it has {}", list(&available)));
         }
 
+        // `xs.length()` is what somebody writes on their first day, because
+        // every language they came from has methods. `length` is here, it is
+        // just a function, and "no such field" sends them looking for a field
+        // rather than telling them the call is spelled the other way round.
+        if self.resolutions.builtin(&name.name).is_some() {
+            diagnostic = diagnostic.with_note(format!(
+                "there are no methods: `{name}` is a function and takes the value as its \
+                 first argument, so this is written `{name}(x)` rather than `x.{name}()`",
+                name = name.name
+            ));
+        }
+
         self.emit(diagnostic);
         Ty::Unknown
     }
