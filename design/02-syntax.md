@@ -1261,20 +1261,30 @@ using an effect to get around not having a loop.
   container of `T`, whichever container". Almost certainly out: it is a large amount of
   machinery for a language whose size budget is the point.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
-  `Option` already is, and the comparison that used to be the reason is not one any more: a
-  declared generic type is compared componentwise with an unknown argument absorbing, exactly
-  the way these two are. `List` is held by `[1, 2, 3]`, a literal with syntax of its own, so
-  moving it out means deciding what that literal builds. `Result` was written down here as
-  being held by its positional payload, and that turned out to be wrong when somebody
-  measured it: a declared `choice` with named fields can already be built and matched, and
-  `Good { value: x }` is an `Outcome<String, unknown>` in exactly the way `ok(x)` is a
-  `Result<T, unknown>`. What cannot be written is the constructor. `ok` and `err` each
-  mention a type parameter that appears in no parameter, which is the one thing `DEED4023`
-  exists to refuse, and they escape it by being built in. So moving `Result` out means one of
-  three things: positional variants, which is new syntax; respelling it `Ok { value: x }` at
-  every use, which needs no new machinery at all; or letting a parameter that appears only in
-  a return type be unknown at the call site, which is what `ok` already does and would make
-  it an ordinary function. The third changes a rule rather than a spelling.
+  Answered for now: no, and what settled it is a count rather than a preference. The question
+  had been asked twice about the constructor, and the constructor is not what holds either of
+  them in. `Ty::Result` and `Ty::List` are named in one crate, the type checker, and in three
+  files of it. What names `Result`'s two variants is `?` and the outcome an `ensures` clause
+  is keyed by, and those are in eight of the twelve crates: the syntax tree, the parser, the
+  resolver, the type checker, the effect checker, the interpreter, the formatter and the
+  driver. Declaring `Result` in a prelude module moves the first set and leaves every one of
+  the second in place, with a lookup through a module added in front of a type the syntax
+  already knows the shape of. That is not a smaller language, it is the same one with an
+  indirection in it. `List` is the same shape: `[1, 2, 3]` has to build something, and `for`
+  is the only loop in the language and walks a list and nothing else.
+
+  So the three ways out written down here before, positional variants, respelling it
+  `Ok { value: x }` at every use, and letting a parameter that appears only in a return type
+  be unknown at the call site, are three ways to write a constructor, and all three leave the
+  eight crates alone. Worth keeping the last one on record: it is what `ok` already does, and
+  it would make `ok` an ordinary function rather than an exemption from `DEED4023`. It is a
+  smaller change than it sounds and it is not this one.
+
+  **What would change the answer:** a rule saying which variant of a two-variant choice means
+  stop, so that `?` and an outcome-keyed `ensures` name a shape rather than a type; and
+  something for `for` to walk that is not spelled `List`. Both are larger questions than
+  moving a type, and with either answered the move stops being the work and starts being
+  what falls out of it.
 - An index into a list has nowhere to say it is in range, and most of that is now fixed. A
   length is a term the prover can hold, so `index < length(items)` is a relation like any
   other, and a `where` clause saying it is read at the call site, so a caller that checked the

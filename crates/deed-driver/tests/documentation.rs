@@ -271,6 +271,90 @@ fn the_documents_these_read_are_all_there() {
     }
 }
 
+/// Every crate under `crates/`, by directory name.
+fn crates() -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(root().join("crates"))
+        .expect("crates/ should be there")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.join("Cargo.toml").is_file())
+        .filter_map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .collect();
+    found.sort();
+    assert!(!found.is_empty(), "no crates found under crates/");
+    found
+}
+
+/// Whether anything under one crate's `src/` contains any of `needles`.
+fn crate_mentions(name: &str, needles: &[&str]) -> bool {
+    fn walk(at: &Path, needles: &[&str]) -> bool {
+        let Ok(entries) = std::fs::read_dir(at) else {
+            return false;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                if walk(&path, needles) {
+                    return true;
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && let Ok(text) = std::fs::read_to_string(&path)
+                && needles.iter().any(|needle| text.contains(needle))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    walk(&root().join("crates").join(name).join("src"), needles)
+}
+
+/// The two counts the answer about `Result` and `List` rests on.
+///
+/// The whole argument for leaving them built in is that the type is named in
+/// one crate and the syntax over it is named in most of them, so if that stops
+/// being true the answer is wrong and nothing else would say so. This is the
+/// one claim in these documents where a refactor moving a match arm is exactly
+/// the event that should make somebody read the paragraph again.
+#[test]
+fn what_holds_result_in_the_language_is_counted_where_it_is_claimed() {
+    let all = crates();
+
+    let types: Vec<&String> = all
+        .iter()
+        .filter(|name| crate_mentions(name, &["Ty::Result", "Ty::List"]))
+        .collect();
+    assert_eq!(
+        types.len(),
+        1,
+        "the paragraph says the type is named in one crate, and it is named in {types:?}"
+    );
+
+    // `?` and the outcome an `ensures` clause is keyed by. Both are syntax
+    // over `Result` rather than the type, which is the point being made.
+    let syntax: Vec<&String> = all
+        .iter()
+        .filter(|name| crate_mentions(name, &["Expr::Try", "Outcome::"]))
+        .collect();
+
+    let syntax_doc = read("design/02-syntax.md");
+    let claim = format!(
+        "those are in {} of the {} crates",
+        spelled(syntax.len()),
+        spelled(all.len())
+    );
+    assert!(
+        syntax_doc.contains(&claim),
+        "{} crates name `?` or an outcome ({syntax:?}) out of {}, so the sentence should read {claim:?}",
+        syntax.len(),
+        all.len()
+    );
+}
+
 /// The number in the README's own transcript of `deed test examples/`.
 ///
 /// The transcript is the first thing anybody sees and it is the claim that is
