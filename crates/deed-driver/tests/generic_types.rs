@@ -72,6 +72,39 @@ fn expect_tests_pass(src: &str) {
     }
 }
 
+/// And the other three prelude names typed alongside them are not shortcuts.
+///
+/// `infer_prelude_call` types `length`, `at`, `push` and `repeat` together,
+/// and its comment used to say they were all out of the signature table for
+/// the reason `ok` and `err` are. Three of them are out of it because the
+/// table holds concrete types and these are polymorphic in the element, which
+/// is a fact about the table rather than a rule anyone is exempt from. So
+/// they are written here, in the language, to keep the claim honest.
+///
+/// `length` is the one that stays exempt: its signature says `String` and the
+/// check also takes a list, and with no overloading there is no way to say
+/// that here at all.
+#[test]
+fn the_rest_of_the_prelude_can_be_written_in_the_language() {
+    expect_tests_pass(
+        "module a\n\n\
+         fn mine_at<T>(items: List<T>, index: Int) -> Result<T, String> {\n\
+         \x20   at(items, index)\n\
+         }\n\n\
+         fn mine_push<T>(items: List<T>, one: T) -> List<T> {\n\
+         \x20   push(items, one)\n\
+         }\n\n\
+         fn mine_repeat<T>(value: T, count: Int) -> List<T> {\n\
+         \x20   repeat(value, count)\n\
+         }\n\n\
+         test \"they do what the built-in ones do\" {\n\
+         \x20 assert mine_push([1], 2) == [1, 2]\n\
+         \x20 assert mine_repeat(\"a\", 2) == [\"a\", \"a\"]\n\
+         \x20 assert mine_at([7], 0) == ok(7)\n\
+         }\n",
+    );
+}
+
 const PAIR: &str = "module a\n\n\
      record Pair<A, B> {\n\
      \x20   left: A,\n\
