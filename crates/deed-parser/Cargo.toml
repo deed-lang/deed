@@ -1,0 +1,16 @@
+[package]
+name = "deed-parser"
+description = "Builds a Deed syntax tree from tokens"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deed-ast = { path = "../deed-ast" }
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-lexer = { path = "../deed-lexer" }
+
+[lints]
+workspace = true

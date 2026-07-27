@@ -1,0 +1,20 @@
+[package]
+name = "deed-lsp"
+description = "A language server for Deed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deed-ast = { path = "../deed-ast" }
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-driver = { path = "../deed-driver" }
+deed-fmt = { path = "../deed-fmt" }
+deed-lexer = { path = "../deed-lexer" }
+deed-parser = { path = "../deed-parser" }
+deed-resolve = { path = "../deed-resolve" }
+
+[lints]
+workspace = true

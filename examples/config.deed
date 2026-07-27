@@ -1,0 +1,63 @@
+// A program that reads a file it was given access to, and cannot read one it
+// was not. `deed run examples/config.deed --dir examples`
+//
+// The point of this file is the third function. `describe` holds a `Dir` and a
+// name, and there is no argument it could be handed and no string it could
+// construct that would get it out of that directory. Not because a check
+// refuses it, though one does, but because narrowing is the only operation
+// there is: `Io.open` goes down and nothing goes up.
+
+module examples/config
+
+fn read_or(files: Dir, name: String, fallback: String) -> String
+  uses
+    Io.read,
+{
+    match Io.read(files, name) {
+        ok(text) => text,
+        err(why) => fallback,
+    }
+}
+
+// This one can read, and only inside whatever directory it was handed. Give it
+// `sys.files` and it reads the working directory. Give it a `Dir` for `config`
+// and it reads that, and there is no way for it to tell the difference or to
+// care.
+fn describe(files: Dir, name: String) -> String
+  uses
+    Io.read,
+{
+    match Io.read(files, name) {
+        ok(text) => "found it",
+        err(why) => why,
+    }
+}
+
+fn main(sys: System) -> Int
+  uses
+    Io.write,
+    Io.read,
+    Io.open,
+{
+    let out = sys.console
+
+    // The file this program is written in, read by the program itself.
+    Io.write(out, describe(sys.files, "config.deed"))
+
+    // Every one of these is refused, and each says which rule it hit. The
+    // first three never touch the filesystem at all.
+    Io.write(out, describe(sys.files, ".."))
+    Io.write(out, describe(sys.files, "../Cargo.toml"))
+    Io.write(out, describe(sys.files, "/etc/passwd"))
+
+    // Narrowing. Whatever `narrower` turns out to be, it reaches less than
+    // `sys.files` did, and nothing hands back the difference.
+    match Io.open(sys.files, "nowhere") {
+        ok(narrower) => Io.write(out, describe(narrower, "anything")),
+        err(why) => Io.write(out, why),
+    }
+
+    Io.write(out, read_or(sys.files, "absent.txt", "used the fallback"))
+
+    0
+}

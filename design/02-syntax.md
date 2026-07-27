@@ -23,7 +23,7 @@ recognition and novelty buys nothing (see P2 in [01-principles.md](01-principles
 
 One module per file. The path is the module name, so there is nothing to keep in sync.
 
-```vow
+```deed
 module payments/transfer
 
 use std/result.{Result, ok, err}
@@ -33,10 +33,10 @@ use ledger.{Ledger, Entry}
 Imports are explicit and named. No wildcards, no re-exports, no ambient prelude beyond a
 small fixed set of primitives. If a name is in scope, some line in this file put it there.
 
-**A module's name says where it lives.** A module named `a/b` is at `<root>/a/b.vow`, and the
+**A module's name says where it lives.** A module named `a/b` is at `<root>/a/b.deed`, and the
 root is worked out from a file that was named on the command line: take its own module path
-off the end of its own file path, and what is left is the root. So `vow run examples/todo.vow`
-finds `examples/list.vow` for a `use examples/list`, and nothing has to be listed twice.
+off the end of its own file path, and what is left is the root. So `deed run examples/todo.deed`
+finds `examples/list.deed` for a `use examples/list`, and nothing has to be listed twice.
 
 There is no search path, no config file and no manifest. One layout, and the `use` line
 already says where to look. That rule had been true of every file in this repository since
@@ -44,8 +44,8 @@ the first one and nothing said it out loud, which meant a program that imported 
 could not be run by naming its own file.
 
 What was named on the command line is the subject, and what an import needed is context. So
-`vow test app.vow` does not run the tests of a library it happens to import, and
-`vow check app.vow` does report an error in that library, because a program that cannot
+`deed test app.deed` does not run the tests of a library it happens to import, and
+`deed check app.deed` does report an error in that library, because a program that cannot
 compile its own dependency does not compile. It is the same split the language server makes
 between the workspace and the open document.
 
@@ -54,7 +54,7 @@ at the root the named files imply.
 
 ## Types
 
-```vow
+```deed
 type AccountId = Id<Account>
 
 record Money {
@@ -74,7 +74,7 @@ default bodies. Behaviour is attached with traits, and a trait cannot carry stat
 
 Refinements are part of the type, which is how most validation stops needing to exist:
 
-```vow
+```deed
 type Positive = Int where value > 0
 type Email = String where matches(value, EMAIL_PATTERN)
 ```
@@ -118,7 +118,7 @@ entry can be argued for.
 
 It carries four more for taking a string apart and putting one back together:
 
-```vow
+```deed
 split("a,b,c", ",")      // ["a", "b", "c"]
 split("gün", "")         // ["g", "ü", "n"]
 join(["a", "b"], ",")    // "a,b"
@@ -143,7 +143,7 @@ argument, so it is not a mistake in the caller and there is nothing to trap abou
 
 One more, on a narrower argument:
 
-```vow
+```deed
 trim("  a  ")            // "a"
 trim("  a  b  ")         // "a  b"
 trim("line\r")           // "line"
@@ -157,7 +157,7 @@ An indexed walk is `for item at index in items`.
 `trim` cannot be. Deciding what whitespace is needs to look at characters, and taking it off
 the ends needs a walk that stops early, which a fold does not do. It is also the difference
 between a program working and not: splitting a file on `"\n"` leaves a `\r` on every line of
-a file written on Windows, and `examples/todo.vow` printed its own output backwards over
+a file written on Windows, and `examples/todo.deed` printed its own output backwards over
 itself until there was a way to take one off.
 
 Whitespace here is four characters, space, tab, carriage return and newline, and not the
@@ -170,7 +170,7 @@ and there is no story for one yet.
 
 ## Lists
 
-```vow
+```deed
 let names: List<String> = ["ada", "grace"]
 let none: List<Int> = []
 
@@ -187,7 +187,7 @@ first element of a literal decides the element type, because with no unification
 nothing to meet two candidates with.
 
 The reason it is still built in is no longer that it could not be declared. It can be now,
-and `Option` in `examples/generic_types.vow` is the proof. It is that `[1, 2, 3]` is a
+and `Option` in `examples/generic_types.deed` is the proof. It is that `[1, 2, 3]` is a
 literal with syntax of its own, and moving `List` out of the language means deciding what
 that literal builds.
 
@@ -203,7 +203,7 @@ quietly be a second one.
 
 ## Iteration
 
-```vow
+```deed
 let total = for n in numbers with sum = 0 {
     sum + n
 }
@@ -219,7 +219,7 @@ accumulator for the next turn, and the value of the whole expression is the last
 there for its effects.
 
 **Nothing here is assigned.** `sum` is a fresh binding on every turn. That is the entire
-reason this shape was chosen over the familiar one: Vow has exactly one mutable thing, a
+reason this shape was chosen over the familiar one: Deed has exactly one mutable thing, a
 handler's `state`, and the claim that an empty effect row means a function cannot observe or
 cause a change to anything rests on there being no second one. A `for` with a mutable
 accumulator would have been the more familiar spelling of a weaker language.
@@ -229,7 +229,7 @@ reach itself has to declare that it may not return. Without a loop, walking a li
 recursion, and walking a list is the most ordinary thing a program does, so almost every
 function in a real program would carry `Diverge`. 03-effects says a row that drifts toward
 listing everything stops carrying information, which is exactly what that is. A `for` walks a
-list that is already there, so it stops, so it declares nothing. `examples/todo.vow` had
+list that is already there, so it stops, so it declares nothing. `examples/todo.deed` had
 three recursive walks and three `Diverge` declarations before this existed and has none of
 either now.
 
@@ -239,7 +239,7 @@ any other, so shadowing an outer name with it is the same error it is anywhere e
 
 **A `for` can say where in the list it is.**
 
-```vow
+```deed
 for task at here in tasks with kept = [] {
     if task.done {
         kept
@@ -263,10 +263,10 @@ that can follow a `for` binder is `at` or `in`, so there is nothing here for it 
 confused with. That is the same reasoning that took `state` back out of the keyword list.
 
 This is in the language rather than in the library because the library cannot have it
-otherwise. Everything in `examples/list.vow` is written with a `for`, so `map` cannot hand a
+otherwise. Everything in `examples/list.deed` is written with a `for`, so `map` cannot hand a
 callback something the walk never knew. With this, the library builds its own indexed forms:
 `map_at` is four lines and no part of the language grew a second `map`. Before it,
-`examples/todo.vow` had three walks carrying a counter in a record, all the same shape, each
+`examples/todo.deed` had three walks carrying a counter in a record, all the same shape, each
 with branches that existed only to remember to bump it.
 
 What can be walked is a `List`, and nothing else. A `for` over a `String` or a `Result` would
@@ -274,7 +274,7 @@ need a way to say what walking one means, which is a trait system, which does no
 
 **A `for` can stop early, and it does it in the head rather than in the body.**
 
-```vow
+```deed
 fn any<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
   uses
     r,
@@ -293,14 +293,14 @@ termination problem that keeps a `while` statement out.
 
 It needs a `with`. The condition is about what the walk has worked out so far, and one that
 can only read what the walk never changes either stops it before it starts or never stops it
-at all, so a `for ... while` with no accumulator is `VOW4027`.
+at all, so a `for ... while` with no accumulator is `DEED4027`.
 
 `while` stays a name everywhere else. The only thing that can come between an accumulator and
 the body is this, so there is nothing here for it to be confused with, which is the same
 reasoning that kept `at` out of the keyword list and took `state` back out of it.
 
 This document said for a while that `break` and `continue` had not come up in a program
-written here. They had. `any` and `all` in `examples/list.vow` both opened with a branch whose
+written here. They had. `any` and `all` in `examples/list.deed` both opened with a branch whose
 only job was to notice that the answer was already in, which is control flow inside a fold,
 which is the thing a fold exists to not have. And the branch could skip the work but not the
 turn, so `any` over a thousand elements took a thousand turns to find the first one.
@@ -311,8 +311,8 @@ reason for having `for`. `break` and `continue` want a loop with control flow in
 than a fold, and the one thing they were wanted for is the clause above.
 
 What is deliberately absent from lists: slicing, searching, and any operation that takes a
-function. The last one is now writable, and `examples/list.vow` is a list library written in
-Vow rather than built into the compiler. It stays out of the prelude, because the prelude is
+function. The last one is now writable, and `examples/list.deed` is a list library written in
+Deed rather than built into the compiler. It stays out of the prelude, because the prelude is
 where names go to become unavailable to everyone else and a library does not need to be
 there.
 
@@ -321,7 +321,7 @@ there.
 The centre of the language. Everything between the return type and the opening brace is the
 contract.
 
-```vow
+```deed
 fn transfer(from: AccountId, to: AccountId, amount: Money)
     -> Result<Receipt, TransferError>
   where
@@ -353,7 +353,7 @@ fn transfer(from: AccountId, to: AccountId, amount: Money)
 What the caller must guarantee. Read at the call site with the facts in scope there, and
 checked at the boundary on every call whatever the reading found. A precondition failure is a
 bug in the caller, and it is reported that way: a call the checker can see breaks the clause
-is `VOW4025` where the call was written, not a runtime failure inside a function the author
+is `DEED4025` where the call was written, not a runtime failure inside a function the author
 of the call did not write.
 
 For a long time this section described a check that did not exist. A `where` clause was two
@@ -366,7 +366,7 @@ range of each argument, how long each one is, and the differences between them w
 arguments are things a fact can be about. That last part is what settles a clause relating
 two arguments, which is most of what a `where` clause is for:
 
-```vow
+```deed
 fn nth(items: List<Int>, index: Int) -> Result<Int, String>
   where
     index >= 0,
@@ -420,7 +420,7 @@ responsible for the body agreeing with it.
 
 ## Generic functions and types
 
-```vow
+```deed
 fn first<T>(items: List<T>) -> Result<T, String> {
     at(items, 0)
 }
@@ -459,7 +459,7 @@ parameter turns out to be, so treating it as an answer would let one argument no
 type decide the type of every other, and turn one mistake into several.
 
 **Every type parameter has to appear in a parameter's type.** `fn empty<T>() -> List<T>` is
-`VOW4023`. Without this rule a call would sometimes have to write its type arguments, which
+`DEED4023`. Without this rule a call would sometimes have to write its type arguments, which
 needs `empty<String>()` to parse, which is the `f<a>(b)` versus `f < a > (b)` ambiguity, and
 P2 has a budget for exactly this kind of thing. The rule costs nothing today: `[]` is already
 a `List<unknown>` and unknown absorbs, so `empty()` would add nothing the empty literal does
@@ -472,7 +472,7 @@ a hole a caller has to fill in from somewhere else is not.
 so the body may hold one, count them and put them in a list, and may not add two together.
 Nothing said they could be added.
 
-**A generic function is not a value.** `let f = first` is `VOW4024`. One expression has one
+**A generic function is not a value.** `let f = first` is `DEED4024`. One expression has one
 type here, and a generic function named rather than called has as many as there are ways to
 call it. Making that work needs a polymorphic value, which is a much larger thing than
 substituting into a signature at a call site.
@@ -489,7 +489,7 @@ and `List` were already compared. A field reads at the type it was applied to, s
 `Option<Int>` binds an `Int`.
 
 **A type is written with exactly as many arguments as it declared.** `Pair` bare is
-`VOW4013`, and so is `Pair<Int>`. A signature is complete, so a missing argument is as much a
+`DEED4013`, and so is `Pair<Int>`. A signature is complete, so a missing argument is as much a
 hole in one as a parameter with no type, and filling it in with unknowns would make every use
 of it agree with everything.
 
@@ -504,7 +504,7 @@ question about what the predicate may say about a value whose type nobody knows 
 
 A declaration's list may also hold a **row variable**, written `uses r`:
 
-```vow
+```deed
 fn map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> B) -> List<B>
   uses
     r,
@@ -527,7 +527,7 @@ always visible:
 | Tested | property tests generated from the contract | anything decidable by sampling |
 | Guarded | runtime check at the boundary | everything else |
 
-`vow check` reports which tier each obligation landed in. A contract silently degrading to a
+`deed check` reports which tier each obligation landed in. A contract silently degrading to a
 runtime check would be the single most dishonest thing this language could do, so it does
 not happen quietly.
 
@@ -542,12 +542,12 @@ check at that span, and there is no second place where the runtime decides what 
 they cannot drift apart without a test noticing.
 
 All three tiers exist. `Tested` covers pure functions whose parameters can be generated:
-`vow test` runs a hundred generated inputs against the contract and shrinks any
+`deed test` runs a hundred generated inputs against the contract and shrinks any
 counterexample it finds. Everything else is `Guarded`, checked on every call.
 
 **A test can say that a contract turns something down.**
 
-```vow
+```deed
 test "a guard refuses what it should" {
     assert refuses order_of(0)
 }
@@ -560,7 +560,7 @@ overflow, a missing handler and a run that went too deep are a program going wro
 than a signature doing its job, and catching those would be a `try` with a small vocabulary
 rather than a statement about what was promised.
 
-It exists because the `Guarded` tier was the one thing a Vow program could not test about
+It exists because the `Guarded` tier was the one thing a Deed program could not test about
 itself. A contract failure ends the run, so a file of examples showing a guard refusing
 something could not pass, and every such test had to be written in Rust against the compiler.
 Then preconditions started being read at the call site, and the checker began refusing those
@@ -592,7 +592,7 @@ nothing else, which meant it could not be one side of a difference, and `index <
 was a shape the relation below could not see even though `low < high` was the shape it existed
 for. A length is a term keyed on the thing being measured, so the two are one rule:
 
-```vow
+```deed
 fn how_many_after(items: List<Int>, index: Int) -> Positive
   where
     index >= 0,
@@ -633,7 +633,7 @@ so every contract that says how two arguments relate used to be thrown away, and
 of what a `where` clause is for. A range per pair of names holds exactly the orderings, which
 is what comparisons produce and nothing more:
 
-```vow
+```deed
 fn span(low: Int, high: Int) -> Positive
   where
     low >= 0,
@@ -675,7 +675,7 @@ in, and the range of `result - argument` for each argument a clause ties it to. 
 never mentions its arguments is a rare thing to want, so a call used to lose most of what an
 `ensures` said:
 
-```vow
+```deed
 fn same(n: Int) -> Int
   ensures
     ok  => result == n,
@@ -773,7 +773,7 @@ Values, always. No exceptions, no panics in library code.
 cannot write a failing function without an import is not finished, and `?` cannot be checked
 against a type the compiler does not know about.
 
-```vow
+```deed
 fn parse_amount(input: String) -> Result<Money, ParseError> {
     let units = Int.parse(input)?
     ok(Money { units, currency: Currency.TRY })
@@ -786,7 +786,7 @@ function that does not return one.
 
 A `Result` is taken apart by matching on it:
 
-```vow
+```deed
 match small(n) {
     ok(value) => value,
     err(TooBig { limit }) => limit,
@@ -805,7 +805,7 @@ that has to care, on purpose.
 
 ## Pattern matching
 
-```vow
+```deed
 match result {
     ok(receipt) => log(receipt.id),
     err(InsufficientFunds { available }) => notify(available),
@@ -825,7 +825,7 @@ rather than a pattern that can never match.
 
 ## Non-termination is an effect
 
-```vow
+```deed
 fn factorial(n: Int) -> Int
   uses
     Diverge,
@@ -843,7 +843,7 @@ not change that: a `for` walks a list that already exists, so it stops, and it d
 nothing. `Diverge` is a built-in effect with no operations, in the prelude next to `Io` and
 for the same reason: a program that could declare its own would be a program that could opt
 out of saying it might not finish. It goes in the row like anything else a function does, so
-the tightness rule applies as well, and declaring it without recursing is `VOW5002`.
+the tightness rule applies as well, and declaring it without recursing is `DEED5002`.
 
 **There is no termination proving.** The example above obviously terminates and still has to
 declare it. "A loop the compiler cannot show terminates" currently means "any call cycle at
@@ -860,12 +860,12 @@ bodies is exactly what a module boundary exists to avoid. What crosses is the de
 so a function that admits to `Diverge` still passes it to its callers wherever they are.
 
 Declaring it does not make anything stop. The interpreter refuses to go past a fixed call
-depth and reports `VOW6009`, because a runner that can be taken down by the program it is
+depth and reports `DEED6009`, because a runner that can be taken down by the program it is
 running is a runner nobody can point at a file they have not read.
 
 ## Entry point
 
-```vow
+```deed
 fn main(sys: System) -> Result<(), Error>
   uses sys.*
 {
@@ -879,7 +879,7 @@ receives what it needs as a parameter. See [04-capabilities.md](04-capabilities.
 
 ## Formatting
 
-Not configurable. One canonical rendering, and `vow fmt` is not optional in CI.
+Not configurable. One canonical rendering, and `deed fmt` is not optional in CI.
 
 The reason is not tidiness. Canonical form means a diff only contains semantic change, and
 that is what makes review scale.
@@ -913,7 +913,7 @@ accepted, and so was calling it with a string. Not being a review surface does n
 body exempt from type checking. It is also no longer true, since a closure can now cross a
 boundary, carrying whatever row the function type it crosses through allows.
 
-Nothing can infer them. A `let f = |x| ..` has no expected type to push down, and Vow does
+Nothing can infer them. A `let f = |x| ..` has no expected type to push down, and Deed does
 not do global inference on purpose.
 
 **A function type is written `Fn(Int, Int) -> Int`,** and a row goes before the arrow:
@@ -942,7 +942,7 @@ gone, with nothing said about it.
 The rule now is that **a line break ends an expression**. A binary operator, or a postfix
 `.`, `(`, `?` or `{`, continues what came before it only if it is on the same line. The rule
 is the same inside brackets as outside them, because a rule that switches off somewhere is a
-rule people have to remember. Nothing anyone writes changes shape under it: `vow fmt` never
+rule people have to remember. Nothing anyone writes changes shape under it: `deed fmt` never
 breaks a binary expression across lines and never puts a call's `(` or a literal's `{` on a
 line of its own, so an argument list or a record can still spread over as many lines as it
 likes, the opening bracket just has to stay with what it opens.
@@ -956,7 +956,7 @@ complaint about one mistake.
 
 A line starting with `-` is the harder half, because `-2` is a perfectly good expression and
 there is nothing to refuse. What is left is a statement whose value nobody reads, and
-`VOW4026` says so. A block's value is its tail, so every other expression in it is there for
+`DEED4026` says so. A block's value is its tail, so every other expression in it is there for
 what it does; one that produces a value has nowhere to put it. It is a warning rather than an
 error, because `let _ = f()` is how a program says it meant that and working code should not
 have to be rewritten to keep compiling. Dropping a `Result` gets its own sentence, since that
@@ -965,7 +965,7 @@ one loses the failure rather than a line.
 That warning has an escape hatch, and one of the ways out is worse than the thing it escapes.
 `let _ = f()` throws the value away and says so. `let b = f()` also silences it, and now
 there is a name nobody reads, which is the same statement doing nothing with an explanation
-attached. So a `let` binding one plain name that no expression mentions is `VOW3009`. Only a
+attached. So a `let` binding one plain name that no expression mentions is `DEED3009`. Only a
 `let`, and only a plain name. Pointing it at every binder was tried and it fired twenty seven
 times across the examples, of which twenty five were not mistakes: a pattern is there to
 match, so `err(why)` names what the shape holds and reads better than `err(_)`; a parameter's
@@ -974,7 +974,7 @@ shape is the signature, and a handler's signature belongs to the effect it imple
 reason for existing is the name. `_name` is how it says it meant to keep the name and not the
 value.
 
-**Type arguments close with single `>` tokens.** There is no shift operator in Vow, so
+**Type arguments close with single `>` tokens.** There is no shift operator in Deed, so
 `Map<K, Vec<V>>` needs none of the special handling that costs other languages a real
 amount of parser complexity.
 
@@ -1016,14 +1016,14 @@ imported would not be a capability.
 **A module is named by its own `module` line, not by where it sits on disk.** `use
 payments/ledger` is answered by looking for the file that says `module payments/ledger`
 among the files handed to the compiler. The unit of compilation is that set of files, so
-`vow check src/` sees the whole thing and `vow check one.vow` sees one module with an empty
+`deed check src/` sees the whole thing and `deed check one.deed` sees one module with an empty
 universe, in which any `use` fails. That is a real cost and it buys not having a second set
 of rules about roots, extensions and case sensitivity, which is the part of every module
 system that goes wrong.
 
 **Imports are checked at the level of names.** A `use` of a module that is not there is
-`VOW3007`, a `use` of a name that module does not declare is `VOW3008`, and an operation an
-imported effect does not have is `VOW3006`. All three used to be accepted in silence.
+`DEED3007`, a `use` of a name that module does not declare is `DEED3008`, and an operation an
+imported effect does not have is `DEED3006`. All three used to be accepted in silence.
 
 **Every item is exported, and a choice's variants are exported in their own right.** There
 is no visibility modifier, because a language with no wildcard imports already makes the
@@ -1120,15 +1120,15 @@ rules. Silently shadowing a builtin would put everything that depends on it quie
 being unchecked.
 
 **A type name is not a value.** Writing `Console` where an expression is expected is
-`VOW4019` rather than something with no type. This looks like a footnote and is not: an
+`DEED4019` rather than something with no type. This looks like a footnote and is not: an
 expression with no type agrees with everything, so `Io.write(Console, "hi")` would have
 checked, and a program could have conjured authority by spelling it.
 
 ## Mutation
 
-There is exactly one mutable thing in Vow, and it is a `state` field of a handler.
+There is exactly one mutable thing in Deed, and it is a `state` field of a handler.
 
-```vow
+```deed
 handler InMemory implements Counter {
     state count: Int
 
@@ -1155,7 +1155,7 @@ in the function, which is the same objection that made shadowing an error.
 
 The cost is that accumulator loops have to be written some other way, and the other way is a
 fold. `for n in numbers with sum = 0 { ... }` binds `sum` again on every turn rather than
-assigning to it, so iteration exists and this rule is untouched. `examples/todo.vow` is where
+assigning to it, so iteration exists and this rule is untouched. `examples/todo.deed` is where
 that bill arrived: it threaded an accumulator through a recursive parameter because there was
 nowhere else to put it, and reaching for a handler to collect four strings would have been
 using an effect to get around not having a loop.
@@ -1213,7 +1213,7 @@ using an effect to get around not having a loop.
   thing the language can now express, and whether the prelude should carry one is the
   question.
 - Position is not something a callback can be handed by a library that does not already have
-  it. A `for` says where it is now, so `examples/list.vow` can write `map_at` and anything
+  it. A `for` says where it is now, so `examples/list.deed` can write `map_at` and anything
   else it wants out of that. What is still unanswered is whether an indexed form of every
   walk belongs in that library at all, since one of each doubles it and nobody has wanted
   more than `map_at` yet.

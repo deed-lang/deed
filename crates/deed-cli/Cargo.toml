@@ -1,0 +1,23 @@
+[package]
+name = "deed-cli"
+description = "The deed command line tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "deed"
+path = "src/main.rs"
+
+[dependencies]
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-driver = { path = "../deed-driver" }
+deed-fmt = { path = "../deed-fmt" }
+deed-interp = { path = "../deed-interp" }
+deed-lsp = { path = "../deed-lsp" }
+deed-typeck = { path = "../deed-typeck" }
+
+[lints]
+workspace = true

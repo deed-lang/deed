@@ -1,0 +1,378 @@
+// The Proven tier, which is the part of this language that is supposed to be
+// interesting.
+//
+// A refinement is only worth having if it replaces a check rather than
+// decorating one. `deed check examples/proven.deed --obligations` says which of
+// these the compiler settled at check time and which became a runtime guard,
+// and it never claims to have proven something it did not.
+//
+// What does the proving is interval reasoning, plus a range for the difference
+// between two names: what is known about each integer in scope, from the
+// contract, from the types, from the conditions above the line, and from the
+// contracts of the functions being called, arguments and all. It is not a
+// solver, and three of the functions below are what that costs.
+
+module examples/proven
+
+type Positive = Int where value > 0
+
+type Percent = Int where value >= 0 && value <= 100
+
+type NonNegative = Int where value >= 0
+
+type NonEmpty = String where length(value) > 0
+
+type NonEmptyList = List<Int> where length(value) > 0
+
+record Order {
+    quantity: Positive,
+}
+
+// Proven from the precondition. The `where` clause says exactly what the
+// refinement needs, and nothing else has to be written down twice.
+fn order_of(n: Int) -> Order
+  where
+    n > 0,
+{
+    Order { quantity: n }
+}
+
+// Proven from the guard. After an `if` that leaves, the rest of the body knows
+// the condition failed, which is the ordinary way anyone establishes a
+// refinement in real code.
+fn checked_order(n: Int) -> Result<Order, String> {
+    if n <= 0 {
+        return err("a quantity has to be positive")
+    }
+
+    ok(Order { quantity: n })
+}
+
+// Proven in the else branch. The same fact arrived at from the other side: an
+// `if` narrows what is known both ways, not just inside the then.
+fn order_from_either(n: Int) -> Result<Order, String> {
+    if n <= 0 {
+        err("a quantity has to be positive")
+    } else {
+        ok(Order { quantity: n })
+    }
+}
+
+// Proven from the type. A `Positive` is already known to be positive, so it
+// fits where a weaker refinement is wanted without a `where` clause repeating
+// the type in prose. Passing one where a `Positive` is wanted raises no
+// obligation at all, which is why this asks for something else.
+fn as_count(n: Positive) -> NonNegative {
+    n
+}
+
+// Proven from arithmetic. Both bounds are known, so the sum is too.
+fn clamped(raw: Int) -> Percent
+  where
+    raw >= 0,
+    raw <= 50,
+{
+    raw + 50
+}
+
+// Proven, and it took an argument to get here. `n` could be the largest
+// integer there is, and then `n + 1` has no answer at all. That used to be
+// enough to refuse, and this comment used to say refusing was the reasoning
+// working. It was not.
+//
+// Overflow is an error here rather than a wrap: `n + 1` either produces a
+// value or stops the program. It never produces a wrong one. So if this
+// produced a value, that value is inside `i64`, and it is greater than one,
+// which is what `Positive` wanted. The interval saturates at the edge instead
+// of collapsing to "anything at all", and the runtime check that used to be
+// emitted here could never have fired.
+fn one_more(n: Positive) -> Positive {
+    n + 1
+}
+
+// Proven from a relationship. An interval has nowhere to put `low < high`, so
+// there is a range for the difference of two names alongside the range for each
+// one. The other two clauses are not there for the relationship, they are there
+// so the subtraction has an answer at all.
+fn span(low: Int, high: Int) -> Positive
+  where
+    low >= 0,
+    high <= 100,
+    low < high,
+{
+    high - low
+}
+
+// Proven, and for the same reason `one_more` is. `low < high` says the
+// difference is at least one, and nothing bounds either name, so `high - low`
+// can be larger than an integer. It does not matter: a difference that exists
+// is inside `i64`, and every one that exists is positive.
+//
+// The `where` clauses on `span` above are still worth having. They are what
+// makes the answer tight rather than merely positive, which is what a reader
+// of that signature wants to know.
+fn unbounded_span(low: Int, high: Int) -> Positive
+  where
+    low < high,
+{
+    high - low
+}
+
+// Proven across a call. `always_one` promises what it returns, the promise is
+// read here, and the proof one function did is worth something to the next.
+// Without this every abstraction boundary would restart the reasoning from
+// nothing, which would make `ensures` decorative outside of tests.
+fn from_a_call() -> Positive {
+    always_one()
+}
+
+fn always_one() -> Int
+  ensures
+    ok  => result == 1,
+{
+    1
+}
+
+// Proven across a call that talks about its argument. `same` promises the
+// result is the number it was handed, and what crosses the call is that
+// difference: `result - n` is zero, `n` is positive, so the result is too.
+// Before this, an `ensures` mentioning an argument was decorative outside of
+// tests, and most of them mention an argument.
+fn echoed(n: Positive) -> Positive {
+    same(n)
+}
+
+fn same(n: Int) -> Int
+  ensures
+    ok  => result == n,
+{
+    n
+}
+
+// Proven through a `?`. A function that can fail promises things about the
+// number inside the `ok`, and the caller is holding the `Result`, so the two
+// only meet where the payload comes out. That is here, and at an `ok(..)`
+// pattern, and nowhere else.
+fn unwrapped() -> Result<Positive, String> {
+    let n = maybe_one()?
+    ok(n)
+}
+
+fn maybe_one() -> Result<Int, String>
+  ensures
+    ok  => result == 1,
+{
+    ok(1)
+}
+
+// Proven from a promise that counts its argument twice. A name multiplied by a
+// number is still a name, so `result == n + n` is a difference like any other
+// once the counting is done. A name multiplied by a name is not, which is the
+// case below.
+fn twice_over(n: Percent) -> Positive
+  where
+    n > 0,
+{
+    doubled(n)
+}
+
+fn doubled(n: Percent) -> Int
+  ensures
+    ok  => result == n + n,
+{
+    n + n
+}
+
+// Proven from how long something is. `length(items)` used to come back as a
+// range and nothing else, so it could not be one side of a difference and
+// `index < length(items)` was a shape the relation machinery could not see.
+//
+// A length is a term now, keyed on the thing being measured. Two things follow
+// and neither needed arithmetic of its own. The first is here: there is no
+// list with fewer than no things in it, so a length starts out not negative
+// and nobody has to write that down.
+fn how_many(items: List<Int>) -> NonNegative {
+    length(items)
+}
+
+// The second. Past the guard the list holds something, so one less than its
+// length is an index that is really there. Without a term for the length, `if`
+// narrowed nothing and this was a runtime check.
+fn last_index(items: List<Int>) -> Result<NonNegative, String> {
+    if length(items) <= 0 {
+        return err("nothing to index")
+    }
+
+    ok(length(items) - 1)
+}
+
+// And the shape the whole thing was for. `index < length(items)` is the same
+// rule as `low < high` in `span` above, which is the point: nothing here knows
+// about lists, it knows about two quantities and the difference between them.
+fn how_many_after(items: List<Int>, index: Int) -> Positive
+  where
+    index >= 0,
+    index < length(items),
+{
+    length(items) - index
+}
+
+// A `where` clause is also something the caller answers for, which is where
+// most of the proving in this file happens now. Every call below is checked
+// against what it was handed, so `nth(items, 0)` after a length check proves
+// both of its clauses and `nth(items, 0 - 1)` would be refused outright rather
+// than failing when it ran.
+//
+// The check inside the callee stays either way. The tier says how much was
+// settled ahead of time, not whether the check happens.
+fn nth(items: List<Int>, index: Int) -> Result<Int, String>
+  where
+    index >= 0,
+    index < length(items),
+{
+    at(items, index)
+}
+
+fn head(items: List<Int>) -> Result<Int, String> {
+    if length(items) <= 0 {
+        return err("nothing to index")
+    }
+
+    nth(items, 0)
+}
+
+// Guarded, and it has to be. Two lists are two lengths, so a bound on one says
+// nothing about the other, and an empty `others` makes this negative.
+fn from_the_wrong_list(items: List<Int>, others: List<Int>) -> Result<NonNegative, String> {
+    if length(items) <= 0 {
+        return err("nothing to index")
+    }
+
+    ok(length(others) - 1)
+}
+
+// Guarded. A promise that ties the result to an argument through a product of
+// two names is not linear, and there is nowhere to put it short of a solver. A
+// `Percent` squared is between nothing and ten thousand, and the tier says it
+// did not work that out rather than pretending it did.
+fn squared(n: Percent) -> Positive {
+    square(n)
+}
+
+fn square(n: Percent) -> Int
+  ensures
+    ok  => result == n * n,
+{
+    n * n
+}
+
+// A refinement has no conversion form and does not need one. `try_positive` is
+// the thing `Positive.try(n)` would have been, written in the language, and
+// the `ok` is Proven: the guard above it says exactly what the predicate wants.
+// What a built-in form would buy is the predicate living in one place instead
+// of being restated here, and the restatement being weaker than the predicate
+// is the mistake it would rule out.
+fn try_positive(n: Int) -> Result<Positive, String> {
+    if n > 0 {
+        ok(n)
+    } else {
+        err("not positive")
+    }
+}
+
+// The same for something whose predicate is about how long it is. This one
+// used to be Guarded and the one above Proven, over the same shape, because a
+// length had nowhere to be looked up while a refinement was being read.
+fn try_nonempty(s: String) -> Result<NonEmpty, String> {
+    if length(s) > 0 {
+        ok(s)
+    } else {
+        err("empty")
+    }
+}
+
+fn shout(s: NonEmpty) -> String {
+    s + "!"
+}
+
+// A refinement over a list is the same machinery again: how long something is
+// is a term, and `value` stands for the thing being described whether that
+// thing is a number or not. Proven twice over. The parameter's own type says
+// its length is at least one, without a `where` clause repeating it in prose,
+// and `take_list([1, 2, 3])` at the bottom is proven from a length the source
+// says out loud.
+fn size_of(items: NonEmptyList) -> Positive {
+    length(items)
+}
+
+test "the proven ones still hold at runtime" {
+    assert order_of(3).quantity == 3
+    assert as_count(4) == 4
+    assert clamped(10) == 60
+    assert span(2, 5) == 3
+    assert from_a_call() == 1
+    assert echoed(7) == 7
+    assert twice_over(3) == 6
+    assert unwrapped() == ok(1)
+    assert order_from_either(0) == err("a quantity has to be positive")
+}
+
+test "how long something is is a fact like any other" {
+    assert how_many([]) == 0
+    assert how_many([1, 2, 3]) == 3
+    assert last_index([1, 2, 3]) == ok(2)
+    assert last_index([]) == err("nothing to index")
+    assert how_many_after([1, 2, 3], 0) == 3
+    assert how_many_after([1, 2, 3], 2) == 1
+    assert from_the_wrong_list([1], [1, 2]) == ok(1)
+    assert head([7, 8]) == ok(7)
+    assert head([]) == err("nothing to index")
+}
+
+test "a refinement is something anyone can convert into" {
+    assert try_positive(3) == ok(3)
+    assert try_positive(0) == err("not positive")
+    assert try_nonempty("hi") == ok("hi")
+    assert try_nonempty("") == err("empty")
+    assert shout("hi") == "hi!"
+    assert size_of([1, 2, 3]) == 3
+}
+
+// A test that only feeds a guard values it accepts proves nothing. This one
+// used to do exactly that, and it passed through a period where the Guarded
+// tier did not check return values at all: the compiler printed "so it becomes
+// a runtime check" over a check that did not exist, and this test agreed with
+// it.
+//
+// For a long time it could only feed valid values, because a contract failure
+// ends the run and a file of examples has to pass. That gap is closed:
+// `assert refuses` says that evaluating something breaks a contract, and it
+// passes when a `where` clause, an `ensures` clause or a refinement turns the
+// value down. Nothing else counts, so overflow and a missing handler are still
+// the end of the run.
+test "the guarded ones are checked when they run" {
+    assert one_more(1) == 2
+    assert unbounded_span(2, 5) == 3
+    assert squared(7) == 49
+}
+
+// The half that was missing. Every one of these is a `Guarded` obligation
+// actually guarding something, which is the claim the tier makes and the claim
+// nothing in this file could check.
+test "a guard turns down what it should" {
+    // The refinement, checked on the way out of a call the checker could not
+    // settle.
+    assert refuses squared(0)
+
+    // The precondition, checked on the way in. The checker can see this one
+    // will not hold, and inside an `assert refuses` that is the statement
+    // being right rather than an error.
+    assert refuses order_of(0)
+    assert refuses clamped(0 - 1)
+    assert refuses span(5, 2)
+
+    // The one that reads a length. `nth` wants an index below however long the
+    // list is, and there is no index below zero of them.
+    assert refuses nth([], 0)
+    assert refuses nth([1, 2], 5)
+}

@@ -35,7 +35,7 @@ conventions, without prior familiarity.*
 **Rejects:** feature accretion, syntactic sugar with no semantic weight, multiple
 mechanisms for the same job, a standard library with three ways to build a string.
 
-There is no corpus of Vow code and there will not be one for a long time. A language nobody
+There is no corpus of Deed code and there will not be one for a long time. A language nobody
 can be expected to have memorized has to be readable in full instead. This makes spec size
 a first-class budget, tracked like binary size, and it is the strongest force in the whole
 design against adding things.
@@ -69,8 +69,8 @@ user-defined precedence, macros.
 Ambiguity costs more than verbosity. Consistent form means diffs carry signal, review gets
 cheaper the more code you have seen, and generated output stops varying for no reason.
 
-`vow fmt` is what this means in practice. It has no options for the output, not "none yet",
-and there is a test asserting that every `.vow` file in the repository is already in
+`deed fmt` is what this means in practice. It has no options for the output, not "none yet",
+and there is a test asserting that every `.deed` file in the repository is already in
 canonical form. Until that test existed, P4 described how the files happened to have been
 typed.
 
@@ -116,7 +116,7 @@ text as the only machine-readable surface.
 Every diagnostic has a stable code, a machine-readable form, and a human-readable rendering
 built from the same data. The human rendering is a view, not the source of truth.
 
-`vow fix` is what this means in practice, the same way `vow fmt` is for P4. It applies every
+`deed fix` is what this means in practice, the same way `deed fmt` is for P4. It applies every
 fix marked machine-applicable, re-checks, and repeats until nothing changes. It never
 applies a fix marked maybe-incorrect, and there is no flag to make it, because a flag for
 applying guesses is a flag someone turns on once and then forgets about.
@@ -128,7 +128,7 @@ nothing is written, which is the version of the check that catches a fix that wa
 rather than merely unhelpful.
 
 A fix is a span and a replacement, so most of them are written where the problem is found.
-The row diagnostics are the exception and were missing for a while because of it: `VOW5001`
+The row diagnostics are the exception and were missing for a while because of it: `DEED5001`
 names the effect, names the function and tells the reader to add it to the `uses` clause, and
 saying that as a span means knowing about commas, about indentation, and about a clause that
 may not exist yet. The effect checker has the answer and no business knowing any of that, so
@@ -161,14 +161,14 @@ makes editing one function require re-checking things that did not change.
 
 ### What is measured, and what is not
 
-`vow check --timings` reports wall time per pass. On one developer machine, an unoptimised
+`deed check --timings` reports wall time per pass. On one developer machine, an unoptimised
 build checking the eleven files in `examples/` takes about 7ms, and a generated module of 800
 functions with contracts on half of them takes about 26ms. Those are numbers from one
 machine and a debug build, not a guarantee.
 
 They are also not the target. The target is about the edit loop, and the edit loop is what
 the language server does: recheck the workspace, wait for a keystroke, recheck it again.
-`cargo run -p vow-driver --example edit_loop --release` measures that, and on one machine it
+`cargo run -p deed-driver --example edit_loop --release` measures that, and on one machine it
 says:
 
 ```text
@@ -188,7 +188,7 @@ between modules, and that is the failure this measurement was most likely to fin
 
 **The target holds today and the shape says when it stops.** At 512 files a keystroke costs
 about 38ms, inside the 100ms budget. A few thousand files is where it leaves. Nobody has
-written a few thousand files of Vow and the honest reading is that this is fine now.
+written a few thousand files of Deed and the honest reading is that this is fine now.
 
 **Essentially all of the work is repeated.** Past a handful of files, 99% of a recheck is
 spent on files that did not change. So a cache would take almost all of it off, and that is

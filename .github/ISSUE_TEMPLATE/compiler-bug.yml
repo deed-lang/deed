@@ -14,7 +14,7 @@ body:
     attributes:
       label: The source
       description: The smallest file that shows it. It will be pasted into a test, so smaller is genuinely better.
-      render: vow
+      render: deed
     validations:
       required: true
 
@@ -22,7 +22,7 @@ body:
     id: command
     attributes:
       label: What you ran
-      placeholder: vow check thing.vow
+      placeholder: deed check thing.deed
     validations:
       required: true
 

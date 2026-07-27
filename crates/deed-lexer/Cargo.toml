@@ -1,0 +1,14 @@
+[package]
+name = "deed-lexer"
+description = "Turns Deed source text into tokens"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deed-diagnostics = { path = "../deed-diagnostics" }
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "deed-diagnostics"
+description = "Source management and structured diagnostics for the Deed compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

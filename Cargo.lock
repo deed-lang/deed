@@ -3,121 +3,121 @@
 version = 4
 
 [[package]]
-name = "vow-ast"
+name = "deed-ast"
 version = "0.0.0"
 dependencies = [
- "vow-diagnostics",
+ "deed-diagnostics",
 ]
 
 [[package]]
-name = "vow-cli"
+name = "deed-cli"
 version = "0.0.0"
 dependencies = [
- "vow-diagnostics",
- "vow-driver",
- "vow-fmt",
- "vow-interp",
- "vow-lsp",
- "vow-typeck",
+ "deed-diagnostics",
+ "deed-driver",
+ "deed-fmt",
+ "deed-interp",
+ "deed-lsp",
+ "deed-typeck",
 ]
 
 [[package]]
-name = "vow-diagnostics"
+name = "deed-diagnostics"
 version = "0.0.0"
 
 [[package]]
-name = "vow-driver"
+name = "deed-driver"
 version = "0.0.0"
 dependencies = [
- "vow-ast",
- "vow-diagnostics",
- "vow-effects",
- "vow-fmt",
- "vow-interp",
- "vow-lexer",
- "vow-parser",
- "vow-resolve",
- "vow-typeck",
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-effects",
+ "deed-fmt",
+ "deed-interp",
+ "deed-lexer",
+ "deed-parser",
+ "deed-resolve",
+ "deed-typeck",
 ]
 
 [[package]]
-name = "vow-effects"
+name = "deed-effects"
 version = "0.0.0"
 dependencies = [
- "vow-ast",
- "vow-diagnostics",
- "vow-lexer",
- "vow-parser",
- "vow-resolve",
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-lexer",
+ "deed-parser",
+ "deed-resolve",
 ]
 
 [[package]]
-name = "vow-fmt"
+name = "deed-fmt"
 version = "0.0.0"
 dependencies = [
- "vow-ast",
- "vow-diagnostics",
- "vow-lexer",
- "vow-parser",
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-lexer",
+ "deed-parser",
 ]
 
 [[package]]
-name = "vow-interp"
+name = "deed-interp"
 version = "0.0.0"
 dependencies = [
- "vow-ast",
- "vow-diagnostics",
- "vow-lexer",
- "vow-parser",
- "vow-resolve",
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-lexer",
+ "deed-parser",
+ "deed-resolve",
 ]
 
 [[package]]
-name = "vow-lexer"
+name = "deed-lexer"
 version = "0.0.0"
 dependencies = [
- "vow-diagnostics",
+ "deed-diagnostics",
 ]
 
 [[package]]
-name = "vow-lsp"
+name = "deed-lsp"
 version = "0.0.0"
 dependencies = [
- "vow-ast",
- "vow-diagnostics",
- "vow-driver",
- "vow-fmt",
- "vow-lexer",
- "vow-parser",
- "vow-resolve",
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-driver",
+ "deed-fmt",
+ "deed-lexer",
+ "deed-parser",
+ "deed-resolve",
 ]
 
 [[package]]
-name = "vow-parser"
+name = "deed-parser"
 version = "0.0.0"
 dependencies = [
- "vow-ast",
- "vow-diagnostics",
- "vow-lexer",
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-lexer",
 ]
 
 [[package]]
-name = "vow-resolve"
+name = "deed-resolve"
 version = "0.0.0"
 dependencies = [
- "vow-ast",
- "vow-diagnostics",
- "vow-lexer",
- "vow-parser",
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-lexer",
+ "deed-parser",
 ]
 
 [[package]]
-name = "vow-typeck"
+name = "deed-typeck"
 version = "0.0.0"
 dependencies = [
- "vow-ast",
- "vow-diagnostics",
- "vow-lexer",
- "vow-parser",
- "vow-resolve",
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-lexer",
+ "deed-parser",
+ "deed-resolve",
 ]

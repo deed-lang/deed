@@ -2,6 +2,6 @@
 # changed. Canonical form in the repository is LF.
 * text=auto eol=lf
 
-*.vow text eol=lf
+*.deed text eol=lf
 *.rs  text eol=lf
 *.md  text eol=lf

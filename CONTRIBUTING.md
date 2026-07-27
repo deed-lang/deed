@@ -35,7 +35,7 @@ Open an issue. A concrete counterexample beats an opinion, but an opinion beats 
 
 ## If you want to write code
 
-Check the [roadmap](https://github.com/onatozmenn/vow/issues/1) and the open issues. Work is
+Check the [roadmap](https://github.com/onatozmenn/deed/issues/1) and the open issues. Work is
 tracked there, and anything actionable is labelled.
 
 The compiler is Rust. Before opening a PR:
