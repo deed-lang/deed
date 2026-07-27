@@ -299,6 +299,7 @@ fn index_module<'a>(entry: &Entry<'a>) -> Code<'a> {
         rows: entry.rows.clone(),
         state_names: HashMap::new(),
         variant_names: HashMap::new(),
+        plans: HashMap::new(),
     };
 
     for item in &entry.module.items {
@@ -390,6 +391,11 @@ struct Code<'a> {
     /// Handler state definition to the field name it stands for.
     state_names: HashMap<DefId, String>,
     variant_names: HashMap<DefId, String>,
+    /// What a call to each function here needs, keyed by where the name was
+    /// written. Filled in as functions are called. A handler operation has no
+    /// definition of its own but does have a span, which is the same reason
+    /// `rows` is keyed that way.
+    plans: HashMap<Span, Rc<CallPlan>>,
 }
 
 /// What one active call promised, so that what it does can be held to it.
@@ -416,12 +422,38 @@ struct Code<'a> {
 struct RowFrame {
     handled: usize,
     handler: Option<usize>,
-    promise: Option<Promise>,
+    promise: Option<Rc<Promise>>,
 }
 
 struct Promise {
     name: String,
     allowed: Vec<(Origin, Option<String>)>,
+}
+
+/// What every call to one function needs before its body can run.
+///
+/// All of it is a property of the declaration rather than of the call, and it
+/// used to be worked out again on every call: a resolution lookup per
+/// parameter to find out what the parameter binds, the promised row rebuilt
+/// from the declaration's span, and two maps captured on entry for `old(...)`
+/// and `unchanged(...)` whether or not anything could read them. That made a
+/// call cost about four turns of a `for` on a function with no contract at
+/// all, which is measured by `examples/interpreting.rs`.
+///
+/// Worked out the first time the function is called rather than for every
+/// declaration up front, for the same reason closure bodies are: most of a
+/// program is not reached by any given run.
+struct CallPlan {
+    /// What each parameter binds, in order. `None` for a parameter that did
+    /// not resolve, which is a file with an error in it being run anyway.
+    params: Vec<Option<DefId>>,
+    /// The row the declaration promised, or `None` when there is nothing to
+    /// hold a call to. See [`RowFrame`].
+    promise: Option<Rc<Promise>>,
+    /// Whether anything can read what a call captures on entry. That is what
+    /// an `ensures` clause is for, and `old` and `unchanged` are refused
+    /// outside one, so a function with no `ensures` has nothing to capture.
+    captures: bool,
 }
 
 /// A closure expression, kept where a [`Value`] can point at it.
@@ -940,6 +972,16 @@ impl<'a> Interp<'a> {
             },
 
             Expr::Unchanged { effect, span } => {
+                // The same rule `old` has had all along, said out loud. Both
+                // of these read what entering a call captured, and a call
+                // captures for the sake of its `ensures` clauses, so outside
+                // one there is nothing for either of them to be about. `old`
+                // refused here already, by looking up a span no captured map
+                // contains; this one used to answer from whatever the nearest
+                // call that captured had, which is a different call.
+                if self.in_contract == 0 {
+                    return Err(self.not_runnable(*span, "`unchanged` outside a contract"));
+                }
                 let Some(def) = self.def_of(&effect.effect) else {
                     return Err(self.not_runnable(*span, "this effect reference"));
                 };
@@ -1704,22 +1746,28 @@ impl<'a> Interp<'a> {
         call_span: Span,
         handler: Option<usize>,
     ) -> Eval<Value> {
+        let plan = self.plan_of(function);
+
         let mut frame = HashMap::new();
-        for (param, (value, _)) in function.sig.params.iter().zip(&args) {
-            if let Some(def) = self.def_of(&param.name) {
-                frame.insert(def, value.clone());
+        for (def, (value, _)) in plan.params.iter().zip(&args) {
+            if let Some(def) = def {
+                frame.insert(*def, value.clone());
             }
         }
 
         self.frames.push(frame);
-        self.rows.push(self.row_frame(function, handler));
+        self.rows.push(RowFrame {
+            handled: self.handlers.len(),
+            handler,
+            promise: plan.promise.clone(),
+        });
         if let Some(handler) = handler {
             self.inside_handler.push(handler);
         }
 
         let result = self
             .too_deep(call_span)
-            .and_then(|()| self.call_body(function, call_span));
+            .and_then(|()| self.call_body(function, call_span, plan.captures));
 
         if handler.is_some() {
             self.inside_handler.pop();
@@ -1729,13 +1777,28 @@ impl<'a> Interp<'a> {
         result
     }
 
-    /// What the function about to run promised.
-    fn row_frame(&self, function: &'a FnDecl, handler: Option<usize>) -> RowFrame {
-        RowFrame {
-            handled: self.handlers.len(),
-            handler,
-            promise: self.promise_of(function),
+    /// What a call to `function` needs, worked out once and kept.
+    fn plan_of(&mut self, function: &'a FnDecl) -> Rc<CallPlan> {
+        let span = function.sig.name.span;
+        if let Some(plan) = self.code().plans.get(&span) {
+            return Rc::clone(plan);
         }
+
+        let resolutions = self.resolutions();
+        let plan = Rc::new(CallPlan {
+            params: function
+                .sig
+                .params
+                .iter()
+                .map(|param| resolutions.resolution(param.name.span))
+                .collect(),
+            promise: self.promise_of(function).map(Rc::new),
+            captures: !function.contract.ensures.is_empty(),
+        });
+
+        let current = self.current;
+        self.modules[current].plans.insert(span, Rc::clone(&plan));
+        plan
     }
 
     /// The row a declaration wrote down, when it says something a call can be
@@ -1882,7 +1945,12 @@ impl<'a> Interp<'a> {
     }
 
     /// The part of a call that runs inside the new frame.
-    fn call_body(&mut self, function: &'a FnDecl, call_span: Span) -> Eval<Value> {
+    ///
+    /// `captures` is whether anything here could read what entering captures.
+    /// A function with no `ensures` and no `old` or `unchanged` in it has
+    /// nothing to snapshot for, and snapshotting anyway copied every installed
+    /// handler's state on every call in a program that installs one.
+    fn call_body(&mut self, function: &'a FnDecl, call_span: Span, captures: bool) -> Eval<Value> {
         // Preconditions first. A failure here is the caller's fault, so the
         // diagnostic points at the call and only mentions the clause.
         for requirement in &function.contract.requires {
@@ -1902,22 +1970,28 @@ impl<'a> Interp<'a> {
             }
         }
 
-        self.in_a_contract(|me| me.capture_entry_state(&function.contract.ensures))?;
+        if captures {
+            self.in_a_contract(|me| me.capture_entry_state(&function.contract.ensures))?;
+        }
 
         let outcome = self.eval_block(&function.body);
         let value = match outcome {
             Ok(value) => value,
             Err(Signal::Return(value)) => value,
             Err(other) => {
-                self.olds.pop();
-                self.entry_states.pop();
+                if captures {
+                    self.olds.pop();
+                    self.entry_states.pop();
+                }
                 return Err(other);
             }
         };
 
         let obligations = self.in_a_contract(|me| me.check_ensures(function, &value, call_span));
-        self.olds.pop();
-        self.entry_states.pop();
+        if captures {
+            self.olds.pop();
+            self.entry_states.pop();
+        }
         obligations?;
 
         Ok(value)
@@ -2504,9 +2578,10 @@ mod tests {
     use deed_diagnostics::SourceMap;
     use deed_resolve::Universe;
 
-    /// Runs the first `test` block and hands back the interpreter that ran it,
-    /// which is the only way to see a table nothing outside the crate can.
-    fn ran(source: &str) -> usize {
+    /// Runs the first `test` block and reads something off the interpreter
+    /// that ran it, which is the only way to see a table nothing outside the
+    /// crate can.
+    fn ran<T>(source: &str, read: impl Fn(&Interp) -> T) -> T {
         let mut sources = SourceMap::new();
         let file = sources.add("test.deed", source);
 
@@ -2538,7 +2613,19 @@ mod tests {
 
         let mut interp = Interp::new(&program, file);
         assert!(interp.eval_block(body).is_ok(), "it should run");
-        interp.closures.len()
+        read(&interp)
+    }
+
+    /// How many closure bodies the run kept.
+    fn closures(source: &str) -> usize {
+        ran(source, |interp| interp.closures.len())
+    }
+
+    /// How many call plans the run worked out, across every module in it.
+    fn plans(source: &str) -> usize {
+        ran(source, |interp| {
+            interp.modules.iter().map(|code| code.plans.len()).sum()
+        })
     }
 
     /// The table holds closure expressions, so it is the size of the program
@@ -2551,22 +2638,26 @@ mod tests {
     /// at the first one.
     #[test]
     fn a_closure_written_once_is_kept_once() {
-        let one_turn = ran("module a\n\n\
+        let one_turn = closures(
+            "module a\n\n\
              fn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\n\
              test \"t\" {\n\
              \x20   let total = for n in [1] with sum = 0 {\n\
              \x20       sum + apply(|x: Int| x + n, 1)\n\
              \x20   }\n\
              \x20   assert total > 0\n\
-             }\n");
-        let many_turns = ran("module a\n\n\
+             }\n",
+        );
+        let many_turns = closures(
+            "module a\n\n\
              fn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\n\
              test \"t\" {\n\
              \x20   let total = for n in [1, 2, 3, 4, 5, 6, 7, 8] with sum = 0 {\n\
              \x20       sum + apply(|x: Int| x + n, 1)\n\
              \x20   }\n\
              \x20   assert total > 0\n\
-             }\n");
+             }\n",
+        );
 
         assert_eq!(one_turn, 1);
         assert_eq!(
@@ -2579,13 +2670,59 @@ mod tests {
     /// have nothing to do with each other.
     #[test]
     fn two_closures_written_are_two_kept() {
-        let kept = ran("module a\n\n\
+        let kept = closures(
+            "module a\n\n\
              fn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\n\
              test \"t\" {\n\
              \x20   let a = apply(|x: Int| x + 1, 1)\n\
              \x20   let b = apply(|x: Int| x + 2, 1)\n\
              \x20   assert a + b > 0\n\
-             }\n");
+             }\n",
+        );
         assert_eq!(kept, 2);
+    }
+
+    /// The same shape one layer down. A plan is a property of a declaration,
+    /// so calling one a thousand times works one out once, and the whole point
+    /// of having them is that a call stops paying for it.
+    #[test]
+    fn a_function_called_many_times_is_planned_once() {
+        let once = plans(
+            "module a\n\n\
+             fn itself(n: Int) -> Int { n }\n\n\
+             test \"t\" {\n\
+             \x20   let total = for n in [1] with sum = 0 { sum + itself(n) }\n\
+             \x20   assert total > 0\n\
+             }\n",
+        );
+        let often = plans(
+            "module a\n\n\
+             fn itself(n: Int) -> Int { n }\n\n\
+             test \"t\" {\n\
+             \x20   let total = for n in [1, 2, 3, 4, 5, 6, 7, 8] with sum = 0 { sum + itself(n) }\n\
+             \x20   assert total > 0\n\
+             }\n",
+        );
+
+        assert_eq!(once, 1);
+        assert_eq!(
+            often, once,
+            "eight calls to one declaration should plan it once"
+        );
+    }
+
+    /// And a function nobody calls is never planned, which is why this is
+    /// worked out on the way in rather than for every declaration up front.
+    #[test]
+    fn a_function_nobody_calls_is_never_planned() {
+        let planned = plans(
+            "module a\n\n\
+             fn called(n: Int) -> Int { n }\n\n\
+             fn never(n: Int) -> Int { n }\n\n\
+             test \"t\" {\n\
+             \x20   assert called(1) == 1\n\
+             }\n",
+        );
+        assert_eq!(planned, 1);
     }
 }

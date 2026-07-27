@@ -242,33 +242,41 @@ spends its time on now.
                       total      per turn   added
 -----------------------------------------------------
 setup, no turns       0.6ms      6ns
-a turn                8.3ms      83ns       77ns
-  + an operator       16.1ms     161ns      78ns
-  + a field read      17.2ms     171ns      10ns
-  + a call            48.5ms     484ns      323ns
-  + another argument  57.8ms     577ns      93ns
-  + a contract on it  68.4ms     684ns      199ns
+a turn                9.5ms      94ns       88ns
+  + an operator       18.9ms     189ns      94ns
+  + a field read      21.7ms     217ns      28ns
+  + a call taking none 24.5ms     244ns      55ns
+  + a call            41.3ms     412ns      223ns
+  + another argument  47.3ms     472ns      59ns
+  + a contract on it  62.3ms     623ns      210ns
 
 50000 pushes, onto a list of this length
 length     total      per push   over an empty one
 -----------------------------------------------------
-0          30.8ms     616ns
-16         36.7ms     734ns      117ns
-64         41.4ms     827ns      210ns
-256        75.7ms     1514ns     897ns
-1024       189.2ms    3784ns     3168ns
+0          27.2ms     543ns
+16         34.4ms     688ns      144ns
+64         39.9ms     798ns      254ns
+256        67.7ms     1353ns     809ns
+1024       159.9ms    3197ns     2653ns
 ```
 
-Three things fall out of it and none of them is the one that was expected.
+Four things fall out of it and none of them is the one that was expected.
 
-**A call costs about four turns, and the function being called has no contract.** Putting a
-`where` and an `ensures` on it adds 199ns. The call that has neither already cost 323, and
-another argument only adds 93, so almost none of that is passing arguments. What is left is
-what a body is given before it starts: a frame that is a hash map keyed by definition, a
-lookup per parameter to find out which definition that is, the row the callee promised
-rebuilt from its span, and two more maps for `old(...)` and for handler state on a function
-with no `ensures` to read either. The machinery costs more on the calls that do not use it
-than the thing it exists for costs on the calls that do.
+**A call to a function taking nothing costs less than an operator.** It did not when this was
+first measured: a call cost about four turns whatever it was calling, because the row the
+declaration promised was rebuilt from its span on every call, the definition each parameter
+binds was looked up again on every call, and every call captured two maps for `old(...)` and
+`unchanged(...)` on functions with no `ensures` to read either. All of that is a property of
+the declaration rather than of the call, and working it out once per declaration took about a
+quarter off. What is left of the mechanism itself is nearly nothing.
+
+**Almost all of what a call still costs is having a parameter.** The first one costs 223ns
+and the second 59ns. That is an argument list, a binding, and three names read where the row
+above read one, and a name read is two hash lookups: the span to the definition, then the
+definition to the value. Reading a name is what a run mostly does, and it is the most
+expensive small thing in the language. A pool that stopped a call allocating a fresh frame
+made no measurable difference, which is how the allocation was ruled out rather than argued
+about.
 
 **Copying a list is nearly free per element and not free per call.** Values are immutable, so
 `push` hands back a copy, and that copy is what everyone points at. It is about 3ns an
@@ -276,27 +284,25 @@ element. A list has to get past a hundred elements before the copy costs what en
 built-in cost before a single element was touched, and the lists in `examples/logs.deed` are
 words in a line and keys in a table: six and four.
 
-**A real program is calls.** `examples/logs.deed` costs about 40us a line, flat from 240
+**A real program is calls.** `examples/logs.deed` costs about 34us a line, flat from 240
 lines to 1920, so nothing in it is accidentally quadratic. Splitting one line into its words
-is 8us of that, and one line's worth of splitting is one declared call, one `split`, nine
-turns and fifteen more entries into a built-in. Adding those up from the two tables gets to
-about six of the eight microseconds, and the part that is missing is the branch in the middle
-of the fold, which nothing above measures. The copying in that 8us is under one percent of
-it.
+is 6us of that, and one line's worth of splitting is one declared call, one `split`, nine
+turns and fifteen more entries into a built-in.
 
 **So the shape question has nothing to decide between yet.** What a machine shape decides is
-how an expression is dispatched, and dispatch is the third thing on that list, behind calls
-and behind built-ins. A compiler measured against this interpreter would mostly be measured
-against per-call bookkeeping, and a compiler is not what fixes that: a bytecode machine still
-gives a call a frame, and giving it slots instead of a hash map is a change that can be made
-without one. Choosing between two machines on this evidence would be choosing on the strength
-of a straw man.
+how an expression is dispatched, and dispatch is not what a run spends its time on: a turn is
+94ns, a field read is 28ns, and both of those are already small next to what it costs to say
+a name. Nothing about which machine reads the name changes what reading it costs, and the
+thing that would, resolving a name to a slot instead of hashing a span and then a definition,
+can be done here. Choosing between two machines on this evidence would be choosing on the
+strength of a straw man.
 
-**What would falsify this:** bring a call down to what a turn costs, since the parts named
-above are bookkeeping rather than anything the language asks for, and measure again. If
-dispatch is on top afterwards then the shape question has a basis and the numbers will say
-which parts of the walk are worth compiling away. If it is not, code generation was never the
-next thing and there will be a number saying so rather than a preference.
+**What would falsify this:** make a name read cost what a field read costs, since a field
+read is a lookup in a map that is already in hand and a name read is two lookups that are
+not, and measure again. If dispatch is on top afterwards then the shape question has a basis
+and the numbers will say which parts of the walk are worth compiling away. If it is not, code
+generation was never the next thing and there will be a number saying so rather than a
+preference.
 
 ---
 

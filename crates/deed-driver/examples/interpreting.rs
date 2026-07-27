@@ -73,7 +73,7 @@ struct Row {
     over: Option<usize>,
 }
 
-const ROWS: [Row; 7] = [
+const ROWS: [Row; 8] = [
     Row {
         name: "setup, no turns",
         body: None,
@@ -99,6 +99,12 @@ const ROWS: [Row; 7] = [
         over: Some(2),
     },
     Row {
+        name: "  + a call taking none",
+        body: Some("sum + nothing()"),
+        claim: "got == turns",
+        over: Some(2),
+    },
+    Row {
         name: "  + a call",
         body: Some("sum + itself(n)"),
         claim: "got == turns",
@@ -108,13 +114,13 @@ const ROWS: [Row; 7] = [
         name: "  + another argument",
         body: Some("sum + first(n, n)"),
         claim: "got == turns",
-        over: Some(4),
+        over: Some(5),
     },
     Row {
         name: "  + a contract on it",
         body: Some("sum + guarded(n)"),
         claim: "got == turns",
-        over: Some(4),
+        over: Some(5),
     },
 ];
 
@@ -153,6 +159,8 @@ fn walk_source(body: Option<&str>, claim: &str) -> String {
 record Holding {{ n: Int }}
 
 fn itself(n: Int) -> Int {{ n }}
+
+fn nothing() -> Int {{ 1 }}
 
 fn first(a: Int, b: Int) -> Int {{ a }}
 
@@ -415,11 +423,11 @@ fn notes() {
     println!();
     println!("Read the first two tables against each other. A turn, an operator and");
     println!("a field read are the walk, and the walk is what a compiler removes. A");
-    println!("call is not: almost all of it is the frame, the row and the contract");
-    println!("machinery a body is given before it runs, and a compiled call still");
-    println!("needs those. Nor is a push: the copy is the per-element part, and the");
-    println!("row for an empty list is what it costs before a single element has");
-    println!("been copied.");
+    println!("call taking nothing is now down among them; what a call still costs is");
+    println!("having a parameter, which is an argument list, a binding and names");
+    println!("read, and a name is two hash lookups. Nor is a push the walk: the copy");
+    println!("is the per-element part, and the row for an empty list is what it");
+    println!("costs before a single element has been copied.");
 }
 
 // -- printing ----------------------------------------------------------------

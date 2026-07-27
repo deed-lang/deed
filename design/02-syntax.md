@@ -446,7 +446,10 @@ noticed, because every example was effectful.
 
 `old(expr)` is the value of `expr` on entry. `unchanged(Effect)` says nothing observable
 through that effect was modified, which is how rollback gets stated without describing the
-mechanism.
+mechanism. Both of them read what entering the call recorded, and a call records for the
+sake of its `ensures` clauses, so both are refused anywhere else. That was always true of
+`old`, which had nothing to look its expression up in; `unchanged` used to answer outside a
+contract and the thing it was answering about was whichever call last recorded anything.
 
 Postconditions are the review surface. A person reads the contract, the compiler is
 responsible for the body agreeing with it.
