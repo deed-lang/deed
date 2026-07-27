@@ -264,7 +264,7 @@ and nothing else does, so the runtime never reads its own invocation on the prog
 
 ### Arguments are input, not authority
 
-`Io.args(sys)` hands back a `List<String>`. It is the odd operation of the six: it does
+`Io.args(sys)` hands back a `List<String>`. It is the odd operation of the ten: it does
 nothing, it returns data rather than something opaque, and it takes the whole `System` rather
 than a narrower capability. It reads like it does not belong.
 

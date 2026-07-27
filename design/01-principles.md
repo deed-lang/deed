@@ -164,9 +164,10 @@ makes editing one function require re-checking things that did not change.
 ### What is measured, and what is not
 
 `deed check --timings` reports wall time per pass. On one developer machine, an unoptimised
-build checking the eleven files in `examples/` takes about 7ms, and a generated module of 800
-functions with contracts on half of them takes about 26ms. Those are numbers from one
-machine and a debug build, not a guarantee.
+build checking the eighteen files in `examples/` takes about 24ms. That is a number from one
+machine and a debug build, not a guarantee, and what it grows like matters more than what it
+is: `crates/deed-driver/tests/scaling.rs` builds modules of increasing size and fails if
+checking stops being close to linear in the number of functions.
 
 They are also not the target. The target is about the edit loop, and the edit loop is what
 the language server does: recheck the workspace, wait for a keystroke, recheck it again.
