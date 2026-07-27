@@ -333,6 +333,77 @@ fn a_transparent_alias_is_still_transparent_from_outside() {
 }
 
 #[test]
+fn an_alias_a_signature_was_written_with_crosses_as_what_it_names() {
+    // The other direction of the same rule, and the one that was missing. `b`
+    // does not declare `Count`, it imports it, so lowering `b`'s surface could
+    // not see what it names and sent the bare name across. `a` writes the
+    // alias out, because it can see it, and then the two disagreed about a
+    // type and its own definition.
+    //
+    // Found by pointing a benchmark at `examples/logs.deed`: `length` refused
+    // a table that came back from a function, and took the same table when it
+    // was written out by hand two lines above.
+    let (sources, checked) = check(&[
+        "module a\n\nuse b.{make}\n\nfn f() -> Int { make() + 1 }\n",
+        "module b\n\nuse c.{Count}\n\nfn make() -> Count { 1 }\n",
+        "module c\n\ntype Count = Int\n",
+    ]);
+    assert!(
+        checked.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn an_alias_that_carries_parameters_crosses_the_same_way() {
+    // The shape it was found in. `Table` takes two parameters and names a list
+    // of something, so the far side has to end up with a list rather than with
+    // a name, or nothing that takes a list will take one of these.
+    let (sources, checked) = check(&[
+        "module a\n\nuse b.{counts}\n\nfn f() -> Int { length(counts()) }\n",
+        "module b\n\nuse c.{Pair, Table}\n\nfn counts() -> Table<String, Int> {\n    [Pair { key: \"one\", value: 1 }]\n}\n",
+        "module c\n\nrecord Pair<K, V> { key: K, value: V }\n\ntype Table<K, V> = List<Pair<K, V>>\n",
+    ]);
+    assert!(
+        checked.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn a_refinement_reached_through_a_third_module_stays_a_distinct_type() {
+    // The half that must not move. Writing an alias out is right because it
+    // was never a type of its own; a predicate makes one, and it stays one
+    // however many modules it is read through.
+    let (sources, checked) = check(&[
+        "module a\n\nuse b.{make}\n\nfn f(n: Int) -> Int { make(n) }\n",
+        "module b\n\nuse c.{Positive}\n\nfn make(n: Positive) -> Int { n }\n",
+        "module c\n\ntype Positive = Int where value > 0\n",
+    ]);
+    assert!(
+        checked.has_errors(),
+        "an Int reached a Positive through two modules:\n{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn two_aliases_that_name_each_other_still_terminate() {
+    // Nothing has refused this before it gets here. The surface pass runs over
+    // whatever files it was handed, so a cycle it walked into would be a hang
+    // rather than a diagnostic, and a hang in a language server is worse than
+    // any message.
+    let (_, checked) = check(&[
+        "module a\n\nuse b.{Y}\n\ntype X = Y\n\nfn f(x: X) -> X { x }\n",
+        "module b\n\nuse a.{X}\n\ntype Y = X\n",
+    ]);
+    // What it says is not the point. That it says anything at all is.
+    assert!(checked.diagnostics.len() < 100);
+}
+
+#[test]
 fn a_type_from_a_third_module_keeps_its_own_identity() {
     // `b` re-exposes a type it imported from `c`. Lowering `b`'s surface must
     // not stamp `b` onto it, or the same type would compare unequal to itself

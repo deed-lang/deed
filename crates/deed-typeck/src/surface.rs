@@ -7,9 +7,15 @@
 //!
 //! A surface is the same declarations lowered so they can be read from
 //! anywhere: every type in it is either primitive or a [`Ty::External`], which
-//! is identified by a module path and a name rather than by an index. Nothing
-//! here needs another module's surface to have been built first, so the order
-//! modules are visited in does not matter and an import cycle still resolves.
+//! is identified by a module path and a name rather than by an index. Lowering
+//! one module never asks about another, so the order they are visited in does
+//! not matter and an import cycle still resolves.
+//!
+//! One step does need all of them, and it is the last one. A transparent alias
+//! is a name for a type rather than a type, so a signature written with one
+//! has to cross as what it names, and a module that imported the alias cannot
+//! see what that is. [`World::of`] writes them out once every module is in,
+//! which is why that is the only way to build a world with anything in it.
 //!
 //! What is deliberately not carried across: refinement predicates. An exported
 //! `type Positive = Int where value > 0` arrives as an opaque named type rather
@@ -122,16 +128,208 @@ pub struct World {
 }
 
 impl World {
+    /// A world with nothing in it, for a file that imports nothing.
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn insert(&mut self, path: impl Into<String>, surface: Surface) {
-        self.modules.insert(path.into(), surface);
+    /// Every module at once.
+    ///
+    /// All of them together rather than one at a time, because a signature can
+    /// mention a transparent alias that a third module declared, and what that
+    /// alias names cannot be worked out until the third module is here.
+    /// Lowering a module deliberately does not ask about another module, so
+    /// that the order they are visited in does not matter and an import cycle
+    /// still resolves; this is the one step that needs the whole set, and it
+    /// is the only way to build a world that has anything in it.
+    pub fn of(modules: impl IntoIterator<Item = (String, Surface)>) -> Self {
+        let mut world = World {
+            modules: modules.into_iter().collect(),
+        };
+        world.expand_aliases();
+        world
     }
 
     pub fn get(&self, module: &str, name: &str) -> Option<&SurfaceItem> {
         self.modules.get(module)?.get(name)
+    }
+
+    /// Replaces every mention of a transparent alias with what it names.
+    ///
+    /// A module lowering its own signatures expands the aliases it declared,
+    /// because it can see them. It cannot expand one it imported, so an
+    /// exported signature written with a third module's alias crossed as a
+    /// bare name and the far side had nothing to compare it against. That is
+    /// the same failure the alias expansion was written to fix, one module
+    /// further out: `size(counts)` was refused as a mismatch between a type
+    /// and its own definition, where `size` took the alias written out and
+    /// `counts` came back from a function that named it.
+    ///
+    /// Refinements are not aliases here and do not move. A predicate makes a
+    /// distinct type wherever it is read from.
+    fn expand_aliases(&mut self) {
+        let aliases: BTreeMap<(&str, &str), &Ty> = self
+            .modules
+            .iter()
+            .flat_map(|(path, surface)| {
+                surface
+                    .items
+                    .iter()
+                    .filter_map(move |(name, item)| match item {
+                        SurfaceItem::Alias { target, .. } => {
+                            Some(((path.as_str(), name.as_str()), target))
+                        }
+                        _ => None,
+                    })
+            })
+            .collect();
+
+        if aliases.is_empty() {
+            return;
+        }
+
+        let expanded: BTreeMap<String, Surface> = self
+            .modules
+            .iter()
+            .map(|(path, surface)| {
+                let items = surface
+                    .items
+                    .iter()
+                    .map(|(name, item)| (name.clone(), expand_item(item, &aliases)))
+                    .collect();
+                (path.clone(), Surface { items })
+            })
+            .collect();
+
+        self.modules = expanded;
+    }
+}
+
+/// One exported declaration with the aliases in its types written out.
+fn expand_item(item: &SurfaceItem, aliases: &BTreeMap<(&str, &str), &Ty>) -> SurfaceItem {
+    let one = |ty: &Ty| expand_ty(ty, aliases, &mut Vec::new());
+    let named = |fields: &Vec<(String, Ty)>| {
+        fields
+            .iter()
+            .map(|(name, ty)| (name.clone(), one(ty)))
+            .collect()
+    };
+
+    match item {
+        SurfaceItem::Function {
+            params,
+            ret,
+            generics,
+            row,
+            guarantee,
+        } => SurfaceItem::Function {
+            params: params.iter().map(one).collect(),
+            ret: one(ret),
+            generics: generics.clone(),
+            row: row.clone(),
+            guarantee: guarantee.clone(),
+        },
+        SurfaceItem::Record { fields, generics } => SurfaceItem::Record {
+            fields: named(fields),
+            generics: generics.clone(),
+        },
+        SurfaceItem::Choice { variants, generics } => SurfaceItem::Choice {
+            variants: variants
+                .iter()
+                .map(|variant| SurfaceVariant {
+                    name: variant.name.clone(),
+                    fields: variant.fields.as_ref().map(named),
+                })
+                .collect(),
+            generics: generics.clone(),
+        },
+        SurfaceItem::Variant {
+            choice,
+            fields,
+            generics,
+        } => SurfaceItem::Variant {
+            choice: Rc::clone(choice),
+            fields: fields.as_ref().map(named),
+            generics: generics.clone(),
+        },
+        SurfaceItem::Refinement { base } => SurfaceItem::Refinement { base: one(base) },
+        SurfaceItem::Alias { target, generics } => SurfaceItem::Alias {
+            target: one(target),
+            generics: generics.clone(),
+        },
+        SurfaceItem::Effect { operations } => SurfaceItem::Effect {
+            operations: operations
+                .iter()
+                .map(|(name, (params, ret))| {
+                    (name.clone(), (params.iter().map(one).collect(), one(ret)))
+                })
+                .collect(),
+        },
+        SurfaceItem::Handler { state } => SurfaceItem::Handler {
+            state: named(state),
+        },
+    }
+}
+
+/// One type with the aliases in it written out.
+///
+/// `open` is which aliases are being written out right now. A chain of them
+/// can lead back to where it started, and this runs over whatever files it was
+/// handed rather than over files something else already accepted, so it cannot
+/// rely on anybody having refused the cycle first.
+fn expand_ty(
+    ty: &Ty,
+    aliases: &BTreeMap<(&str, &str), &Ty>,
+    open: &mut Vec<(Rc<str>, Rc<str>)>,
+) -> Ty {
+    match ty {
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(expand_ty(ok, aliases, open)),
+            Box::new(expand_ty(err, aliases, open)),
+        ),
+        Ty::List(element) => Ty::List(Box::new(expand_ty(element, aliases, open))),
+        Ty::Fn { params, row, ret } => Ty::Fn {
+            params: params
+                .iter()
+                .map(|param| expand_ty(param, aliases, open))
+                .collect(),
+            row: row.clone(),
+            ret: Box::new(expand_ty(ret, aliases, open)),
+        },
+        Ty::Named { def, args } => Ty::Named {
+            def: *def,
+            args: args
+                .iter()
+                .map(|arg| expand_ty(arg, aliases, open))
+                .collect(),
+        },
+        Ty::External { module, name, args } => {
+            let args: Vec<Ty> = args
+                .iter()
+                .map(|arg| expand_ty(arg, aliases, open))
+                .collect();
+            let key = (Rc::clone(module), Rc::clone(name));
+            let Some(target) = aliases.get(&(module.as_ref(), name.as_ref())) else {
+                return Ty::External {
+                    module: Rc::clone(module),
+                    name: Rc::clone(name),
+                    args,
+                };
+            };
+            if open.contains(&key) {
+                return Ty::Unknown;
+            }
+
+            open.push(key);
+            let target = expand_ty(target, aliases, open);
+            open.pop();
+
+            if args.is_empty() {
+                return target;
+            }
+            target.substitute(&crate::ty::bindings_for(&args))
+        }
+        other => other.clone(),
     }
 }
 
