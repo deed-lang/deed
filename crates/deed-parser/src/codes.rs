@@ -41,3 +41,11 @@ pub const MISSING_PARAMETER_TYPE: &str = "DEED2007";
 /// positionally and are built in, which is the shortcut `design/02-syntax.md`
 /// records under what holds `Result` in the language.
 pub const POSITIONAL_VARIANT: &str = "DEED2008";
+
+/// A word in front of a `let` name, such as `mut`, that the language has no
+/// place for.
+///
+/// It has a code of its own because taking `mut` as the name is the reading
+/// that produces the most and the least useful messages of any single word a
+/// newcomer writes, and none of them names the word.
+pub const NO_BINDING_MODIFIER: &str = "DEED2009";
