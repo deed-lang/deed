@@ -69,9 +69,9 @@ fn announced(numbers: List<Int>) -> List<Int>
     map(
         numbers,
         |n: Int| {
-        Log.note("saw a number")
-        n + 1
-    },
+            Log.note("saw a number")
+            n + 1
+        },
     )
 }
 
@@ -82,9 +82,9 @@ fn counted_over(numbers: List<Int>) -> Int
     count_where(
         numbers,
         |n: Int| {
-        Log.note("checked one")
-        n > 2
-    },
+            Log.note("checked one")
+            n > 2
+        },
     )
 }
 
