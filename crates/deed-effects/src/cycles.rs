@@ -1,10 +1,12 @@
 //! Which functions can reach themselves.
 //!
-//! Deed has no loop syntax, so a call cycle is the only way a function can fail
-//! to return. Finding them is Tarjan's algorithm and nothing more interesting
-//! than that, written iteratively: the thing this exists to detect is unbounded
-//! recursion, and a checker that blew its own stack looking for one would be
-//! funny in the wrong way.
+//! A call cycle is the only way a function can fail to return. There is a loop
+//! and it does not change that: a `for` walks a list that already exists, and
+//! a `for ... while` only ends one sooner, so neither can be the thing that
+//! never stops. Finding cycles is Tarjan's algorithm and nothing more
+//! interesting than that, written iteratively: the thing this exists to detect
+//! is unbounded recursion, and a checker that blew its own stack looking for
+//! one would be funny in the wrong way.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
