@@ -43,7 +43,7 @@ reused, so `DEED4009` means today what it meant when it was assigned, and `--for
 is an output something else can read.
 
 ```
-$ cargo run -p deed-cli -- run examples/config.deed --dir examples
+$ deed run examples/config.deed --dir examples
 found it
 `..` would leave the directory, and there is no way out of a `Dir`
 `../Cargo.toml` is not a single name, and a `Dir` only takes one at a time
@@ -53,7 +53,7 @@ used the fallback
 ```
 
 ```
-$ cargo run -p deed-cli -- test examples/
+$ deed test examples/
 examples/counter.deed
   ok    bumping twice adds twice
   ...
@@ -62,11 +62,11 @@ examples/transfer.deed
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-84 passed, 0 failed
+102 passed, 0 failed
 ```
 
 ```
-$ cargo run -p deed-cli -- check examples/transfer.deed --obligations
+$ deed check examples/transfer.deed --obligations
 obligations: 7 proven, 0 tested, 6 guarded
   guarded  examples/transfer.deed:94:5  transfer ensures ok
   ...
