@@ -5,7 +5,7 @@
 //! that rewrites source has to be more careful about when it declines than
 //! about when it acts.
 
-use deed_diagnostics::{Applicability, Diagnostic, SourceMap, Span};
+use deed_diagnostics::{Applicability, Diagnostic, SourceMap, Span, SuggestedEdit};
 use deed_driver::fix::{error_count, fix};
 
 fn diagnose(text: &str) -> Vec<Diagnostic> {
@@ -26,6 +26,24 @@ fn with_fix(span: Span, replacement: &str, applicability: Applicability) -> Diag
         "made up",
         span,
         replacement,
+        applicability,
+    )
+}
+
+/// A diagnostic whose repair takes two edits, for the same reason.
+fn with_edits(edits: Vec<(Span, &str)>, applicability: Applicability) -> Diagnostic {
+    let mut sources = SourceMap::new();
+    let file = sources.add("made-up.deed", String::new());
+    let span = edits[0].0;
+    Diagnostic::error("DEED0000", file, span, "made up").with_edits(
+        "made up",
+        edits
+            .into_iter()
+            .map(|(span, replacement)| SuggestedEdit {
+                span,
+                replacement: replacement.to_string(),
+            })
+            .collect(),
         applicability,
     )
 }
@@ -106,6 +124,23 @@ fn bindings_written_without_let_all_come_out_in_one_pass() {
     assert_eq!(
         result.source,
         "module a\n\nfn f() -> Int {\n    let n = 1\n    let m = 2\n    let k: Int = 3\n    n + m + k\n}\n"
+    );
+    assert!(
+        diagnose(&result.source).is_empty(),
+        "it should check clean now: {:?}",
+        diagnose(&result.source)
+    );
+}
+
+/// The one repair in the compiler that has to wrap a value, end to end.
+#[test]
+fn a_cast_comes_out_as_the_call_it_meant() {
+    let source = "module a\n\nfn f(n: Int) -> String {\n    let text = n as String\n    text\n}\n";
+    let result = fix(source, diagnose);
+    assert_eq!(result.applied, 1);
+    assert_eq!(
+        result.source,
+        "module a\n\nfn f(n: Int) -> String {\n    let text = to_string(n)\n    text\n}\n"
     );
     assert!(
         diagnose(&result.source).is_empty(),
@@ -392,6 +427,46 @@ fn fixes_that_only_touch_at_a_point_both_go_in() {
         ]
     });
     assert_eq!(result.source, "AB6789");
+}
+
+/// A repair that wraps something is two edits and one answer. Both go in, and
+/// it counts as one repair, because what a person counting wants is the number
+/// of things that were wrong.
+#[test]
+fn a_repair_of_two_edits_goes_in_as_one() {
+    let source = "0123456789";
+    let result = fix(source, |text| {
+        if text != "0123456789" {
+            return Vec::new();
+        }
+        vec![with_edits(
+            vec![(Span::at(2), "("), (Span::new(5, 7), ")")],
+            Applicability::MachineApplicable,
+        )]
+    });
+    assert_eq!(result.source, "01(234)789");
+    assert_eq!(result.applied, 1);
+}
+
+/// Half a repair is not a smaller repair. If one edit has to be dropped the
+/// other goes with it, or the file is left holding an opening parenthesis that
+/// nothing closes.
+#[test]
+fn half_a_repair_is_refused_with_the_other_half() {
+    let source = "0123456789";
+    let result = fix(source, |_| {
+        vec![
+            with_edits(
+                vec![(Span::at(2), "("), (Span::new(5, 7), ")")],
+                Applicability::MachineApplicable,
+            ),
+            // Overlaps the closing half only. The opening half is untouched
+            // and would otherwise sail in on its own.
+            with_fix(Span::new(6, 9), "X", Applicability::MachineApplicable),
+        ]
+    });
+    assert_eq!(result.source, source);
+    assert!(!result.changed());
 }
 
 #[test]

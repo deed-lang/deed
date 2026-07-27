@@ -156,6 +156,30 @@ impl Diagnostic {
         self
     }
 
+    /// A fix made of several edits that only mean anything together.
+    ///
+    /// One edit is the ordinary case, which is what [`Self::with_fix`] is for.
+    /// This is for a repair that has to wrap something: turning `n as String`
+    /// into `to_string(n)` is an insertion in front of the value and a
+    /// replacement behind it, and either half on its own leaves the line worse
+    /// than it was found. Whoever applies a fix has to take all of it or none.
+    ///
+    /// The edits are given in the order they appear in the file.
+    #[must_use]
+    pub fn with_edits(
+        mut self,
+        message: impl Into<String>,
+        edits: Vec<SuggestedEdit>,
+        applicability: Applicability,
+    ) -> Self {
+        self.fix = Some(Fix {
+            message: message.into(),
+            edits,
+            applicability,
+        });
+        self
+    }
+
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
     }

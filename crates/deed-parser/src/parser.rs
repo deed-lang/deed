@@ -16,7 +16,7 @@ use deed_ast::{
     Outcome, Param, Pattern, PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias, UnaryOp,
     Use, Variant,
 };
-use deed_diagnostics::{Applicability, Diagnostic, FileId, Span};
+use deed_diagnostics::{Applicability, Diagnostic, FileId, Span, SuggestedEdit};
 use deed_lexer::{Keyword, Token, TokenKind};
 
 use crate::codes;
@@ -1578,6 +1578,17 @@ impl<'a> Parser<'a> {
             lhs = self.no_such_range(lhs);
         }
 
+        // `n as String`. `as` stays an ordinary name, so this is the shape and
+        // not the word: a value followed by a name followed by a name, all on
+        // one line, which no expression could ever have been.
+        if matches!(self.kind(), TokenKind::Ident(word) if word == "as")
+            && matches!(self.nth_kind(1), TokenKind::Ident(_))
+            && !self.continues_a_new_line()
+            && !self.nth(1).starts_line
+        {
+            lhs = self.no_such_cast(lhs);
+        }
+
         while let Some((op, bp)) = binary_op(self.kind()) {
             if bp < min_bp || self.continues_a_new_line() {
                 break;
@@ -1640,6 +1651,91 @@ impl<'a> Parser<'a> {
 
         let rhs = self.parse_unary();
         Expr::Error(lhs.span().to(rhs.span()))
+    }
+
+    /// Reports `x as T` and reads the type it was given.
+    ///
+    /// The type is parsed rather than skipped, so `xs as List<Int>` is one
+    /// mistake and not a comparison that never closes. What comes back is an
+    /// error node, because there is no cast to build: this language converts
+    /// by calling something, and the call says in its return type whether it
+    /// can fail, which is exactly what a cast is for not saying.
+    fn no_such_cast(&mut self, lhs: Expr) -> Expr {
+        let word_span = self.span();
+        self.bump();
+        let ty = self.parse_type();
+
+        // Only a plain name has a conversion to point at. `List<Int>` and
+        // `Fn(Int) -> Int` are the shapes nothing converts to anyway.
+        let target = match &ty {
+            Type::Named { name, args, .. } if args.is_empty() => Some(name.name.as_str()),
+            _ => None,
+        };
+
+        let mut diagnostic = Diagnostic::error(
+            codes::NO_CAST,
+            self.file,
+            word_span.to(ty.span()),
+            "there is no cast in this language",
+        )
+        .with_primary_label("no such operator")
+        .with_note(
+            "a conversion is a call, and a call says in its return type whether it can fail, \
+             which is the thing a cast is for not saying",
+        );
+
+        // The tail is everything from the end of the value to the end of the
+        // type, so wrapping the value is an insertion in front of it and a
+        // closing parenthesis in place of the rest.
+        let tail = Span::new(lhs.span().end, ty.span().end);
+        diagnostic = match target {
+            Some("String") => diagnostic
+                .with_note("a number is written out with `to_string(n)`")
+                .with_edits(
+                    "call `to_string`",
+                    vec![
+                        SuggestedEdit {
+                            span: Span::at(lhs.span().start),
+                            replacement: "to_string(".to_string(),
+                        },
+                        SuggestedEdit {
+                            span: tail,
+                            replacement: ")".to_string(),
+                        },
+                    ],
+                    Applicability::MachineApplicable,
+                ),
+            Some("Int") => diagnostic
+                .with_note(
+                    "text is read as a number with `to_int(s)`, which gives a `Result` \
+                     because not every string is one",
+                )
+                .with_edits(
+                    "call `to_int`",
+                    vec![
+                        SuggestedEdit {
+                            span: Span::at(lhs.span().start),
+                            replacement: "to_int(".to_string(),
+                        },
+                        SuggestedEdit {
+                            span: tail,
+                            replacement: ")".to_string(),
+                        },
+                    ],
+                    // Unlike `to_string` this one can fail, so what it gives
+                    // back is a `Result` and what to do with that is the
+                    // reader's decision rather than a rewrite anybody can make
+                    // without them.
+                    Applicability::MaybeIncorrect,
+                ),
+            _ => diagnostic.with_note(
+                "`to_string` and `to_int` are the conversions the prelude has, and anything \
+                 else is an ordinary function with a name of its own",
+            ),
+        };
+        self.emit(diagnostic);
+
+        Expr::Error(lhs.span().to(ty.span()))
     }
 
     fn parse_unary(&mut self) -> Expr {

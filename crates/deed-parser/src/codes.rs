@@ -67,3 +67,11 @@ pub const BINDING_WITHOUT_LET: &str = "DEED2010";
 /// since a field access has a name between them, so the shape can be read and
 /// swallowed whole.
 pub const NO_RANGE: &str = "DEED2011";
+
+/// `n as String`. A cast, which this language does not have.
+///
+/// `as` is an ordinary name, so the resolver used to answer it with "cannot
+/// find `as` in this scope", which is true of a word nobody wrote as a name.
+/// The conversions that exist are calls, and a call says in its return type
+/// whether it can fail, which is the thing a cast is for hiding.
+pub const NO_CAST: &str = "DEED2012";

@@ -5,17 +5,23 @@
 //! structure rather than something a machine does. This is the part that does
 //! it.
 //!
-//! A fix is a span and a replacement, so most of them are written where the
-//! problem is found: the lexer, the parser and the resolver each hand one over
-//! with the diagnostic. The row diagnostics cannot, and they are the ones that
-//! would pay, because they already say the words. `DEED5001` names the effect,
-//! names the function and tells the reader to add it to the `uses` clause.
-//! Saying that as a span means knowing about commas, about indentation, and
-//! about a clause that may not exist yet, and the effect checker has the answer
-//! and no business knowing any of that. So [`crate::rows`] writes those, where
-//! the text, the tree and the one canonical layout are all in scope at once.
-//! [`crate::imports`] is the same shape one pass earlier: the resolver knows
-//! which import is unused and nothing about the comma beside it.
+//! A fix is usually a span and a replacement, so most of them are written
+//! where the problem is found: the lexer, the parser and the resolver each
+//! hand one over with the diagnostic. `DEED2012` is the one that is not, and
+//! it is not by a little: turning `n as String` into `to_string(n)` is an
+//! insertion in front of the value and a replacement behind it, so a fix is
+//! taken or refused whole and never in pieces.
+//!
+//! The row diagnostics cannot write theirs where they are found, and they are
+//! the ones that would pay, because they already say the words. `DEED5001`
+//! names the effect, names the function and tells the reader to add it to the
+//! `uses` clause. Saying that as a span means knowing about commas, about
+//! indentation, and about a clause that may not exist yet, and the effect
+//! checker has the answer and no business knowing any of that. So
+//! [`crate::rows`] writes those, where the text, the tree and the one canonical
+//! layout are all in scope at once. [`crate::imports`] is the same shape one
+//! pass earlier: the resolver knows which import is unused and nothing about
+//! the comma beside it.
 //!
 //! The type checker has one, and only one. There is no obvious repair for a
 //! type that does not fit, which is the difference between a fix that is
@@ -34,7 +40,7 @@
 //! arrive at either is a value that was supposed to be read, and papering over
 //! that in bulk is the one thing they must not do.
 
-use deed_diagnostics::{Applicability, Diagnostic, SourceMap, Span, SuggestedEdit};
+use deed_diagnostics::{Applicability, Diagnostic, Fix, SourceMap, Span, SuggestedEdit};
 
 /// How many rounds of fix-then-recheck to run before giving up.
 ///
@@ -47,7 +53,11 @@ const ROUNDS: usize = 8;
 #[derive(Debug)]
 pub struct Fixed {
     pub source: String,
-    /// How many edits went in, across every round.
+    /// How many repairs went in, across every round.
+    ///
+    /// Repairs and not edits: one that wraps something is two edits and one
+    /// answer to one diagnostic, and what a person counting wants is the
+    /// number of things that were wrong.
     pub applied: usize,
     /// True when the bound was reached with changes still pending, which means
     /// something is oscillating and the result should not be trusted as final.
@@ -71,8 +81,8 @@ pub fn fix(source: &str, mut check: impl FnMut(&str) -> Vec<Diagnostic>) -> Fixe
 
     for _ in 0..ROUNDS {
         let diagnostics = check(&current);
-        let edits = collect(&diagnostics);
-        if edits.is_empty() {
+        let repairs = collect(&diagnostics);
+        if repairs.edits.is_empty() {
             return Fixed {
                 source: current,
                 applied,
@@ -80,7 +90,7 @@ pub fn fix(source: &str, mut check: impl FnMut(&str) -> Vec<Diagnostic>) -> Fixe
             };
         }
 
-        let next = apply(&current, &edits);
+        let next = apply(&current, &repairs.edits);
         if next == current {
             // The edits were all no-ops, so another round would find the same
             // ones and change nothing again.
@@ -91,7 +101,7 @@ pub fn fix(source: &str, mut check: impl FnMut(&str) -> Vec<Diagnostic>) -> Fixe
             };
         }
 
-        applied += edits.len();
+        applied += repairs.fixes;
         current = next;
     }
 
@@ -102,34 +112,59 @@ pub fn fix(source: &str, mut check: impl FnMut(&str) -> Vec<Diagnostic>) -> Fixe
     }
 }
 
+/// The edits worth applying, and how many repairs they came from.
+struct Repairs {
+    edits: Vec<SuggestedEdit>,
+    fixes: usize,
+}
+
 /// The edits worth applying, with overlaps dropped.
 ///
 /// Two fixes that touch the same range cannot both be right, and applying one
 /// of them would leave the other's span pointing at text that moved. Dropping
 /// both is the answer that does not depend on which order they came in.
-fn collect(diagnostics: &[Diagnostic]) -> Vec<SuggestedEdit> {
-    let mut edits: Vec<SuggestedEdit> = diagnostics
+///
+/// A fix is refused whole. Most carry one edit, but a repair that wraps
+/// something carries two, and half of that is not a smaller repair: it is
+/// `to_string(n as String`, which is worse than the line it replaced.
+fn collect(diagnostics: &[Diagnostic]) -> Repairs {
+    let fixes: Vec<&Fix> = diagnostics
         .iter()
         .filter_map(|diagnostic| diagnostic.fix.as_ref())
         .filter(|fix| fix.applicability == Applicability::MachineApplicable)
-        .flat_map(|fix| fix.edits.iter().cloned())
         .collect();
 
-    edits.sort_by_key(|edit| (edit.span.start, edit.span.end));
+    let mut edits: Vec<(usize, SuggestedEdit)> = fixes
+        .iter()
+        .enumerate()
+        .flat_map(|(owner, fix)| fix.edits.iter().cloned().map(move |edit| (owner, edit)))
+        .collect();
 
-    let mut kept: Vec<SuggestedEdit> = Vec::with_capacity(edits.len());
+    edits.sort_by_key(|(_, edit)| (edit.span.start, edit.span.end));
+
+    let mut refused = vec![false; fixes.len()];
     let mut index = 0;
     while index < edits.len() {
         let mut last = index;
-        while last + 1 < edits.len() && overlaps(&edits[last].span, &edits[last + 1].span) {
+        while last + 1 < edits.len() && overlaps(&edits[last].1.span, &edits[last + 1].1.span) {
             last += 1;
         }
-        if last == index {
-            kept.push(edits[index].clone());
+        if last > index {
+            for (owner, _) in &edits[index..=last] {
+                refused[*owner] = true;
+            }
         }
         index = last + 1;
     }
-    kept
+
+    Repairs {
+        edits: edits
+            .into_iter()
+            .filter(|(owner, _)| !refused[*owner])
+            .map(|(_, edit)| edit)
+            .collect(),
+        fixes: refused.iter().filter(|refused| !**refused).count(),
+    }
 }
 
 fn overlaps(a: &Span, b: &Span) -> bool {

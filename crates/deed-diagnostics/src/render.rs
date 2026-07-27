@@ -5,7 +5,7 @@
 //! one. That is the whole point of P7: the data is the source of truth and the
 //! text is a view.
 
-use crate::diagnostic::{Diagnostic, Label};
+use crate::diagnostic::{Diagnostic, Label, SuggestedEdit};
 use crate::source::{SourceFile, SourceMap};
 use crate::span::Span;
 
@@ -58,19 +58,64 @@ pub fn render_human(map: &SourceMap, diagnostic: &Diagnostic) -> String {
     }
     if let Some(fix) = &diagnostic.fix {
         out.push_str(&format!("help: {}\n", fix.message));
-        for edit in &fix.edits {
-            if !edit.replacement.is_empty() {
-                out.push_str(&format!(
-                    "{:gutter$} | {}\n",
-                    "",
-                    edit.replacement,
-                    gutter = gutter + 1
-                ));
+        match fix.edits.as_slice() {
+            // One replacement is the text that goes in, and reads as itself.
+            [edit] => {
+                if !edit.replacement.is_empty() {
+                    out.push_str(&format!(
+                        "{:gutter$} | {}\n",
+                        "",
+                        edit.replacement,
+                        gutter = gutter + 1
+                    ));
+                }
+            }
+            // Several only mean anything together and in the place they go. A
+            // `to_string(` and a `)` on two lines of their own say nothing
+            // about the line they were going to make, so show the line.
+            edits => {
+                if let Some(line) = rewritten_line(file, edits) {
+                    out.push_str(&format!("{:gutter$} | {}\n", "", line, gutter = gutter + 1));
+                }
             }
         }
     }
 
     out
+}
+
+/// The line the edits fall on, with all of them applied.
+///
+/// `None` when they do not all land on one line, which is a repair with no
+/// single line to show rather than a repair to be shown badly.
+fn rewritten_line(file: &SourceFile, edits: &[SuggestedEdit]) -> Option<String> {
+    let text = file.text();
+    let first = edits.first()?.span.start as usize;
+    let last = edits.last()?.span.end as usize;
+    if first > last || last > text.len() {
+        return None;
+    }
+
+    let start = text[..first].rfind('\n').map_or(0, |at| at + 1);
+    let end = text[last..].find('\n').map_or(text.len(), |at| last + at);
+    if text[start..end].contains('\n') {
+        return None;
+    }
+
+    let mut line = text[start..end].to_string();
+    for edit in edits.iter().rev() {
+        let from = (edit.span.start as usize).checked_sub(start)?;
+        let to = (edit.span.end as usize).checked_sub(start)?;
+        if from > to
+            || to > line.len()
+            || !line.is_char_boundary(from)
+            || !line.is_char_boundary(to)
+        {
+            return None;
+        }
+        line.replace_range(from..to, &edit.replacement);
+    }
+    Some(line.trim_start().to_string())
 }
 
 fn push_snippet(out: &mut String, file: &SourceFile, label: &Label, caret: char, gutter: usize) {
@@ -219,7 +264,7 @@ fn json_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{render_human, render_json};
-    use crate::diagnostic::{Applicability, Diagnostic};
+    use crate::diagnostic::{Applicability, Diagnostic, SuggestedEdit};
     use crate::source::SourceMap;
     use crate::span::Span;
 
@@ -286,5 +331,34 @@ mod tests {
         let file = map.add("t.deed", "abc");
         let d = Diagnostic::error("DEED9004", file, Span::new(0, 1), "no fix");
         assert!(render_json(&map, &d).contains("\"fix\":null"));
+    }
+
+    /// One replacement is the text that goes in and reads as itself. Two of
+    /// them are `to_string(` and `)`, which on lines of their own say nothing
+    /// about the line they were going to make.
+    #[test]
+    fn a_fix_that_wraps_something_is_shown_as_the_line_it_makes() {
+        let source = "fn f() -> String {\n    n as String\n}\n";
+        let mut map = SourceMap::new();
+        let file = map.add("t.deed", source);
+        let d = Diagnostic::error("DEED9005", file, Span::new(25, 34), "no cast").with_edits(
+            "call `to_string`",
+            vec![
+                SuggestedEdit {
+                    span: Span::at(23),
+                    replacement: "to_string(".to_string(),
+                },
+                SuggestedEdit {
+                    span: Span::new(24, 34),
+                    replacement: ")".to_string(),
+                },
+            ],
+            Applicability::MachineApplicable,
+        );
+
+        let text = render_human(&map, &d);
+        assert!(text.contains("help: call `to_string`"), "{text}");
+        assert!(text.contains("| to_string(n)\n"), "{text}");
+        assert!(!text.contains("| )\n"), "{text}");
     }
 }
