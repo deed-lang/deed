@@ -253,7 +253,8 @@ letter as two escapes that are bytes rather than characters. Getting either wron
 The examples are [transfer.deed](examples/transfer.deed),
 [counter.deed](examples/counter.deed), [hello.deed](examples/hello.deed),
 [config.deed](examples/config.deed), [todo.deed](examples/todo.deed),
-[journal.deed](examples/journal.deed), [proven.deed](examples/proven.deed),
+[journal.deed](examples/journal.deed), [logs.deed](examples/logs.deed),
+[proven.deed](examples/proven.deed),
 [closures.deed](examples/closures.deed), [diverge.deed](examples/diverge.deed),
 [strings.deed](examples/strings.deed), [lists.deed](examples/lists.deed),
 [generics.deed](examples/generics.deed),
@@ -261,8 +262,8 @@ The examples are [transfer.deed](examples/transfer.deed),
 [using_list.deed](examples/using_list.deed), and the three that see
 each other: [names.deed](examples/names.deed), [sink.deed](examples/sink.deed) and
 [greeting.deed](examples/greeting.deed). All are checked by every pass on every commit,
-`hello.deed`, `config.deed`, `todo.deed` and `journal.deed` have a `main`, and the rest run their
-own tests.
+`hello.deed`, `config.deed`, `todo.deed`, `journal.deed` and `logs.deed` have a `main`, and
+the rest run their own tests.
 
 `todo.deed` is the one written to find out what is missing rather than to show what is there.
 It reads a list of tasks out of a directory it was handed, adds one or marks one done if it

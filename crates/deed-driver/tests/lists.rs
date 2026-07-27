@@ -415,3 +415,78 @@ fn the_element_type_is_the_type_of_what_was_repeated() {
     let text = rendered(&sources, &checked.diagnostics);
     assert!(text.contains("DEED4001"), "{text}");
 }
+
+// -- what a fold built -------------------------------------------------------
+//
+// `[]` is a list of unknown until something says what goes into it, and three
+// places used to report the unknown rather than the answer: `push` handed back
+// the list's old element type, an `if` handed back its first branch, and a
+// `for` handed back what its accumulator started as. Any one of them was
+// enough to make a walk over what the loop built bind an element nothing was
+// known about, and an unknown element agrees with everything.
+
+#[test]
+fn a_mistake_after_a_fold_is_caught() {
+    // Without the element type this checked cleanly, so `one.nonesuch` on a
+    // record with no such field was a program the compiler said yes to.
+    let (sources, checked) = check(
+        "module a\n\n\
+         record Tally { key: String, seen: Int }\n\n\
+         fn wrong(tallies: List<Tally>) -> Int {\n\
+         \x20   let made = for one in tallies with out = [] {\n\
+         \x20       push(out, one)\n\
+         \x20   }\n\
+         \x20   for one in made with total = 0 {\n\
+         \x20       total + one.nonesuch\n\
+         \x20   }\n\
+         }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("DEED4004"), "{text}");
+    assert!(text.contains("no field `nonesuch`"), "{text}");
+}
+
+#[test]
+fn which_branch_comes_first_does_not_change_the_type() {
+    // The two spellings of one filter. Taking the first branch meant the one
+    // that hands the accumulator back unchanged decided, and it knows nothing.
+    for (first, second) in [("push(out, one)", "out"), ("out", "push(out, one)")] {
+        let source = format!(
+            "module a\n\n\
+             record Tally {{ key: String, seen: Int }}\n\n\
+             fn wrong(tallies: List<Tally>) -> Int {{\n\
+             \x20   let made = for one in tallies with out = [] {{\n\
+             \x20       if one.seen > 0 {{ {first} }} else {{ {second} }}\n\
+             \x20   }}\n\
+             \x20   for one in made with total = 0 {{\n\
+             \x20       total + one.nonesuch\n\
+             \x20   }}\n\
+             }}\n"
+        );
+        let (sources, checked) = check(&source);
+        let text = rendered(&sources, &checked.diagnostics);
+        assert!(
+            text.contains("DEED4004"),
+            "with `{first}` first, the element type was lost:\n{text}"
+        );
+    }
+}
+
+/// What the accumulator started as still wins where it knew something. The
+/// loop may run no times at all, so an accumulator that started as an `Int` is
+/// an `Int` whatever the body happens to hand back.
+#[test]
+fn a_narrower_body_does_not_narrow_the_accumulator() {
+    expect_pass(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn total(numbers: List<Int>) -> Int {\n\
+         \x20 for n in numbers with sum = 0 {\n\
+         \x20   if n > 0 { sum + n } else { sum }\n\
+         \x20 }\n\
+         }\n\n\
+         test \"folding\" {\n\
+         \x20 assert total([1, 2, 0 - 5]) == 3\n\
+         }\n",
+    );
+}

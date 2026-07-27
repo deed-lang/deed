@@ -111,6 +111,39 @@ fn every_example_is_fully_typed() {
 
 // -- one per construct the language has ------------------------------------
 
+/// A fold whose body is a branch, and a walk over what it built.
+///
+/// The accumulator starts as `[]`, which is a list of unknown, and the body is
+/// the only thing that says what is in it. One branch pushes an element and
+/// the other hands the accumulator back unchanged, which is the ordinary shape
+/// of a filter. If the type of the `if` comes from one branch rather than from
+/// both, writing them in the other order gives a list of unknown, and then
+/// nothing done with the elements is checked.
+#[test]
+fn a_fold_whose_body_is_a_branch_knows_what_it_built() {
+    let body = |first: &str, second: &str| {
+        format!(
+            "module a\n\n\
+             record Tally {{ key: String, seen: Int }}\n\n\
+             fn built(sorted: List<Tally>, one: Tally) -> List<Tally> {{\n\
+             \x20   let out = for s in sorted with kept = [] {{\n\
+             \x20       if s.seen >= one.seen {{\n\
+             \x20           {first}\n\
+             \x20       }} else {{\n\
+             \x20           {second}\n\
+             \x20       }}\n\
+             \x20   }}\n\
+             \x20   for s in out with again = [] {{\n\
+             \x20       push(again, s)\n\
+             \x20   }}\n\
+             }}\n"
+        )
+    };
+
+    expect_all_known("pushing first.deed", &body("push(kept, s)", "kept"));
+    expect_all_known("keeping first.deed", &body("kept", "push(kept, s)"));
+}
+
 #[test]
 fn literals_and_arithmetic() {
     expect_all_known(
