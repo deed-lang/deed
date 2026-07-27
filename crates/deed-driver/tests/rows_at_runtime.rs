@@ -6,10 +6,23 @@
 //! were open at once, and each was found by hand.
 //!
 //! So the run checks too. Every effect performed is held against every call on
-//! the stack that did not already discharge it with a `with` block, and a
-//! function that performs something it did not declare is `DEED6010`. That is
-//! reported against the compiler rather than the program: the file was
-//! accepted, so if an effect got through then the check was wrong.
+//! the stack, and a function that performs something it did not declare is
+//! `DEED6010`. That is reported against the compiler rather than the program:
+//! the file was accepted, so if an effect got through then the check was wrong.
+//!
+//! Three frames are passed over, and the value of an invariant like this one is
+//! knowing exactly which. A frame that discharged the effect with a `with`
+//! block is done, and so is everything outside it. A frame between a handler
+//! operation and the `with` that installed it is not asked, because what a
+//! handler performs belongs to whoever installed it. And an effect performed
+//! inside a `where` or `ensures` clause is held against nothing at all, because
+//! a contract does not contribute to a row. Each is a rule stated in
+//! `design/03-effects.md` rather than a gap here.
+//!
+//! That third one used to be reachable without any row naming the effect,
+//! which made it a gap after all. `DEED5009` closed it: a clause may still
+//! perform an operation the row does not list, but not an effect the signature
+//! never mentions.
 //!
 //! This is the same move as `crates/deed-driver/tests/fully_typed.rs`, one pass
 //! along. That one says no expression in a clean file is untyped. This one says

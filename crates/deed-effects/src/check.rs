@@ -18,6 +18,14 @@
 //! to be paid for in permissions would be an obligation people stop writing.
 //! That is a decision rather than an oversight, and it is written up in
 //! `design/03-effects.md`.
+//!
+//! **Unmentioned in a contract.** What that decision cannot mean is that a
+//! clause may perform an effect the signature says nothing about. Installing a
+//! handler is the caller's job and the signature is the only place a caller
+//! learns one is needed, so such a call passes every check here and then has
+//! nowhere to send the operation. The row may still be narrower than the
+//! clauses, which is the decision holding: the requirement is that the effect
+//! is named, not that the operation is.
 
 use std::collections::{HashMap, HashSet};
 
@@ -117,6 +125,7 @@ pub fn analyse(
         checked_rows: HashSet::new(),
         row_from: HashMap::new(),
         closure_rows: HashMap::new(),
+        in_contract: false,
     };
 
     checker.collect(module);
@@ -185,6 +194,13 @@ struct Checker<'a> {
     /// bound to one is the only thing that can stand for it. Kept per body,
     /// because a local from one body means nothing in another.
     closure_rows: HashMap<DefId, Row>,
+    /// Whether the expression being walked is a `where` or `ensures` clause.
+    ///
+    /// Only two things read it, and both are about `old(...)`. A clause is the
+    /// one place `old` is allowed, and the expression inside it does run, on
+    /// entry, so walking a contract has to go in where walking a body steps
+    /// over.
+    in_contract: bool,
 }
 
 impl<'a> Checker<'a> {
@@ -651,6 +667,12 @@ impl<'a> Checker<'a> {
 
         let mut performed = self.infer_block(&function.body);
 
+        // What the clauses perform, kept apart from the body's row rather than
+        // added to it. The decision that a contract does not contribute is
+        // still in force: this is not an entry the row has to carry, it is a
+        // question about an entry the row has to already have.
+        let in_contract = self.contract_row(&function.contract);
+
         // Not returning is something the function does, so it goes in the row
         // with everything else it does. There is no termination proving here:
         // a function that can reach itself may not return as far as this pass
@@ -705,9 +727,49 @@ impl<'a> Checker<'a> {
             );
         }
 
+        // Unmentioned in a contract.
+        //
+        // By effect and not by operation, which is forced rather than chosen:
+        // asking for the operation would ask for a row entry that the too wide
+        // rule below then rejects, since the body is not the thing performing
+        // it. `examples/transfer.deed` reads `Ledger.total()` in an `ensures`
+        // clause and declares three other entries, and it stays legal because
+        // `Ledger` is among them.
+        let mut said = HashSet::new();
+        for (item, span) in &in_contract {
+            if declared.iter().any(|entry| entry.effect == item.effect) || !said.insert(item.effect)
+            {
+                continue;
+            }
+            let effect = self.name_of(item.effect);
+            let described = self.describe(item);
+            let name = function.sig.name.name.clone();
+
+            self.emit(
+                Diagnostic::error(
+                    codes::CONTRACT_EFFECT_NOT_DECLARED,
+                    self.file,
+                    *span,
+                    format!(
+                        "this performs {described}, and `{name}` does not mention `{effect}`"
+                    ),
+                )
+                .with_primary_label(format!("`{effect}` is not in the `uses` clause"))
+                .with_secondary(function.sig.name.span, "the signature a caller reads")
+                .with_note(
+                    "a handler is installed by the caller, and the signature is the only place a caller learns one is needed, so a clause cannot reach an effect the row is silent about",
+                )
+                .with_note(
+                    "naming the effect is enough; the row does not have to list the operation, because a contract still does not contribute to it",
+                ),
+            );
+        }
+
         // Too wide.
         for (item, span) in &sites {
-            if performed.iter().any(|done| item.covers(done)) {
+            if performed.iter().any(|done| item.covers(done))
+                || in_contract.iter().any(|(done, _)| item.covers(done))
+            {
                 continue;
             }
             let described = self.describe(item);
@@ -727,6 +789,37 @@ impl<'a> Checker<'a> {
     }
 
     // -- inference ---------------------------------------------------------
+
+    /// What a function's `where` and `ensures` clauses perform, and where.
+    ///
+    /// One entry per thing performed, carrying the span of the clause that
+    /// performed it, because that is the line the reader has to change and the
+    /// signature above it is already the secondary label.
+    ///
+    /// `unchanged(E)` is not in here. It reads the state captured on entry and
+    /// compares it, rather than asking a handler for anything, so it is the one
+    /// piece of contract syntax that names an effect without reaching for one.
+    fn contract_row(&mut self, contract: &deed_ast::Contract) -> Vec<(EffectItem, Span)> {
+        let was = std::mem::replace(&mut self.in_contract, true);
+        let mut found = Vec::new();
+        let clauses = contract
+            .requires
+            .iter()
+            .map(|clause| (clause, clause.span()))
+            .chain(
+                contract
+                    .ensures
+                    .iter()
+                    .map(|clause| (&clause.condition, clause.span)),
+            );
+        for (clause, span) in clauses.collect::<Vec<_>>() {
+            for item in self.infer_expr(clause).iter() {
+                found.push((item.clone(), span));
+            }
+        }
+        self.in_contract = was;
+        found
+    }
 
     fn infer_block(&mut self, block: &Block) -> Row {
         let mut row = Row::new();
@@ -895,6 +988,12 @@ impl<'a> Checker<'a> {
             Expr::Closure { body, .. } => row.extend(&self.infer_expr(body)),
 
             // Specification, not action. See the note at the top of this file.
+            //
+            // Except that `old(e)` does evaluate `e`, on entry, and a contract
+            // is the only place it can appear. So a body steps over this and a
+            // contract walk goes in: what a clause performs is the question
+            // DEED5009 is asking, and `old(Counter.value())` performs it.
+            Expr::Old { expr, .. } if self.in_contract => row.extend(&self.infer_expr(expr)),
             Expr::Old { .. } | Expr::Unchanged { .. } => {}
 
             Expr::With { handlers, body, .. } => {

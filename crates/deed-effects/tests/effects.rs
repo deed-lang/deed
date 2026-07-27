@@ -495,19 +495,117 @@ fn a_contract_mentioning_a_recursive_function_is_not_a_call() {
 // -- specification is not action -------------------------------------------
 
 #[test]
-fn a_contract_may_observe_an_effect_without_declaring_it() {
+fn a_contract_may_observe_an_operation_without_declaring_it() {
     // `ensures` describes state rather than changing it. Making an obligation
     // cost permissions would be making obligations expensive to write, which is
     // the opposite of what this language wants.
+    //
+    // So the row is allowed to be narrower than the clauses: `Ledger.post` is
+    // what the body does, `Ledger.balance` is what the postcondition reads, and
+    // only the first is declared. This is the shape `examples/transfer.deed`
+    // relies on, where `Ledger.total()` appears in an `ensures` clause and in
+    // no row anywhere.
     analyse_ok(&with_ledger(
         "fn f() -> Int\n\
+         \x20 uses Ledger.post,\n\
          \x20 ensures ok => Ledger.balance(1) == old(Ledger.balance(1)),\n\
+         { Ledger.post(1) 0 }\n",
+    ));
+}
+
+#[test]
+fn a_contract_cannot_reach_an_effect_the_signature_never_mentions() {
+    // The other half of the same decision. A clause does not have to put an
+    // entry in the row, but it cannot perform an effect the row is silent
+    // about, because installing the handler is the caller's job and the
+    // signature is the only place the caller could find out.
+    //
+    // Before this rule the file below checked clean and then died at run time
+    // with DEED6005, pointing at a clause the caller never wrote.
+    let (_, _, _, analysis) = analyse_source(&with_ledger(
+        "fn f() -> Int\n  ensures ok => Ledger.balance(1) > 0,\n{ 0 }\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::CONTRACT_EFFECT_NOT_DECLARED]
+    );
+}
+
+#[test]
+fn a_where_clause_is_held_to_it_too() {
+    let (_, _, _, analysis) = analyse_source(&with_ledger(
+        "fn f(n: Int) -> Int\n  where n > Ledger.balance(1),\n{ n }\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::CONTRACT_EFFECT_NOT_DECLARED]
+    );
+}
+
+#[test]
+fn old_is_walked_into_rather_than_stepped_over() {
+    // A body steps over `old(...)`, because a body cannot contain one. In a
+    // clause the expression inside really is evaluated, on entry, so this is
+    // the same reach as the test above wearing a disguise.
+    let (_, _, _, analysis) = analyse_source(&with_ledger(
+        "fn f() -> Int\n  ensures ok => old(Ledger.balance(1)) > 0,\n{ 0 }\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::CONTRACT_EFFECT_NOT_DECLARED]
+    );
+}
+
+#[test]
+fn a_clause_reaches_an_effect_through_a_call_as_well() {
+    // The worst of the three shapes to meet at run time: the DEED6005 landed
+    // inside `reading`, which declared everything correctly and did nothing
+    // wrong. The complaint belongs on the clause that called it.
+    let (_, _, _, analysis) = analyse_source(&with_ledger(
+        "fn reading() -> Int\n\
+         \x20 uses Ledger.balance,\n\
+         { Ledger.balance(1) }\n\n\
+         fn f() -> Int\n  ensures ok => reading() > 0,\n{ 0 }\n",
+    ));
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::CONTRACT_EFFECT_NOT_DECLARED]
+    );
+}
+
+#[test]
+fn naming_the_effect_is_enough_to_satisfy_it() {
+    // By effect and not by operation. `Ledger.post` is declared and performed,
+    // and that is what lets the clause read `Ledger.balance`: the caller
+    // already has to install a `Ledger` handler, which is the whole question.
+    analyse_ok(&with_ledger(
+        "fn f() -> Int\n\
+         \x20 uses Ledger.post,\n\
+         \x20 ensures ok => Ledger.balance(1) > 0,\n\
+         { Ledger.post(1) 0 }\n",
+    ));
+}
+
+#[test]
+fn an_entry_the_contract_alone_performs_is_not_too_wide() {
+    // Without this the rule above would have no answer to obey. A function
+    // whose body performs nothing and whose postcondition reads the ledger has
+    // to be able to declare `Ledger`, and DEED5002 used to reject exactly that
+    // for being unused, which left the shape with no writable form at all.
+    analyse_ok(&with_ledger(
+        "fn f() -> Int\n\
+         \x20 uses Ledger.balance,\n\
+         \x20 ensures ok => Ledger.balance(1) > 0,\n\
          { 0 }\n",
     ));
 }
 
 #[test]
 fn unchanged_costs_nothing() {
+    // Still nothing, and now for a reason worth writing down: `unchanged(E)`
+    // compares the state captured on entry against the state now. It never
+    // asks a handler for anything, so it is the one piece of contract syntax
+    // that names an effect without reaching for one.
     analyse_ok(&with_ledger(
         "fn f() -> Int\n  ensures err => unchanged(Ledger),\n{ 0 }\n",
     ));
