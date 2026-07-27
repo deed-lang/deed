@@ -85,6 +85,16 @@ fn examples() -> Vec<(String, String)> {
         .collect();
     found.sort();
 
+    // Without this the corpus test is vacuous. Everything it asserts is that
+    // some list of failures is empty, and zero files produce an empty list for
+    // free. The extension is written here and on every file in `examples/`,
+    // so a rename that changes one and not the other lands exactly here.
+    assert!(
+        !found.is_empty(),
+        "no `.deed` files under {}",
+        root.display()
+    );
+
     found
         .iter()
         .map(|path| {
