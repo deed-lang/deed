@@ -323,3 +323,95 @@ fn a_list_can_be_walked_with_recursion() {
          }\n",
     );
 }
+
+// -- repeat ------------------------------------------------------------------
+//
+// A `for` walks a list that already exists, so having something a number of
+// times had no list to hand it and the only form left was a function calling
+// itself. That made padding a column declare `Diverge` and spread it to
+// everything that built a line, which is the outcome the design document gives
+// as the reason iteration exists in the first place.
+
+#[test]
+fn padding_a_column_needs_no_effects_at_all() {
+    // The function this exists for. Written with recursion it declares
+    // `Diverge`, and so does everything that calls it.
+    expect_pass(
+        "module a\n\n\
+         fn padded(text: String, width: Int) -> String {\n\
+         \x20 text + join(repeat(\" \", width - length(text)), \"\")\n\
+         }\n\n\
+         test \"padding\" {\n\
+         \x20 assert length(padded(\"ab\", 20)) == 20\n\
+         \x20 assert padded(\"ab\", 4) == \"ab  \"\n\
+         }\n",
+    );
+}
+
+#[test]
+fn a_count_that_went_negative_is_no_repetitions() {
+    // Not a refusal. `repeat(\" \", width - length(text))` goes negative
+    // exactly when the text is already wider than the column, and what it
+    // means there is that there is no padding to add.
+    expect_pass(
+        "module a\n\n\
+         test \"nothing to repeat\" {\n\
+         \x20 assert repeat(\"x\", 0) == []\n\
+         \x20 assert repeat(\"x\", 0 - 4) == []\n\
+         }\n",
+    );
+}
+
+/// The count comes back out through `at`, which already binds a position and
+/// already knows it is not negative and below the length. So counting from
+/// zero needed no second thing to walk.
+#[test]
+fn counting_from_zero_comes_back_through_at() {
+    expect_pass(
+        "module a\n\n\
+         fn upto(count: Int) -> List<Int> {\n\
+         \x20 for _step at i in repeat(0, count) with out = [] {\n\
+         \x20   push(out, i)\n\
+         \x20 }\n\
+         }\n\n\
+         test \"counting\" {\n\
+         \x20 assert upto(4) == [0, 1, 2, 3]\n\
+         \x20 assert upto(0) == []\n\
+         }\n",
+    );
+}
+
+#[test]
+fn it_repeats_whatever_it_was_given() {
+    expect_pass(
+        "module a\n\n\
+         record Point { x: Int }\n\n\
+         test \"any element type\" {\n\
+         \x20 assert repeat(true, 2) == [true, true]\n\
+         \x20 assert repeat([1], 2) == [[1], [1]]\n\
+         \x20 assert repeat(Point { x: 1 }, 2) == [Point { x: 1 }, Point { x: 1 }]\n\
+         }\n",
+    );
+}
+
+#[test]
+fn the_count_has_to_be_a_number() {
+    let (sources, checked) = check(
+        "module a\n\n\
+         fn f() -> List<String> { repeat(\"x\", \"three\") }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("DEED4001"), "{text}");
+}
+
+#[test]
+fn the_element_type_is_the_type_of_what_was_repeated() {
+    // A list of the wrong thing is refused, which is what says the element
+    // type was worked out rather than left unknown.
+    let (sources, checked) = check(
+        "module a\n\n\
+         fn f() -> List<Int> { repeat(\"x\", 3) }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("DEED4001"), "{text}");
+}

@@ -274,11 +274,25 @@ need a way to say what walking one means, which is a trait system, which does no
 
 There is no range either, and that one is refused for a different reason. `for i in 0..10` is
 the first thing anyone writes who wants to count, and a range would terminate perfectly well,
-so the paragraph above is not the argument. The argument is that every walk in `examples/`
-walks a list that was already there, and the ones that wanted a number took it from `at`, so a
-range would be a second walkable thing bought for a shape nothing written here has asked for.
+so the paragraph above is not the argument. The argument is that a range would be a second
+walkable thing, and the first program that genuinely needed to repeat something a number of
+times got what it wanted out of the prelude instead: `repeat(value, count)` hands `for` the
+list it already knows how to walk, and `at` turns that back into the count it came from.
+
+```deed
+for _step at i in repeat(0, n) with out = [] {
+    push(out, i)
+}
+```
+
 It is `DEED2011`, which says that rather than leaving somebody to work it out from a parse
 error about a missing brace.
+
+`repeat` is in the prelude on the same argument as `trim`: it cannot be written here. Having
+something a number of times has no list to hand a `for`, so the only form left is a function
+that calls itself, and that makes padding a column declare `Diverge` and spreads it to
+everything that builds a line. That is the outcome the paragraph on non-termination gives as
+the reason iteration exists at all, arriving from the direction nobody was watching.
 
 **A `for` can stop early, and it does it in the head rather than in the body.**
 
@@ -1013,8 +1027,9 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is nineteen names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `length`, `List`, `at`, `push`, `split`, `join`, `trim`, `to_string`, `to_int`, `System`,
+**The prelude is twenty names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `length`, `List`, `at`, `push`, `repeat`, `split`, `join`, `trim`, `to_string`,
+`to_int`, `System`,
 `Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`, `now`, `epoch`, `open`,
 `read`, `save`, `remove`, `make`, `list` and `args` operations, and `Diverge`. Everything else
 is imported. Each prelude entry is a name that

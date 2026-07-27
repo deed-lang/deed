@@ -2816,7 +2816,9 @@ impl<'a> Checker<'a> {
                     row: signature.row.clone(),
                     ret: Box::new(signature.ret.clone()),
                 },
-                None if matches!(ident.name.as_str(), "ok" | "err" | "at" | "push") => Ty::Unknown,
+                None if matches!(ident.name.as_str(), "ok" | "err" | "at" | "push" | "repeat") => {
+                    Ty::Unknown
+                }
                 None => {
                     self.not_a_value(ident, "a type");
                     Ty::Unknown
@@ -3060,7 +3062,7 @@ impl<'a> Checker<'a> {
         Ty::List(Box::new(element))
     }
 
-    /// `length`, `at` and `push`.
+    /// `length`, `at`, `push` and `repeat`.
     ///
     /// Typed here rather than through a [`Signature`], because a signature is
     /// a list of concrete types and none of these has one: each is polymorphic
@@ -3087,6 +3089,14 @@ impl<'a> Checker<'a> {
                 .with_primary_label("wrong number of arguments"),
             );
             return Ty::Unknown;
+        }
+
+        // The one that builds a list rather than reading one, so its first
+        // argument is the element and there is nothing to check about it: a
+        // list of anything is a list.
+        if name == "repeat" {
+            self.assign(&types[1], &Ty::Int, Some(&args[1]), args[1].span(), None);
+            return Ty::List(Box::new(types[0].clone()));
         }
 
         let receiver = self.widen(&types[0]);
@@ -3186,7 +3196,7 @@ impl<'a> Checker<'a> {
                     Ty::Result(Box::new(Ty::Unknown), Box::new(carried))
                 };
             }
-            if matches!(name.as_str(), "length" | "at" | "push") {
+            if matches!(name.as_str(), "length" | "at" | "push" | "repeat") {
                 return self.infer_prelude_call(&name, args, span);
             }
         }
