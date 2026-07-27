@@ -278,6 +278,39 @@ fn a_choice_is_not_ordered_either() {
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_ORDERED]);
 }
 
+/// The case that decides whether this language wants a bound.
+///
+/// A record and a choice are concrete: the checker can look at them and see
+/// there is no order. A type parameter is the one where a trait system would
+/// have something to say, because `T: Ord` is exactly the sentence being
+/// refused here. Both tests above existed and this one did not, which left
+/// the deciding case as the unmeasured one.
+///
+/// It refuses, and the refusal is the reason a generic sort cannot be written
+/// without passing the comparison in. Anything that loosens this is choosing
+/// bounds, and should have to come past this test to do it.
+#[test]
+fn a_type_parameter_is_not_ordered() {
+    let (sources, checked) =
+        check_source("module a\n\nfn bigger<T>(a: T, b: T) -> Bool { a > b }\n");
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_ORDERED]);
+    assert!(
+        rendered(&sources, &checked.diagnostics).contains("`T`, a type parameter"),
+        "the message should name what it is, not just what it is not"
+    );
+}
+
+/// And equality is not the same question, on the same type.
+///
+/// This is why the ordering refusal above costs so little. The bound people
+/// reach for first is `Eq`, and here it is not a bound at all: `==` works on
+/// a bare `T`, which is what lets `examples/table.deed` be a keyed table over
+/// any key type without saying anything about it.
+#[test]
+fn a_type_parameter_is_still_comparable_for_equality() {
+    check_ok("module a\n\nfn same<T>(a: T, b: T) -> Bool { a == b }\n");
+}
+
 #[test]
 fn two_types_that_do_not_match_are_one_mistake_not_two() {
     // Saying the sides disagree and then that the type they do not share has

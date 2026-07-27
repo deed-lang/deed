@@ -3136,10 +3136,28 @@ impl<'a> Checker<'a> {
     /// `length`, `at`, `push` and `repeat`.
     ///
     /// Typed here rather than through a [`Signature`], because a signature is
-    /// a list of concrete types and none of these has one: each is polymorphic
-    /// in the element type. The same reasoning that keeps `ok` and `err` out
-    /// of the signature table keeps these out of it, and the unknown type
-    /// absorbing is what stands in for the unification there is none of.
+    /// a list of concrete types and none of these has one.
+    ///
+    /// That is where the similarity ends, and the difference matters enough
+    /// to write down. `at`, `push` and `repeat` are here for a mechanical
+    /// reason only: they are polymorphic in the element and the table holds
+    /// concrete types. Nothing stops anyone writing them, and
+    /// `examples/table.deed` writes the `at`-shaped one. They are not
+    /// exempt from anything.
+    ///
+    /// `ok` and `err`, typed further down, are the ones that are. They
+    /// return an error type that appears nowhere in their arguments, which
+    /// is what [`Self::check_type_params_are_determined`] refuses, so they
+    /// are a rule being broken rather than a table being missed.
+    ///
+    /// `length` is a third case and the only ad-hoc one in the prelude: its
+    /// signature says `String` and the check below also takes a list, so one
+    /// name covers two receivers. There is no overloading and no way to say
+    /// "anything with a length", so this is the one prelude entry a user
+    /// could not have written.
+    ///
+    /// The unknown type absorbing is what stands in for the unification
+    /// there is none of.
     fn infer_prelude_call(&mut self, name: &str, args: &'a [Expr], span: Span) -> Ty {
         let types: Vec<Ty> = args.iter().map(|arg| self.infer(arg)).collect();
 
