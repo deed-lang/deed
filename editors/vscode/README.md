@@ -22,9 +22,10 @@ Then restart VS Code and open any file in `examples/`.
 It colours. That is all it does today.
 
 The compiler already has a language server with hover, go to definition, find
-references, rename, formatting, document symbols, completion and quick fixes,
-and none of it is wired up here yet. Until it is, run `deed check` in a
-terminal.
+references, rename, formatting, document symbols, completion, signature help,
+workspace search and quick fixes, and none of it is wired up here yet. Until
+it is, run `deed check` in a terminal. `../README.md` has the editors that do
+start it.
 
 Highlighting comes from a TextMate grammar rather than from the compiler,
 which means it works on a file that does not parse. That is the right way

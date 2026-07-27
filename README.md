@@ -47,9 +47,9 @@ obligations: 7 proven, 0 tested, 6 guarded
   proven   examples/transfer.deed:202:76  Positive
 ```
 
-For an editor, `editors/vscode` colours `.deed` files. It is three JSON files and no
-code, so copying the directory into `~/.vscode/extensions` is the whole install. The
-language server is not wired up to it yet.
+For an editor, see [`editors`](editors). VS Code gets syntax highlighting from three JSON
+files and no code. Helix and Neovim get the language server from a few lines of
+configuration and no plugin. Neither gets both yet, and the table there says why.
 
 ## The idea
 
