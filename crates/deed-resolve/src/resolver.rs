@@ -833,7 +833,10 @@ impl Resolver<'_> {
     }
 
     fn resolve_type_alias(&mut self, alias: &TypeAlias) {
+        self.push_scope(ScopeKind::Local);
+        self.declare_type_params(&alias.generics);
         self.resolve_type(&alias.ty);
+        self.pop_scope();
 
         if let Some(refinement) = &alias.refinement {
             // `value` is the thing being refined. It is the only name the

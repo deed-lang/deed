@@ -241,6 +241,7 @@ impl Printer<'_> {
         self.line_start();
         self.push("type ");
         self.push(&decl.name.name);
+        self.push(&type_params(&decl.generics, &[]));
         self.push(" = ");
         let ty = self.ty(&decl.ty);
         self.push(&ty);

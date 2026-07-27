@@ -266,3 +266,101 @@ fn an_imported_generic_type_is_checked_at_the_arguments_it_was_given() {
     assert!(checked.has_errors(), "this should not have been accepted");
     assert!(text.contains("expected `Int`, found `String`"), "{text}");
 }
+
+// -- parameters on an alias --------------------------------------------------
+//
+// An alias with no predicate is a name for a type and expands to it, so
+// parameters on one are the substitution a `record` already does. Writing
+// `List<Entry<String, Int>>` eight times in one file is what asked for this.
+
+#[test]
+fn an_alias_with_parameters_expands_to_what_it_names() {
+    expect_clean(
+        "module a\n\n\
+         record Entry<K, V> { key: K, value: V }\n\n\
+         type Table<K, V> = List<Entry<K, V>>\n\n\
+         fn size<K, V>(t: Table<K, V>) -> Int { length(t) }\n\n\
+         fn first(t: Table<String, Int>) -> Result<Entry<String, Int>, String> {\n\
+         \x20   at(t, 0)\n\
+         }\n",
+    );
+}
+
+/// It is a name and not a type, so what it expands to is what it is compared
+/// against. Nothing sees a `Table` afterwards.
+#[test]
+fn an_alias_is_the_type_it_names_and_not_a_new_one() {
+    expect_clean(
+        "module a\n\n\
+         record Entry<K, V> { key: K, value: V }\n\n\
+         type Table<K, V> = List<Entry<K, V>>\n\n\
+         fn made() -> List<Entry<String, Int>> {\n\
+         \x20   push([], Entry { key: \"a\", value: 1 })\n\
+         }\n\n\
+         fn taken(t: Table<String, Int>) -> Int { length(t) }\n\n\
+         fn both() -> Int { taken(made()) }\n",
+    );
+}
+
+#[test]
+fn the_arguments_are_substituted_rather_than_carried() {
+    let (sources, checked) = check(
+        "module a\n\n\
+         record Entry<K, V> { key: K, value: V }\n\n\
+         type Table<K, V> = List<Entry<K, V>>\n\n\
+         fn wrong(t: Table<String, Int>) -> Int {\n\
+         \x20   match at(t, 0) {\n\
+         \x20       ok(one) => one.value,\n\
+         \x20       err(why) => length(why),\n\
+         \x20   }\n\
+         }\n\n\
+         fn refused(t: Table<String, Bool>) -> Int {\n\
+         \x20   match at(t, 0) {\n\
+         \x20       ok(one) => one.value,\n\
+         \x20       err(why) => 0,\n\
+         \x20   }\n\
+         }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(checked.has_errors(), "a `Bool` value is not an `Int`");
+    assert!(text.contains("expected `Int`, found `Bool`"), "{text}");
+}
+
+#[test]
+fn an_alias_still_owes_the_arguments_it_declared() {
+    let (sources, checked) = check(
+        "module a\n\n\
+         record Entry<K, V> { key: K, value: V }\n\n\
+         type Table<K, V> = List<Entry<K, V>>\n\n\
+         fn f(t: Table<String>) -> Int { length(t) }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(checked.has_errors(), "{text}");
+    assert!(text.contains("DEED4013"), "{text}");
+}
+
+/// A predicate about a value whose type is not decided yet has nothing it can
+/// say, so the parameters are refused rather than accepted and ignored.
+#[test]
+fn a_refinement_may_not_take_parameters() {
+    let (sources, checked) = check(
+        "module a\n\n\
+         type Positive<T> = Int where value > 0\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("DEED4028"), "{text}");
+    assert!(
+        text.contains("has a predicate, so it cannot take `T`"),
+        "{text}"
+    );
+    assert!(text.contains("nothing it can say"), "{text}");
+}
+
+#[test]
+fn a_refinement_with_no_parameters_is_untouched() {
+    expect_clean(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f(n: Positive) -> Int { n }\n",
+    );
+}

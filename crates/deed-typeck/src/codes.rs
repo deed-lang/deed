@@ -139,3 +139,13 @@ pub const DISCARDED_VALUE: &str = "DEED4026";
 /// the walk before the first turn or never stops it, and neither is a thing
 /// anybody meant to write.
 pub const WHILE_WITHOUT_ACCUMULATOR: &str = "DEED4027";
+
+/// Type parameters on an alias that also carries a predicate.
+///
+/// An alias with no predicate is a name for a type and expands to it, so
+/// parameters on one are the substitution a `record` already does.
+/// A refinement is not that: it is a nominal type whose predicate is checked,
+/// and a predicate about a value whose type is not decided yet has nothing it
+/// can say. `length(value) > 0` over an unknown `T` is not a question with an
+/// answer, so the parameters are refused rather than accepted and ignored.
+pub const REFINEMENT_TYPE_PARAM: &str = "DEED4028";
