@@ -48,8 +48,10 @@ pub enum Value {
     /// Authority to do something to something.
     ///
     /// Opaque on purpose. There is nothing to know about a capability except
-    /// that you were handed it, and the only way to get one is to be passed
-    /// one, which is what makes the absence of an argument mean something.
+    /// that you were handed it, which is what makes the absence of an argument
+    /// mean something. `Io.open` and `Io.make` hand one back, and both are
+    /// rooted inside the `Dir` they were given, so authority narrows on the
+    /// way down and nothing widens it.
     Capability(Capability),
     Closure(Rc<ClosureValue>),
     /// A declared function, named where a value belongs.
