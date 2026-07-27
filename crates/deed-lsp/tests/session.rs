@@ -228,6 +228,39 @@ fn initialize_says_what_the_server_can_do() {
 }
 
 #[test]
+fn the_advertised_set_is_exactly_this() {
+    // Every other test here asks whether one capability is present, which
+    // says nothing about one that appeared. `editors/README.md` lists what
+    // the server answers in prose, and an editor's configuration is written
+    // once and then trusted, so a provider arriving unannounced is a feature
+    // nobody is told about. This is the list to change when one lands.
+    let sent = session(&[request(1, "initialize")]);
+    let Some(Json::Object(fields)) = sent[0].at(&["result", "capabilities"]) else {
+        panic!("initialize should answer with capabilities");
+    };
+
+    let mut found: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
+    found.sort_unstable();
+
+    assert_eq!(
+        found,
+        [
+            "codeActionProvider",
+            "completionProvider",
+            "definitionProvider",
+            "documentFormattingProvider",
+            "documentSymbolProvider",
+            "hoverProvider",
+            "referencesProvider",
+            "renameProvider",
+            "signatureHelpProvider",
+            "textDocumentSync",
+            "workspaceSymbolProvider",
+        ]
+    );
+}
+
+#[test]
 fn a_question_before_initialize_is_refused() {
     // Otherwise the server answers about state the editor has not set up, and
     // the protocol has a code for exactly this.
