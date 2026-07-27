@@ -410,6 +410,51 @@ fn an_unknown_name_suggests_the_closest_one_in_scope() {
     assert!(render_human(&sources, &resolved.diagnostics[0]).contains("cannot find `balanse`"));
 }
 
+/// The suggester works on edit distance, so a name nobody here could have
+/// meant used to be answered with whatever short name happened to be nearby.
+/// `null` was told there is a `f` in scope.
+#[test]
+fn a_name_from_another_language_is_answered_instead_of_guessed_at() {
+    let (sources, _, resolved) = resolve_source("module a\n\nfn f() -> Int { null }\n");
+    assert_eq!(codes_of(&resolved.diagnostics), vec![codes::UNKNOWN_NAME]);
+
+    let text = render_human(&sources, &resolved.diagnostics[0]);
+    assert!(text.contains("there is no empty value"), "{text}");
+    assert!(!text.contains("there is a `f` in scope"), "{text}");
+}
+
+#[test]
+fn a_word_for_an_operator_is_answered_with_the_operator() {
+    for (word, op) in [("and", "&&"), ("or", "||"), ("not", "!")] {
+        let source = format!("module a\n\nfn f(a: Bool, b: Bool) -> Bool {{ a {word} b }}\n");
+        let (sources, _, resolved) = resolve_source(&source);
+        let named = resolved
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains(&format!("cannot find `{word}`")))
+            .unwrap_or_else(|| panic!("`{word}` should not resolve"));
+
+        let text = render_human(&sources, named);
+        assert!(text.contains(&format!("this is spelled `{op}`")), "{text}");
+        assert_eq!(named.fix.as_ref().expect("a fix").edits[0].replacement, op);
+    }
+}
+
+/// Nothing here shadows anything. A name that resolves never reaches the
+/// place this is decided, so somebody who declared a function called `and`
+/// still has it.
+#[test]
+fn a_declared_name_is_not_taken_for_a_word_from_elsewhere() {
+    let (_, _, resolved) = resolve_source(
+        "module a\n\nfn and(a: Bool, b: Bool) -> Bool { a }\n\nfn f() -> Bool { and(true, false) }\n",
+    );
+    assert!(
+        !codes_of(&resolved.diagnostics).contains(&codes::UNKNOWN_NAME),
+        "{:?}",
+        codes_of(&resolved.diagnostics)
+    );
+}
+
 #[test]
 fn a_name_with_no_close_match_gets_no_suggestion() {
     let (_, _, resolved) =
