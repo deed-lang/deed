@@ -137,7 +137,7 @@ Read them in order. Each one leans on the one before it.
 | `deed-effects` | Every effect row checked against what the body does |
 | `deed-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `deed-fmt` | The one canonical form, with no options for the output |
-| `deed-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, signature help, quick fixes, an outline and formatting |
+| `deed-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, signature help, quick fixes, an outline, workspace search and formatting |
 | `deed-driver` | Runs all of the above, in one place, so nothing drifts |
 | `deed-cli` | The `deed` binary: `check`, `test`, `run`, `fmt`, `fix` and `lsp` |
 
