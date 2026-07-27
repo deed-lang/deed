@@ -431,3 +431,57 @@ fn a_refinement_still_crosses_as_itself() {
         "a negative number is not `Positive`:\n{text}"
     );
 }
+
+// -- what actually holds `Result` in the language ----------------------------
+//
+// The open question about taking `Result` out was written down as being about
+// its positional payload, and that turned out to be the wrong half. These two
+// are the measurement, kept as tests so the next person to look does not have
+// to take anybody's word for what is in the way.
+
+/// A declared `choice` can already do what `Result` does on the value side,
+/// including saying nothing about the other parameter.
+#[test]
+fn a_declared_choice_already_behaves_like_result() {
+    expect_tests_pass(
+        "module a\n\n\
+         choice Outcome<T, E> {\n\
+         \x20   Good { value: T },\n\
+         \x20   Bad { error: E },\n\
+         }\n\n\
+         fn or_else<T, E>(outcome: Outcome<T, E>, fallback: T) -> T {\n\
+         \x20   match outcome {\n\
+         \x20       Good { value } => value,\n\
+         \x20       Bad { error } => fallback,\n\
+         \x20   }\n\
+         }\n\n\
+         test \"either side\" {\n\
+         \x20 assert or_else(Good { value: \"yes\" }, \"no\") == \"yes\"\n\
+         \x20 assert or_else(Bad { error: 404 }, \"no\") == \"no\"\n\
+         }\n",
+    );
+}
+
+/// What cannot be written is the constructor. `ok` and `err` each mention a
+/// parameter no argument decides, which is the one thing `DEED4023` refuses,
+/// and they are allowed it by being built in. That is the shortcut, rather
+/// than anything about how a payload is carried.
+#[test]
+fn the_constructor_is_the_thing_that_cannot_be_written() {
+    let (sources, checked) = check(
+        "module a\n\n\
+         choice Outcome<T, E> {\n\
+         \x20   Good { value: T },\n\
+         \x20   Bad { error: E },\n\
+         }\n\n\
+         fn good<T, E>(value: T) -> Outcome<T, E> {\n\
+         \x20   Good { value: value }\n\
+         }\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("DEED4023"), "{text}");
+    assert!(
+        text.contains("nothing at a call site says what `E` is"),
+        "{text}"
+    );
+}
