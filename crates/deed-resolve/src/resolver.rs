@@ -1270,7 +1270,7 @@ fn closest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<
         if candidate.chars().count().abs_diff(length) > threshold {
             continue;
         }
-        let Some(distance) = levenshtein_within(name, candidate, threshold) else {
+        let Some(distance) = edit_distance_within(name, candidate, threshold) else {
             continue;
         };
         match best {
@@ -1290,10 +1290,20 @@ fn closest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<
 
 /// Edit distance, or `None` when it is greater than `limit`.
 ///
+/// Two letters written in the wrong order cost one edit rather than two. That
+/// is the difference between this and plain Levenshtein and it is the whole
+/// reason for it: the threshold in [`closest`] is one for any name of five
+/// characters or fewer, a transposition is two edits under Levenshtein, and
+/// short names are most of the names anybody writes. `psuh`, `tirm`, `totla`
+/// and `spilt` all got no suggestion at all, while `lenght` got one only
+/// because `length` is long enough to have earned a threshold of two.
+///
 /// Only the band of cells within `limit` of the diagonal can hold a value that
 /// small, so the rest are never computed. With a limit of one or two that is a
-/// handful of cells per row rather than the whole table.
-fn levenshtein_within(a: &str, b: &str, limit: usize) -> Option<usize> {
+/// handful of cells per row rather than the whole table. The transposition
+/// reads one row further back, which is still inside the band it was computed
+/// in.
+fn edit_distance_within(a: &str, b: &str, limit: usize) -> Option<usize> {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
 
@@ -1309,6 +1319,9 @@ fn levenshtein_within(a: &str, b: &str, limit: usize) -> Option<usize> {
         return (a.len() <= limit).then_some(a.len());
     }
 
+    // Three rows rather than two, because a transposition is the only rule
+    // that looks past the row before this one.
+    let mut before_previous = vec![too_far; b.len() + 1];
     let mut previous: Vec<usize> = (0..=b.len()).map(|j| j.min(too_far)).collect();
     let mut current = vec![too_far; b.len() + 1];
 
@@ -1326,10 +1339,19 @@ fn levenshtein_within(a: &str, b: &str, limit: usize) -> Option<usize> {
 
         for j in first..=last {
             let cost = usize::from(ca != b[j]);
-            current[j + 1] = (current[j] + 1)
+            let mut best = (current[j] + 1)
                 .min(previous[j + 1] + 1)
                 .min(previous[j] + cost)
                 .min(too_far);
+
+            // The two letters this pair is about are each other's, one place
+            // over. Swapping them back is one edit, not the two that deleting
+            // and reinserting would cost.
+            if i > 0 && j > 0 && ca == b[j - 1] && a[i - 1] == b[j] {
+                best = best.min(before_previous[j - 1] + 1).min(too_far);
+            }
+
+            current[j + 1] = best;
         }
 
         if current[first..=last + 1]
@@ -1339,6 +1361,9 @@ fn levenshtein_within(a: &str, b: &str, limit: usize) -> Option<usize> {
         {
             return None;
         }
+        // before_previous <- previous <- current, with the oldest row becoming
+        // the scratch space the next turn overwrites.
+        std::mem::swap(&mut before_previous, &mut previous);
         std::mem::swap(&mut previous, &mut current);
     }
 
@@ -1348,45 +1373,82 @@ fn levenshtein_within(a: &str, b: &str, limit: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::levenshtein_within;
+    use super::edit_distance_within;
 
     /// The distance when it is wanted regardless of how large it is.
-    fn levenshtein(a: &str, b: &str) -> usize {
+    fn distance(a: &str, b: &str) -> usize {
         let limit = a.chars().count().max(b.chars().count());
-        levenshtein_within(a, b, limit).expect("the limit cannot be exceeded")
+        edit_distance_within(a, b, limit).expect("the limit cannot be exceeded")
     }
 
     #[test]
     fn edit_distance_is_symmetric_and_zero_on_equal() {
-        assert_eq!(levenshtein("balance", "balance"), 0);
-        assert_eq!(levenshtein("balance", "balanse"), 1);
-        assert_eq!(levenshtein("balanse", "balance"), 1);
-        assert_eq!(levenshtein("", "abc"), 3);
-        assert_eq!(levenshtein("abc", ""), 3);
-        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(distance("balance", "balance"), 0);
+        assert_eq!(distance("balance", "balanse"), 1);
+        assert_eq!(distance("balanse", "balance"), 1);
+        assert_eq!(distance("", "abc"), 3);
+        assert_eq!(distance("abc", ""), 3);
+        assert_eq!(distance("kitten", "sitting"), 3);
+    }
+
+    /// The reason this is not plain Levenshtein. Every one of these costs two
+    /// edits under that metric and gets no suggestion, because a name this
+    /// short earns a threshold of one.
+    #[test]
+    fn two_letters_in_the_wrong_order_cost_one_edit() {
+        for (typo, meant) in [
+            ("psuh", "push"),
+            ("tirm", "trim"),
+            ("totla", "total"),
+            ("spilt", "split"),
+            ("lenght", "length"),
+            ("ta", "at"),
+        ] {
+            assert_eq!(distance(typo, meant), 1, "`{typo}` for `{meant}`");
+            assert_eq!(
+                edit_distance_within(typo, meant, 1),
+                Some(1),
+                "`{typo}` for `{meant}` should be reachable at a limit of one"
+            );
+        }
+    }
+
+    /// Two separate transpositions are still two edits, and a transposition
+    /// with something written between the letters is not one at all. Neither
+    /// is a typo somebody makes on the way to the name next to it.
+    #[test]
+    fn it_is_the_restricted_metric_and_not_more() {
+        assert_eq!(distance("abcd", "badc"), 2);
+        assert_eq!(edit_distance_within("abcd", "badc", 1), None);
+        // `ca` -> `abc` is a transposition with an insertion through it, which
+        // the restricted metric charges separately and so does this.
+        assert!(distance("ca", "abc") > 1);
     }
 
     #[test]
     fn a_distance_past_the_limit_is_not_computed() {
-        assert_eq!(levenshtein_within("balance", "balanse", 1), Some(1));
-        assert_eq!(levenshtein_within("balance", "sitting", 2), None);
-        assert_eq!(levenshtein_within("a", "abcdefg", 2), None);
-        assert_eq!(levenshtein_within("kitten", "sitting", 3), Some(3));
-        assert_eq!(levenshtein_within("kitten", "sitting", 2), None);
+        assert_eq!(edit_distance_within("balance", "balanse", 1), Some(1));
+        assert_eq!(edit_distance_within("balance", "sitting", 2), None);
+        assert_eq!(edit_distance_within("a", "abcdefg", 2), None);
+        assert_eq!(edit_distance_within("kitten", "sitting", 3), Some(3));
+        assert_eq!(edit_distance_within("kitten", "sitting", 2), None);
     }
 
     #[test]
     fn the_band_agrees_with_the_full_table() {
         // The banded version is an optimisation, so it has to answer the same
-        // thing wherever it answers at all.
+        // thing wherever it answers at all. The transposed pairs are here
+        // because that rule reads a row further back than the others, which is
+        // the one place the band could have been too narrow.
         let words = [
-            "", "a", "ab", "abc", "balance", "balanse", "kitten", "sitting", "counter", "count",
+            "", "a", "ab", "ba", "abc", "bac", "acb", "balance", "balanse", "kitten", "sitting",
+            "counter", "count", "psuh", "push", "spilt", "split", "lenght", "length",
         ];
         for a in words {
             for b in words {
-                let full = levenshtein(a, b);
+                let full = distance(a, b);
                 for limit in 0..8 {
-                    let banded = levenshtein_within(a, b, limit);
+                    let banded = edit_distance_within(a, b, limit);
                     if full <= limit {
                         assert_eq!(banded, Some(full), "`{a}` vs `{b}` at limit {limit}");
                     } else {

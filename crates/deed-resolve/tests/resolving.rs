@@ -420,6 +420,38 @@ fn a_name_with_no_close_match_gets_no_suggestion() {
     );
 }
 
+/// Two letters in the wrong order, in a name too short to have afforded it
+/// under plain Levenshtein.
+///
+/// The threshold is one for anything up to five characters and a transposition
+/// costs two edits under that metric, so `bmup` used to get no suggestion at
+/// all while `lenght` got one purely because `length` is longer. Short names
+/// are most of the names in a prelude, so that was the common case going
+/// unanswered.
+#[test]
+fn two_letters_in_the_wrong_order_still_finds_the_name() {
+    let (_, _, resolved) =
+        resolve_source("module a\n\nfn bump() -> Int { 0 }\n\nfn f() -> Int { bmup() }\n");
+    assert_eq!(codes_of(&resolved.diagnostics), vec![codes::UNKNOWN_NAME]);
+
+    let fix = resolved.diagnostics[0].fix.as_ref().expect("a suggestion");
+    assert_eq!(fix.edits[0].replacement, "bump");
+    assert_eq!(
+        fix.applicability,
+        deed_diagnostics::Applicability::MachineApplicable
+    );
+}
+
+/// Being closer to human mistakes is not the same as being looser. A name two
+/// transpositions away is still two edits and still gets nothing.
+#[test]
+fn one_transposition_is_not_a_licence_for_two() {
+    let (_, _, resolved) =
+        resolve_source("module a\n\nfn abcd() -> Int { 0 }\n\nfn f() -> Int { badc() }\n");
+    assert_eq!(codes_of(&resolved.diagnostics), vec![codes::UNKNOWN_NAME]);
+    assert!(resolved.diagnostics[0].fix.is_none());
+}
+
 #[test]
 fn an_ambiguous_suggestion_is_withheld() {
     // `fee` is one edit from both `fee1`-alikes, so neither wins.
