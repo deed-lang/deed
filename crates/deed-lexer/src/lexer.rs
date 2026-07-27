@@ -352,6 +352,53 @@ impl<'a> Lexer<'a> {
         let digits: String = raw.chars().filter(|&c| c != '_').collect();
         let literal_span = Span::new(start as u32, self.pos as u32);
 
+        // `1.5` is three tokens under the ordinary rules: `1`, `.`, `5`. That
+        // is deliberate, and it is what makes `40.try` unambiguous with no
+        // lookahead, but the reader who wrote a decimal point was never told
+        // so. They got a stray `.` reported as a missing expression, one
+        // column to the right of what they typed, under an unrelated warning
+        // about the `1` going nowhere.
+        //
+        // Take the whole number here instead. A dot followed by a digit is not
+        // a field access, because field names are identifiers and `5` is not
+        // one, so nothing that used to mean something means something else
+        // now. `0..10` is untouched: the character after the first dot is
+        // another dot.
+        if self.peek() == Some('.') && self.peek_second().is_some_and(|c| c.is_ascii_digit()) {
+            self.bump();
+            while self.peek().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                self.bump();
+            }
+            let span = Span::new(start as u32, self.pos as u32);
+            let text = &self.src[start..self.pos];
+            let whole = &self.src[start..literal_span.end as usize];
+            self.emit(
+                Diagnostic::error(
+                    codes::NO_FLOAT_LITERAL,
+                    self.file,
+                    span,
+                    format!("`{text}` has a decimal point, and there are no float literals"),
+                )
+                .with_primary_label("no literal has this shape")
+                .with_note(
+                    "`Int` is the only number, so a quantity with a fraction is counted in \
+                     its smallest unit: money in cents, a duration in milliseconds",
+                )
+                .with_note(format!(
+                    "this is not `{whole}` with a field after it either, because a field name \
+                     is an identifier"
+                )),
+            );
+            // Carry on as the whole part. Handing the parser an invalid token
+            // would earn a second message, in the same place, saying an
+            // expression was expected, which tells the reader nothing they
+            // were not just told.
+            return match i64::from_str_radix(&digits, radix) {
+                Ok(value) => TokenKind::Int(value),
+                Err(_) => TokenKind::Error,
+            };
+        }
+
         if digits.is_empty() {
             let prefix = &self.src[start..digits_start];
             self.emit(
