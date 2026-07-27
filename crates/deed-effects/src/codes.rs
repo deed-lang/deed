@@ -54,3 +54,18 @@ pub const IMPURE_FUNCTION_VALUE: &str = "DEED5007";
 /// The same shape as DEED4023, where a type parameter has to appear in a
 /// parameter's type so that every call knows what it is.
 pub const MISPLACED_ROW_VARIABLE: &str = "DEED5008";
+
+/// A contract performs an effect the signature does not mention.
+///
+/// A contract does not contribute to a row, which is why the row may be
+/// narrower than the clauses: `examples/transfer.deed` reads `Ledger.total()`
+/// in an `ensures` clause and never declares it. What the row cannot be is
+/// silent about the effect altogether. Installing a handler is the caller's
+/// job, and the signature is the only place a caller can find out that one is
+/// needed, so a clause performing an effect nothing above the brace names is a
+/// call that type checks and then cannot run.
+///
+/// The granularity is the effect rather than the operation, because that is
+/// what a handler is installed for, and because asking for the operation would
+/// mean asking for a row entry that DEED5002 then rejects as unused.
+pub const CONTRACT_EFFECT_NOT_DECLARED: &str = "DEED5009";

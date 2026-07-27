@@ -331,11 +331,16 @@ fn capabilities() {
 
 #[test]
 fn a_contract_talking_about_an_effect() {
+    // The row is here because of DEED5009: a clause may read an effect the
+    // signature declares, and the body performing nothing is what makes it
+    // interesting rather than what makes it wrong.
     expect_all_known(
         "observing.deed",
         "module a\n\n\
          effect Ledger {\n    fn balance() -> Int\n}\n\n\
          fn f() -> Int\n\
+         \x20 uses\n\
+         \x20   Ledger.balance,\n\
          \x20 ensures\n\
          \x20   ok  => Ledger.balance() == old(Ledger.balance()),\n\
          \x20   err => unchanged(Ledger),\n\

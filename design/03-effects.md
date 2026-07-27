@@ -110,6 +110,24 @@ The cost of this rule is that a contract can observe something a body is not all
 touch. That looks wrong at first and is probably right: what a specification is allowed to
 talk about and what an implementation is allowed to do are different questions.
 
+There is a second cost, and that one was wrong. Contributing nothing to the row was read as
+permission to reach an effect the row does not mention at all, and a clause that does is a
+call that passes every check and then cannot run: it needs a handler, installing one is the
+caller's job, and the signature is the only place the caller could learn that. So the rule
+has a floor. **A contract may perform an effect only if the signature names it.**
+
+Naming it is the whole requirement. The operation is still free, which is what keeps the
+paragraph above true: `transfer` reads `Ledger.total()` in an `ensures` clause, declares
+`Ledger.balance` and `Ledger.post` and not `Ledger.total`, and is fine, because a handler is
+installed for an effect rather than for an operation. Asking for the operation would not even
+be available as a choice, since the tightness rule would immediately reject the entry as
+declared and never performed.
+
+That last part cuts the other way too. A function whose body performs nothing and whose
+postcondition reads the ledger has to be able to write `uses Ledger.balance`, so an entry
+counts as used when the body or the contract performs it. Before that, the honest row was an
+error and the dishonest one was accepted, which left the shape with no writable form.
+
 ## Purity is the default
 
 No `uses` clause means no effects. A pure function can be evaluated at compile time, cached,
