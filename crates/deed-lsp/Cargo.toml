@@ -15,6 +15,7 @@ deed-fmt = { path = "../deed-fmt" }
 deed-lexer = { path = "../deed-lexer" }
 deed-parser = { path = "../deed-parser" }
 deed-resolve = { path = "../deed-resolve" }
+deed-typeck = { path = "../deed-typeck" }
 
 [lints]
 workspace = true

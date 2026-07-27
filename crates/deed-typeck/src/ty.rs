@@ -621,7 +621,13 @@ impl Types {
     }
 
     /// A type name without the surrounding backticks, for nesting.
-    fn bare(&self, ty: &Ty) -> String {
+    ///
+    /// [`Self::describe`] writes a phrase for a sentence, so it puts the
+    /// backticks on and says "an unknown type" where this says `_`. A label in
+    /// an editor is not a sentence and has to be able to point at part of
+    /// itself by offset, so it needs the bare form and needs to build it
+    /// piece by piece.
+    pub fn bare(&self, ty: &Ty) -> String {
         match ty {
             Ty::Unknown => "_".to_string(),
             Ty::Never => "!".to_string(),

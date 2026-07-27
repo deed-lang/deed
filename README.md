@@ -137,7 +137,7 @@ Read them in order. Each one leans on the one before it.
 | `deed-effects` | Every effect row checked against what the body does |
 | `deed-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `deed-fmt` | The one canonical form, with no options for the output |
-| `deed-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, quick fixes, an outline and formatting |
+| `deed-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, signature help, quick fixes, an outline and formatting |
 | `deed-driver` | Runs all of the above, in one place, so nothing drifts |
 | `deed-cli` | The `deed` binary: `check`, `test`, `run`, `fmt`, `fix` and `lsp` |
 
@@ -149,6 +149,18 @@ says the type of whatever is under the cursor, jumps to a declaration in whichev
 declares it, lists every use of a name across the workspace, renames one everywhere it is
 written, offers what could be written where the cursor is, offers the patch a diagnostic is
 already carrying, says what the file declares, and formats a file.
+
+Signature help is the one that is most this language's own. Everywhere else the contract is
+on the screen already, because it is written on the declaration. At a call site it is not:
+`transfer(a, b, amount)` says nothing about what the call performs or what it needs to be
+true first, and that is exactly where somebody is deciding whether they can afford it. So the
+label carries the row as well as the types, and `shout(Console, String) uses Io.write -> ()`
+is the whole signature rather than the part that fits an editor's idea of one.
+
+It is read off the text rather than the tree, for the same reason completion is. `add(` with
+nothing after it does not parse, and that is the moment the question gets asked. Nesting is a
+stack rather than a counter, so the comma in `add(add(1, 2), 3)` belongs to the inner call
+and the ones in `total([1, 2, 3], 4)` belong to the list.
 
 That last one was data with nowhere to go. A diagnostic carries the edit that resolves it
 where the repair is unambiguous, and the only thing that could reach one was `deed fix` on a

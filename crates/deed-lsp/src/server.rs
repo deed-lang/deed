@@ -20,6 +20,7 @@ use deed_ast::Item;
 use deed_diagnostics::{Applicability, Diagnostic, Severity, SourceMap, Span};
 use deed_driver::Checked;
 use deed_resolve::{DefId, DefKind};
+use deed_typeck::ty::{FnRow, Ty};
 
 use crate::json::Json;
 use crate::position::{Lines, Position};
@@ -145,6 +146,7 @@ impl Server {
             "textDocument/formatting" => result(id, self.formatting(message)),
             "textDocument/codeAction" => result(id, self.code_action(message)),
             "textDocument/documentSymbol" => result(id, self.document_symbol(message)),
+            "textDocument/signatureHelp" => result(id, self.signature_help(message)),
             "textDocument/completion" => result(id, self.completion(message)),
             _ => error(
                 id,
@@ -776,6 +778,92 @@ impl Server {
     /// Two ranges each, and the difference between them is the point. `range`
     /// is the whole declaration, which is what an editor highlights when you
     /// pick it. `selectionRange` is the name, which is where the cursor lands.
+    /// The signature of the call the cursor is inside, and which argument it
+    /// is on.
+    ///
+    /// The whole thesis of the language is that the signature is the contract,
+    /// and a call site is the one place a reader is deciding whether they can
+    /// keep it. So this answers with the row as well as the types: what a call
+    /// performs is part of what it costs, and it is not written at the call.
+    ///
+    /// Read off the text rather than the tree, for the reason completion is:
+    /// `f(` with nothing after it does not parse, and that is exactly the
+    /// moment somebody wants this.
+    fn signature_help(&self, message: &Json) -> Json {
+        let Some((document, offset, checked)) = self.locate(message) else {
+            return Json::Null;
+        };
+        let before = &document.text[..(offset as usize).min(document.text.len())];
+        let Some((callee, active)) = call_site(before) else {
+            return Json::Null;
+        };
+        let Some((_, Ty::Fn { params, row, ret })) = checked.types.at(callee) else {
+            // Not a call of anything with a signature. A name the checker gave
+            // up on lands here too, and saying nothing is better than
+            // describing a type that is already wrong.
+            return Json::Null;
+        };
+
+        let name = narrowest_name(&checked, callee)
+            .map(|(_, def)| checked.resolutions.def(def).name.to_string())
+            .unwrap_or_else(|| "fn".to_string());
+
+        // Built a piece at a time because the protocol points at a parameter
+        // by offset into the label, and counting those afterwards would mean
+        // parsing back what was just written.
+        let mut label = format!("{name}(");
+        let mut ranges = Vec::new();
+        for (index, param) in params.iter().enumerate() {
+            if index > 0 {
+                label.push_str(", ");
+            }
+            let start = label.chars().count();
+            label.push_str(&checked.types.bare(param));
+            ranges.push((start, label.chars().count()));
+        }
+        label.push(')');
+        if let FnRow::Declared(entries) = row
+            && !entries.is_empty()
+        {
+            let named: Vec<String> = entries
+                .iter()
+                .map(|entry| match &entry.operation {
+                    Some(operation) => format!("{}.{operation}", entry.effect),
+                    None => entry.effect.clone(),
+                })
+                .collect();
+            label.push_str(&format!(" uses {}", named.join(", ")));
+        }
+        label.push_str(&format!(" -> {}", checked.types.bare(ret)));
+
+        let parameters = ranges
+            .into_iter()
+            .map(|(start, end)| {
+                Json::object(vec![(
+                    "label",
+                    Json::Array(vec![Json::number(start as i64), Json::number(end as i64)]),
+                )])
+            })
+            .collect();
+
+        Json::object(vec![
+            (
+                "signatures",
+                Json::Array(vec![Json::object(vec![
+                    ("label", Json::string(&label)),
+                    ("parameters", Json::Array(parameters)),
+                ])]),
+            ),
+            ("activeSignature", Json::number(0)),
+            // Past the last parameter on a call with too many arguments. The
+            // protocol says an out of range index is ignored, which is the
+            // right answer: the extra argument is a mistake the checker
+            // reports, and highlighting nothing is how this says it has
+            // nothing left to offer.
+            ("activeParameter", Json::number(active as i64)),
+        ])
+    }
+
     fn document_symbol(&self, message: &Json) -> Json {
         let Some(uri) = text_document_uri(message) else {
             return Json::Null;
@@ -1244,6 +1332,70 @@ fn kind_of(kind: DefKind) -> i64 {
     }
 }
 
+/// The name being called and the argument index, for the innermost call the
+/// cursor is inside.
+///
+/// A scan rather than a walk of the tree, because the text this is asked
+/// about is `f(` and half an argument, which does not parse.
+///
+/// Nesting is a stack rather than a counter so that a comma inside `[1, 2]`
+/// or inside another call belongs to whatever opened it. Strings and line
+/// comments are skipped, or a `(` in a message would open a call that never
+/// closes and every later answer would be wrong.
+fn call_site(before: &str) -> Option<(u32, usize)> {
+    let bytes = before.as_bytes();
+    // (opening byte, offset of it, commas seen at this level)
+    let mut open: Vec<(u8, usize, usize)> = Vec::new();
+    let mut at = 0;
+
+    while at < bytes.len() {
+        match bytes[at] {
+            b'"' => {
+                at += 1;
+                while at < bytes.len() && bytes[at] != b'"' {
+                    // A quote that was escaped is inside the string, not the
+                    // end of it.
+                    at += if bytes[at] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'/' if bytes.get(at + 1) == Some(&b'/') => {
+                while at < bytes.len() && bytes[at] != b'\n' {
+                    at += 1;
+                }
+                continue;
+            }
+            opener @ (b'(' | b'[' | b'{') => open.push((opener, at, 0)),
+            b')' | b']' | b'}' => {
+                open.pop();
+            }
+            b',' => {
+                if let Some(frame) = open.last_mut() {
+                    frame.2 += 1;
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+
+    // The innermost unclosed `(`. Anything nested inside it is still that
+    // call's argument, so a cursor inside `f(g(x), [1, |2])` is on `f`'s
+    // second argument and on `[`'s second element, and the call is the one
+    // with a signature to show.
+    let (_, paren, commas) = *open.iter().rev().find(|(byte, _, _)| *byte == b'(')?;
+
+    // What is being called ends just before the bracket, allowing for the
+    // space somebody may have left. A `(` with no name in front of it is a
+    // grouping, not a call.
+    let name_end = before[..paren].trim_end().len();
+    let last = before[..name_end].chars().next_back()?;
+    if !last.is_alphanumeric() && last != '_' {
+        return None;
+    }
+
+    Some((name_end as u32 - 1, commas))
+}
+
 /// The end of the expression a `.` was typed after.
 ///
 /// `None` when the text does not end in a name preceded by a dot, which is
@@ -1376,6 +1528,16 @@ fn initialize_result() -> Json {
             ),
             ("documentFormattingProvider", Json::Bool(true)),
             ("documentSymbolProvider", Json::Bool(true)),
+            // A `(` opens an argument list and a `,` moves to the next one.
+            // Nothing else changes which parameter is being written, and an
+            // editor asks again on its own after that.
+            (
+                "signatureHelpProvider",
+                Json::object(vec![(
+                    "triggerCharacters",
+                    Json::Array(vec![Json::string("("), Json::string(",")]),
+                )]),
+            ),
             // Quick fixes only. A code action is also how editors offer
             // refactorings and source-wide commands, and this server has
             // neither: what it has is the patch a diagnostic already carries.
