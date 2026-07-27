@@ -2208,7 +2208,13 @@ impl<'a> Checker<'a> {
                             Some((then_branch.span, "the other branch".to_string())),
                         );
                     }
-                    then_ty
+                    // The branch that knows more decides. Taking the first one
+                    // meant `if c { kept } else { push(kept, one) }` reported
+                    // whatever `kept` started as, so writing the unchanged case
+                    // first gave a list of unknown and writing it second did
+                    // not. Two spellings of one filter should not typecheck
+                    // differently.
+                    settled(&then_ty, &else_ty)
                 }
             }
             None => {
@@ -2563,10 +2569,20 @@ impl<'a> Checker<'a> {
                 "a `for` with no `with` produces `()` on every turn".to_string(),
             )),
         };
-        self.check_block_against(body, &carried, because);
+        let produced = self.check_block_against(body, &carried, because);
         self.facts = outer.join(&self.facts.clone());
 
-        carried
+        // What the accumulator ends up holding, rather than what it started
+        // as. `[]` is a list of unknown until the body says what goes into it,
+        // and reporting the initialiser's type handed a list of unknown to
+        // whatever walked what the loop built. An unknown element agrees with
+        // everything, so nothing done with those elements was checked.
+        //
+        // Only where the initialiser did not know. The loop may run no times
+        // at all, so the answer has to accept what it started as, and where
+        // that is a real type it wins: an accumulator that started as an `Int`
+        // is an `Int` even if every turn happens to produce a `Positive`.
+        settled(&carried, &produced)
     }
 
     fn infer(&mut self, expr: &'a Expr) -> Ty {
@@ -3155,7 +3171,11 @@ impl<'a> Checker<'a> {
             args[1].span(),
             Some((args[0].span(), "the list it is pushed onto".to_string())),
         );
-        Ty::List(Box::new(element))
+        // What is in the list after this, rather than what was in it before.
+        // `[]` is a list of unknown, so pushing onto one used to hand back
+        // another list of unknown and the element type never got worked out at
+        // all. The value going in is the only thing that knows.
+        Ty::List(Box::new(settled(&element, &types[1])))
     }
 
     fn infer_call(&mut self, callee: &'a Expr, args: &'a [Expr], span: Span) -> Ty {
@@ -4220,6 +4240,78 @@ fn capability(name: &str) -> Ty {
         name: Rc::from(name),
         args: Vec::new(),
     }
+}
+
+/// `carried` with the parts it did not know filled in from `produced`.
+///
+/// A `for` used to report what its accumulator started as, and `[]` starts as
+/// a list of unknown. So `let kept = for x in xs with out = [] { push(out, x) }`
+/// produced a list of unknown, and a walk over `kept` bound an element nothing
+/// was known about, which agrees with everything and is checked against
+/// nothing. That is the shape this repository has been caught by three times,
+/// and the invariant that catches it found this one in the first program of the
+/// second phase.
+///
+/// Where the initialiser knows, it wins, because the loop may run no times at
+/// all and the answer has to accept what it started as. An accumulator that
+/// started as an `Int` is an `Int` even if every turn happens to hand back a
+/// `Positive`. `Never` never wins: a body that always returns says nothing
+/// about a loop that took no turns.
+fn settled(carried: &Ty, produced: &Ty) -> Ty {
+    match (carried, produced) {
+        (Ty::Unknown, other) if !other.absorbs() => other.clone(),
+        (Ty::List(started), Ty::List(ended)) => Ty::List(Box::new(settled(started, ended))),
+        (Ty::Result(ok_started, err_started), Ty::Result(ok_ended, err_ended)) => Ty::Result(
+            Box::new(settled(ok_started, ok_ended)),
+            Box::new(settled(err_started, err_ended)),
+        ),
+        // A bare variant is its choice with unknown arguments, so a fold whose
+        // accumulator starts at `None` and ends at `Some { value: 3 }` is the
+        // same question one level in.
+        (
+            Ty::Named {
+                def: started,
+                args: started_args,
+            },
+            Ty::Named {
+                def: ended,
+                args: ended_args,
+            },
+        ) if started == ended && started_args.len() == ended_args.len() => Ty::Named {
+            def: *started,
+            args: settled_all(started_args, ended_args),
+        },
+        (
+            Ty::External {
+                module: started_module,
+                name: started_name,
+                args: started_args,
+            },
+            Ty::External {
+                module: ended_module,
+                name: ended_name,
+                args: ended_args,
+            },
+        ) if started_module == ended_module
+            && started_name == ended_name
+            && started_args.len() == ended_args.len() =>
+        {
+            Ty::External {
+                module: Rc::clone(started_module),
+                name: Rc::clone(started_name),
+                args: settled_all(started_args, ended_args),
+            }
+        }
+        _ => carried.clone(),
+    }
+}
+
+fn settled_all(started: &[Ty], ended: &[Ty]) -> Vec<Ty> {
+    started
+        .iter()
+        .zip(ended)
+        .map(|(started, ended)| settled(started, ended))
+        .collect()
 }
 
 /// What an `ensures` block promises about the returned value.

@@ -1,0 +1,277 @@
+// A program that reads a directory of logs and reports what is in them.
+//
+// This is the second file written to find out what is missing rather than to
+// show what is there. `examples/todo.deed` was the first and it found four
+// things, every one of which became part of the language. This one found one
+// before it had read a file: a report has columns, columns need padding, and
+// padding could not be written without a function that calls itself, so
+// aligning a column made a function declare `Diverge` and spread it to
+// everything that built a line. `repeat` closed that.
+//
+// What is worth reading here is the split between the two halves. Everything
+// down to `report` is pure: it takes text and gives back text, declares
+// nothing, and can be tested by writing a string down. Nothing in it can read
+// a file, and that is checked rather than intended. `summarise` is the only
+// function that touches anything, and it says so in five words.
+//
+// Point it at a directory of `.log` files:
+//
+//   deed run examples/logs.deed --dir /var/log/mine
+//
+// A line is a date, a level, a source and a message, separated by runs of
+// spaces:
+//
+//   2026-07-01 ERROR  ledger   refused a write
+
+module examples/logs
+
+// How many times one key was seen. A record rather than a pair, because
+// `tally.seen` reads and `at(tally, 1)` does not.
+record Tally {
+    key: String,
+    seen: Int,
+}
+
+// The words of a line, with the gaps thrown away.
+//
+// `split` leaves an empty piece between two separators, which is what makes it
+// the inverse of `join` and what makes it wrong for a column that was padded
+// out to line up. Dropping the empties is the caller's job precisely because
+// splitting cannot know whether they meant anything.
+fn fields(line: String) -> List<String> {
+    for piece in split(line, " ") with kept = [] {
+        if length(piece) > 0 {
+            push(kept, piece)
+        } else {
+            kept
+        }
+    }
+}
+
+// The nth word, or nothing. A line that is not a log line is not a mistake in
+// this program: it came out of a file somebody else wrote.
+fn word(line: String, index: Int) -> String {
+    match at(fields(line), index) {
+        ok(found) => found,
+        err(why) => "",
+    }
+}
+
+fn level_of(line: String) -> String {
+    word(line, 1)
+}
+
+fn source_of(line: String) -> String {
+    word(line, 2)
+}
+
+// Whether anything here is already counting that key.
+fn holds(tallies: List<Tally>, key: String) -> Bool {
+    for one in tallies with found = false while !found {
+        one.key == key
+    }
+}
+
+// One more of `key`, whether or not it has been seen before.
+//
+// Two walks and a branch, because a list is what there is: adding the first one
+// and bumping a later one are different shapes and there is no keyed
+// collection to make them the same shape. Worth watching. If this file grows a
+// second one of these it stops being an inconvenience and starts being a gap.
+fn counted(tallies: List<Tally>, key: String) -> List<Tally> {
+    if holds(tallies, key) {
+        for one in tallies with out = [] {
+            if one.key == key {
+                push(out, Tally { key: one.key, seen: one.seen + 1 })
+            } else {
+                push(out, one)
+            }
+        }
+    } else {
+        push(tallies, Tally { key: key, seen: 1 })
+    }
+}
+
+// Every line counted by whatever `key_of` says the line is about.
+//
+// The caller passes the question. Counting by level and counting by source are
+// the same walk asking a different thing, and writing it twice would be two
+// places for the same mistake.
+fn tallied(lines: List<String>, key_of: Fn(String) -> String) -> List<Tally> {
+    for line in lines with tallies = [] {
+        if length(trim(line)) == 0 {
+            tallies
+        } else {
+            counted(tallies, key_of(line))
+        }
+    }
+}
+
+// Insertion sort, most seen first.
+//
+// `sorted` is already in order, so where `one` goes is decided by walking it
+// twice: everything that outranks it, then everything that does not. There is
+// no `insert` and no way to join two lists except by walking one onto the
+// other, which is what `rest` does.
+fn placed(sorted: List<Tally>, one: Tally) -> List<Tally> {
+    let ahead = for s in sorted with kept = [] {
+        if s.seen >= one.seen {
+            push(kept, s)
+        } else {
+            kept
+        }
+    }
+    let behind = for s in sorted with kept = [] {
+        if s.seen >= one.seen {
+            kept
+        } else {
+            push(kept, s)
+        }
+    }
+    for s in behind with out = push(ahead, one) {
+        push(out, s)
+    }
+}
+
+fn ranked(tallies: List<Tally>) -> List<Tally> {
+    for one in tallies with sorted = [] {
+        placed(sorted, one)
+    }
+}
+
+// Text out to a width. The function this file was written to find.
+//
+// A count of zero or less is no repetitions, which is what
+// `width - length(text)` means when the text is already wider than the column.
+fn padded(text: String, width: Int) -> String {
+    text + join(repeat(" ", width - length(text)), "")
+}
+
+fn line_for(one: Tally) -> String {
+    padded(one.key, 16) + to_string(one.seen)
+}
+
+// The whole report, as lines. Pure, so a test can read it.
+fn report(lines: List<String>) -> List<String> {
+    let levels = ranked(tallied(lines, level_of))
+    let sources = ranked(tallied(lines, source_of))
+
+    let head = ["by level", padded("", 16) + "count"]
+    let with_levels = for one in levels with out = head {
+        push(out, line_for(one))
+    }
+    let with_gap = push(with_levels, "")
+    let with_head = push(with_gap, "by source")
+    for one in sources with out = with_head {
+        push(out, line_for(one))
+    }
+}
+
+// The only function here that reads anything, and the only one with a row.
+//
+// It is handed a `Dir` and cannot get out of it: naming `..` is refused, so is
+// an absolute path, and so is a symlink pointing outside. `Io.list` is what
+// finds the names, which is a different authority from reading one of them,
+// and both are written down.
+fn summarise(files: Dir) -> Result<List<String>, String>
+  uses
+    Io.list,
+    Io.read,
+{
+    let names = Io.list(files)?
+    let lines = for name in names with gathered = [] {
+        match Io.read(files, name) {
+            ok(text) => appended(gathered, split(text, "\n")),
+            err(why) => gathered,
+        }
+    }
+    ok(report(lines))
+}
+
+// One list onto the end of another. Not in the prelude because it can be
+// written here, which is the test.
+fn appended(front: List<String>, back: List<String>) -> List<String> {
+    for one in back with out = front {
+        push(out, one)
+    }
+}
+
+fn main(sys: System) -> Result<(), String>
+  uses
+    Io.list,
+    Io.read,
+    Io.write,
+{
+    let lines = summarise(sys.files)?
+    for line in lines {
+        Io.write(sys.console, line)
+    }
+    ok(())
+}
+
+test "a line comes apart on runs of spaces" {
+    let line = "2026-07-01 ERROR  ledger   refused a write"
+    assert length(fields(line)) == 6
+    assert level_of(line) == "ERROR"
+    assert source_of(line) == "ledger"
+}
+
+test "a line that is not a log line is empty rather than a failure" {
+    assert level_of("") == ""
+    assert source_of("only two") == ""
+}
+
+test "counting adds a key it has not seen and bumps one it has" {
+    let once = counted([], "ERROR")
+    assert length(once) == 1
+    let twice = counted(once, "ERROR")
+    assert length(twice) == 1
+    assert at(twice, 0) == ok(Tally { key: "ERROR", seen: 2 })
+}
+
+test "blank lines are not a level" {
+    let counts = tallied(["", "   ", "2026-07-01 INFO ledger up"], level_of)
+    assert length(counts) == 1
+}
+
+test "the most seen comes first" {
+    let lines = ["d INFO a x", "d ERROR b x", "d ERROR b x", "d WARN c x", "d ERROR b x"]
+    let order = ranked(tallied(lines, level_of))
+    assert at(order, 0) == ok(Tally { key: "ERROR", seen: 3 })
+    assert length(order) == 3
+}
+
+test "counting by source is the same walk asking a different question" {
+    let lines = ["d INFO ledger x", "d ERROR audit x", "d WARN ledger x"]
+    let order = ranked(tallied(lines, source_of))
+    assert at(order, 0) == ok(Tally { key: "ledger", seen: 2 })
+}
+
+test "a column is as wide as it was asked for" {
+    assert length(padded("ledger", 16)) == 16
+    assert length(padded("", 16)) == 16
+}
+
+test "text wider than its column is left alone" {
+    let long = "a source name longer than the column"
+    assert padded(long, 16) == long
+}
+
+test "the report has both halves and a gap between them" {
+    let lines = ["d INFO ledger x", "d ERROR audit x"]
+    let out = report(lines)
+    assert at(out, 0) == ok("by level")
+    assert at(out, 4) == ok("")
+    assert at(out, 5) == ok("by source")
+    assert length(out) == 8
+}
+
+test "an empty directory still reports its headings" {
+    let out = report([])
+    assert length(out) == 4
+}
+
+test "appending walks one list onto the other" {
+    assert appended(["a"], ["b", "c"]) == ["a", "b", "c"]
+    assert appended([], []) == []
+}
