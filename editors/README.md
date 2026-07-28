@@ -82,6 +82,17 @@ It publishes diagnostics on open and on change, and answers hover, go to
 definition, references, rename, formatting, code actions, document symbol,
 completion, signature help and workspace symbol.
 
+A hover carries the part of a signature a diagnostic never gets to. On a
+function's name it quotes the contract, which is what that function requires,
+performs and guarantees. On anything an obligation covers it names the tier
+that obligation landed in, the same three words `deed check --obligations`
+prints and the same table it prints them from, `proven` included: an editor
+that showed only the ones that went wrong would leave a reader unable to tell a
+discharged contract from a question nobody asked. The contract comes from the
+file being hovered, so a name imported from another module answers with its
+type and not its contract, and go to definition is one keypress away from the
+rest.
+
 Full sync only. The server asks for whole documents rather than incremental
 changes, because a sync that can drift out of step with the file is an
 optimisation worth measuring before taking.

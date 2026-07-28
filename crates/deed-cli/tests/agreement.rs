@@ -308,3 +308,230 @@ fn the_examples_this_was_reported_against_agree() {
     }
     assert_eq!(checked, named.len(), "every named example should be asked");
 }
+
+// -- the tier ---------------------------------------------------------------
+//
+// The second thing both of them answer about one file. `design/02-syntax.md`
+// promises that the tier an obligation landed in is always visible, and for a
+// while that was true of a terminal and false of the place a reader is: the
+// whole `deed-lsp` crate mentioned obligations once, in a comment. Now a hover
+// names them, which makes this the same pairing as the codes above and the
+// same risk. Two readings of one table are two chances to be wrong.
+
+/// A file carrying one obligation of each tier.
+///
+/// `halve` guarantees something a property test can exercise, so its `ensures`
+/// is `Tested`. The call satisfies `halve`'s `where` from the literal, so that
+/// is `Proven`. Its result has to land in `Positive` and nothing here says it
+/// does, so that is `Guarded`. The last two are the same span, which is worth
+/// having: a position with two answers is where picking one would show.
+const CONTRACTS: &str = "module one\n\n\
+     type Positive = Int where value > 0\n\n\
+     fn halve(n: Int) -> Int\n\
+     \x20 where\n\
+     \x20   n > 1,\n\
+     \x20 ensures\n\
+     \x20   ok => result >= 0,\n\
+     {\n\
+     \x20   n / 2\n\
+     }\n\n\
+     fn use_it() -> Positive {\n\
+     \x20   halve(10)\n\
+     }\n";
+
+/// Every obligation `deed check --obligations` reports about one file.
+///
+/// Tier, one based line and column, and subject, in the order it prints them.
+fn obligations_from_the_command_line(path: &Path) -> Vec<(String, u32, u32, String)> {
+    let output = Command::new(DEED)
+        .args(["check", "--format", "json", "--obligations"])
+        .arg(path)
+        .output()
+        .expect("the deed binary should run");
+    let text = String::from_utf8(output.stdout).expect("the tool writes UTF-8");
+    let named = path.to_string_lossy().replace('\\', "/");
+
+    let mut reported = Vec::new();
+    for line in text.lines() {
+        let Ok(message) = json::parse(line) else {
+            panic!("the tool should write one JSON object a line, got {line}");
+        };
+        if message.at(&["kind"]).and_then(Json::as_str) != Some("obligation") {
+            continue;
+        }
+        if message.at(&["file"]).and_then(Json::as_str) != Some(named.as_str()) {
+            continue;
+        }
+        let field = |name: &str| {
+            message
+                .at(&[name])
+                .and_then(Json::as_str)
+                .unwrap_or_else(|| panic!("every obligation carries {name}"))
+                .to_string()
+        };
+        let number = |name: &str| {
+            message
+                .at(&[name])
+                .and_then(Json::as_i64)
+                .unwrap_or_else(|| panic!("every obligation carries {name}")) as u32
+        };
+        reported.push((
+            field("tier"),
+            number("line"),
+            number("column"),
+            field("subject"),
+        ));
+    }
+    reported
+}
+
+/// A server that has been told about the folder and handed the file.
+fn opened(folder: &Path, path: &Path) -> Server {
+    let mut server = Server::new();
+    let (_, next) = server.handle(&Json::object(vec![
+        ("jsonrpc", Json::string("2.0")),
+        ("id", Json::number(1)),
+        ("method", Json::string("initialize")),
+        (
+            "params",
+            Json::object(vec![(
+                "workspaceFolders",
+                Json::Array(vec![Json::object(vec![
+                    ("uri", Json::string(file_uri(folder))),
+                    ("name", Json::string("scratch")),
+                ])]),
+            )]),
+        ),
+    ]));
+    assert_eq!(next, Next::Continue);
+
+    let text = std::fs::read_to_string(path).expect("the file should be readable");
+    server.handle(&Json::object(vec![
+        ("jsonrpc", Json::string("2.0")),
+        ("method", Json::string("textDocument/didOpen")),
+        (
+            "params",
+            Json::object(vec![(
+                "textDocument",
+                Json::object(vec![
+                    ("uri", Json::string(file_uri(path))),
+                    ("languageId", Json::string("deed")),
+                    ("version", Json::number(1)),
+                    ("text", Json::string(&text)),
+                ]),
+            )]),
+        ),
+    ]));
+    server
+}
+
+/// Every tier a hover names at a zero based line and character.
+///
+/// Read back out of the markdown the way a person reads it, rather than from
+/// somewhere only a test can see. A tooltip nobody can parse is a tooltip that
+/// says nothing, and the shape is the one the type and the name lines already
+/// use.
+fn tiers_from_the_editor(
+    server: &mut Server,
+    uri: &str,
+    line: u32,
+    character: u32,
+) -> Vec<(String, String)> {
+    let (sent, _) = server.handle(&Json::object(vec![
+        ("jsonrpc", Json::string("2.0")),
+        ("id", Json::number(2)),
+        ("method", Json::string("textDocument/hover")),
+        (
+            "params",
+            Json::object(vec![
+                (
+                    "textDocument",
+                    Json::object(vec![("uri", Json::string(uri))]),
+                ),
+                (
+                    "position",
+                    Json::object(vec![
+                        ("line", Json::number(line as i64)),
+                        ("character", Json::number(character as i64)),
+                    ]),
+                ),
+            ]),
+        ),
+    ]));
+
+    let text = sent
+        .last()
+        .and_then(|message| message.at(&["result", "contents", "value"]))
+        .and_then(Json::as_str)
+        .unwrap_or_else(|| panic!("nothing was hovered at {line}:{character}"))
+        .to_string();
+
+    text.lines()
+        .filter_map(|line| {
+            let (subject, tier) = line.rsplit_once("`, ")?;
+            if !["proven", "tested", "guarded"].contains(&tier) {
+                return None;
+            }
+            Some((
+                tier.to_string(),
+                subject.trim_start_matches('`').to_string(),
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn the_tier_of_every_obligation_is_the_same_in_both_places() {
+    let scratch = Scratch::new("obligations");
+    let one = scratch.write("one.deed", CONTRACTS);
+
+    // The absolute value first, so that both of them being silent is not a
+    // pass. This is the whole table for this file.
+    let terminal = obligations_from_the_command_line(&one);
+    assert_eq!(
+        terminal,
+        vec![
+            ("tested".to_string(), 9, 5, "halve ensures ok".to_string()),
+            ("guarded".to_string(), 15, 5, "Positive".to_string()),
+            ("proven".to_string(), 15, 5, "halve requires".to_string()),
+        ],
+        "`deed check --obligations` should report one obligation of each tier"
+    );
+
+    let uri = file_uri(&one);
+    let mut server = opened(&scratch.0, &one);
+
+    let mut editor: Vec<(String, String)> = Vec::new();
+    let mut asked: Vec<(u32, u32)> = Vec::new();
+    for (_, line, column, _) in &terminal {
+        if asked.contains(&(*line, *column)) {
+            continue;
+        }
+        asked.push((*line, *column));
+        // One based and counting characters on both sides, so the editor's
+        // zero based position is one less of each.
+        editor.extend(tiers_from_the_editor(
+            &mut server,
+            &uri,
+            line - 1,
+            column - 1,
+        ));
+    }
+
+    // Both directions. Everything the terminal reported is in a tooltip, and
+    // nothing is in a tooltip that the terminal did not report: an editor that
+    // invents a tier is the failure this pairing exists to catch, and it would
+    // pass a check that only looked for what it was told to find.
+    let mut expected: Vec<(String, String)> = terminal
+        .iter()
+        .map(|(tier, _, _, subject)| (tier.clone(), subject.clone()))
+        .collect();
+    expected.sort();
+    editor.sort();
+    assert_eq!(
+        editor,
+        expected,
+        "`deed check --obligations` and the server disagree about {}",
+        one.display()
+    );
+}

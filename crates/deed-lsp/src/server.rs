@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use deed_ast::Item;
 use deed_diagnostics::{Applicability, Diagnostic, Severity, SourceMap, Span};
-use deed_driver::Checked;
+use deed_driver::{Checked, ObligationReport};
 use deed_resolve::{DefId, DefKind};
 use deed_typeck::ty::{FnRow, Ty};
 
@@ -180,6 +180,18 @@ impl Server {
     /// the name under it refers to. Both, when the cursor is on a name that is
     /// also an expression, because "`total` is a function" and
     /// "`Fn(Int) -> Int`" answer different halves of the same question.
+    ///
+    /// Then the two halves of the contract, which is the part
+    /// `design/02-syntax.md` promises is always visible and which used to be
+    /// visible only in a terminal. On a function's name, what it requires,
+    /// performs and guarantees, in the words it was written with:
+    /// `crates/deed-ast/src/lib.rs` calls that the review surface. On anything
+    /// an obligation covers, which tier that obligation landed in, including
+    /// `proven`, because a reader shown nothing cannot tell a proof from a
+    /// question nobody asked.
+    ///
+    /// The tiers are read off [`Checked::obligations`], which the check behind
+    /// this hover has already built. Nothing here checks anything again.
     fn hover(&self, message: &Json) -> Json {
         let Some((document, offset, checked)) = self.locate(message) else {
             return Json::Null;
@@ -197,6 +209,31 @@ impl Server {
             let data = checked.resolutions.def(def);
             lines.push(format!("`{}`, {}", data.name, with_article(data.kind)));
             range = range.or(Some(span));
+            if let Some(contract) = contract_declared_at(&checked, &document.text, data.span) {
+                lines.push(contract);
+            }
+        }
+
+        // In source order, which for nested spans puts the outer one first: a
+        // call's precondition before the refinement on the argument inside it.
+        // Every one of them is true of this position, and which one a reader
+        // meant is not a thing to guess.
+        let covering: Vec<&ObligationReport> = checked
+            .obligations
+            .iter()
+            .filter(|report| report.span.contains(offset))
+            .collect();
+        for report in &covering {
+            lines.push(format!("`{}`, {}", report.subject, report.tier.name()));
+        }
+        // An `ensures` clause is not an expression and names nothing the
+        // resolver kept, so a cursor on one has no range yet. The narrowest
+        // obligation covering it is the thing being hovered.
+        if range.is_none() {
+            range = covering
+                .iter()
+                .map(|report| report.span)
+                .min_by_key(|span| (span.end - span.start, span.start));
         }
 
         let Some(range) = range else {
@@ -1718,6 +1755,79 @@ fn narrowest_name(checked: &Checked, offset: u32) -> Option<(Span, DefId)> {
         .names()
         .filter(|(span, _)| span.contains(offset))
         .min_by_key(|(span, _)| (span.end - span.start, span.start))
+}
+
+/// The contract of the function declared at `declared`, as it was written.
+///
+/// Quoted from the file rather than printed back from the tree, because the
+/// review surface is somebody's own words and a second printer for them would
+/// be a second opinion about what they wrote. Each clause is put on its own
+/// line and its internal line breaks are flattened, because a wrapped
+/// signature reads as one clause per line and a tooltip is not the place to
+/// re-litigate the layout.
+///
+/// `None` for a contract with nothing in it. Most declarations in this
+/// language have one, so writing an empty block under every other name would
+/// be noise in the place a reader looks most.
+///
+/// `None` too for a name declared in another file. What crosses a module
+/// boundary here is the type, which the line above already says; reaching the
+/// other file's text would mean checking the workspace a second time on a
+/// keystroke, and go to definition is one keypress and already goes there.
+fn contract_declared_at(checked: &Checked, text: &str, declared: Span) -> Option<String> {
+    if declared.is_empty() {
+        return None;
+    }
+    let function = checked.module.items.iter().find_map(|item| match item {
+        Item::Function(function) if function.sig.name.span == declared => Some(function),
+        _ => None,
+    })?;
+    let contract = &function.contract;
+    if contract.is_empty() {
+        return None;
+    }
+
+    let mut clauses: Vec<String> = Vec::new();
+    let mut clause = |keyword: &str, parts: Vec<String>| {
+        if !parts.is_empty() {
+            clauses.push(format!("{keyword} {}", parts.join(", ")));
+        }
+    };
+    clause(
+        "where",
+        contract
+            .requires
+            .iter()
+            .map(|expr| quoted(text, expr.span()))
+            .collect(),
+    );
+    clause(
+        "uses",
+        contract
+            .uses
+            .iter()
+            .map(|effect| quoted(text, effect.span))
+            .collect(),
+    );
+    clause(
+        "ensures",
+        contract
+            .ensures
+            .iter()
+            .map(|ensures| quoted(text, ensures.span))
+            .collect(),
+    );
+
+    Some(format!("```deed\n{}\n```", clauses.join("\n")))
+}
+
+/// The source between two offsets, on one line.
+fn quoted(text: &str, span: Span) -> String {
+    text.get(span.as_range())
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What kind of thing a name is, as a phrase rather than a word.
