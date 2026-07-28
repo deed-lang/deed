@@ -28,7 +28,7 @@ record Person {
 // The reasons they were allowed are not the same, though. `+` is here because
 // spelling concatenation any other way would be a tax on the most ordinary
 // thing a program does. The comparisons are here because nothing else in this
-// language can rank text; see `earlier` below.
+// language ranks text without being told how; see `earlier` below.
 fn greeting(person: Person) -> String {
     "hello, " + person.name + " of " + person.town
 }
@@ -54,13 +54,18 @@ fn announce(text: NonEmpty) -> String {
     text
 }
 
-// Strings are ordered, and this is the only thing in the language that can
-// rank text. A record has fields, so a caller who wants two of them ranked can
-// pass the comparison in, which is why ordering a record is refused. A
-// `String` has no part a program can reach: there is no character access, no
-// code point, and `to_int` only speaks about text that spells a number. Take
-// `<` away and sorting a list of names stops being awkward and starts being
-// impossible.
+// Strings are ordered, and this is the only thing in the language that ranks
+// text without being told how. A record has fields, so a caller who wants two
+// of them ranked passes the comparison in, which is why ordering a record is
+// refused, and it costs that caller nothing: the fields are already types with
+// an order. Text is reachable as well, since `split(s, "")` hands back the
+// characters, which this file asserts further down, so a comparator over text
+// can be written. What it cannot do is rank a character nobody told it about:
+// there is no code point and no `to_int` on a single character, so the
+// alphabet has to be typed out by hand, and everything left out of it ties
+// with everything else, silently. Take `<` away and sorting names is still
+// writable, at the price of one hand-written alphabet per program, each of
+// them wrong somewhere its author never looked.
 //
 // The order is by character. For text in one script that is the order anybody
 // expects, and for text that mixes them it is a decision nobody should be

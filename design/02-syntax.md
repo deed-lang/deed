@@ -125,12 +125,17 @@ is refused for the same reason and pinned by its own test. A caller that needs a
 passes the comparison. Equality is different, because structural equality is total and
 wanting to know whether two records are the same is reasonable.
 
-Strings are ordered because nothing else here can rank text, and that is the argument for
-the comparisons. Passing the comparison in is the answer for a record because a record has
-fields to compare. A `String` has no part a program can reach: there is no character
-access, no code point, and `to_int` only speaks about text that spells a number. Taking
-`<` away would not make ordering text awkward, it would make it unwritable, which is what
-separates it from the type parameter refused above.
+Strings are ordered because nothing else here ranks text without being told how, and that
+is the argument for the comparisons. Passing the comparison in is the answer for a record,
+and it costs the caller nothing: the fields are already types with an order, so the caller
+writes down what it already knows. Text is reachable as well, since `split(s, "")` hands
+back the characters, so a comparator over text can be written. What it cannot do is rank a
+character nobody told it about. There is no code point and no `to_int` on a single
+character, so the alphabet has to be typed out by hand, and every character left out of it
+ties with every other one, silently. Taking `<` away would not make ordering text
+impossible, it would put a hand-written alphabet in every program that sorts names and
+leave each of them wrong somewhere its author never looked, which is what separates it from
+the type parameter refused above.
 
 The order is by character. For text in one script that is the order anyone expects, and for
 text that mixes them it is a decision that needs a locale, which is not something an

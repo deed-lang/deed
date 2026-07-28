@@ -4392,13 +4392,18 @@ impl<'a> Checker<'a> {
     /// `String` is here on purpose rather than by leftover, though it started
     /// as one: this rule replaced one that asked only that both sides agree,
     /// so text was already comparable and narrowing kept it. It stays because
-    /// it is the only thing in the language that can rank text. A record is
-    /// refused and a caller who wants two ranked passes the comparison in,
-    /// which works because a record has fields to compare. A `String` has no
-    /// part a program can reach, so refusing here would not make ordering text
-    /// awkward, it would make it unwritable. `design/02-syntax.md` carries the
-    /// argument and what it rules out, and the corpus carries the consequence
-    /// nobody should meet by surprise, which is that `"10" < "9"`.
+    /// it is the only thing in the language that ranks text without being told
+    /// how. A record is refused and a caller who wants two ranked passes the
+    /// comparison in, which costs that caller nothing, since the fields are
+    /// already types with an order. Text is reachable as well: `split(s, "")`
+    /// hands back the characters. What a comparator written over those cannot
+    /// do is rank a character nobody typed into it, because there is no code
+    /// point and no `to_int` on a single character, so refusing here would not
+    /// make ordering text impossible, it would buy a hand-written alphabet per
+    /// program and a silent tie for everything outside it.
+    /// `design/02-syntax.md` carries the argument and what it rules out, and
+    /// the corpus carries the consequence nobody should meet by surprise,
+    /// which is that `"10" < "9"`.
     fn require_order(&mut self, ty: &Ty, at: Span, op: BinaryOp) {
         if matches!(self.widen(ty), Ty::Int | Ty::Str | Ty::Never) {
             return;

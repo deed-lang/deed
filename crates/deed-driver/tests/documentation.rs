@@ -787,9 +787,23 @@ fn the_documents_that_work_through_the_running_example_are_the_ones_that_do() {
 
 /// The types every operator is tried against.
 ///
-/// Concrete, and everything the language can build inside one module. This is
-/// the hand-written half of the measurement below, and the only one: what an
-/// operator does with these comes from the checker.
+/// Concrete and declarable inside one module, but nowhere near all of those:
+/// `()`, a `choice`, a refined type, a function type, `Result` and a bare type
+/// parameter are all missing, and the measurement below does not need them.
+///
+/// What it does need is that no two entries here are one type to the checker.
+/// The rule it uses is "more than one of these and not all of them", so a type
+/// that stands in for another already on the list gets counted a second time
+/// and an operator with one meaning looks like it has two. `Positive = Int
+/// where value > 0` is the near miss: adding it alone would make `%`, `*`, `-`
+/// and `/` join the answer. That precondition is held by
+/// [`the_probed_types_are_not_the_same_type_twice`] rather than left as a
+/// sentence, so completing the list is a red test that says why.
+///
+/// This is the hand-written half of the measurement, together with
+/// `BinaryOp::ALL` and the four comparisons written out in
+/// [`the_types_ordering_takes_are_the_ones_the_syntax_document_names`]. What
+/// an operator does with these comes from the checker.
 const PROBED_TYPES: [(&str, &str); 5] = [
     ("Int", ""),
     ("String", ""),
@@ -797,6 +811,54 @@ const PROBED_TYPES: [(&str, &str); 5] = [
     ("List<Int>", ""),
     ("Point", "record Point { x: Int }\n\n"),
 ];
+
+/// Whether a value of type `from` is accepted where `to` is wanted.
+///
+/// Asked of the checker, like everything else here. Two probed types that
+/// answer yes in either direction are one type as far as the count is
+/// concerned, since every operator taking one of them takes the other.
+fn stands_in_for(from: &str, to: &str) -> bool {
+    let mut declarations = String::new();
+    for (ty, declaration) in PROBED_TYPES {
+        if (ty == from || ty == to) && !declarations.contains(declaration) {
+            declarations.push_str(declaration);
+        }
+    }
+
+    let source =
+        format!("module probe\n\n{declarations}fn probe(a: {from}) -> {to} {{\n    a\n}}\n");
+    let mut sources = SourceMap::new();
+    let file = sources.add("probe.deed", source);
+    !deed_driver::check(&sources, file).has_errors()
+}
+
+/// The precondition [`operators_with_two_meanings`] counts under.
+fn probed_types_are_distinct() {
+    for (from, _) in PROBED_TYPES {
+        for (to, _) in PROBED_TYPES {
+            if from != to {
+                assert!(
+                    !stands_in_for(from, to),
+                    "a `{from}` is accepted where a `{to}` is wanted, so the two are one \
+                     type to the checker and PROBED_TYPES counts it twice"
+                );
+            }
+        }
+    }
+}
+
+/// The one thing the probed types have to be.
+///
+/// The count below calls an operator ambiguous when it takes more than one
+/// probed type and not all of them, which reads the right answer off the
+/// checker only while no probed type stands in for another. Nothing about a
+/// list of type names says that, and the list is the obvious thing to extend,
+/// so this holds it and fails by name instead of letting the counts demand a
+/// number nobody can make true.
+#[test]
+fn the_probed_types_are_not_the_same_type_twice() {
+    probed_types_are_distinct();
+}
 
 /// How the sentence about them opens, in both places that write it.
 const TWO_MEANINGS: &str = "operators that mean two things: ";
@@ -836,12 +898,17 @@ fn types_taken_by(op: &str) -> Vec<String> {
 /// choosing between meanings. One that takes all of them has a single meaning
 /// applied everywhere, which is why `==` is not in the answer: structural
 /// equality is total by design, and counting it would turn "two meanings" into
-/// "more than one type", which is a different and much duller claim.
+/// "more than one type", which is a different and much duller claim. The rule
+/// only reads that way while the probed types are distinct, so it says so
+/// first rather than reporting a number that came from counting one type
+/// twice.
 ///
 /// Sorted, and compared as a set. `BinaryOp::ALL` is in the parser's
 /// precedence order, which is not an order any sentence would use, so holding
 /// it would be holding the wrong thing.
 fn operators_with_two_meanings() -> Vec<String> {
+    probed_types_are_distinct();
+
     let mut found: Vec<String> = BinaryOp::ALL
         .iter()
         .map(|op| op.as_str())
@@ -924,9 +991,9 @@ fn the_syntax_document_counts_them_the_same_way() {
 /// This is the decision the sentence above turned up. `String` was never
 /// added to the ordering rule; it was what survived the rule being narrowed
 /// from "both sides agree" down to two types, and it stays because nothing
-/// else in the language can rank text. A set stated in a document and argued
-/// for in it is worth holding to what the checker does with it, since the
-/// argument is the reason anyone would trust the set.
+/// else in the language ranks text without being told how. A set stated in a
+/// document and argued for in it is worth holding to what the checker does
+/// with it, since the argument is the reason anyone would trust the set.
 #[test]
 fn the_types_ordering_takes_are_the_ones_the_syntax_document_names() {
     let syntax = read("design/02-syntax.md");
