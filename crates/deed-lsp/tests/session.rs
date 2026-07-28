@@ -234,37 +234,130 @@ fn initialize_says_what_the_server_can_do() {
     );
 }
 
+/// What each provider is called in `editors/README.md`.
+///
+/// A dictionary between two vocabularies, not a second copy of the set. The
+/// set is read out of the document; this only spells the field name for a
+/// phrase, because nothing derives one from the other: `references` keeps its
+/// plural where `code actions` loses it, and `formatting` grows a `document`
+/// in front. A capability with no entry here is a failure that names it, which
+/// is the same event as a provider landing that nobody was told about.
+const IN_ENGLISH: [(&str, &str); 10] = [
+    ("codeActionProvider", "code actions"),
+    ("completionProvider", "completion"),
+    ("definitionProvider", "go to definition"),
+    ("documentFormattingProvider", "formatting"),
+    ("documentSymbolProvider", "document symbol"),
+    ("hoverProvider", "hover"),
+    ("referencesProvider", "references"),
+    ("renameProvider", "rename"),
+    ("signatureHelpProvider", "signature help"),
+    ("workspaceSymbolProvider", "workspace symbol"),
+];
+
+/// `editors/README.md`, which is the document this test is about.
+fn editor_guide() -> String {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("this crate lives two directories under the repository root");
+    let path = root.join("editors").join("README.md");
+    std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} should be there", path.display()))
+}
+
 #[test]
 fn the_advertised_set_is_exactly_this() {
-    // Every other test here asks whether one capability is present, which
-    // says nothing about one that appeared. `editors/README.md` lists what
-    // the server answers in prose, and an editor's configuration is written
+    // Every other test here asks whether one capability is present, which says
+    // nothing about one that appeared. `editors/README.md` is where an editor
+    // author reads what the server answers, and a configuration is written
     // once and then trusted, so a provider arriving unannounced is a feature
-    // nobody is told about. This is the list to change when one lands.
+    // nobody is told about.
+    //
+    // That was the reason this gave, and then it compared against a list
+    // written out in Rust, so the document it named for its whole argument
+    // could have said anything at all. It reads the document now.
+    let guide = editor_guide();
+
+    // The whole clause, because `and answers ` on its own also starts the
+    // sentence about which files the server answers about, and a marker that
+    // matches two sentences reads whichever one moved last.
+    const ANSWERS: &str = "It publishes diagnostics on open and on change, and answers ";
+    let listed: Vec<String> = {
+        let start = guide.find(ANSWERS).unwrap_or_else(|| {
+            panic!("editors/README.md should still say {ANSWERS:?}, which is where it says what the server does")
+        });
+        let rest = &guide[start + ANSWERS.len()..];
+        let end = rest
+            .find('.')
+            .expect("the sentence saying what the server answers should end");
+        rest[..end]
+            .replace('\n', " ")
+            .split(',')
+            .flat_map(|part| part.split(" and "))
+            .map(|part| part.trim().to_string())
+            .filter(|part| !part.is_empty())
+            .collect()
+    };
+    assert!(
+        !listed.is_empty(),
+        "editors/README.md names nothing the server answers, so the sentence has been reworded"
+    );
+
     let sent = session(&[request(1, "initialize")]);
     let Some(Json::Object(fields)) = sent[0].at(&["result", "capabilities"]) else {
         panic!("initialize should answer with capabilities");
     };
-
-    let mut found: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
-    found.sort_unstable();
-
-    assert_eq!(
-        found,
-        [
-            "codeActionProvider",
-            "completionProvider",
-            "definitionProvider",
-            "documentFormattingProvider",
-            "documentSymbolProvider",
-            "hoverProvider",
-            "referencesProvider",
-            "renameProvider",
-            "signatureHelpProvider",
-            "textDocumentSync",
-            "workspaceSymbolProvider",
-        ]
+    let advertised: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(
+        !advertised.is_empty(),
+        "the server advertised nothing, so there is no set for the document to be wrong about"
     );
+
+    // Sync is not something the server answers, so it is not in that sentence.
+    // The document gives it a paragraph of its own, and this is the claim in it.
+    assert!(
+        advertised.contains(&"textDocumentSync"),
+        "the server no longer syncs documents and editors/README.md still describes how it does"
+    );
+    assert!(
+        guide.contains("Full sync only."),
+        "editors/README.md should still say \"Full sync only.\", which is the only place sync is written down"
+    );
+
+    for name in advertised
+        .iter()
+        .filter(|name| **name != "textDocumentSync")
+    {
+        let english = IN_ENGLISH
+            .iter()
+            .find(|(field, _)| field == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "`{name}` is advertised and this test has no English for it, so nothing can tell whether editors/README.md announces it"
+                )
+            })
+            .1;
+        assert!(
+            listed.iter().any(|item| item == english),
+            "`{name}` is advertised and editors/README.md does not say the server answers {english}"
+        );
+    }
+
+    for item in &listed {
+        let field = IN_ENGLISH
+            .iter()
+            .find(|(_, english)| english == item)
+            .unwrap_or_else(|| {
+                panic!(
+                    "editors/README.md says the server answers {item:?} and this test has no capability for it"
+                )
+            })
+            .0;
+        assert!(
+            advertised.contains(&field),
+            "editors/README.md says the server answers {item}, and `{field}` is not advertised"
+        );
+    }
 }
 
 #[test]

@@ -19,6 +19,17 @@
 //! three files in the same directory declared one, and `transfer.deed` said
 //! every design document referred back to it when two of the five did. Those
 //! are checked here too.
+//!
+//! `editors/` is prose about this compiler as well, and most of what holds it
+//! is deliberately not here. The keywords a TextMate grammar paints are
+//! compared with the lexer's in `crates/deed-parser/tests/grammar.rs`, and the
+//! list of what the language server answers is compared with what it
+//! advertises in `crates/deed-lsp/tests/session.rs`. Each sits beside the
+//! thing it reads, because this crate knows nothing about a grammar or a
+//! server and a test here that made it know would point a dependency
+//! backwards. What is left over is the sentence in `editors/README.md` about
+//! the modules that ship inside the compiler, and those are names this crate
+//! does hold, so that one is checked below.
 
 use std::path::{Path, PathBuf};
 
@@ -60,6 +71,38 @@ fn backticked(text: &str) -> Vec<String> {
         let Some(close) = rest.find('`') else { break };
         found.push(rest[..close].to_string());
         rest = &rest[close + 1..];
+    }
+    found
+}
+
+/// One English enumeration of backticked names, read from the start of `text`:
+/// `` `a` ``, or `` `a` and `b` ``, or `` `a`, `b` and `c` ``.
+///
+/// [`backticked`] takes every name in a stretch of prose, which only works
+/// where the stretch is nothing but the list. The paragraphs that write out a
+/// library go on to say something about it, in backticks, in the same
+/// sentence, so a list has to end where the English says it ends: at the first
+/// thing that is not a comma, the word `and`, or the line the paragraph
+/// happened to wrap at.
+///
+/// A rewording therefore drops the rest of the names rather than reaching past
+/// them, and the caller's comparison is what says which ones went missing.
+fn enumerated(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(body) = rest.strip_prefix('`') {
+        let Some(close) = body.find('`') else { break };
+        found.push(body[..close].to_string());
+        rest = &body[close + 1..];
+
+        let mut next = rest.strip_prefix(',').unwrap_or(rest);
+        next = next.trim_start_matches([' ', '\n']);
+        next = next.strip_prefix("and").unwrap_or(next);
+        next = next.trim_start_matches([' ', '\n']);
+        if next.len() == rest.len() {
+            break;
+        }
+        rest = next;
     }
     found
 }
@@ -261,6 +304,125 @@ fn the_library_the_readme_lists_is_the_library_that_is_written() {
     assert_eq!(backticked(sentence), written);
 }
 
+/// Every function each module that ships declares, in declaration order.
+///
+/// Off the parse tree rather than off the text, because what the prose is
+/// about is what a program that imports the module can call, and the parser is
+/// what decides that. They are checked together because they are allowed to
+/// import each other.
+fn functions_that_ship() -> Vec<(String, Vec<String>)> {
+    let modules: Vec<&str> = deed_driver::shipped_modules().collect();
+    assert!(
+        !modules.is_empty(),
+        "no module ships inside the compiler, so there is nothing for the syntax document to be wrong about"
+    );
+
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+    for module in &modules {
+        let text = deed_driver::shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
+    }
+
+    let mut found = Vec::new();
+    for (module, checked) in modules.iter().zip(deed_driver::check_all(&sources, &ids)) {
+        let declared: Vec<String> = checked
+            .module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => Some(function.sig.name.name.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !declared.is_empty(),
+            "`{module}` ships and declares no function at all"
+        );
+        found.push(((*module).to_string(), declared));
+    }
+    found
+}
+
+/// The three sentences in the syntax document that write out what a module
+/// that ships contains.
+///
+/// One of these lists was already held: the README's copy of `std/list` is
+/// checked above. The other two copies of that same list were not, and
+/// `std/string` and `std/table` were written down nowhere a change had to
+/// pass. A module gains a function in one file, and no line of that file has
+/// any reason to look at a design document.
+///
+/// Order is held rather than membership. A paragraph that lists what a module
+/// has is read down the page against the module, so the two orders agreeing is
+/// most of what makes it readable, and a set comparison passes on a sentence
+/// nobody can follow. That cost one edit: `std/string.deed` declared
+/// `pad_right` first and the sentence read `pad_left` first, and the file was
+/// reordered rather than the check weakened. The note above `pad_left` says so.
+#[test]
+fn the_functions_the_syntax_document_lists_are_the_ones_the_modules_declare() {
+    let syntax = read("design/02-syntax.md");
+
+    for (module, declared) in functions_that_ship() {
+        let marker = format!("`{module}` has ");
+        let paragraph = between(&syntax, &marker, "\n\n");
+        let named = enumerated(&paragraph[marker.len()..]);
+        assert!(
+            !named.is_empty(),
+            "the sentence starting {marker:?} names no function, so it has been reworded into something this cannot read"
+        );
+
+        for name in &declared {
+            assert!(
+                named.contains(name),
+                "`{module}` declares `{name}` and the sentence in design/02-syntax.md does not name it"
+            );
+        }
+        for name in &named {
+            assert!(
+                declared.contains(name),
+                "design/02-syntax.md says `{module}` has `{name}` and no such function is declared there"
+            );
+        }
+        assert_eq!(
+            named, declared,
+            "design/02-syntax.md reads {module} out in a different order than the module declares it"
+        );
+    }
+}
+
+/// The one claim `editors/README.md` makes that this crate can answer.
+///
+/// It tells an editor author that the modules inside the compiler are checked
+/// alongside their own files, and names one to show what that looks like. The
+/// name is one the compiler also holds, which is the checkable kind of claim,
+/// and it is the reason this file reaches into `editors/` at all. What the
+/// rest of that document says about the language server is held beside the
+/// language server; the note at the top of this file says where.
+#[test]
+fn the_module_the_editor_guide_names_is_one_that_ships() {
+    let shipping: Vec<&str> = deed_driver::shipped_modules().collect();
+    assert!(!shipping.is_empty(), "no module ships inside the compiler");
+
+    let guide = read("editors/README.md");
+    let sentence = between(&guide, "The modules that ship inside the compiler", "\n\n");
+    let named: Vec<String> = backticked(sentence)
+        .into_iter()
+        .filter_map(|item| item.strip_prefix("use ").map(str::to_string))
+        .collect();
+    assert!(
+        !named.is_empty(),
+        "the paragraph telling an editor author about the modules that ship names none of them"
+    );
+
+    for module in &named {
+        assert!(
+            shipping.contains(&module.as_str()),
+            "editors/README.md tells an editor author that `use {module}` is not an error and no such module ships"
+        );
+    }
+}
+
 /// The paragraph whose whole job is to say which parts of the document are
 /// fiction. It said four and listed three, because generic application was
 /// deleted from the list when it started parsing and the number was not.
@@ -296,6 +458,7 @@ fn the_documents_these_read_are_all_there() {
         "design/03-effects.md",
         "design/04-capabilities.md",
         "README.md",
+        "editors/README.md",
     ] {
         let path: &Path = &root().join(name);
         assert!(path.is_file(), "{name} should be there");
