@@ -636,6 +636,151 @@ fn hovering_over_nothing_is_null_rather_than_an_empty_tooltip() {
     assert!(sent[2].at(&["result"]).is_some_and(Json::is_null));
 }
 
+// -- the tier, where the reader is ------------------------------------------
+
+/// One file carrying one obligation of each kind, and one contract of each
+/// shape.
+///
+/// `deed check --obligations` on this text reports three: `halve ensures ok`
+/// is tested, `Positive` on the call is guarded, and `halve requires` at the
+/// same call is proven. The last two sit on the same span, which is why a
+/// hover reports every obligation covering a position rather than picking one.
+///
+/// `announce` is the one that writes all three contract clauses. It performs
+/// an effect and nothing calls it, so `use_it` stays pure and stays the one
+/// with no contract at all.
+const CONTRACTS: &str = "module a\n\n\
+     effect Log {\n\
+     \x20   fn note(line: String) -> ()\n\
+     }\n\n\
+     type Positive = Int where value > 0\n\n\
+     fn halve(n: Int) -> Int\n\
+     \x20 where\n\
+     \x20   n > 1,\n\
+     \x20 ensures\n\
+     \x20   ok => result >= 0,\n\
+     {\n\
+     \x20   n / 2\n\
+     }\n\n\
+     fn use_it() -> Positive {\n\
+     \x20   halve(10)\n\
+     }\n\n\
+     fn announce(line: String) -> Int\n\
+     \x20 where\n\
+     \x20   length(line) > 0,\n\
+     \x20 uses\n\
+     \x20   Log.note,\n\
+     \x20 ensures\n\
+     \x20   ok => result > 0,\n\
+     {\n\
+     \x20   Log.note(line)\n\
+     \x20   1\n\
+     }\n";
+
+#[test]
+fn hovering_over_a_call_says_which_tier_its_precondition_landed_in() {
+    // The line the issue is about. `deed check --obligations` said `proven`
+    // about this call and an editor said nothing at all, so a reader could not
+    // tell a discharged contract from one nobody looked at.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CONTRACTS),
+        at(2, "textDocument/hover", URI, 18, 4),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(text.contains("`halve requires`, proven"), "{text}");
+}
+
+#[test]
+fn a_position_carrying_two_obligations_reports_both_of_them() {
+    // The call is `Guarded` against the return type's refinement and `Proven`
+    // against the callee's `where`, at the same span. Reporting one of them
+    // would be picking, and the terminal picks neither.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CONTRACTS),
+        at(2, "textDocument/hover", URI, 18, 4),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(text.contains("`Positive`, guarded"), "{text}");
+    assert!(text.contains("`halve requires`, proven"), "{text}");
+}
+
+#[test]
+fn hovering_over_an_ensures_clause_says_it_is_tested() {
+    // Nothing else answers here. An `ensures` clause is not an expression and
+    // the resolver keeps no name for it, so before this the tooltip was empty
+    // on the one line that states what the function guarantees.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CONTRACTS),
+        at(2, "textDocument/hover", URI, 12, 6),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(text.contains("`halve ensures ok`, tested"), "{text}");
+}
+
+#[test]
+fn hovering_over_a_function_name_shows_its_contract() {
+    // The review surface, quoted from the file. The type line above it says
+    // what goes in and comes out and says nothing about what is required,
+    // performed or guaranteed, which is the half this language is about.
+    //
+    // All three clauses and in the order they are written, because the tree
+    // keeps them in three lists and a renderer that dropped one would still
+    // look like a contract to anyone who did not know what was in the file.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CONTRACTS),
+        at(2, "textDocument/hover", URI, 21, 4),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(
+        text.contains(
+            "```deed\nwhere length(line) > 0\nuses Log.note\nensures ok => result > 0\n```"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_contract_with_only_some_clauses_writes_only_those() {
+    // `halve` performs nothing, so there is no `uses` line to write. A
+    // renderer that wrote every heading whether or not it had anything under
+    // it would be saying something about the function that is not in the file.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CONTRACTS),
+        at(2, "textDocument/hover", URI, 8, 4),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(
+        text.contains("```deed\nwhere n > 1\nensures ok => result >= 0\n```"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_function_with_nothing_in_its_contract_gets_no_empty_block() {
+    // `use_it` declares no contract. Most names in a file are like this, so a
+    // block saying so under each of them would be noise where a reader looks
+    // most.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CONTRACTS),
+        at(2, "textDocument/hover", URI, 17, 4),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(text.contains("`use_it`, a function"), "{text}");
+    assert!(!text.contains("```"), "{text}");
+}
+
 // -- go to definition -------------------------------------------------------
 
 #[test]
@@ -1277,6 +1422,38 @@ fn hover_reaches_across_a_module_boundary() {
 
     let text = hover_text(sent.last().unwrap());
     assert!(text.contains("`Fn(Int) -> Int`"), "{text}");
+}
+
+#[test]
+fn a_contract_does_not_reach_across_a_module_boundary() {
+    // What crosses is the type, which the line above already says. The
+    // contract is quoted from the file being hovered, and quoting the other
+    // one would mean holding its text, which would mean checking the
+    // workspace a second time on a keystroke. Go to definition is one
+    // keypress and already goes there.
+    //
+    // The importing file has a contract of its own, so a hover that reached
+    // for whichever contract it found first would answer with that one and
+    // this would notice.
+    let scratch = Scratch::new("contract-across");
+    scratch.write(
+        "one.deed",
+        "module scratch/one\n\nfn double(n: Int) -> Int\n  where\n    n > 0,\n{\n    n + n\n}\n",
+    );
+    let importer = "module scratch/two\n\nuse scratch/one.{double}\n\n\
+         fn f() -> Int {\n    double(2)\n}\n\n\
+         fn g(n: Int) -> Int\n  where\n    n < 99,\n{\n    n\n}\n";
+    let two = scratch.write("two.deed", importer);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, importer),
+        at(2, "textDocument/hover", &two, 5, 6),
+    ]);
+
+    let text = hover_text(sent.last().unwrap());
+    assert!(text.contains("`Fn(Int) -> Int`"), "{text}");
+    assert!(!text.contains("```"), "{text}");
 }
 
 #[test]

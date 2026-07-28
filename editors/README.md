@@ -82,6 +82,17 @@ It publishes diagnostics on open and on change, and answers hover, go to
 definition, references, rename, formatting, code actions, document symbol,
 completion, signature help and workspace symbol.
 
+A hover carries the part of a signature a diagnostic never gets to. On a
+function's name it quotes the contract, which is what that function requires,
+performs and guarantees. On anything an obligation covers it names the tier
+that obligation landed in, the same three words `deed check --obligations`
+prints and the same table it prints them from, `proven` included: an editor
+that showed only the ones that went wrong would leave a reader unable to tell a
+discharged contract from a question nobody asked. The contract comes from the
+file being hovered, so a name imported from another module answers with its
+type and not its contract, and go to definition is one keypress away from the
+rest.
+
 Full sync only. The server asks for whole documents rather than incremental
 changes, because a sync that can drift out of step with the file is an
 optimisation worth measuring before taking.
@@ -94,8 +105,13 @@ it answers, in both directions, so a provider that lands without a line here
 fails the build and so does a line here with no provider behind it. What it
 compares them through is a rule and not a list: a capability is written here
 the way its field name reads with `Provider` taken off, and the handful that
-are not are each held to the field they claim to be about. The keywords the VS
-Code grammar paints are compared with the lexer's in
+are not are each held to the field they claim to be about. What a hover says
+about a contract is held in the same file, one test for each clause a contract
+can have and one for a name that came from another module. That the tier is the
+terminal's answer and not a second one is held by
+`crates/deed-cli/tests/agreement.rs`, which runs the real binary and an
+in-process server over the same file and compares them position by position.
+The keywords the VS Code grammar paints are compared with the lexer's in
 `crates/deed-parser/tests/grammar.rs`. The module named in `use std/list` above
 is checked against the ones that really ship in
 `crates/deed-driver/tests/documentation.rs`, whose header says why these checks

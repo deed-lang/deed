@@ -359,6 +359,23 @@ pub enum Tier {
     Guarded,
 }
 
+impl Tier {
+    /// The word this tier goes by, wherever it is reported.
+    ///
+    /// One spelling, because the tier is now said in two places: `deed check
+    /// --obligations` prints it and a hover in an editor names it. Two
+    /// consumers of one idea drifting apart is the mistake this repository
+    /// keeps making, and a word each of them spells for itself is the cheapest
+    /// way to start.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tier::Proven => "proven",
+            Tier::Tested => "tested",
+            Tier::Guarded => "guarded",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Obligation {
     /// The expression that has to satisfy the refinement.

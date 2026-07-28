@@ -581,7 +581,7 @@ fn report_obligations(
             writeln!(
                 out,
                 "  {:<8} {name}:{}:{}  {subject}",
-                tier_name(*tier),
+                tier.name(),
                 location.line,
                 location.column
             )?;
@@ -620,7 +620,7 @@ fn report_json(
                 writeln!(
                     out,
                     "{{\"kind\":\"obligation\",\"tier\":\"{}\",\"file\":\"{}\",\"line\":{},\"column\":{},\"subject\":\"{}\"}}",
-                    tier_name(*tier),
+                    tier.name(),
                     file.name(),
                     location.line,
                     location.column,
@@ -631,14 +631,6 @@ fn report_json(
     }
 
     Ok(())
-}
-
-fn tier_name(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Proven => "proven",
-        Tier::Tested => "tested",
-        Tier::Guarded => "guarded",
-    }
 }
 
 fn plural(count: usize, noun: &str) -> String {

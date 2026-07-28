@@ -666,9 +666,11 @@ always visible:
 | Tested | property tests generated from the contract | anything decidable by sampling |
 | Guarded | runtime check at the boundary | everything else |
 
-`deed check` reports which tier each obligation landed in. A contract silently degrading to a
-runtime check would be the single most dishonest thing this language could do, so it does
-not happen quietly.
+`deed check` reports which tier each obligation landed in, and so does a hover: the language
+server names the tier of every obligation covering the cursor, `Proven` included, because a
+reader shown nothing cannot tell a discharged contract from one nobody asked about. A contract
+silently degrading to a runtime check would be the single most dishonest thing this language
+could do, so it does not happen quietly.
 
 There is a worse thing, and it happened. For a while the checker recorded a `Guarded`
 obligation on a return value, printed "so it becomes a runtime check", and the interpreter
