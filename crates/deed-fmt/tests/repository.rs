@@ -45,10 +45,12 @@ fn every_deed_file_in_the_repository_is_formatted() {
 /// nothing about formatting, because the interesting input to a formatter is
 /// code that is laid out badly, and nothing here had ever handed it any.
 ///
-/// The properties in `format.rs` have the same shape of hole from the other
-/// side. They run over a list of snippets written by hand, which is the set
-/// somebody thought of rather than the set that turns up, and that file says
-/// so about itself in its first paragraph.
+/// The tests in `format.rs` have the same shape of hole from the other side.
+/// They run over text written in this repository for them to run over, which
+/// is the set somebody thought of rather than the set that turns up. That file
+/// is about which layout decisions are checked, and it keeps them in a table
+/// so that they are; it says nothing about where its input comes from, so this
+/// is the side that has to.
 ///
 /// So these are the real programs, with their indentation thrown away and
 /// trailing spaces added, and the claim is the one P4 actually makes: whatever
