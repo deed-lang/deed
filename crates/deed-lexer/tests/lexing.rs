@@ -3,8 +3,12 @@
 //! The awkward cases get more attention than the happy path on purpose. The
 //! happy path is covered by lexing `examples/transfer.deed`, and everything else
 //! here is a way the lexer could quietly do the wrong thing.
+//!
+//! The last section is the other half of that. Everything above it asks what
+//! the lexer did; that one asks what it said, once per message, because a
+//! message nobody has read is also a message nobody has judged.
 
-use deed_diagnostics::{Diagnostic, SourceMap, render_human, render_json};
+use deed_diagnostics::{Applicability, Diagnostic, SourceMap, render_human, render_json};
 use deed_lexer::{Keyword, Lexed, TokenKind, codes, tokenize};
 
 fn lex(src: &str) -> (SourceMap, Lexed) {
@@ -112,20 +116,6 @@ fn method_calls_on_integer_literals_are_unambiguous() {
     );
 }
 
-/// The decision not to have floats is in `design/02-syntax.md`, and until now
-/// it was nowhere in the compiler. `1.5` came apart into `1`, a stray `.` the
-/// parser called a missing expression, and a `5`, so the reader was told about
-/// a dot they never thought of as separate.
-#[test]
-fn a_decimal_point_says_there_are_no_floats() {
-    let (sources, lexed) = lex("1.5");
-    assert_eq!(codes_of(&lexed.diagnostics), vec![codes::NO_FLOAT_LITERAL]);
-
-    let text = render_human(&sources, &lexed.diagnostics[0]);
-    assert!(text.contains("there are no float literals"), "{text}");
-    assert!(text.contains("smallest unit"), "{text}");
-}
-
 #[test]
 fn a_decimal_point_is_reported_once_and_the_whole_part_stands_in() {
     // Reporting it and then handing the parser an invalid token would earn a
@@ -230,15 +220,12 @@ fn block_comments_nest() {
 }
 
 #[test]
-fn an_unterminated_block_comment_says_how_many_are_missing() {
-    let (sources, lexed) = lex("/* one /* two ");
+fn an_unterminated_block_comment_offers_every_terminator_it_needs() {
+    let (_, lexed) = lex("/* one /* two ");
     assert_eq!(
         codes_of(&lexed.diagnostics),
         vec![codes::UNTERMINATED_BLOCK_COMMENT]
     );
-
-    let rendered = render_human(&sources, &lexed.diagnostics[0]);
-    assert!(rendered.contains("2 `*/`s are still needed"), "{rendered}");
 
     let fix = lexed.diagnostics[0].fix.as_ref().unwrap();
     assert_eq!(fix.edits[0].replacement, "*/*/");
@@ -330,22 +317,11 @@ fn radix_prefixes_and_separators_are_decoded() {
 }
 
 #[test]
-fn an_oversized_integer_names_the_limit() {
-    let (sources, lexed) = lex("99999999999999999999");
-    assert_eq!(
-        codes_of(&lexed.diagnostics),
-        vec![codes::INTEGER_OUT_OF_RANGE]
-    );
-    assert!(render_human(&sources, &lexed.diagnostics[0]).contains("9223372036854775807"));
-}
-
-#[test]
 fn a_literal_suffix_is_one_error_not_two_tokens() {
-    let (sources, lexed) = lex("100u8");
+    let (_, lexed) = lex("100u8");
     assert_eq!(codes_of(&lexed.diagnostics), vec![codes::MALFORMED_NUMBER]);
     assert_eq!(lexed.tokens[0].kind, TokenKind::Error);
     assert_eq!(lexed.tokens.len(), 2, "should not also emit an identifier");
-    assert!(render_human(&sources, &lexed.diagnostics[0]).contains("no literal suffixes"));
 }
 
 #[test]
@@ -451,4 +427,382 @@ fn a_file_of_only_trivia_is_just_eof() {
     let (_, lexed) = lex("  // hi\n  /* there */\n\n");
     assert_eq!(lexed.tokens.len(), 1);
     assert_eq!(lexed.tokens[0].kind, TokenKind::Eof);
+}
+
+// -- every message, read ---------------------------------------------------
+//
+// The ratchet in `crates/deed-driver/tests/codes.rs` matches on the name of a
+// code, so one test naming `UNKNOWN_ESCAPE` covered four messages and rendered
+// none of them. Nineteen messages were written in this crate, one of them
+// could not be reached at all, and four had ever been rendered by a test.
+//
+// So one test per message from here down, reading the words rather than the
+// code, and no string read in two of them: breaking a sentence should name the
+// test that owns it. `message` also asserts on the way past that one mistake
+// produces one diagnostic, which is the thing #210 had to go back and fix.
+
+/// Every diagnostic `src` produced, rendered the way a person reads them.
+fn messages(src: &str) -> Vec<String> {
+    let (sources, lexed) = lex(src);
+    assert!(
+        !lexed.diagnostics.is_empty(),
+        "`{src}` was meant to produce a diagnostic and produced none"
+    );
+    lexed
+        .diagnostics
+        .iter()
+        .map(|d| render_human(&sources, d))
+        .collect()
+}
+
+/// The one message `src` produces, and the assertion that there is one.
+fn message(src: &str) -> String {
+    let mut all = messages(src);
+    assert_eq!(
+        all.len(),
+        1,
+        "`{src}` is one mistake and should be one message:\n{}",
+        all.join("\n")
+    );
+    all.pop().unwrap()
+}
+
+fn fix_for(src: &str) -> deed_diagnostics::Fix {
+    let (_, lexed) = lex(src);
+    lexed.diagnostics[0]
+        .fix
+        .clone()
+        .unwrap_or_else(|| panic!("`{src}` should carry a fix"))
+}
+
+// DEED1001, four ways.
+
+#[test]
+fn an_ampersand_is_told_which_operator_deed_has() {
+    let text = message("a & b");
+    assert!(text.contains("`&` is not an operator in Deed"), "{text}");
+    assert!(text.contains("expected `&&`"), "{text}");
+    assert!(text.contains("Deed has no bitwise operators"), "{text}");
+    assert!(text.contains("help: use `&&`"), "{text}");
+}
+
+#[test]
+fn a_character_that_starts_nothing_says_only_what_is_wrong() {
+    let text = message("§");
+    assert!(text.contains("unexpected character `§`"), "{text}");
+    assert!(text.contains("not valid at the start of a token"), "{text}");
+    // Nothing is suggested, because there is nothing this was likely to be.
+    assert!(!text.contains("help:"), "{text}");
+}
+
+#[test]
+fn a_character_pasted_in_from_a_document_is_named_as_such() {
+    let text = message("\u{201C}");
+    assert!(text.contains("pasted in from formatted text"), "{text}");
+    assert!(text.contains("help: replace it with `\"`"), "{text}");
+}
+
+#[test]
+fn a_curly_apostrophe_is_not_offered_a_replacement_that_fails_the_same_way() {
+    // `'` is not a character in this language either, so the fix that used to
+    // be here produced this same message again, and `deed fix` applied it
+    // without asking.
+    let text = message("\u{2019}");
+    assert!(
+        text.contains("Deed has no character literals, so text of any length goes between"),
+        "{text}"
+    );
+    assert!(!text.contains("help:"), "{text}");
+}
+
+#[test]
+fn a_no_break_space_separates_tokens_the_way_a_space_does() {
+    // There was a fourth suggestion under this code, for the no-break spaces,
+    // and nothing could reach it: `char::is_whitespace` is true for all three,
+    // so the trivia skipper takes them before anything looks at them. Which is
+    // the right answer, and now it is one somebody has checked.
+    let source = "let\u{00A0}a\u{2007}=\u{202F}1";
+    let (_, lexed) = lex(source);
+    assert!(!lexed.has_errors());
+    assert_eq!(
+        kinds(source),
+        vec![
+            TokenKind::Keyword(Keyword::Let),
+            TokenKind::Ident("a".into()),
+            TokenKind::Eq,
+            TokenKind::Int(1),
+        ]
+    );
+}
+
+// DEED1002, two ways.
+
+#[test]
+fn a_string_that_runs_off_the_line_says_which_end_it_reached() {
+    let text = message("\"oops\nlet b = 1");
+    assert!(
+        text.contains("string literal reaches end of line before its closing quote"),
+        "{text}"
+    );
+    assert!(text.contains("this string is never closed"), "{text}");
+    assert!(text.contains("cannot span multiple lines"), "{text}");
+}
+
+#[test]
+fn a_string_that_runs_off_the_file_says_which_end_it_reached() {
+    let text = message("\"oops");
+    assert!(
+        text.contains("string literal reaches end of file before its closing quote"),
+        "{text}"
+    );
+}
+
+// DEED1003, two ways.
+
+#[test]
+fn one_missing_comment_terminator_is_counted_in_the_singular() {
+    // This used to say "1 `*/` are still needed".
+    let text = message("/* one ");
+    assert!(text.contains("unterminated block comment"), "{text}");
+    assert!(text.contains("this comment is never closed"), "{text}");
+    assert!(text.contains("one `*/` is still needed"), "{text}");
+}
+
+#[test]
+fn several_missing_comment_terminators_explain_the_nesting() {
+    let text = message("/* one /* two ");
+    assert!(
+        text.contains("block comments nest, so 2 `*/`s are still needed"),
+        "{text}"
+    );
+}
+
+// DEED1004, seven ways. Three of them are about `\u{...}`, and the one certain
+// thing about somebody typing `\u{...}` is that they were already unsure.
+
+#[test]
+fn an_unknown_escape_lists_the_ones_that_exist() {
+    let text = message(r#""a\qb""#);
+    assert!(text.contains("unknown escape sequence `\\q`"), "{text}");
+    assert!(text.contains("not a recognised escape"), "{text}");
+    assert!(
+        text.contains("Deed defines `\\n`, `\\t`, `\\r`, `\\0`, `\\\\`, `\\\"` and `\\u{...}`"),
+        "{text}"
+    );
+    assert!(
+        text.contains("help: write a literal backslash as `\\\\q`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_backslash_u_with_no_brace_names_both_readings() {
+    // The other way to get here is a Windows path or a regular expression,
+    // where the backslash was meant to stand for itself, and that reading was
+    // not mentioned at all.
+    let text = message(r#""\u41""#);
+    assert!(text.contains("expected `{` after `\\u`"), "{text}");
+    assert!(text.contains("incomplete unicode escape"), "{text}");
+    assert!(
+        text.contains("unicode escapes are written `\\u{1F600}`"),
+        "{text}"
+    );
+    assert!(
+        text.contains("a backslash that stands for itself is written `\\\\`"),
+        "{text}"
+    );
+    assert!(
+        text.contains("help: write a literal backslash as `\\\\u`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_backslash_reading_is_offered_and_never_applied() {
+    // Which of the two readings was meant is the reader's to choose, so this
+    // is a suggestion. Braces around whatever follows would be the other
+    // guess, and it would have to decide where the digits end.
+    let fix = fix_for(r#""\u41""#);
+    assert_eq!(fix.edits[0].replacement, "\\\\u");
+    assert_eq!(fix.applicability, Applicability::MaybeIncorrect);
+}
+
+#[test]
+fn an_escape_that_runs_into_the_end_of_the_string_is_closed_for_you() {
+    let text = message(r#""\u{41" rest"#);
+    assert!(
+        text.contains("unicode escape is missing its closing `}`"),
+        "{text}"
+    );
+    assert!(text.contains("this escape is never closed"), "{text}");
+    assert!(text.contains("help: close the escape"), "{text}");
+
+    let fix = fix_for(r#""\u{41" rest"#);
+    assert_eq!(fix.edits[0].replacement, "}");
+    assert_eq!(fix.applicability, Applicability::MachineApplicable);
+}
+
+#[test]
+fn an_escape_stopped_by_a_stray_character_names_the_character() {
+    let text = message(r#""\u{4G}""#);
+    assert!(
+        text.contains("`G` is not a hexadecimal digit, so the escape stops before it"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_brace_is_not_applied_over_a_character_it_would_turn_into_text() {
+    // `deed fix` would otherwise rewrite `"\u{4G}"` to `"\u{4}G"` without
+    // asking, which is a change to what the string says.
+    let fix = fix_for(r#""\u{4G}""#);
+    assert_eq!(fix.edits[0].replacement, "}");
+    assert_eq!(fix.applicability, Applicability::MaybeIncorrect);
+}
+
+#[test]
+fn an_escape_with_no_digits_and_no_brace_is_not_offered_a_brace() {
+    // A `}` here would produce `\u{}`, which is the next message down rather
+    // than a repair.
+    let text = message(r#""\u{" rest"#);
+    assert!(
+        text.contains("there is no codepoint here yet either, so `}` alone would not finish it"),
+        "{text}"
+    );
+    assert!(!text.contains("help:"), "{text}");
+}
+
+#[test]
+fn an_empty_pair_of_braces_says_what_is_missing() {
+    // This used to render as "`` is not a unicode scalar value", which names
+    // nothing at all.
+    let text = message(r#""\u{}""#);
+    assert!(
+        text.contains("unicode escape has no digits between its braces"),
+        "{text}"
+    );
+    assert!(
+        text.contains("expected at least one hexadecimal digit"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_codepoint_that_is_not_a_scalar_value_says_which_ones_are() {
+    let text = message(r#""\u{D800}""#);
+    assert!(
+        text.contains("`D800` is not a unicode scalar value"),
+        "{text}"
+    );
+    assert!(text.contains("invalid unicode escape"), "{text}");
+    assert!(
+        text.contains("valid values are 0 to 10FFFF, excluding the surrogate range D800 to DFFF"),
+        "{text}"
+    );
+}
+
+// DEED1005, one way.
+
+#[test]
+fn an_oversized_integer_names_the_limit() {
+    let text = message("99999999999999999999");
+    assert!(
+        text.contains("integer literal does not fit in `Int`"),
+        "{text}"
+    );
+    assert!(text.contains("too large"), "{text}");
+    assert!(
+        text.contains("`Int` holds values up to 9223372036854775807"),
+        "{text}"
+    );
+}
+
+// DEED1006, five ways: no digits at all, and one note per radix.
+
+#[test]
+fn a_radix_prefix_with_no_digits_says_what_is_missing() {
+    let text = message("0x");
+    assert!(
+        text.contains("numeric literal has no digits after `0x`"),
+        "{text}"
+    );
+    assert!(text.contains("expected at least one digit"), "{text}");
+}
+
+#[test]
+fn a_bad_binary_digit_says_which_two_there_are() {
+    let text = message("0b12");
+    assert!(
+        text.contains("`2` is not a valid digit in base 2"),
+        "{text}"
+    );
+    assert!(text.contains("invalid digit"), "{text}");
+    assert!(text.contains("in this literal"), "{text}");
+    assert!(
+        text.contains("binary literals accept `0` and `1`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_bad_octal_digit_says_where_the_range_stops() {
+    let text = message("0o18");
+    assert!(
+        text.contains("`8` is not a valid digit in base 8"),
+        "{text}"
+    );
+    assert!(
+        text.contains("octal literals accept `0` through `7`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_bad_hexadecimal_digit_admits_that_case_does_not_matter() {
+    // `0xFF` lexes, and this note used to name the lowercase letters only.
+    let text = message("0xZZ");
+    assert!(
+        text.contains("`Z` is not a valid digit in base 16"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "hexadecimal literals accept `0` through `9` and `a` through `f`, in either case"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_literal_suffix_is_told_there_are_none() {
+    let text = message("100u8");
+    assert!(
+        text.contains("`u` is not a valid digit in base 10"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Deed has no literal suffixes, so `100u8` should be written `100`"),
+        "{text}"
+    );
+}
+
+// DEED1007, one way.
+
+/// The decision not to have floats is in `design/02-syntax.md`, and before
+/// #210 it was nowhere in the compiler. `1.5` came apart into `1`, a stray `.`
+/// the parser called a missing expression, and a `5`, so the reader was told
+/// about a dot they never thought of as separate.
+#[test]
+fn a_decimal_point_says_there_are_no_floats() {
+    let text = message("1.5");
+    assert!(
+        text.contains("`1.5` has a decimal point, and there are no float literals"),
+        "{text}"
+    );
+    assert!(text.contains("no literal has this shape"), "{text}");
+    assert!(text.contains("counted in its smallest unit"), "{text}");
+    assert!(
+        text.contains("this is not `1` with a field after it either"),
+        "{text}"
+    );
 }

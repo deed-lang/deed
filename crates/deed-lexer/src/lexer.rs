@@ -265,7 +265,15 @@ impl<'a> Lexer<'a> {
                 }
                 (None, _) => {
                     let open = Span::new(start as u32, (start + 2) as u32);
-                    let plural = if depth == 1 { "" } else { "s" };
+                    // Nesting is the reason the count is not one, so it is
+                    // worth saying when the count is not one and is noise when
+                    // it is. The single case also has to agree with itself:
+                    // "1 `*/`s are still needed" was what this said.
+                    let note = if depth == 1 {
+                        "one `*/` is still needed".to_string()
+                    } else {
+                        format!("block comments nest, so {depth} `*/`s are still needed")
+                    };
                     self.emit(
                         Diagnostic::error(
                             codes::UNTERMINATED_BLOCK_COMMENT,
@@ -274,9 +282,7 @@ impl<'a> Lexer<'a> {
                             "unterminated block comment",
                         )
                         .with_primary_label("this comment is never closed")
-                        .with_note(format!(
-                            "block comments nest, so {depth} `*/`{plural} are still needed"
-                        ))
+                        .with_note(note)
                         .with_fix(
                             "close the comment",
                             Span::at(self.pos as u32),
@@ -428,7 +434,8 @@ impl<'a> Lexer<'a> {
                 .with_note(match radix {
                     2 => "binary literals accept `0` and `1`".to_string(),
                     8 => "octal literals accept `0` through `7`".to_string(),
-                    16 => "hexadecimal literals accept `0` through `9` and `a` through `f`"
+                    16 => "hexadecimal literals accept `0` through `9` and `a` through `f`, \
+                           in either case"
                         .to_string(),
                     _ => "Deed has no literal suffixes, so `100u8` should be written `100`"
                         .to_string(),
@@ -516,8 +523,11 @@ impl<'a> Lexer<'a> {
 
     /// Decodes one escape sequence. The backslash has already been consumed.
     ///
-    /// Returns `None` only when the sequence was malformed and a diagnostic was
-    /// emitted, in which case nothing is appended to the literal.
+    /// Returns `None` when nothing is appended to the literal. That is usually
+    /// because the sequence was malformed and a diagnostic was emitted, but a
+    /// backslash that runs into the end of the line or the end of the file
+    /// returns quietly: the caller has the better message there, which is that
+    /// the string was never closed.
     fn escape(&mut self) -> Option<char> {
         let backslash = self.pos - 1;
         let c = self.peek()?;
@@ -574,7 +584,24 @@ impl<'a> Lexer<'a> {
                     "expected `{` after `\\u`",
                 )
                 .with_primary_label("incomplete unicode escape")
-                .with_note("unicode escapes are written `\\u{1F600}`"),
+                .with_note("unicode escapes are written `\\u{1F600}`")
+                // The other way to arrive here is a path or a pattern, where
+                // the backslash was meant to stand for itself, and that
+                // reading was not mentioned at all.
+                .with_note(
+                    "a backslash that stands for itself is written `\\\\`, as in \
+                     `\"C:\\\\users\"`",
+                )
+                // Which of the two was meant is the reader's to choose, so this
+                // is offered and never applied. Wrapping whatever follows in
+                // braces instead would have to decide where the digits end,
+                // and `\\u0041abc` has seven hexadecimal digits in it.
+                .with_fix(
+                    "write a literal backslash as `\\\\u`",
+                    span,
+                    "\\\\u",
+                    Applicability::MaybeIncorrect,
+                ),
             );
             return None;
         }
@@ -591,27 +618,72 @@ impl<'a> Lexer<'a> {
 
         if !self.eat('}') {
             let span = Span::new(backslash as u32, self.pos as u32);
+            let stopped = self.peek();
+            let mut diagnostic = Diagnostic::error(
+                codes::UNKNOWN_ESCAPE,
+                self.file,
+                span,
+                "unicode escape is missing its closing `}`",
+            )
+            // The underline covers the whole escape, so the label says what is
+            // wrong with the escape rather than pointing at a byte.
+            .with_primary_label("this escape is never closed");
+
+            if digits.is_empty() {
+                // Closing it here would produce `\u{}`, which is the next
+                // message down rather than a repair, so nothing is offered.
+                diagnostic = diagnostic.with_note(
+                    "there is no codepoint here yet either, so `}` alone would not finish it",
+                );
+            } else {
+                let ran_to_the_end = matches!(stopped, None | Some('\n') | Some('"'));
+                let applicability = if ran_to_the_end {
+                    Applicability::MachineApplicable
+                } else {
+                    // Something that is not a digit is sitting where the `}`
+                    // should be. Putting the brace in front of it turns it into
+                    // ordinary text, which changes what the string says, so a
+                    // tool has to ask first.
+                    diagnostic = diagnostic.with_note(format!(
+                        "`{}` is not a hexadecimal digit, so the escape stops before it",
+                        stopped.unwrap_or('?').escape_debug()
+                    ));
+                    Applicability::MaybeIncorrect
+                };
+                diagnostic = diagnostic.with_fix(
+                    "close the escape",
+                    Span::at(self.pos as u32),
+                    "}",
+                    applicability,
+                );
+            }
+
+            self.emit(diagnostic);
+            return None;
+        }
+
+        let span = Span::new(backslash as u32, self.pos as u32);
+
+        // Without this, `\u{}` reached the message below and rendered as
+        // "`` is not a unicode scalar value", which names nothing at all.
+        if digits.is_empty() {
             self.emit(
                 Diagnostic::error(
                     codes::UNKNOWN_ESCAPE,
                     self.file,
                     span,
-                    "unicode escape is missing its closing `}`",
+                    "unicode escape has no digits between its braces",
                 )
-                .with_primary_label("expected `}` here")
-                .with_fix(
-                    "close the escape",
-                    Span::at(self.pos as u32),
-                    "}",
-                    Applicability::MachineApplicable,
-                ),
+                .with_primary_label("expected at least one hexadecimal digit")
+                .with_note("unicode escapes are written `\\u{1F600}`"),
             );
             return None;
         }
 
-        let span = Span::new(backslash as u32, self.pos as u32);
-        let value = u32::from_str_radix(digits, 16).ok();
-        match value.and_then(char::from_u32) {
+        match u32::from_str_radix(digits, 16)
+            .ok()
+            .and_then(char::from_u32)
+        {
             Some(c) => Some(c),
             None => {
                 self.emit(
@@ -638,17 +710,24 @@ impl<'a> Lexer<'a> {
     /// The suggestions here look like a small thing and are not. A curly quote
     /// pasted in from a document is a real and frequent failure, and a fix a
     /// tool can apply without asking turns it into a non-event.
+    ///
+    /// Two neighbours of that case are deliberately not fixes. A curly
+    /// apostrophe has nothing to become, because `'` is not a character in
+    /// this language either, so the fix used to produce this same message
+    /// again, and `deed fix` applied it without asking. The no-break spaces
+    /// were listed here too and could never arrive: `char::is_whitespace` is
+    /// true for all three, so the trivia skipper takes them, and a no-break
+    /// space separates two tokens exactly the way a space does.
     fn unknown_character(&mut self, start: usize, c: char) {
         let span = Span::new(start as u32, self.pos as u32);
         let replacement = match c {
             '\u{201C}' | '\u{201D}' => Some("\""),
-            '\u{2018}' | '\u{2019}' => Some("'"),
-            '\u{00A0}' | '\u{2007}' | '\u{202F}' => Some(" "),
             '\u{FF1B}' => Some(";"),
             '\u{FF0C}' => Some(","),
             '\u{2013}' | '\u{2014}' => Some("-"),
             _ => None,
         };
+        let pasted = replacement.is_some() || matches!(c, '\u{2018}' | '\u{2019}');
 
         let mut diagnostic = Diagnostic::error(
             codes::UNKNOWN_CHARACTER,
@@ -658,20 +737,22 @@ impl<'a> Lexer<'a> {
         )
         .with_primary_label("not valid at the start of a token");
 
+        if pasted {
+            diagnostic =
+                diagnostic.with_note("this looks like a character pasted in from formatted text");
+        }
+
         if let Some(replacement) = replacement {
-            let shown = if replacement == " " {
-                "a plain space".to_string()
-            } else {
-                format!("`{replacement}`")
-            };
-            diagnostic = diagnostic
-                .with_note("this looks like a character pasted in from formatted text")
-                .with_fix(
-                    format!("replace it with {shown}"),
-                    span,
-                    replacement,
-                    Applicability::MachineApplicable,
-                );
+            diagnostic = diagnostic.with_fix(
+                format!("replace it with `{replacement}`"),
+                span,
+                replacement,
+                Applicability::MachineApplicable,
+            );
+        } else if pasted {
+            diagnostic = diagnostic.with_note(
+                "Deed has no character literals, so text of any length goes between double quotes",
+            );
         }
 
         self.emit(diagnostic);
