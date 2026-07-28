@@ -788,17 +788,29 @@ fn the_documents_that_work_through_the_running_example_are_the_ones_that_do() {
 /// The types every operator is tried against.
 ///
 /// Concrete and declarable inside one module, but nowhere near all of those:
-/// `()`, a `choice`, a refined type, a function type, `Result` and a bare type
-/// parameter are all missing, and the measurement below does not need them.
+/// `()`, a `choice`, a refined type, a function type and `Result` are all
+/// missing, and the measurement below does not need them.
 ///
-/// What it does need is that no two entries here are one type to the checker.
-/// The rule it uses is "more than one of these and not all of them", so a type
-/// that stands in for another already on the list gets counted a second time
-/// and an operator with one meaning looks like it has two. `Positive = Int
-/// where value > 0` is the near miss: adding it alone would make `%`, `*`, `-`
-/// and `/` join the answer. That precondition is held by
-/// [`the_probed_types_are_not_the_same_type_twice`] rather than left as a
-/// sentence, so completing the list is a red test that says why.
+/// Two things it does need, and both are held by
+/// [`the_probed_types_are_types_and_no_two_are_the_same_one`] rather than left
+/// as a sentence here.
+///
+/// No two entries are one type to the checker. The rule below is "more than
+/// one of these and not all of them", so a type that stands in for another
+/// already on the list gets counted a second time and an operator with one
+/// meaning looks like it has two. `Positive = Int where value > 0` is the near
+/// miss: adding it alone would make `%`, `*`, `-` and `/` join the answer.
+///
+/// And every entry is a type at all. One that no operator takes lengthens the
+/// list without anything reaching it, so `==` stops taking all of them and
+/// falls into the answer with `!=` beside it. `("T", "")` is that mistake
+/// wearing the clothes of a type parameter: nothing declares `T`, so it
+/// resolves to nothing and every operator refuses it. A real type parameter
+/// cannot be an entry here, because an entry is a type name plus declarations
+/// written above the probe and a type parameter is declared on the probe
+/// itself. It would not move the answer if it could be, either: the checker
+/// takes `==` on one and refuses `<`, `+` and the rest, which is what `Bool`
+/// on this list already does.
 ///
 /// This is the hand-written half of the measurement, together with
 /// `BinaryOp::ALL` and the four comparisons written out in
@@ -832,8 +844,18 @@ fn stands_in_for(from: &str, to: &str) -> bool {
     !deed_driver::check(&sources, file).has_errors()
 }
 
-/// The precondition [`operators_with_two_meanings`] counts under.
-fn probed_types_are_distinct() {
+/// The preconditions [`operators_with_two_meanings`] counts under.
+fn probed_types_are_sound() {
+    for (ty, declaration) in PROBED_TYPES {
+        assert!(
+            BinaryOp::ALL
+                .iter()
+                .any(|op| operator_takes(op.as_str(), ty, declaration)),
+            "no operator takes a `{ty}`, so it is not a type the checker knows and \
+             counting it lengthens PROBED_TYPES without anything reaching it"
+        );
+    }
+
     for (from, _) in PROBED_TYPES {
         for (to, _) in PROBED_TYPES {
             if from != to {
@@ -847,17 +869,17 @@ fn probed_types_are_distinct() {
     }
 }
 
-/// The one thing the probed types have to be.
+/// The two things the probed types have to be.
 ///
 /// The count below calls an operator ambiguous when it takes more than one
 /// probed type and not all of them, which reads the right answer off the
-/// checker only while no probed type stands in for another. Nothing about a
-/// list of type names says that, and the list is the obvious thing to extend,
-/// so this holds it and fails by name instead of letting the counts demand a
-/// number nobody can make true.
+/// checker only while every probed type is a type and no two of them are the
+/// same one. Nothing about a list of type names says either, and the list is
+/// the obvious thing to extend, so this holds both and fails by name instead
+/// of letting the counts demand a number nobody can make true.
 #[test]
-fn the_probed_types_are_not_the_same_type_twice() {
-    probed_types_are_distinct();
+fn the_probed_types_are_types_and_no_two_are_the_same_one() {
+    probed_types_are_sound();
 }
 
 /// How the sentence about them opens, in both places that write it.
@@ -899,15 +921,15 @@ fn types_taken_by(op: &str) -> Vec<String> {
 /// applied everywhere, which is why `==` is not in the answer: structural
 /// equality is total by design, and counting it would turn "two meanings" into
 /// "more than one type", which is a different and much duller claim. The rule
-/// only reads that way while the probed types are distinct, so it says so
-/// first rather than reporting a number that came from counting one type
-/// twice.
+/// only reads that way while every probed type is a type and no two of them
+/// are the same one, so it says so first rather than reporting a number that
+/// came from counting one type twice or from counting a name nothing declares.
 ///
 /// Sorted, and compared as a set. `BinaryOp::ALL` is in the parser's
 /// precedence order, which is not an order any sentence would use, so holding
 /// it would be holding the wrong thing.
 fn operators_with_two_meanings() -> Vec<String> {
-    probed_types_are_distinct();
+    probed_types_are_sound();
 
     let mut found: Vec<String> = BinaryOp::ALL
         .iter()

@@ -57,13 +57,17 @@ fn announce(text: NonEmpty) -> String {
 // Strings are ordered, and this is the only thing in the language that ranks
 // text without being told how. A record has fields, so a caller who wants two
 // of them ranked passes the comparison in, which is why ordering a record is
-// refused, and it costs that caller nothing: the fields are already types with
-// an order. Text is reachable as well, since `split(s, "")` hands back the
+// refused, and that asks the caller for nothing it does not already have to
+// have: which field decides the order is not something the shape of the record
+// says. Text is reachable as well, since `split(s, "")` hands back the
 // characters, which this file asserts further down, so a comparator over text
 // can be written. What it cannot do is rank a character nobody told it about:
-// there is no code point and no `to_int` on a single character, so the
-// alphabet has to be typed out by hand, and everything left out of it ties
-// with everything else, silently. Take `<` away and sorting names is still
+// there is no code point, and `to_int` only speaks about text that spells a
+// number, so the characters it turns into numbers are the ten digits and no
+// letter. A comparator can rank those with no alphabet written down, and to
+// rank anything else it needs one typed out by hand, with everything left out
+// of that alphabet tying with everything else, silently. Take `<` away and
+// sorting names is still
 // writable, at the price of one hand-written alphabet per program, each of
 // them wrong somewhere its author never looked.
 //
@@ -153,6 +157,11 @@ test "ordering" {
     // The answer the paragraph above warns about, pinned so it stays an
     // answer rather than a surprise.
     assert "10" < "9"
+    // And the reach the same paragraph claims for a comparator written
+    // without `<`: a digit is text that spells a number, a letter is not, so
+    // an alphabet with a letter in it is one somebody typed.
+    assert to_int("7") == ok(7)
+    assert to_int("a") == err("`a` is not a number")
 }
 
 test "the refinement is real" {

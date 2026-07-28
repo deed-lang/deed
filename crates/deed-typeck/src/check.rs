@@ -4394,13 +4394,16 @@ impl<'a> Checker<'a> {
     /// so text was already comparable and narrowing kept it. It stays because
     /// it is the only thing in the language that ranks text without being told
     /// how. A record is refused and a caller who wants two ranked passes the
-    /// comparison in, which costs that caller nothing, since the fields are
-    /// already types with an order. Text is reachable as well: `split(s, "")`
-    /// hands back the characters. What a comparator written over those cannot
-    /// do is rank a character nobody typed into it, because there is no code
-    /// point and no `to_int` on a single character, so refusing here would not
-    /// make ordering text impossible, it would buy a hand-written alphabet per
-    /// program and a silent tie for everything outside it.
+    /// comparison in, which asks that caller for nothing it does not already
+    /// have to have, since the shape of a record does not say which field
+    /// decides the order. Text is reachable as well: `split(s, "")` hands back
+    /// the characters. What a comparator written over those cannot do is rank
+    /// a character nobody typed into it, because there is no code point and
+    /// `to_int` only speaks about text that spells a number, so the characters
+    /// it turns into numbers are the ten digits and no letter. Refusing here
+    /// would not make ordering text impossible, it would buy a hand-written
+    /// alphabet per program that sorts names and a silent tie for everything
+    /// outside it.
     /// `design/02-syntax.md` carries the argument and what it rules out, and
     /// the corpus carries the consequence nobody should meet by surprise,
     /// which is that `"10" < "9"`.
