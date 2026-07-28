@@ -523,32 +523,61 @@ impl<'a> Checker<'a> {
                     sites.push((item, entry.span));
                 }
 
-                // Anything else from another module is not an effect, and the
-                // resolver already said whether the name exists.
-                DefKind::Import => {
-                    unverifiable = true;
-                    let name = self.name_of(def);
-                    self.emit(
-                        Diagnostic::warning(
-                            codes::UNVERIFIABLE_ROW,
-                            self.file,
-                            entry.span,
-                            format!("`{name}` is not an effect, so this row is not checked"),
-                        )
-                        .with_primary_label("not checked"),
-                    );
-                }
+                // Anything else from another module is not an effect, and this
+                // is the same mistake as naming a local record: the export
+                // says which kind of thing the name is, so the answer is as
+                // definite here as it is for a declaration in this file. The
+                // module boundary changes where the answer comes from, not how
+                // sure of it the compiler is, so it does not change the
+                // severity either. It used to be a warning, which meant one
+                // wrong `uses` entry quietly switched off effect checking for
+                // the whole function.
+                DefKind::Import => match self.resolutions.import(def).map(|export| export.kind) {
+                    Some(kind) => {
+                        let name = self.name_of(def);
+                        self.emit(
+                            Diagnostic::error(
+                                codes::NOT_AN_EFFECT,
+                                self.file,
+                                entry.span,
+                                format!("`{name}` is {}, not an effect", kind.describe()),
+                            )
+                            .with_primary_label("not an effect")
+                            .with_note(
+                                "a `uses` clause names effects declared with `effect`, and an \
+                                 imported one is checked the same way a local one is",
+                            ),
+                        );
+                    }
+                    // Nothing behind the import, so what it is was never known
+                    // here. Name resolution already complained, and guessing on
+                    // top of that would be a second message about one mistake.
+                    None => unverifiable = true,
+                },
 
-                // `uses sys.*`. This is the hole design/04-capabilities.md
-                // already worried about, and it is worth the compiler saying so
-                // out loud rather than reporting a clean check it never did.
+                // A capability value in a `uses` clause. Two spellings, one
+                // subject: `sys.*` is the hole design/04-capabilities.md
+                // already worried about, and a bare `sys` is that hole with
+                // the star left off. Neither is an effect the row can be
+                // checked against, and the compiler saying so out loud is
+                // better than reporting a clean check it never did. This stays
+                // a warning where an imported non-effect is an error, because
+                // what is written here is a value that really does carry
+                // authority, and the question of what a row should say about
+                // one is still open in that document.
                 DefKind::Param | DefKind::Local => {
                     unverifiable = true;
                     let name = self.name_of(def);
-                    let what = if entry.all {
-                        format!("`{name}.*` grants everything that capability carries")
+                    let (what, note) = if entry.all {
+                        (
+                            format!("`{name}.*` grants everything that capability carries"),
+                            "granting everything is the same as promising nothing; see the open questions in design/04-capabilities.md",
+                        )
                     } else {
-                        format!("`{name}` is a value, not an effect")
+                        (
+                            format!("`{name}` is a value, not an effect"),
+                            "a row names effects, not the capabilities they are performed with; `sys.*` is how a row admits it grants everything one carries",
+                        )
                     };
                     self.emit(
                         Diagnostic::warning(
@@ -558,9 +587,7 @@ impl<'a> Checker<'a> {
                             format!("{what}, so this function's row is not checked"),
                         )
                         .with_primary_label("not checked")
-                        .with_note(
-                            "granting everything is the same as promising nothing; see the open questions in design/04-capabilities.md",
-                        ),
+                        .with_note(note),
                     );
                 }
 
@@ -1208,9 +1235,16 @@ impl<'a> Checker<'a> {
                 let complete = export.row_complete;
                 let span = callee.span();
 
-                // The callee's own row is not checked, so nothing built on it
-                // is either. Inheriting an empty row here would move the
+                // The export dropped a starred entry, so what came across is
+                // not the whole row. Inheriting it silently would move the
                 // loophole rather than close it: the caller would look pure.
+                //
+                // `row_complete` is the star and only the star, so this fires
+                // for a callee whose row said `Log.*` even though that one was
+                // checked where it was written, and not at all for one whose
+                // row named a bare capability even though that one was not.
+                // See `codes::UNVERIFIABLE_ROW` for why that is written down
+                // rather than fixed.
                 if !complete {
                     let name = self.name_of(def);
                     self.emit(
@@ -1218,7 +1252,9 @@ impl<'a> Checker<'a> {
                             codes::UNVERIFIABLE_ROW,
                             self.file,
                             span,
-                            format!("`{name}` has a row that is not checked, so this call is not either"),
+                            format!(
+                                "`{name}` has a row that is not checked, so this call is not either"
+                            ),
                         )
                         .with_primary_label("not checked")
                         .with_note(

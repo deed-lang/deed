@@ -96,6 +96,28 @@ name what it grants would not be a row. Declaring an effect means having a word 
 Effects the language provides are the exception, and only because they need no word. `Io` and
 `Diverge` are in the prelude, so every module can already name them.
 
+**The boundary does not soften a rule either.** A `uses` entry naming something that is not
+an effect is an error whether the name was declared here or imported: which kind of thing it
+is comes off the export, so the compiler is exactly as sure of it either way. That was a
+warning on the imported side for a while, which read as if it could not tell, and it also
+switched both rules above off for the rest of the function, so one wrong entry bought silence
+about the whole row.
+
+**What the boundary does lose is a starred entry.** A row is exported without its starred
+entries and marked as not the whole story, and a caller is told at the call site rather than
+quietly inheriting a row that is missing something and looking pure. The rule is the star and
+only the star, read straight off the syntax, because a module's surface is computed before
+anything is resolved and which kind of thing a name is does not show there.
+
+That is right for `sys.*`, the case it was written for. It is too coarse in both directions
+elsewhere, and both directions are reachable today. `Log.*` on a declared effect means the
+whole of `Log`, which a caller can read perfectly well; the declaration is checked and stays
+silent, and every call site is told the row is not checked anyway. A bare `sys` is not
+starred at all, so it crosses as an ordinary entry, and the caller is told to import a name
+that is one of the callee's parameters. Deciding this properly means resolving names before
+computing exports, which is a change to how rows cross the boundary rather than to what the
+message says, so it is an open question below rather than a fix in passing.
+
 ## Specification is not action
 
 A `where` or `ensures` clause may mention any effect operation and contributes nothing to
@@ -459,6 +481,11 @@ to be found by reading the pass that had the bug.
 
 ## Open questions
 
+- Whether a row can cross a module boundary knowing which of its entries are effects. Today
+  the exported row is lowered from syntax alone and a call into a callee with any starred
+  entry is reported, which is right for `sys.*` and wrong for `Log.*`, and misses a bare
+  capability entirely. Answering it means resolving names before computing exports, and
+  exports being computable first is what keeps module order from mattering.
 - Charging a closure's effects to the call site rather than to its author. Now that a
   closure's row can be written down where it crosses a boundary, the conservative rule is
   doing less work than it used to. Changing it changes the soundness argument above, which is

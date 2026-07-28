@@ -14,13 +14,43 @@ pub const UNDECLARED_EFFECT: &str = "DEED5001";
 pub const UNUSED_EFFECT: &str = "DEED5002";
 
 /// A `uses` entry naming something that is not an effect.
+///
+/// An imported name lands here too. Which kind of thing it is comes off the
+/// export rather than off a declaration in this file, but it comes off
+/// something either way, so the module boundary does not soften the answer.
 pub const NOT_AN_EFFECT: &str = "DEED5003";
 
 /// A row the compiler cannot check.
 ///
-/// Either it names an effect from a module that has not been loaded, or it
-/// grants everything a capability carries. Both make the row vacuous, and the
-/// compiler says so rather than reporting a clean check it did not perform.
+/// Two shapes are written in a `uses` clause and reported where they are
+/// written: `sys.*`, which grants everything a capability carries, and a bare
+/// `sys`, which names a value where an effect belongs. Both leave a row that
+/// means nothing, and the compiler says so rather than reporting a clean check
+/// it did not perform.
+///
+/// The third is reported at a call into another module, and it does not follow
+/// from either of those. It follows from the star and from nothing else. An
+/// export carries `row_complete`, and `RowLowering::row` sets it from the
+/// syntax of the clause: false as soon as any entry is starred, whatever the
+/// star is on, with the starred entry left out of the exported row rather than
+/// carried. So `uses Log.*` on a declared effect is reported at every call site
+/// while the declaration itself is silent, because locally it means the whole
+/// of `Log` and checks fine, and `uses sys,` is reported where it is written
+/// and at no call site, because it is not starred: it crosses as an ordinary
+/// entry and the caller is told by DEED5006 to import a name that is a
+/// parameter.
+///
+/// Neither of those is the answer anyone would choose. They hold because a
+/// module's surface is lowered from syntax alone, on purpose, so that it can be
+/// computed before anything is resolved, and whether a name is an effect or a
+/// capability is exactly what the syntax does not say. Deciding it properly
+/// means resolving before exporting, which changes how rows cross the boundary
+/// rather than what this code says about them. So it is written down here and
+/// in design/03-effects.md instead of being changed here.
+///
+/// A `uses` entry that is simply the wrong kind of name is not here. That is
+/// DEED5003, whether the name is local or imported: the compiler knows what it
+/// is, so there is nothing it failed to verify.
 pub const UNVERIFIABLE_ROW: &str = "DEED5004";
 
 /// A test performs an effect with no handler in scope.

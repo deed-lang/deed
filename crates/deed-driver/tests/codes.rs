@@ -1,4 +1,4 @@
-//! Every diagnostic this compiler can produce is read by some test.
+//! Every diagnostic code this compiler can produce is named by some test.
 //!
 //! A diagnostic is not a return value. Its whole job is to be read by a
 //! person, and the only way to find out whether it reads well is to have
@@ -9,6 +9,26 @@
 //!
 //! So this is a ratchet rather than a one-off repair. Adding a code without a
 //! test that mentions it fails here, and the failure names the code.
+//!
+//! # What this does not hold
+//!
+//! One test per code, and nothing finer. It matches on the constant's name and
+//! on the number, so a code with several messages behind it is satisfied by a
+//! test that names either, whether or not any of those messages is ever
+//! rendered, and the rest are as unread as a code with no test at all.
+//! `DEED5004` was that: four messages, one of them ever rendered by a test,
+//! and a comment in the effects tests asserting that the tested one was the
+//! only shape left.
+//!
+//! So if you put a second message under an existing code, nothing here will
+//! ask you for a test. Write one anyway, next to the message, and have it read
+//! the words rather than the code.
+//!
+//! Counting messages per code instead is not the fix and is deliberately not
+//! attempted. A message is a `format!` in a branch, and a branch can choose
+//! between two of them on a flag, so there is no set for the source to
+//! enumerate; what could be counted is call sites, which is a number to keep
+//! up to date rather than a claim about anything being read.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
