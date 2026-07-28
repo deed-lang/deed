@@ -66,12 +66,18 @@ fn ends_with(text: String, suffix: String) -> Bool {
 // report with one long name in it should come out crooked rather than not come
 // out. `repeat` already answers a negative count with an empty list, which is
 // the same decision one layer down.
-fn pad_right(text: String, width: Int) -> String {
-    text + join(repeat(" ", width - length(text)), "")
-}
-
+//
+// These two are written in the order design/02-syntax.md reads them out, and
+// the check on that sentence holds the order rather than the membership. A
+// paragraph that lists what a module has is read down the page against the
+// module, so the two orders being the same is the whole of what makes it
+// readable; a set comparison passes on a sentence nobody could follow.
 fn pad_left(text: String, width: Int) -> String {
     join(repeat(" ", width - length(text)), "") + text
+}
+
+fn pad_right(text: String, width: Int) -> String {
+    text + join(repeat(" ", width - length(text)), "")
 }
 
 test "a slice is the characters between two positions" {

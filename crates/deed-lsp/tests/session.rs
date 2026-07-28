@@ -234,37 +234,215 @@ fn initialize_says_what_the_server_can_do() {
     );
 }
 
+/// The capabilities `editors/README.md` does not call by their field name
+/// with the `Provider` filed off.
+///
+/// Most of them it does: `documentSymbolProvider` is "document symbol" and
+/// `signatureHelpProvider` is "signature help", so [`english_for`] works those
+/// out and stores nothing. Only three are irregular, and they are here.
+///
+/// The reason for deriving rather than tabulating is that a stored pair can be
+/// permuted and nothing notices. Written out in full, this table could say
+/// `hoverProvider` is "document symbol" and `documentSymbolProvider` is
+/// "hover", and the check below would go green while the document told an
+/// editor author the server answers something it does not advertise, which is
+/// the one event the check exists to prevent. A derived pair cannot be written
+/// down wrongly because it is not written down. The ones that are left are
+/// held to their fields by
+/// [`each_irregular_name_is_irregular_and_still_names_its_capability`].
+const IRREGULAR: [(&str, &str); 3] = [
+    ("codeActionProvider", "code actions"),
+    ("definitionProvider", "go to definition"),
+    ("documentFormattingProvider", "formatting"),
+];
+
+/// The rule: drop `Provider`, and write the camel case out as words.
+fn spelled_out(field: &str) -> String {
+    let stem = field.strip_suffix("Provider").unwrap_or_else(|| {
+        panic!(
+            "`{field}` is advertised and is neither `textDocumentSync` nor a `...Provider`, so there is no rule for what editors/README.md would call it"
+        )
+    });
+    assert!(
+        !stem.is_empty(),
+        "a capability called `Provider` and nothing else has no name to write out"
+    );
+
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for letter in stem.chars() {
+        if letter.is_ascii_uppercase() && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        word.push(letter.to_ascii_lowercase());
+    }
+    words.push(word);
+    words.join(" ")
+}
+
+/// What `editors/README.md` calls a capability: the rule, or the exception.
+fn english_for(field: &str) -> String {
+    match IRREGULAR.iter().find(|(name, _)| *name == field) {
+        Some((_, english)) => (*english).to_string(),
+        None => spelled_out(field),
+    }
+}
+
+/// The word a phrase ends in, with a plural `s` taken off, which is the thing
+/// the phrase is about: "code actions" and "code action" are both about an
+/// action, and "go to definition" is about a definition.
+fn head_word(phrase: &str) -> &str {
+    phrase
+        .rsplit(' ')
+        .next()
+        .expect("splitting a phrase gives at least one word")
+        .trim_end_matches('s')
+}
+
+/// `editors/README.md`, which is the document this test is about.
+fn editor_guide() -> String {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("this crate lives two directories under the repository root");
+    let path = root.join("editors").join("README.md");
+    std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} should be there", path.display()))
+}
+
 #[test]
 fn the_advertised_set_is_exactly_this() {
-    // Every other test here asks whether one capability is present, which
-    // says nothing about one that appeared. `editors/README.md` lists what
-    // the server answers in prose, and an editor's configuration is written
+    // Every other test here asks whether one capability is present, which says
+    // nothing about one that appeared. `editors/README.md` is where an editor
+    // author reads what the server answers, and a configuration is written
     // once and then trusted, so a provider arriving unannounced is a feature
-    // nobody is told about. This is the list to change when one lands.
+    // nobody is told about.
+    //
+    // That was the reason this gave, and then it compared against a list
+    // written out in Rust, so the document it named for its whole argument
+    // could have said anything at all. It reads the document now.
+    let guide = editor_guide();
+
+    // The whole clause, because `and answers ` on its own also starts the
+    // sentence about which files the server answers about, and a marker that
+    // matches two sentences reads whichever one moved last.
+    const ANSWERS: &str = "It publishes diagnostics on open and on change, and answers ";
+    let listed: Vec<String> = {
+        let start = guide.find(ANSWERS).unwrap_or_else(|| {
+            panic!("editors/README.md should still say {ANSWERS:?}, which is where it says what the server does")
+        });
+        let rest = &guide[start + ANSWERS.len()..];
+        let end = rest
+            .find('.')
+            .expect("the sentence saying what the server answers should end");
+        rest[..end]
+            .replace('\n', " ")
+            .split(',')
+            .flat_map(|part| part.split(" and "))
+            .map(|part| part.trim().to_string())
+            .filter(|part| !part.is_empty())
+            .collect()
+    };
+    assert!(
+        !listed.is_empty(),
+        "editors/README.md names nothing the server answers, so the sentence has been reworded"
+    );
+
     let sent = session(&[request(1, "initialize")]);
     let Some(Json::Object(fields)) = sent[0].at(&["result", "capabilities"]) else {
         panic!("initialize should answer with capabilities");
     };
-
-    let mut found: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
-    found.sort_unstable();
-
-    assert_eq!(
-        found,
-        [
-            "codeActionProvider",
-            "completionProvider",
-            "definitionProvider",
-            "documentFormattingProvider",
-            "documentSymbolProvider",
-            "hoverProvider",
-            "referencesProvider",
-            "renameProvider",
-            "signatureHelpProvider",
-            "textDocumentSync",
-            "workspaceSymbolProvider",
-        ]
+    let advertised: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(
+        !advertised.is_empty(),
+        "the server advertised nothing, so there is no set for the document to be wrong about"
     );
+
+    // Sync is not something the server answers, so it is not in that sentence.
+    // The document gives it a paragraph of its own, and this is the claim in it.
+    assert!(
+        advertised.contains(&"textDocumentSync"),
+        "the server no longer syncs documents and editors/README.md still describes how it does"
+    );
+    assert!(
+        guide.contains("Full sync only."),
+        "editors/README.md should still say \"Full sync only.\", which is the only place sync is written down"
+    );
+
+    let answered: Vec<String> = advertised
+        .iter()
+        .filter(|name| **name != "textDocumentSync")
+        .map(|name| english_for(name))
+        .collect();
+    assert!(
+        !answered.is_empty(),
+        "the server advertises nothing but document sync, so there is nothing for that sentence to be about"
+    );
+
+    for (name, english) in advertised
+        .iter()
+        .filter(|name| **name != "textDocumentSync")
+        .zip(&answered)
+    {
+        assert!(
+            listed.iter().any(|item| item == english),
+            "`{name}` is advertised and editors/README.md does not say the server answers {english}"
+        );
+    }
+
+    for item in &listed {
+        assert!(
+            answered.iter().any(|english| english == item),
+            "editors/README.md says the server answers {item:?} and the server advertises nothing that is called that"
+        );
+    }
+}
+
+/// Every exception in [`IRREGULAR`] is one, and is about its own capability.
+///
+/// Three pairs are still written out by hand, and a pair written by hand can
+/// be written against the wrong field. Nothing above would catch that: the
+/// document and the server would be compared through a dictionary that agrees
+/// with itself and with neither of them. So each entry has to earn its place.
+/// It has to name something the server really advertises, or it is dead. It
+/// has to differ from what the rule already produces, or it should not be
+/// here. And it has to end in the word the rule ends in, which is what makes
+/// it the same capability said differently rather than a different one:
+/// "formatting" is what `documentFormattingProvider` does and "code actions"
+/// is not, so writing the second against the first fails here.
+#[test]
+fn each_irregular_name_is_irregular_and_still_names_its_capability() {
+    assert!(
+        !IRREGULAR.is_empty(),
+        "no name is written out by hand any more, so delete this rather than let it pass on nothing"
+    );
+
+    let sent = session(&[request(1, "initialize")]);
+    let Some(Json::Object(fields)) = sent[0].at(&["result", "capabilities"]) else {
+        panic!("initialize should answer with capabilities");
+    };
+    let advertised: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(
+        !advertised.is_empty(),
+        "the server advertised nothing, so no exception here can be about anything"
+    );
+
+    for (field, english) in IRREGULAR {
+        assert!(
+            advertised.contains(&field),
+            "`{field}` is written out here and the server does not advertise it, so this entry is dead and nothing else would say so"
+        );
+        let rule = spelled_out(field);
+        assert_ne!(
+            english,
+            rule.as_str(),
+            "`{field}` is written out here as the exception it is not, because the rule already gives {rule:?}"
+        );
+        assert_eq!(
+            head_word(english),
+            head_word(&rule),
+            "`{field}` is written out here as {english:?}, and the rule gives {rule:?}, so the two are not about the same capability"
+        );
+    }
 }
 
 #[test]
