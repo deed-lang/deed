@@ -6,10 +6,13 @@
 //! nothing at all. And a shipped module's own tests can stop being run,
 //! because a program that imports one gets it as context and context does not
 //! run its tests, which is right for the program and would leave the library
-//! itself checked by nobody.
+//! itself checked by nobody. That second one is asked module by module rather
+//! than in total, because a total says yes for as long as any one of them
+//! still has a test in it.
 
 use std::path::{Path, PathBuf};
 
+use deed_ast::Item;
 use deed_diagnostics::SourceMap;
 use deed_driver::{check_all, shipped_modules, shipped_source};
 use deed_interp::{Program, run_tests};
@@ -112,6 +115,21 @@ fn the_shipped_modules_pass_their_own_tests() {
 
     let mut passed = 0;
     for checked in &checks {
+        // What the module wrote down, off the parse tree, against what running
+        // it produced. A total over all of them cannot tell the difference
+        // between a module's tests running and another module's tests being
+        // enough to keep the total above zero, which is exactly the state this
+        // file exists to notice: `std/table` arrived carrying seven tests and
+        // a `passed > 0` would have said the same thing whether they ran or
+        // not.
+        let declared = checked
+            .module
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::Test(_)))
+            .count();
+
+        let mut ran = 0;
         for outcome in run_tests(&program, checked.file) {
             assert!(
                 outcome.failure.is_none(),
@@ -119,8 +137,16 @@ fn the_shipped_modules_pass_their_own_tests() {
                 outcome.name,
                 sources.file(checked.file).name()
             );
-            passed += 1;
+            ran += 1;
         }
+
+        assert_eq!(
+            ran,
+            declared,
+            "{} writes {declared} test(s) and {ran} of them ran",
+            sources.file(checked.file).name()
+        );
+        passed += ran;
     }
 
     assert!(

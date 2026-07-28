@@ -392,6 +392,12 @@ fn what_holds_result_in_the_language_is_counted_where_it_is_claimed() {
 /// easiest to leave behind, because every change that adds a test to the
 /// corpus falsifies it and none of them has any reason to look. It said 84
 /// for the eighteen tests it took to notice.
+///
+/// It can also fall, which is a different thing to be wrong about. A library
+/// moving out of `examples/` takes its tests with it and the corpus honestly
+/// runs fewer, so the paragraph under the transcript says where they went and
+/// this checks that too: what the libraries run, and that the two together are
+/// more than the transcript used to report.
 #[test]
 fn the_readme_reports_the_number_of_tests_the_corpus_runs() {
     let mut sources = SourceMap::new();
@@ -466,6 +472,44 @@ fn the_readme_reports_the_number_of_tests_the_corpus_runs() {
     assert!(
         read("README.md").contains(&claim),
         "the corpus runs {passed} tests, so the transcript should read {claim:?}"
+    );
+
+    // The other half of the same paragraph, and the reason the number above is
+    // allowed to fall. Seven of the tests it used to count are in `std/table`
+    // now, and a library that ships is context rather than subject, so the
+    // corpus stopped running them. With only the corpus number written down,
+    // moving seven tests into a library and deleting seven tests read the same
+    // from outside, which is the sentence this checks.
+    let mut shipped = 0;
+    for checked in &checks[subject..] {
+        for outcome in run_tests(&program, checked.file) {
+            assert!(
+                outcome.failure.is_none(),
+                "`{}` should pass in `{}`",
+                outcome.name,
+                sources.file(checked.file).name()
+            );
+            shipped += 1;
+        }
+    }
+
+    let carried = format!("carry {} tests of their own", spelled(shipped));
+    assert!(
+        read("README.md").contains(&carried),
+        "the modules that ship run {shipped} tests, so the README should read {carried:?}"
+    );
+
+    // And the arithmetic the paragraph is asking to be believed. The number it
+    // says the transcript used to report is read back out of it, so what is
+    // compared against is what a reader was told rather than a constant here.
+    let readme = read("README.md");
+    let before: usize = between(&readme, "That number used to be ", ".")
+        .trim_start_matches("That number used to be ")
+        .parse()
+        .expect("the README should say what the transcript used to report");
+    assert!(
+        passed + shipped > before,
+        "{passed} in the corpus and {shipped} in the libraries is not more than the {before} the README says used to run, so tests went missing rather than moving"
     );
 }
 

@@ -21,8 +21,14 @@
 // One invariant holds it together: a key appears at most once. `set` is the
 // only way anything gets in and it replaces rather than appends, so `get` can
 // stop caring which match it finds because there is only ever one.
+//
+// It lived under `examples/` to begin with, and a module's name says where it
+// lives, so the only way to import it was `use examples/table` and a program
+// outside this repository had to copy the file. Nothing about the table
+// changed to fix that. It ships now, so the name a program writes is the name
+// it has here.
 
-module examples/table
+module std/table
 
 record Entry<K, V> {
     key: K,

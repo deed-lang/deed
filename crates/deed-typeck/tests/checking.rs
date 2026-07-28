@@ -306,8 +306,8 @@ fn a_type_parameter_is_not_ordered() {
 ///
 /// This is why the ordering refusal above costs so little. The bound people
 /// reach for first is `Eq`, and here it is not a bound at all: `==` works on
-/// a bare `T`, which is what lets `examples/table.deed` be a keyed table over
-/// any key type without saying anything about it.
+/// a bare `T`, which is what lets `std/table` be a keyed table over any key
+/// type without saying anything about it.
 #[test]
 fn a_type_parameter_is_still_comparable_for_equality() {
     check_ok("module a\n\nfn same<T>(a: T, b: T) -> Bool { a == b }\n");

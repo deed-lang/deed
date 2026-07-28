@@ -191,6 +191,11 @@ That is also where the list library is. `std/list` has `map`, `map_at`, `filter`
 was written long before there was anywhere to put it and sat under `examples/`, where its
 name said it lived in this repository and a program elsewhere had to copy it.
 
+The keyed collection is there too. `std/table` has `holds`, `get`, `set`, `or_else`, `keys`,
+`values` and `size`, built out of a generic record and a `for`, and it is the answer to what
+a program does when it wants to count by key. It came out of `examples/` for the same reason
+the list library did.
+
 ## A library that ships with the compiler
 
 A module named `std/x` lives inside the compiler.
@@ -210,9 +215,11 @@ in the prelude because it cannot be written, and case will stay out of both unti
 the other.
 
 The other thing that goes here is a library that was already written and had nowhere to be.
-`std/list` was under `examples/` for months, which made its name a path into this repository,
-so a program elsewhere could not import it and had to copy the file instead. Two modules ship
-today, `std/string` and `std/list`, and `crates/deed-driver/src/shipped.rs` is the table.
+`std/list` and `std/table` were both under `examples/`, which made their names paths into
+this repository, so a program elsewhere could not import them and had to copy the files
+instead. Three modules ship today,
+`std/string`, `std/list` and `std/table`, and `crates/deed-driver/src/shipped.rs` is the
+table.
 
 ## Lists
 
@@ -581,8 +588,8 @@ type Table<K, V> = List<Entry<K, V>>
 ```
 
 `Table<String, Int>` is `List<Entry<String, Int>>` and there is nothing called `Table`
-afterwards, which is the whole of what an alias is. `examples/table.deed` asked for this by
-writing the shape out eight times.
+afterwards, which is the whole of what an alias is. `std/table` asked for this by writing the
+shape out eight times.
 
 An alias with a predicate may not take them, and that is `DEED4028` rather than an oversight.
 A refinement is a distinct type whose predicate is checked, and a predicate about a value
@@ -1366,7 +1373,7 @@ using an effect to get around not having a loop.
   rather than a shrug. The question was measured against the code instead of argued, and the
   motivation people expect to find here was absorbed years ago by three decisions made for
   other reasons. Equality is structural and total, so `==` works on a bare type parameter and
-  `examples/table.deed` keys on any `K` without saying anything about it; the first bound
+  `std/table` keys on any `K` without saying anything about it; the first bound
   anyone reaches for is not a bound here but the ambient rule. A function is a value, so a
   caller that needs different behaviour passes it, and `examples/logs.deed` counts by level
   and by source through one walk that takes the question as an argument. Rows travel with

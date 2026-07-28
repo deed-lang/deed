@@ -19,10 +19,10 @@
 //! missing for as long as they were writable.
 //!
 //! The other thing that belongs here is a library that was already written and
-//! had nowhere to be. The list library sat under `examples/` for months, and a
-//! module's name says where it lives, so importing it meant writing
-//! `use examples/list` and a program outside this repository had to copy the
-//! file to get one.
+//! had nowhere to be. The list library and the table library both sat under
+//! `examples/` for months, and a module's name says where it lives, so
+//! importing one meant writing `use examples/list`, and a program outside this
+//! repository had to copy the file to get one.
 //!
 //! These are checked like any other file. `crates/deed-driver/tests/shipped.rs`
 //! runs their tests, and `deed fmt` reaches them through the repository walk
@@ -36,6 +36,7 @@
 const SHIPPED: &[(&str, &str)] = &[
     ("std/string", include_str!("../../../std/string.deed")),
     ("std/list", include_str!("../../../std/list.deed")),
+    ("std/table", include_str!("../../../std/table.deed")),
 ];
 
 /// Every module that ships, in the order they are declared.

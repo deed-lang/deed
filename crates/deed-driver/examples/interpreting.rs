@@ -358,12 +358,16 @@ test \"pushing\" {{
 /// being involved in the number.
 fn real_program() {
     let logs = read("logs.deed");
-    let table = read("table.deed");
+    // The table it counts with ships inside the compiler, so it comes from
+    // there rather than from a path, the same way it reaches a program.
+    let table = deed_driver::shipped_source("std/table")
+        .expect("a module that ships has a source")
+        .to_string();
     let files = |bench: String| {
         vec![
             ("bench.deed", bench),
             ("logs.deed", logs.clone()),
-            ("table.deed", table.clone()),
+            ("<shipped>/std/table.deed", table.clone()),
         ]
     };
 
