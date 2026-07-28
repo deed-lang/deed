@@ -15,6 +15,10 @@
 //! it is reserved, which is why `state` sits among the declaration keywords
 //! and `at` among the contract ones.
 //!
+//! A word in either set is coloured wherever it appears, because a TextMate
+//! grammar has no positions to ask about. `SOFT_KEYWORDS` says what that
+//! costs and why the set is drawn where it is.
+//!
 //! So the grammar is held to both sets rather than trusted to keep up. Both
 //! directions: every word in them is coloured, and nothing is coloured that is
 //! in neither.

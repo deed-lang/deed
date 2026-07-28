@@ -36,13 +36,43 @@ impl Parsed {
 /// Words the parser reads in one position but which are not keywords.
 ///
 /// `state` opens a handler field, `at` names the index of a `for`, `while` is
-/// the condition a `for` stops on, and `refuses` is the marker on the `assert`
-/// that expects a contract to turn something down. None of them is reserved: a
-/// variable may still be called `at`, which is why they are read with
-/// `eat_named` rather than lexed. An editor still has to colour them, so the
-/// set is written down here rather than being four string literals scattered
-/// through the file.
-pub const SOFT_KEYWORDS: [&str; 4] = ["state", "at", "while", "refuses"];
+/// the condition a `for` stops on, `refuses` is the marker on the `assert`
+/// that expects a contract to turn something down, and `ok` and `err` are the
+/// outcome an `ensures` clause is about. None of them is reserved: a variable
+/// may still be called `at`, which is why they are read with `eat_named`
+/// rather than lexed. An editor still has to colour them, so the set is
+/// written down here rather than as string literals scattered through the
+/// file.
+///
+/// What that costs, since it is the question this list keeps raising: the
+/// editor grammar is a TextMate grammar and has no positions, so a word in
+/// here is coloured everywhere it appears. `at(items, 0)` and `ok(value)` are
+/// calls to prelude functions and are coloured like the markers they share a
+/// spelling with. Being a prelude name is therefore not what keeps a word out
+/// of this list, and it never was: `at` has been in it and coloured at every
+/// call site since the grammar was written.
+///
+/// It is also less of a lie than it looks. `ok` is not an ordinary name in
+/// any of its three positions. `ensures ok =>` produces an `Outcome` and
+/// resolves to nothing, `ok(v)` is a pattern head no declared variant can
+/// occupy, and `ok(value)` is the one call exempt from the rule that every
+/// type parameter appears in a parameter type. All three are the language
+/// talking about itself, and the word naming the same thing in each is why
+/// they are spelled alike. The grammar cannot tell them apart, and it is
+/// lexical on purpose, because the moment somebody is looking at a file is
+/// the moment it does not parse.
+///
+/// What is left out, so the next person does not have to work it out again.
+/// `mut`, `as`, `struct` and the rest of the words another language would
+/// have used are read by name too, but every one of them is on a path that
+/// emits a diagnostic, so none of them survives into a program worth
+/// colouring. `Fn` is the only word read here that does appear in an accepted
+/// program and is still not in this list, and the reason is that the grammar
+/// already colours it: every type is written with a capital and the grammar
+/// matches that shape. The test in `crates/deed-parser/tests/grammar.rs`
+/// walks alternation groups, so a word that is coloured by shape rather than
+/// by name is neither missing from the grammar nor invented by it.
+pub const SOFT_KEYWORDS: [&str; 6] = ["state", "at", "while", "refuses", "ok", "err"];
 
 /// Parses a token stream. Always produces a module, possibly containing error nodes.
 pub fn parse(file: FileId, tokens: &[Token]) -> Parsed {
@@ -1131,39 +1161,37 @@ impl<'a> Parser<'a> {
     /// `ok => balance(from) == old(balance(from)) - amount`
     fn parse_ensures(&mut self) -> Ensures {
         let outcome_span = self.span();
-        let outcome = match self.kind() {
-            TokenKind::Ident(name) if name == "ok" => Some(Outcome::Ok),
-            TokenKind::Ident(name) if name == "err" => Some(Outcome::Err),
-            _ => None,
-        };
 
-        let outcome = match outcome {
-            Some(outcome) => {
+        // Nothing but these two words can stand here, and what comes out is
+        // an `Outcome` rather than a name, but they are still the prelude's
+        // two constructors everywhere else. So they are read by name, and
+        // they are in `SOFT_KEYWORDS` with the rest of the words that are
+        // syntax in one place and nothing in particular in the others.
+        let outcome = if self.eat_named("ok") {
+            Outcome::Ok
+        } else if self.eat_named("err") {
+            Outcome::Err
+        } else {
+            let found = self.kind().describe();
+            self.emit(
+                Diagnostic::error(
+                    codes::INVALID_ENSURES_OUTCOME,
+                    self.file,
+                    outcome_span,
+                    format!("expected `ok` or `err`, found {found}"),
+                )
+                .with_primary_label("not an outcome")
+                .with_note(
+                    "obligations are stated per outcome so that neither the success case nor the failure case can be left unsaid",
+                ),
+            );
+            // Consume it anyway. Whatever it was, it stood where the outcome
+            // belongs, and leaving it would derail the `=>` that follows into
+            // a second diagnostic about the same mistake.
+            if !self.at_eof() && !self.at(&TokenKind::FatArrow) {
                 self.bump();
-                outcome
             }
-            None => {
-                let found = self.kind().describe();
-                self.emit(
-                    Diagnostic::error(
-                        codes::INVALID_ENSURES_OUTCOME,
-                        self.file,
-                        outcome_span,
-                        format!("expected `ok` or `err`, found {found}"),
-                    )
-                    .with_primary_label("not an outcome")
-                    .with_note(
-                        "obligations are stated per outcome so that neither the success case nor the failure case can be left unsaid",
-                    ),
-                );
-                // Consume it anyway. Whatever it was, it stood where the
-                // outcome belongs, and leaving it would derail the `=>` that
-                // follows into a second diagnostic about the same mistake.
-                if !self.at_eof() && !self.at(&TokenKind::FatArrow) {
-                    self.bump();
-                }
-                Outcome::Ok
-            }
+            Outcome::Ok
         };
 
         self.expect(TokenKind::FatArrow, "an `ensures` obligation");

@@ -1512,6 +1512,64 @@ fn an_ensures_outcome_must_be_ok_or_err() {
     assert!(render_human(&sources, &parsed.diagnostics[0]).contains("expected `ok` or `err`"));
 }
 
+// The three places `ok` stands, one test each. They are in `SOFT_KEYWORDS`
+// because of the first one, and the other two are what that must not cost.
+
+#[test]
+fn an_ensures_outcome_is_read_by_name() {
+    let parsed = parse_ok(
+        "module a\n\nfn f() -> Int\n  ensures\n    ok => true,\n    err => true,\n{ 0 }\n",
+    );
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    let outcomes: Vec<Outcome> = function
+        .contract
+        .ensures
+        .iter()
+        .map(|e| e.outcome)
+        .collect();
+    assert_eq!(outcomes, [Outcome::Ok, Outcome::Err]);
+}
+
+#[test]
+fn ok_and_err_are_still_names_when_they_are_called() {
+    // Neither word is reserved, and the position they mean something in is
+    // the `ensures` clause above. Everywhere else they are the two prelude
+    // constructors, which is how nearly every call in the corpus reaches
+    // them.
+    let stmts = body_of("ok(1)");
+    let Stmt::Expr(Expr::Call { callee, .. }) = &stmts[0] else {
+        panic!("expected a call, got {:?}", stmts[0]);
+    };
+    assert!(matches!(&**callee, Expr::Ident(name) if name.name == "ok"));
+
+    let stmts = body_of("err(\"no\")");
+    let Stmt::Expr(Expr::Call { callee, .. }) = &stmts[0] else {
+        panic!("expected a call, got {:?}", stmts[0]);
+    };
+    assert!(matches!(&**callee, Expr::Ident(name) if name.name == "err"));
+}
+
+#[test]
+fn ok_and_err_still_head_a_pattern() {
+    let stmts = body_of("match r {\n  ok(value) => a(value),\n  err(why) => b(why),\n}");
+    let Stmt::Expr(Expr::Match { arms, .. }) = &stmts[0] else {
+        panic!("expected a match, got {:?}", stmts[0]);
+    };
+    assert_eq!(arms.len(), 2);
+    for arm in arms {
+        let Pattern::Tuple { path, elements, .. } = &arm.pattern else {
+            panic!("expected a payload pattern, got {:?}", arm.pattern);
+        };
+        let [head] = &path[..] else {
+            panic!("expected one segment, got {path:?}");
+        };
+        assert!(head.name == "ok" || head.name == "err", "{}", head.name);
+        assert_eq!(elements.len(), 1);
+    }
+}
+
 #[test]
 fn a_star_effect_reference_parses() {
     let parsed = parse_ok("module a\n\nfn main(sys: System) -> Int\n  uses sys.*,\n{ 0 }\n");

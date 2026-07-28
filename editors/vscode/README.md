@@ -32,9 +32,13 @@ which means it works on a file that does not parse. That is the right way
 round for the case that matters, a file being typed, but it also means the
 grammar is a second copy of the words the compiler reads as keywords: the ones
 the lexer reserves, and the ones the parser reads by name in a single position
-such as `state` and `refuses`. It is held to both by
-`crates/deed-parser/tests/grammar.rs`, which fails if they disagree in either
-direction.
+such as `state`, `refuses` and the `ok` and `err` of an `ensures` clause. It
+is held to both by `crates/deed-parser/tests/grammar.rs`, which fails if they
+disagree in either direction.
+
+A grammar with no positions colours a word everywhere, so `at(items, 0)` and
+`ok(value)` are coloured like the markers they share a spelling with. The
+parser's `SOFT_KEYWORDS` says why that is the trade being made.
 
 ## Not published
 
