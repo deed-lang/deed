@@ -4303,11 +4303,14 @@ impl<'a> Checker<'a> {
         let unknown = left.absorbs() || right.absorbs();
 
         match op {
-            // `+` is the one operator with two meanings. Joining strings is
+            // `+` means two things, and so do the comparisons below. None of
+            // them is ambiguous, for the same reason: a `String` is not an
+            // `Int` and there is no conversion between them, so no expression
+            // is unsure which meaning it wanted. What `+` has that they do not
+            // is a result that changes shape with the meaning. Joining is
             // common enough that spelling it any other way would be a tax on
-            // the most ordinary thing a program does, and the two meanings
-            // never overlap: a `String` is not an `Int` and there is no
-            // conversion between them, so no expression is ambiguous.
+            // the most ordinary thing a program does, which is the argument
+            // for this arm and not for theirs.
             Add if !unknown && (left == &Ty::Str || right == &Ty::Str) => {
                 self.assign(
                     right,
@@ -4385,6 +4388,17 @@ impl<'a> Checker<'a> {
     /// record has no ordering anyone could define, and accepting the comparison
     /// on the grounds that it might mean something one day is how a type
     /// checker ends up not checking.
+    ///
+    /// `String` is here on purpose rather than by leftover, though it started
+    /// as one: this rule replaced one that asked only that both sides agree,
+    /// so text was already comparable and narrowing kept it. It stays because
+    /// it is the only thing in the language that can rank text. A record is
+    /// refused and a caller who wants two ranked passes the comparison in,
+    /// which works because a record has fields to compare. A `String` has no
+    /// part a program can reach, so refusing here would not make ordering text
+    /// awkward, it would make it unwritable. `design/02-syntax.md` carries the
+    /// argument and what it rules out, and the corpus carries the consequence
+    /// nobody should meet by surprise, which is that `"10" < "9"`.
     fn require_order(&mut self, ty: &Ty, at: Span, op: BinaryOp) {
         if matches!(self.widen(ty), Ty::Int | Ty::Str | Ty::Never) {
             return;

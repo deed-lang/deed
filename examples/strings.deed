@@ -19,9 +19,16 @@ record Person {
     town: String,
 }
 
-// `+` joins two strings. It is the one operator with two meanings, and they
-// never overlap: there is no conversion between `Int` and `String`, so no
-// expression is ambiguous about which one it wanted.
+// `+` joins two strings, and it is not the only operator doing two jobs.
+// There are five operators that mean two things: `+`, `<`, `<=`, `>` and `>=`.
+// Every one of them takes an `Int` or a `String` and nothing else, and none of
+// them is ambiguous, for the same reason: there is no conversion between the
+// two types, so no expression is unsure which meaning it wanted.
+//
+// The reasons they were allowed are not the same, though. `+` is here because
+// spelling concatenation any other way would be a tax on the most ordinary
+// thing a program does. The comparisons are here because nothing else in this
+// language can rank text; see `earlier` below.
 fn greeting(person: Person) -> String {
     "hello, " + person.name + " of " + person.town
 }
@@ -47,10 +54,21 @@ fn announce(text: NonEmpty) -> String {
     text
 }
 
-// Strings are ordered, by character. For text in one script that is the order
-// anybody expects, and for text that mixes them it is a decision nobody should
-// be making without knowing the locale, so this is the plain answer rather
-// than a wrong clever one.
+// Strings are ordered, and this is the only thing in the language that can
+// rank text. A record has fields, so a caller who wants two of them ranked can
+// pass the comparison in, which is why ordering a record is refused. A
+// `String` has no part a program can reach: there is no character access, no
+// code point, and `to_int` only speaks about text that spells a number. Take
+// `<` away and sorting a list of names stops being awkward and starts being
+// impossible.
+//
+// The order is by character. For text in one script that is the order anybody
+// expects, and for text that mixes them it is a decision nobody should be
+// making without knowing the locale, so this is the plain answer rather than a
+// wrong clever one. It follows that `"10" < "9"`, which is true and is not the
+// comparison being wrong: it is a question about numbers asked of text. Call
+// `to_int` first, and the `Result` it hands back is this language making the
+// caller say what happens to input that was never a number.
 fn earlier(a: String, b: String) -> String {
     if a < b {
         a
@@ -127,6 +145,9 @@ test "ordering" {
     assert earlier("b", "a") == "a"
     assert earlier("abc", "abd") == "abc"
     assert !("b" <= "a")
+    // The answer the paragraph above warns about, pinned so it stays an
+    // answer rather than a surprise.
+    assert "10" < "9"
 }
 
 test "the refinement is real" {

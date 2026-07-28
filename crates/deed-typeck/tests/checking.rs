@@ -1,10 +1,25 @@
 //! Type checking behaviour.
 //!
-//! Two things get most of the attention. What the checker refuses to say when
-//! it does not know, since a false positive is worse than a missing check while
-//! most of the language still comes from modules that cannot be loaded. And
-//! refinements, since that is the first sliver of the Proven tier and the place
-//! this language is eventually supposed to be interesting.
+//! This used to open by saying two things got most of the attention: what the
+//! checker refuses to say when it does not know, and refinements. Both were
+//! the point when the sentence was written and neither is the largest thing
+//! here now. Handlers are, and matching a choice is second, and both of them
+//! arrived long after. Attention is not countable anyway, so the header no
+//! longer claims any, and says something that can be read off the file
+//! instead.
+//!
+//! Every test here does one of two things. It hands the checker a module and
+//! insists it is accepted, or it hands over a module and names the exact
+//! diagnostic codes that should come back, in order. None of them settles for
+//! asserting that something failed, which matters because most of these rules
+//! were written to replace a worse message rather than to replace silence:
+//! a test that only asked for failure would have passed before the change it
+//! was written for.
+//!
+//! What that leaves out is what the reader sees. A code is not a sentence, so
+//! the tests whose subject is the wording go on to render the diagnostic and
+//! look for the phrase, and those are the ones to copy when adding a message
+//! anybody is meant to act on.
 
 use deed_diagnostics::{Diagnostic, SourceMap, render_human};
 use deed_lexer::tokenize;
@@ -256,6 +271,14 @@ fn plus_still_adds_two_numbers() {
     check_ok("module a\n\nfn f(n: Int) -> Int { n + 1 }\n");
 }
 
+/// The half of the ordering rule that was kept rather than chosen.
+///
+/// The rule this test guards replaced one that asked only that both sides
+/// agree, so text was comparable before anybody narrowed anything and the
+/// narrowing left it in. It stays because it is the only thing in the language
+/// that can rank text: a record is refused below and a caller who wants two of
+/// them ranked passes the comparison in, which works because a record has
+/// fields to compare, and a `String` has no part a program can reach.
 #[test]
 fn strings_are_ordered() {
     check_ok("module a\n\nfn f(a: String, b: String) -> Bool { a < b }\n");
