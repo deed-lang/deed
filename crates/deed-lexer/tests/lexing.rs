@@ -126,6 +126,14 @@ fn a_decimal_point_is_reported_once_and_the_whole_part_stands_in() {
         vec![TokenKind::Int(1)],
         "the dot and the fraction are absorbed, not left behind"
     );
+    // Once, and under the code that says what it is. The text this renders is
+    // read by `a_decimal_point_says_there_are_no_floats`; the wording and the
+    // code it arrives under are two separate claims, and breaking either one
+    // leaves the other standing.
+    assert_eq!(
+        codes_of(&lex("1.5").1.diagnostics),
+        vec![codes::NO_FLOAT_LITERAL]
+    );
 }
 
 #[test]
@@ -289,10 +297,15 @@ fn an_unknown_escape_is_reported_but_lexing_continues() {
 
 #[test]
 fn malformed_unicode_escapes_are_caught() {
-    let (_, lexed) = lex(r#""\u41" "\u{D800}" "\u{110000}""#);
+    // All five shapes, because the code a message arrives under is a separate
+    // claim from its wording, and the section at the bottom of this file only
+    // reads the wording.
+    let (_, lexed) = lex(r#""\u41" "\u{41" "\u{}" "\u{D800}" "\u{110000}""#);
     assert_eq!(
         codes_of(&lexed.diagnostics),
         vec![
+            codes::UNKNOWN_ESCAPE,
+            codes::UNKNOWN_ESCAPE,
             codes::UNKNOWN_ESCAPE,
             codes::UNKNOWN_ESCAPE,
             codes::UNKNOWN_ESCAPE
@@ -653,8 +666,10 @@ fn an_escape_stopped_by_a_stray_character_names_the_character() {
 
 #[test]
 fn a_brace_is_not_applied_over_a_character_it_would_turn_into_text() {
-    // `deed fix` would otherwise rewrite `"\u{4G}"` to `"\u{4}G"` without
-    // asking, which is a change to what the string says.
+    // `deed fix` would otherwise rewrite `"\u{4G}"` to `"\u{4}G}"` without
+    // asking. The brace is inserted, not moved, so the original one stays and
+    // becomes text as well: the error goes away and the string says something
+    // else.
     let fix = fix_for(r#""\u{4G}""#);
     assert_eq!(fix.edits[0].replacement, "}");
     assert_eq!(fix.applicability, Applicability::MaybeIncorrect);
