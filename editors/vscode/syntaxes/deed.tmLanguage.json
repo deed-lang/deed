@@ -44,11 +44,11 @@
     },
     "control": {
       "name": "keyword.control.deed",
-      "match": "\\b(if|else|match|for|in|while|return|with|assert)\\b"
+      "match": "\\b(if|else|match|for|in|while|return|with|assert|refuses)\\b"
     },
     "contract": {
       "name": "keyword.other.contract.deed",
-      "match": "\\b(where|uses|ensures|old|unchanged|at)\\b"
+      "match": "\\b(where|uses|ensures|old|unchanged|at|ok|err)\\b"
     },
     "type": {
       "name": "entity.name.type.deed",

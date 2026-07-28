@@ -674,7 +674,9 @@ discharged.
 
 `refuses` is a name everywhere else. It is the marker only when an identifier follows it, and
 no statement could ever have been two names in a row, so `assert refuses(x)` is still a call
-to a function somebody called `refuses`. Same reasoning as `state` and as the `at` in a `for`.
+to a function somebody called `refuses`. Same reasoning as `state` and as the `at` in a `for`,
+and it sits with them in the parser's `SOFT_KEYWORDS`, which is the list the editor grammar is
+held to, so a word nothing reserves is still a word the reader sees coloured.
 
 ### What `Proven` can decide
 
@@ -875,6 +877,14 @@ Values, always. No exceptions, no panics in library code.
 `Result`, `ok` and `err` are part of the language rather than a library. A language where you
 cannot write a failing function without an import is not finished, and `?` cannot be checked
 against a type the compiler does not know about.
+
+Neither word is reserved, and each of them stands in three places. `ensures ok => ...` names
+an outcome and resolves to nothing at all, `ok(v)` is a pattern head no declared variant can
+occupy, and `ok(value)` is a call that is exempt from the rule that every type parameter
+appears in a parameter type. They are spelled alike because they are about the same thing, so
+both words sit in the parser's `SOFT_KEYWORDS` next to `state`, `at`, `while` and `refuses`,
+and the editor grammar is held to that list. It colours them wherever they appear, calls
+included, because it is a TextMate grammar and has no positions to ask about.
 
 ```deed
 fn parse_amount(input: String) -> Result<Money, ParseError> {
