@@ -105,9 +105,16 @@ system for them to hang off.
 | `== !=` | anything, structurally |
 | `&& \|\|` | `Bool`, and they short circuit |
 
-`+` is the one operator with two meanings. There is no conversion between `Int` and
-`String`, so no expression is ambiguous about which one it wanted, and spelling
-concatenation any other way would be a tax on the most ordinary thing a program does.
+There are five operators that mean two things: `+`, `<`, `<=`, `>` and `>=`. Each of them
+takes an `Int` or a `String` and nothing else, and none of them is ambiguous, for the same
+reason: there is no conversion between the two types, so no expression is unsure which
+meaning it wanted. `+` is the only one whose answer changes shape with the meaning, since
+the comparisons give back a `Bool` either way.
+
+The reasons the five were allowed are not the same. Spelling concatenation any other way
+would be a tax on the most ordinary thing a program does, which is the argument for `+` and
+is not the argument for the comparisons. `==` is not one of the five: it takes every type,
+so it has one meaning applied everywhere rather than a choice between two.
 
 Ordering is deliberately narrow. Comparing two records used to pass the type checker and
 fail at runtime, and the runtime message blamed the interpreter for not implementing
@@ -118,9 +125,38 @@ is refused for the same reason and pinned by its own test. A caller that needs a
 passes the comparison. Equality is different, because structural equality is total and
 wanting to know whether two records are the same is reasonable.
 
-Strings order by character. For text in one script that is the order anyone expects, and for
-text that mixes them it is a decision that needs a locale, which is not something an operator
-should be guessing at.
+Strings are ordered because `<` is the only thing here that puts two pieces of text in an
+order and never ties two of them that differ, and that is the argument for the comparisons.
+Three other things do rank text and all three tie. `length` answers for every pair and
+calls `ab` and `ba` the same. `to_int` refuses everything that does not spell a number and
+calls `007` and `7` the same. `Io.list` hands back file names already sorted, which agrees
+with `<` on the text it will take, but it refuses whatever the machine will not accept as a
+name, it calls `A` and `a` the same wherever the filesystem does, and it costs a `Dir`, two
+entries in the row, a directory on disk and a written file per comparison. Passing the
+comparison in is the answer for a record, and it asks the caller for nothing it does not
+already have to have: which field decides the order is not something the shape of the
+record says, and some of those fields have no order of their own. Text is reachable as
+well, since `split(s, "")` hands back the characters, so a comparator over text can be
+written. What it cannot do is rank a character nobody told it about. There is no code
+point, and `to_int` only speaks about text that spells a number, so the characters it
+turns into numbers are the ten digits and no letter. A comparator can rank those with no
+alphabet written down, and to rank anything else it needs one typed out by hand, with
+every character left out of that alphabet tying with every other one, silently. Taking
+`<` away would not make ordering text impossible, it would put a hand-written alphabet in
+every program that sorts names and leave each of them wrong somewhere its author never
+looked, which is what separates it from the type parameter refused above.
+
+The order is by character. For text in one script that is the order anyone expects, and for
+text that mixes them it is a decision that needs a locale, which is not something an
+operator should be guessing at. It follows that `"10" < "9"` is true. That is not the
+comparison being wrong, it is a question about numbers asked of text: call `to_int` first,
+and the `Result` it hands back is the language making the caller say what happens to input
+that was never a number.
+
+What this rules out is `<` picking up a third meaning. A locale-aware ordering would be a
+different answer under the same spelling, and a bound would be a different answer chosen
+per call site. Either would have to say why the type checker should stop being able to read
+a comparison on sight.
 
 The prelude carries one function for measuring, `length`, which counts a `String` in
 characters rather than bytes. Otherwise a refinement written against it would mean something

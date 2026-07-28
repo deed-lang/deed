@@ -19,9 +19,17 @@ record Person {
     town: String,
 }
 
-// `+` joins two strings. It is the one operator with two meanings, and they
-// never overlap: there is no conversion between `Int` and `String`, so no
-// expression is ambiguous about which one it wanted.
+// `+` joins two strings, and it is not the only operator doing two jobs.
+// There are five operators that mean two things: `+`, `<`, `<=`, `>` and `>=`.
+// Every one of them takes an `Int` or a `String` and nothing else, and none of
+// them is ambiguous, for the same reason: there is no conversion between the
+// two types, so no expression is unsure which meaning it wanted.
+//
+// The reasons they were allowed are not the same, though. `+` is here because
+// spelling concatenation any other way would be a tax on the most ordinary
+// thing a program does. The comparisons are here because nothing else in this
+// language orders text without tying two pieces of it that differ; see
+// `earlier` below.
 fn greeting(person: Person) -> String {
     "hello, " + person.name + " of " + person.town
 }
@@ -47,10 +55,39 @@ fn announce(text: NonEmpty) -> String {
     text
 }
 
-// Strings are ordered, by character. For text in one script that is the order
-// anybody expects, and for text that mixes them it is a decision nobody should
-// be making without knowing the locale, so this is the plain answer rather
-// than a wrong clever one.
+// Strings are ordered, and `<` is the only thing in the language that puts two
+// pieces of text in an order and never ties two of them that differ. Three
+// other things do rank text and all three tie. `length` answers for every pair
+// and calls "ab" and "ba" the same. `to_int` refuses everything that does not
+// spell a number and calls "007" and "7" the same. `Io.list` hands back file
+// names already sorted, which agrees with `<` on the text it will take, but it
+// refuses whatever the machine will not accept as a name, it calls "A" and "a"
+// the same wherever the filesystem does, and it costs a `Dir`, two entries in
+// the row and a written file per comparison.
+//
+// A record has fields, so a caller who wants two of them ranked passes the
+// comparison in, which is why ordering a record is refused, and that asks the
+// caller for nothing it does not already have to have: which field decides the
+// order is not something the shape of the record says, and some of those
+// fields have no order of their own. Text is reachable as well, since
+// `split(s, "")` hands back the characters, which this file asserts further
+// down, so a comparator over text can be written. What it cannot do is rank a
+// character nobody told it about: there is no code point, and `to_int` only
+// speaks about text that spells a number, so the characters it turns into
+// numbers are the ten digits and no letter. A comparator can rank those with
+// no alphabet written down, and to rank anything else it needs one typed out
+// by hand, with everything left out of that alphabet tying with everything
+// else, silently. Take `<` away and sorting names is still writable, at the
+// price of one hand-written alphabet per program, each of them wrong somewhere
+// its author never looked.
+//
+// The order is by character. For text in one script that is the order anybody
+// expects, and for text that mixes them it is a decision nobody should be
+// making without knowing the locale, so this is the plain answer rather than a
+// wrong clever one. It follows that `"10" < "9"`, which is true and is not the
+// comparison being wrong: it is a question about numbers asked of text. Call
+// `to_int` first, and the `Result` it hands back is this language making the
+// caller say what happens to input that was never a number.
 fn earlier(a: String, b: String) -> String {
     if a < b {
         a
@@ -127,6 +164,21 @@ test "ordering" {
     assert earlier("b", "a") == "a"
     assert earlier("abc", "abd") == "abc"
     assert !("b" <= "a")
+    // The answer the paragraph above warns about, pinned so it stays an
+    // answer rather than a surprise.
+    assert "10" < "9"
+    // And the reach the same paragraph claims for a comparator written
+    // without `<`: a digit is text that spells a number, a letter is not, so
+    // an alphabet with a letter in it is one somebody typed.
+    assert to_int("7") == ok(7)
+    assert to_int("a") == err("`a` is not a number")
+    // The two ties the paragraph names, so the reason `<` is kept is held by
+    // something rather than asserted. Both of these rank text and both put
+    // two pieces of text that differ in the same place; `<` separates them.
+    assert length("ab") == length("ba")
+    assert "ab" < "ba"
+    assert to_int("007") == to_int("7")
+    assert "007" < "7"
 }
 
 test "the refinement is real" {

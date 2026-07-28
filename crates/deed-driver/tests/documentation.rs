@@ -33,7 +33,7 @@
 
 use std::path::{Path, PathBuf};
 
-use deed_ast::Item;
+use deed_ast::{BinaryOp, Item};
 use deed_diagnostics::SourceMap;
 use deed_interp::{Program, PropertyConfig, run_properties, run_tests};
 use deed_resolve::{IO_OPERATIONS, PRELUDE};
@@ -781,6 +781,255 @@ fn the_documents_that_work_through_the_running_example_are_the_ones_that_do() {
         assert!(
             header.contains(&format!("design/{name}")),
             "design/{name} works through transfer.deed and the header does not name it"
+        );
+    }
+}
+
+/// The types every operator is tried against.
+///
+/// Concrete and declarable inside one module, but nowhere near all of those:
+/// `()`, a `choice`, a refined type, a function type and `Result` are all
+/// missing, and the measurement below does not need them.
+///
+/// Two things it does need, and both are held by
+/// [`the_probed_types_are_types_and_no_two_are_the_same_one`] rather than left
+/// as a sentence here.
+///
+/// No two entries are one type to the checker. The rule below is "more than
+/// one of these and not all of them", so a type that stands in for another
+/// already on the list gets counted a second time and an operator with one
+/// meaning looks like it has two. `Positive = Int where value > 0` is the near
+/// miss: adding it alone would make `%`, `*`, `-` and `/` join the answer.
+///
+/// And every entry is a type at all. One that no operator takes lengthens the
+/// list without anything reaching it, so `==` stops taking all of them and
+/// falls into the answer with `!=` beside it. `("T", "")` is that mistake
+/// wearing the clothes of a type parameter: nothing declares `T`, so it
+/// resolves to nothing and every operator refuses it. A real type parameter
+/// cannot be an entry here, because an entry is a type name plus declarations
+/// written above the probe and a type parameter is declared on the probe
+/// itself. It would not move the answer if it could be, either: the checker
+/// takes `==` on one and refuses `<`, `+` and the rest, which is what `Bool`
+/// on this list already does.
+///
+/// This is the hand-written half of the measurement, together with
+/// `BinaryOp::ALL` and the four comparisons written out in
+/// [`the_types_ordering_takes_are_the_ones_the_syntax_document_names`]. What
+/// an operator does with these comes from the checker.
+const PROBED_TYPES: [(&str, &str); 5] = [
+    ("Int", ""),
+    ("String", ""),
+    ("Bool", ""),
+    ("List<Int>", ""),
+    ("Point", "record Point { x: Int }\n\n"),
+];
+
+/// Whether a value of type `from` is accepted where `to` is wanted.
+///
+/// Asked of the checker, like everything else here. Two probed types that
+/// answer yes in either direction are one type as far as the count is
+/// concerned, since every operator taking one of them takes the other.
+fn stands_in_for(from: &str, to: &str) -> bool {
+    let mut declarations = String::new();
+    for (ty, declaration) in PROBED_TYPES {
+        if (ty == from || ty == to) && !declarations.contains(declaration) {
+            declarations.push_str(declaration);
+        }
+    }
+
+    let source =
+        format!("module probe\n\n{declarations}fn probe(a: {from}) -> {to} {{\n    a\n}}\n");
+    let mut sources = SourceMap::new();
+    let file = sources.add("probe.deed", source);
+    !deed_driver::check(&sources, file).has_errors()
+}
+
+/// The preconditions [`operators_with_two_meanings`] counts under.
+fn probed_types_are_sound() {
+    for (ty, declaration) in PROBED_TYPES {
+        assert!(
+            BinaryOp::ALL
+                .iter()
+                .any(|op| operator_takes(op.as_str(), ty, declaration)),
+            "no operator takes a `{ty}`, so it is not a type the checker knows and \
+             counting it lengthens PROBED_TYPES without anything reaching it"
+        );
+    }
+
+    for (from, _) in PROBED_TYPES {
+        for (to, _) in PROBED_TYPES {
+            if from != to {
+                assert!(
+                    !stands_in_for(from, to),
+                    "a `{from}` is accepted where a `{to}` is wanted, so the two are one \
+                     type to the checker and PROBED_TYPES counts it twice"
+                );
+            }
+        }
+    }
+}
+
+/// The two things the probed types have to be.
+///
+/// The count below calls an operator ambiguous when it takes more than one
+/// probed type and not all of them, which reads the right answer off the
+/// checker only while every probed type is a type and no two of them are the
+/// same one. Nothing about a list of type names says either, and the list is
+/// the obvious thing to extend, so this holds both and fails by name instead
+/// of letting the counts demand a number nobody can make true.
+#[test]
+fn the_probed_types_are_types_and_no_two_are_the_same_one() {
+    probed_types_are_sound();
+}
+
+/// How the sentence about them opens, in both places that write it.
+const TWO_MEANINGS: &str = "operators that mean two things: ";
+
+/// Whether a module doing `a <op> b` over two values of `ty` checks cleanly.
+///
+/// The value is bound rather than left as a statement, because a statement
+/// whose value nobody reads is its own warning and the answer wanted here is
+/// about errors.
+fn operator_takes(op: &str, ty: &str, declaration: &str) -> bool {
+    let source = format!(
+        "module probe\n\n{declaration}fn probe(a: {ty}, b: {ty}) -> () {{\n    let _answer = a {op} b\n}}\n"
+    );
+    let mut sources = SourceMap::new();
+    let file = sources.add("probe.deed", source);
+    !deed_driver::check(&sources, file).has_errors()
+}
+
+/// The types `op` accepts, out of the ones probed.
+fn types_taken_by(op: &str) -> Vec<String> {
+    let taken: Vec<String> = PROBED_TYPES
+        .iter()
+        .filter(|(ty, declaration)| operator_takes(op, ty, declaration))
+        .map(|(ty, _)| (*ty).to_string())
+        .collect();
+    assert!(
+        !taken.is_empty(),
+        "`{op}` took none of the probed types, so either it cannot be written at all \
+         or the probe around it is wrong"
+    );
+    taken
+}
+
+/// The operators that mean more than one thing, asked of the checker.
+///
+/// An operator that takes several of the probed types but not all of them is
+/// choosing between meanings. One that takes all of them has a single meaning
+/// applied everywhere, which is why `==` is not in the answer: structural
+/// equality is total by design, and counting it would turn "two meanings" into
+/// "more than one type", which is a different and much duller claim. The rule
+/// only reads that way while every probed type is a type and no two of them
+/// are the same one, so it says so first rather than reporting a number that
+/// came from counting one type twice or from counting a name nothing declares.
+///
+/// Sorted, and compared as a set. `BinaryOp::ALL` is in the parser's
+/// precedence order, which is not an order any sentence would use, so holding
+/// it would be holding the wrong thing.
+fn operators_with_two_meanings() -> Vec<String> {
+    probed_types_are_sound();
+
+    let mut found: Vec<String> = BinaryOp::ALL
+        .iter()
+        .map(|op| op.as_str())
+        .filter(|op| {
+            let taken = types_taken_by(op).len();
+            taken > 1 && taken < PROBED_TYPES.len()
+        })
+        .map(str::to_string)
+        .collect();
+    found.sort();
+    assert!(
+        !found.is_empty(),
+        "no operator took more than one type, so the probe is measuring nothing"
+    );
+    found
+}
+
+/// The count the corpus states, against the count the checker produces.
+///
+/// `examples/strings.deed` said `+` was the one operator with two meanings.
+/// The four comparisons had the same property from the commit that wrote the
+/// sentence, because the rule narrowing them to `Int` and `String` landed in
+/// it, so the number had never been right. Nothing held it. That is the exact
+/// shape this file exists for, with the twist that the claim is not about a
+/// list the compiler keeps but about how the compiler behaves, so the check
+/// has to run it rather than read it.
+///
+/// What this does not hold: the operator has to be in `BinaryOp::ALL` and the
+/// type it means something new about has to be in [`PROBED_TYPES`]. A new
+/// operator left out of both would go unmeasured and the sentence would go
+/// stale in silence, which is the failure this cannot fix by itself.
+#[test]
+fn the_operators_that_mean_two_things_are_the_ones_the_corpus_names() {
+    let operators = operators_with_two_meanings();
+    let strings = read("examples/strings.deed");
+
+    let claim = format!("There are {} {TWO_MEANINGS}", spelled(operators.len()));
+    assert!(
+        strings.contains(&claim),
+        "the checker takes more than one type for {operators:?}, \
+         so examples/strings.deed should say {claim:?}"
+    );
+
+    let sentence = between(&strings, TWO_MEANINGS, "\n");
+    let mut listed = enumerated(&sentence[TWO_MEANINGS.len()..]);
+    listed.sort();
+    assert_eq!(
+        listed, operators,
+        "examples/strings.deed lists {listed:?} and the checker gives {operators:?}"
+    );
+}
+
+/// The same claim, in the document that also carries the operator table.
+///
+/// Two places state it, which is two places to go stale, and the document was
+/// wrong in the same words as the corpus for the same reason.
+#[test]
+fn the_syntax_document_counts_them_the_same_way() {
+    let operators = operators_with_two_meanings();
+    let syntax = read("design/02-syntax.md");
+
+    let claim = format!("There are {} {TWO_MEANINGS}", spelled(operators.len()));
+    assert!(
+        syntax.contains(&claim),
+        "the checker takes more than one type for {operators:?}, \
+         so design/02-syntax.md should say {claim:?}"
+    );
+
+    let sentence = between(&syntax, TWO_MEANINGS, "\n");
+    let mut listed = enumerated(&sentence[TWO_MEANINGS.len()..]);
+    listed.sort();
+    assert_eq!(
+        listed, operators,
+        "design/02-syntax.md lists {listed:?} and the checker gives {operators:?}"
+    );
+}
+
+/// What ordering takes, where the document says what it takes.
+///
+/// This is the decision the sentence above turned up. `String` was never
+/// added to the ordering rule; it was what survived the rule being narrowed
+/// from "both sides agree" down to two types, and it stays because nothing
+/// else in the language orders text without tying two pieces that differ:
+/// `length` ties `ab` with `ba`, `to_int` ties `007` with `7` and refuses
+/// everything that does not spell a number, and `Io.list` sorts file names but
+/// wants a `Dir` and a written file per comparison and ties whatever the
+/// filesystem does not tell apart. A set stated in a document and argued for
+/// in it is worth holding to what the checker does with it, since the argument
+/// is the reason anyone would trust the set.
+#[test]
+fn the_types_ordering_takes_are_the_ones_the_syntax_document_names() {
+    let syntax = read("design/02-syntax.md");
+    let sentence = between(&syntax, "**Ordering is ", ".**");
+
+    for op in ["<", "<=", ">", ">="] {
+        assert_eq!(
+            backticked(sentence),
+            types_taken_by(op),
+            "design/02-syntax.md names the types ordering takes, and `{op}` takes others"
         );
     }
 }

@@ -396,6 +396,31 @@ pub enum BinaryOp {
 }
 
 impl BinaryOp {
+    /// Every binary operator the language has.
+    ///
+    /// Written out, because there is no way to ask an enum for its variants,
+    /// and something that wants to measure the operators has to be able to
+    /// walk them. `crates/deed-driver/tests/documentation.rs` does exactly
+    /// that: it asks the type checker which types each of these takes, and
+    /// holds the sentence in the corpus that says which ones mean more than
+    /// one thing. An entry here that cannot be written fails that test by
+    /// name, because a probe over it will not compile for any type.
+    pub const ALL: [BinaryOp; 13] = [
+        BinaryOp::Or,
+        BinaryOp::And,
+        BinaryOp::Eq,
+        BinaryOp::Ne,
+        BinaryOp::Lt,
+        BinaryOp::Le,
+        BinaryOp::Gt,
+        BinaryOp::Ge,
+        BinaryOp::Add,
+        BinaryOp::Sub,
+        BinaryOp::Mul,
+        BinaryOp::Div,
+        BinaryOp::Rem,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             BinaryOp::Or => "||",

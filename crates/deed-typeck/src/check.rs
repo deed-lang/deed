@@ -4303,11 +4303,14 @@ impl<'a> Checker<'a> {
         let unknown = left.absorbs() || right.absorbs();
 
         match op {
-            // `+` is the one operator with two meanings. Joining strings is
+            // `+` means two things, and so do the comparisons below. None of
+            // them is ambiguous, for the same reason: a `String` is not an
+            // `Int` and there is no conversion between them, so no expression
+            // is unsure which meaning it wanted. What `+` has that they do not
+            // is a result that changes shape with the meaning. Joining is
             // common enough that spelling it any other way would be a tax on
-            // the most ordinary thing a program does, and the two meanings
-            // never overlap: a `String` is not an `Int` and there is no
-            // conversion between them, so no expression is ambiguous.
+            // the most ordinary thing a program does, which is the argument
+            // for this arm and not for theirs.
             Add if !unknown && (left == &Ty::Str || right == &Ty::Str) => {
                 self.assign(
                     right,
@@ -4385,6 +4388,32 @@ impl<'a> Checker<'a> {
     /// record has no ordering anyone could define, and accepting the comparison
     /// on the grounds that it might mean something one day is how a type
     /// checker ends up not checking.
+    ///
+    /// `String` is here on purpose rather than by leftover, though it started
+    /// as one: this rule replaced one that asked only that both sides agree,
+    /// so text was already comparable and narrowing kept it. It stays because
+    /// it is the only thing in the language that puts two pieces of text in an
+    /// order and never ties two of them that differ. `length` and `to_int`
+    /// both rank text and both tie, `ab` with `ba` and `007` with `7`, and
+    /// `to_int` refuses everything that does not spell a number; `Io.list`
+    /// sorts file names, which is a real order over text, but it wants a `Dir`,
+    /// two entries in the row and a written file per comparison, and it ties
+    /// whatever the filesystem does not tell apart. A record is refused and a
+    /// caller who wants two ranked passes the comparison in, which asks that
+    /// caller for nothing it does not already have to have, since the shape of
+    /// a record does not say which field decides the order and some of those
+    /// fields have no order of their own. Text is reachable as well:
+    /// `split(s, "")` hands back the characters. What a comparator written
+    /// over those cannot do is rank a character nobody typed into it, because
+    /// there is no code point and `to_int` only speaks about text that spells
+    /// a number, so the characters it turns into numbers are the ten digits
+    /// and no letter. Refusing here would not make ordering text impossible,
+    /// it would buy a hand-written alphabet per program that sorts names and a
+    /// silent tie for everything outside it.
+    ///
+    /// `design/02-syntax.md` carries the argument and what it rules out, and
+    /// the corpus carries the consequence nobody should meet by surprise,
+    /// which is that `"10" < "9"`.
     fn require_order(&mut self, ty: &Ty, at: Span, op: BinaryOp) {
         if matches!(self.widen(ty), Ty::Int | Ty::Str | Ty::Never) {
             return;
