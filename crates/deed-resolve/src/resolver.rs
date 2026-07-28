@@ -406,16 +406,24 @@ impl Resolver<'_> {
                     .with_secondary(previous_span, format!("the {} bound here", previous_kind.describe()))
                     .with_note("Deed does not allow shadowing, so that a name means one thing for the whole function"),
                 ),
-                ScopeKind::Module | ScopeKind::Prelude => self.diagnostics.push(
-                    Diagnostic::warning(
+                ScopeKind::Module | ScopeKind::Prelude => {
+                    let mut diagnostic = Diagnostic::warning(
                         codes::SHADOWED_DECLARATION,
                         self.file,
                         ident.span,
                         format!("`{}` hides a {}", ident.name, previous_kind.describe()),
                     )
-                    .with_primary_label("hides a declaration")
-                    .with_secondary(previous_span, "declared here"),
-                ),
+                    .with_primary_label("hides a declaration");
+                    // A builtin is declared nowhere, and its span says so by
+                    // being empty. This used to point at it anyway: the offsets
+                    // clamp, so `fn f(length: Int)` drew "declared here" under
+                    // the first byte of the file, which is the `module` line
+                    // and is not where `length` comes from.
+                    if !previous_span.is_empty() {
+                        diagnostic = diagnostic.with_secondary(previous_span, "declared here");
+                    }
+                    self.diagnostics.push(diagnostic);
+                }
             }
         }
 

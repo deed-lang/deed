@@ -24,9 +24,20 @@ impl Severity {
 }
 
 /// A span with something to say about it.
+///
+/// The file is `None` for the ordinary case, which is a label about the file
+/// the diagnostic was filed against, and that is most of them: 23 of the 31
+/// places this compiler builds one can only ever have a span from their own
+/// file in hand. `Some` is for the rest, where the thing worth pointing at is
+/// somewhere else, and until it existed those producers had to choose between
+/// drawing a caret over whatever happened to sit at those byte offsets in the
+/// wrong file and saying nothing. They all chose to say nothing, which is the
+/// right call and is still a label a reader does not get.
 #[derive(Clone, Debug)]
 pub struct Label {
     pub span: Span,
+    /// Where `span` is an offset into. `None` means the diagnostic's own file.
+    pub file: Option<FileId>,
     pub message: String,
 }
 
@@ -34,8 +45,23 @@ impl Label {
     pub fn new(span: Span, message: impl Into<String>) -> Self {
         Self {
             span,
+            file: None,
             message: message.into(),
         }
+    }
+
+    /// A label about a file other than the one the diagnostic is filed against.
+    pub fn in_file(file: FileId, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            span,
+            file: Some(file),
+            message: message.into(),
+        }
+    }
+
+    /// The file this label is about, given the diagnostic it belongs to.
+    pub fn file_or(&self, diagnostic: FileId) -> FileId {
+        self.file.unwrap_or(diagnostic)
     }
 }
 
@@ -128,6 +154,24 @@ impl Diagnostic {
     #[must_use]
     pub fn with_secondary(mut self, span: Span, message: impl Into<String>) -> Self {
         self.secondary.push(Label::new(span, message));
+        self
+    }
+
+    /// The same, about somewhere else.
+    ///
+    /// For the producer that has a span from another module in hand: a
+    /// precondition failure names a clause in the callee and is filed against
+    /// the caller, and a postcondition failure is the other way round. Passing
+    /// the diagnostic's own file here is harmless and says the same thing as
+    /// [`Self::with_secondary`].
+    #[must_use]
+    pub fn with_secondary_in(
+        mut self,
+        file: FileId,
+        span: Span,
+        message: impl Into<String>,
+    ) -> Self {
+        self.secondary.push(Label::in_file(file, span, message));
         self
     }
 

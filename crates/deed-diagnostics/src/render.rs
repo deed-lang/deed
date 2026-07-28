@@ -6,7 +6,7 @@
 //! text is a view.
 
 use crate::diagnostic::{Diagnostic, Label, SuggestedEdit};
-use crate::source::{SourceFile, SourceMap};
+use crate::source::{FileId, SourceFile, SourceMap};
 use crate::span::Span;
 
 /// Renders a diagnostic for a person, with the offending line and an underline.
@@ -14,13 +14,16 @@ pub fn render_human(map: &SourceMap, diagnostic: &Diagnostic) -> String {
     let file = map.file(diagnostic.file);
     let primary = file.location(diagnostic.primary.span.start);
 
+    // The gutter is wide enough for every line number that will be printed,
+    // whichever file each of them came out of. One width for the whole
+    // diagnostic, because two of them would make the carets stop lining up
+    // down the page.
     let widest_line = std::iter::once(primary.line)
-        .chain(
-            diagnostic
-                .secondary
-                .iter()
-                .map(|label| file.location(label.span.start).line),
-        )
+        .chain(diagnostic.secondary.iter().map(|label| {
+            map.file(label.file_or(diagnostic.file))
+                .location(label.span.start)
+                .line
+        }))
         .max()
         .unwrap_or(1);
     let gutter = widest_line.to_string().len();
@@ -43,7 +46,23 @@ pub fn render_human(map: &SourceMap, diagnostic: &Diagnostic) -> String {
 
     push_snippet(&mut out, file, &diagnostic.primary, '^', gutter);
     for label in &diagnostic.secondary {
-        push_snippet(&mut out, file, label, '-', gutter);
+        let label_file = map.file(label.file_or(diagnostic.file));
+        // A label about another file says so. Without this the caret moves
+        // files and the reader is told nothing, which is worse than the label
+        // being missing: they would read it as another line of the file above.
+        if label.file.is_some_and(|other| other != diagnostic.file) {
+            let at = label_file.location(label.span.start);
+            out.push_str(&format!(
+                "{:gutter$} |\n{:gutter$}--> {}:{}:{}\n",
+                "",
+                "",
+                label_file.name(),
+                at.line,
+                at.column,
+                gutter = gutter + 1
+            ));
+        }
+        push_snippet(&mut out, label_file, label, '-', gutter);
     }
 
     if !diagnostic.notes.is_empty() || diagnostic.fix.is_some() {
@@ -173,14 +192,14 @@ pub fn render_json(map: &SourceMap, diagnostic: &Diagnostic) -> String {
     push_field(
         &mut out,
         "primary",
-        &json_label(file, &diagnostic.primary),
+        &json_label(map, diagnostic.file, &diagnostic.primary),
         false,
     );
 
     let secondary: Vec<String> = diagnostic
         .secondary
         .iter()
-        .map(|label| json_label(file, label))
+        .map(|label| json_label(map, diagnostic.file, label))
         .collect();
     push_field(&mut out, "secondary", &json_array(&secondary), false);
 
@@ -222,9 +241,17 @@ fn push_field(out: &mut String, name: &str, value: &str, first: bool) {
     out.push_str(&format!("\"{name}\":{value}"));
 }
 
-fn json_label(file: &SourceFile, label: &Label) -> String {
+/// One label, with the file its span is an offset into.
+///
+/// The name is on every label rather than only on the ones that differ from
+/// the diagnostic's. A reader of this output would otherwise have to know the
+/// rule to work out what a missing key meant, and P7 says this form is the API
+/// rather than a view of the other one.
+fn json_label(map: &SourceMap, diagnostic: FileId, label: &Label) -> String {
+    let file = map.file(label.file_or(diagnostic));
     format!(
-        "{{\"span\":{},\"message\":{}}}",
+        "{{\"file\":{},\"span\":{},\"message\":{}}}",
+        json_string(file.name()),
         json_span(file, label.span),
         json_string(&label.message)
     )
@@ -360,5 +387,126 @@ mod tests {
         assert!(text.contains("help: call `to_string`"), "{text}");
         assert!(text.contains("| to_string(n)\n"), "{text}");
         assert!(!text.contains("| )\n"), "{text}");
+    }
+
+    /// Two files, so that a wrong answer cannot come out looking right.
+    fn two_files() -> (SourceMap, crate::source::FileId, crate::source::FileId) {
+        let mut map = SourceMap::new();
+        let caller = map.add("caller.deed", "module a\n\nfn f() -> Int {\n    g(1)\n}\n");
+        let callee = map.add(
+            "callee.deed",
+            "module b\n\n// a longer file, on purpose\n\nfn g(n: Int) -> Int\n  where\n    n > 1,\n{\n    n\n}\n",
+        );
+        (map, caller, callee)
+    }
+
+    /// Where a piece of text is, so a test says what it means rather than a
+    /// pair of byte offsets nobody can check by reading.
+    fn spanning(map: &SourceMap, file: crate::source::FileId, text: &str) -> Span {
+        let at = map
+            .file(file)
+            .text()
+            .find(text)
+            .unwrap_or_else(|| panic!("{text:?} should be in {}", map.file(file).name()))
+            as u32;
+        Span::new(at, at + text.len() as u32)
+    }
+
+    #[test]
+    fn a_label_about_another_file_says_which_file_it_is_about() {
+        // Before a label could carry a file, this label was either dropped or
+        // drawn over whatever sat at those byte offsets in the file above it.
+        // The header is the part that matters: without it the caret changes
+        // files and a reader is told nothing, so they read it as another line
+        // of the first one.
+        let (map, caller, callee) = two_files();
+        let d = Diagnostic::error(
+            "DEED9006",
+            caller,
+            spanning(&map, caller, "g(1)"),
+            "the call is wrong",
+        )
+        .with_primary_label("here")
+        .with_secondary_in(
+            callee,
+            spanning(&map, callee, "n > 1"),
+            "the clause it does not satisfy",
+        );
+
+        let text = render_human(&map, &d);
+        assert!(text.contains("--> caller.deed:4:5"), "{text}");
+        assert!(text.contains("--> callee.deed:7:5"), "{text}");
+        assert!(
+            text.contains("----- the clause it does not satisfy"),
+            "{text}"
+        );
+        // Drawn from the other file's text, not from the first one's bytes.
+        assert!(text.contains("7 |     n > 1,"), "{text}");
+    }
+
+    #[test]
+    fn a_label_about_the_diagnostics_own_file_says_nothing_extra() {
+        // The other 23 of the 31 places this compiler builds a secondary
+        // label. Adding a file to `Label` may not add a line to any of them.
+        let (map, caller, _) = two_files();
+        let d = Diagnostic::error(
+            "DEED9007",
+            caller,
+            spanning(&map, caller, "g(1)"),
+            "the call is wrong",
+        )
+        .with_primary_label("here")
+        .with_secondary(spanning(&map, caller, "fn f()"), "the function it is in");
+
+        let text = render_human(&map, &d);
+        assert_eq!(text.matches("-->").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn passing_the_diagnostics_own_file_reads_the_same_as_not_passing_one() {
+        // `with_secondary_in` is for a producer that has a file in hand and
+        // cannot always tell whether it is the same one. Making it say
+        // something different when the two agree would push that decision back
+        // onto every caller, which is the arrangement this replaced.
+        let (map, caller, _) = two_files();
+        let at = spanning(&map, caller, "g(1)");
+        let there = spanning(&map, caller, "fn f()");
+        let plain =
+            Diagnostic::error("DEED9008", caller, at, "problem").with_secondary(there, "there");
+        let spelled = Diagnostic::error("DEED9008", caller, at, "problem")
+            .with_secondary_in(caller, there, "there");
+
+        assert_eq!(render_human(&map, &plain), render_human(&map, &spelled));
+        assert_eq!(render_json(&map, &plain), render_json(&map, &spelled));
+    }
+
+    #[test]
+    fn json_says_which_file_every_label_is_about() {
+        // P7: this form is the API rather than a view of the human one. A
+        // reader of it cannot apply the rule that a missing key means the
+        // diagnostic's own file unless they already know the rule, so the name
+        // is on every label including the primary.
+        let (map, caller, callee) = two_files();
+        let d = Diagnostic::error(
+            "DEED9009",
+            caller,
+            spanning(&map, caller, "g(1)"),
+            "the call is wrong",
+        )
+        .with_secondary_in(
+            callee,
+            spanning(&map, callee, "n > 1"),
+            "the clause it does not satisfy",
+        );
+
+        let json = render_json(&map, &d);
+        assert!(
+            json.contains("\"primary\":{\"file\":\"caller.deed\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"secondary\":[{\"file\":\"callee.deed\""),
+            "{json}"
+        );
     }
 }

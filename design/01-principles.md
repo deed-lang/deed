@@ -116,6 +116,15 @@ text as the only machine-readable surface.
 Every diagnostic has a stable code, a machine-readable form, and a human-readable rendering
 built from the same data. The human rendering is a view, not the source of truth.
 
+A diagnostic is filed against one file, which is where it gets reported, and every label on it
+says which file it is about. Those are two different questions and for a while there was one
+answer to both: a label carried a span and no file, so a producer holding a span from another
+module had to choose between drawing a caret over whatever sat at those byte offsets in the
+wrong file and saying nothing at all. They all chose to say nothing, correctly, and a reader
+lost the half of the failure that was not local. A precondition failure is filed against the
+caller because that is whose bug it is, and the clause it broke is in the callee; a broken
+promise is filed against the function, and the call that caught it can be anywhere.
+
 `deed fix` is what this means in practice, the same way `deed fmt` is for P4. It applies every
 fix marked machine-applicable, re-checks, and repeats until nothing changes. It never
 applies a fix marked maybe-incorrect, and there is no flag to make it, because a flag for
