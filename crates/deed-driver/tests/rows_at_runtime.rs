@@ -27,6 +27,12 @@
 //! This is the same move as `crates/deed-driver/tests/fully_typed.rs`, one pass
 //! along. That one says no expression in a clean file is untyped. This one says
 //! nothing a clean file does is undeclared.
+//!
+//! Every assertion here but one is that some list of failures is empty, which
+//! is what an invariant nothing has violated looks like. The one at the bottom
+//! reads the sentence `DEED6010` would arrive as, by handing the run a row the
+//! checker would never have produced. Without it the words the next real hole
+//! will be reported in are words nobody has looked at.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -269,4 +275,91 @@ fn a_contract_may_read_state_without_declaring_it() {
         ),
     )]);
     assert!(said.is_empty(), "{}", rendered(&sources, &said));
+}
+
+/// The words `DEED6010` says, which nothing had ever read.
+///
+/// No program can reach them, and that is the invariant rather than a gap: the
+/// pass that writes a row is what makes every row true, so the only way to see
+/// this message is to hand the run a row that pass would never have produced.
+/// `logs` performs `Log.note` and declares it; the row it is held to here says
+/// it declares nothing, which is exactly the shape a hole in the effect
+/// checker would take.
+///
+/// Doctoring the input rather than the interpreter, because what is being read
+/// is the sentence the next real hole will arrive as, and every other test in
+/// this file asserts that some list of failures is empty. A list that is empty
+/// because the check is right and a list that is empty because the check never
+/// runs look the same from the outside.
+#[test]
+fn a_row_that_does_not_cover_what_ran_names_the_function_that_promised_it() {
+    let mut sources = SourceMap::new();
+    let file = sources.add(
+        "log.deed",
+        format!(
+            "{LOG}\
+             test \"it runs\" {{\n\
+             \x20 with Counted {{ seen: 0 }} {{\n\
+             \x20   assert logs(1) == 2\n\
+             \x20 }}\n\
+             }}\n"
+        ),
+    );
+    let checked = check_all(&sources, &[file]);
+    let one = &checked[0];
+    let errors: Vec<Diagnostic> = one
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .cloned()
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "this should have checked cleanly:\n{}",
+        rendered(&sources, &errors)
+    );
+
+    let named = one
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            deed_ast::Item::Function(function) if function.sig.name.name == "logs" => {
+                Some(function.sig.name.span)
+            }
+            _ => None,
+        })
+        .expect("`logs` should be one of the items");
+
+    let mut rows = one.rows();
+    let taken = rows.insert(named, Vec::new());
+    // Otherwise this passes on a `DeclaredRows` keyed by something else, and
+    // what it would then be reporting is a function with no row at all, which
+    // the interpreter deliberately says nothing about.
+    assert!(
+        taken.is_some_and(|row| !row.is_empty()),
+        "`logs` should have had a row to take away"
+    );
+
+    let mut program = Program::new();
+    program.add(one.file, &one.module, &one.resolutions, one.guards(), rows);
+
+    let failures: Vec<Diagnostic> = run_tests(&program, one.file)
+        .into_iter()
+        .filter_map(|outcome| outcome.failure)
+        .collect();
+    assert_eq!(
+        failures.len(),
+        1,
+        "one performed effect is one diagnostic:\n{}",
+        rendered(&sources, &failures)
+    );
+    assert_eq!(failures[0].code, deed_interp::codes::ROW_NOT_KEPT);
+
+    let text = render_human(&sources, &failures[0]);
+    assert!(
+        text.contains("this performs `Log.note`, and `logs` is running and did not declare it"),
+        "{text}"
+    );
+    assert!(text.contains("hole in the effect checker"), "{text}");
 }

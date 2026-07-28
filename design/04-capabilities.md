@@ -265,6 +265,11 @@ fallback to wherever the process happens to be. Defaulting to the working direct
 is not obviously right, and the reason it is not `--dir` or nothing is that a flag people
 have to type every time is a flag people type without reading.
 
+A `--dir` naming a path that cannot be opened is the same as no directory, and reaching
+`sys.files` there is the one runtime refusal in this document that a correct program can
+meet. The diagnostic says so and says where the root comes from, because the mistake it
+usually reports is a typo on the command line rather than anything in the file.
+
 Arguments arrive the same way. Everything after `--` on the command line goes to the program
 and nothing else does, so the runtime never reads its own invocation on the program's behalf.
 

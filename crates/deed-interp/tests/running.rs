@@ -3,6 +3,11 @@
 //! Most of these are failures, because a runtime that only works when
 //! everything is fine is not worth much, and because the failure messages are
 //! the product here as much as the evaluation is.
+//!
+//! These are about behaviour, and they read a message where the message is the
+//! behaviour. Whether every message the interpreter can produce is read by
+//! something is a different question and is answered in `messages.rs`, which
+//! also says which of them are read here rather than there.
 
 use deed_diagnostics::{SourceMap, render_human};
 use deed_interp::{DeclaredRows, Guards, Program, TestOutcome, codes, run_tests};
@@ -515,6 +520,11 @@ fn a_handler_missing_an_initial_value_says_which() {
          \x20 }\n\
          }\n",
     ));
+    // The code as well as the words. Swapping the constant at this one
+    // emission site used to leave the whole workspace green, which is half of
+    // a message being held: the wording is read here and nothing at all said
+    // which code it arrives under.
+    assert_eq!(failure.code, codes::NOT_RUNNABLE);
     assert!(render_human(&sources, &failure).contains("initial value for `limit`"));
 }
 
@@ -832,6 +842,108 @@ fn a_contract_on_an_imported_function_is_still_enforced() {
     assert_eq!(failure.code, codes::PRECONDITION_FAILED);
     let text = render_human(&sources, &failure);
     assert!(text.contains("halve"), "{text}");
+}
+
+/// The file, not only the offsets.
+///
+/// A `Diagnostic` carries one file for the whole of it and a `Span` carries
+/// none, so a failure built while the callee's module is current but pointing
+/// at the caller's byte offsets underlines whatever happens to sit at those
+/// offsets in the wrong file. That is the shape of the worst part of #257, a
+/// contract failure landing inside a callee that had declared everything
+/// correctly, and it was still live for this one.
+///
+/// The two files are deliberately different lengths, so that reading the
+/// caller's offsets out of the callee's text cannot land on the same words by
+/// accident.
+#[test]
+fn a_precondition_that_fails_across_a_module_boundary_underlines_the_call() {
+    let (sources, failure) = expect_failure_together(&[
+        "module a\n\nuse b.{halve}\n\ntest \"breaks it\" {\n  assert halve(3) == 1\n}\n",
+        "module b\n\n// Longer than the file that calls into it, on purpose.\n\n\
+         fn halve(n: Int) -> Int\n  where\n    n % 2 == 0,\n{\n  n / 2\n}\n",
+    ]);
+    assert_eq!(failure.code, codes::PRECONDITION_FAILED);
+
+    let file = sources.file(failure.file);
+    let span = failure.primary.span;
+    let underlined = &file.text()[span.start as usize..span.end as usize];
+    assert_eq!(underlined, "halve(3)", "underlined in `{}`", file.name());
+
+    // And the clause is not shown at all. It lives in the other file, a label
+    // cannot say which file it means, and a caret drawn over the wrong bytes
+    // is worse than no caret. Giving `Label` a file of its own is the real
+    // answer and belongs to `deed-diagnostics` rather than here.
+    assert!(
+        failure.secondary.is_empty(),
+        "{}",
+        render_human(&sources, &failure)
+    );
+}
+
+/// The same rule, for the depth limit.
+///
+/// The span is the call and the check runs after the callee's module has been
+/// made current, so this had the same fault and needed the same fix. Mutual
+/// recursion is what makes it visible: with both ends in one file there is
+/// nothing to get wrong.
+#[test]
+fn a_run_that_goes_too_deep_across_a_module_boundary_underlines_a_call() {
+    let (sources, failure) = expect_failure_together(&[
+        "module a\n\nuse b.{descend}\n\n\
+         fn ascend(n: Int) -> Int\n  uses\n    Diverge,\n{\n  descend(n + 1)\n}\n\n\
+         test \"deep\" {\n  assert ascend(0) == 0\n}\n",
+        "module b\n\n// Longer than the file that calls into it, on purpose.\n\n\
+         use a.{ascend}\n\n\
+         fn descend(n: Int) -> Int\n  uses\n    Diverge,\n{\n  ascend(n + 1)\n}\n",
+    ]);
+    assert_eq!(failure.code, codes::TOO_DEEP);
+
+    let file = sources.file(failure.file);
+    let span = failure.primary.span;
+    let underlined = &file.text()[span.start as usize..span.end as usize];
+    assert!(
+        underlined == "descend(n + 1)" || underlined == "ascend(n + 1)",
+        "underlined `{underlined}` in `{}`",
+        file.name()
+    );
+}
+
+/// The other half of the same rule.
+///
+/// A postcondition failure is the function's bug, so the primary stays on the
+/// clause and the file stays the callee's. What moves is the `called from
+/// here` label, which carries a span and no file of its own: when the call is
+/// in another module it would be drawn over whatever sits at those offsets
+/// here, so it is left off instead.
+#[test]
+fn a_postcondition_that_fails_across_a_module_boundary_leaves_the_call_out() {
+    let (sources, failure) = expect_failure_together(&[
+        "module a\n\nuse b.{promise}\n\ntest \"breaks it\" {\n  assert promise(1) == 1\n}\n",
+        "module b\n\n// Longer than the file that calls into it, on purpose.\n\n\
+         fn promise(n: Int) -> Int\n  ensures\n    ok => result > 100,\n{\n  n\n}\n",
+    ]);
+    assert_eq!(
+        failure.code,
+        codes::POSTCONDITION_FAILED,
+        "{}",
+        render_human(&sources, &failure)
+    );
+
+    let file = sources.file(failure.file);
+    let span = failure.primary.span;
+    let underlined = &file.text()[span.start as usize..span.end as usize];
+    assert_eq!(
+        underlined,
+        "ok => result > 100",
+        "underlined in `{}`",
+        file.name()
+    );
+    assert!(
+        failure.secondary.is_empty(),
+        "{}",
+        render_human(&sources, &failure)
+    );
 }
 
 #[test]

@@ -507,12 +507,31 @@ fn opening_narrows_and_there_is_no_way_back() {
 fn a_program_given_no_directory_has_none() {
     // `sys.console` still works. Only the part nothing granted is missing, and
     // the runtime does not quietly substitute the working directory.
-    let (_, run) = run(&report(
+    let (sources, run) = run(&report(
         &["write", "read"],
         "  match Io.read(sys.files, \"anything\") {\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }",
     ));
     let failure = run.result.expect_err("there is no directory to reach");
     assert_eq!(failure.code, deed_interp::codes::NOT_RUNNABLE);
+
+    // The one message in the interpreter a reader meets on a file that checked
+    // and a program that is right, which is why it is read here rather than
+    // only counted. It used to be phrased as a gap in the interpreter, so
+    // whoever pointed `deed run --dir` at a directory that is not there went
+    // looking in the compiler for their own typo.
+    let text = render_human(&sources, &failure);
+    assert!(
+        text.contains("this program was not given a directory"),
+        "{text}"
+    );
+    // The whole note, not the tail of it. The mistake this usually reports is
+    // a typo on the command line, so the sentence has to say where the root
+    // comes from before it says what sets it.
+    assert!(
+        text.contains("`sys.files` hands out the directory the run was rooted at"),
+        "{text}"
+    );
+    assert!(text.contains("`deed run` roots it at `--dir`"), "{text}");
 }
 
 #[test]
