@@ -10,6 +10,16 @@
 //! that fails while running is not a different kind of problem from one that
 //! fails while being checked, and P7 does not stop applying because the
 //! compiler finished.
+//!
+//! What this refuses falls into three kinds, and telling them apart is most of
+//! what a runtime message has to do. Most of them are shapes `deed check`
+//! turns down, so a run that meets one has been handed a file nobody checked
+//! or has found a hole in the check. A few are the interpreter's own unfinished
+//! work, on programs the checker accepts. And a few are neither: a contract
+//! broken, arithmetic with no answer, a directory the run was never given.
+//! Every message anything can reach is read by a test, and
+//! `crates/deed-interp/tests/messages.rs` is where the reading is written
+//! down, along with the argument for keeping the two arms nothing can reach.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -280,6 +290,18 @@ fn is_contract_failure(diagnostic: &Diagnostic) -> bool {
 /// Whether a runtime variant is the one a pattern named.
 fn variant_is(variant: &VariantValue, id: &(Rc<str>, String)) -> bool {
     variant.origin == id.0 && variant.name == id.1
+}
+
+/// How a unary operator was written.
+///
+/// Here rather than on [`UnaryOp`], because the one thing that needs it is a
+/// diagnostic and `BinaryOp::as_str` earns its place in the syntax tree by
+/// being what the formatter prints.
+fn unary_op_as_str(op: UnaryOp) -> &'static str {
+    match op {
+        UnaryOp::Neg => "-",
+        UnaryOp::Not => "!",
+    }
 }
 
 /// Walks one module's items once, so lookups during a run are by definition.
@@ -695,7 +717,8 @@ impl<'a> Interp<'a> {
         args: Vec<(Value, Span)>,
         span: Span,
     ) -> Result<Value, Box<Diagnostic>> {
-        match self.call(function, args, span, None) {
+        let file = self.file();
+        match self.call(function, args, span, file, None) {
             Ok(value) | Err(Signal::Return(value)) => Ok(value),
             Err(Signal::Fail(diagnostic)) => Err(diagnostic),
         }
@@ -738,7 +761,49 @@ impl<'a> Interp<'a> {
         Signal::Fail(Box::new(diagnostic))
     }
 
+    /// Something the running program did that `deed check` refuses.
+    ///
+    /// Thirty-one of the thirty-four shapes that arrive here are shapes the
+    /// type checker turns down: `+` on an Int and a Bool, a `for` over
+    /// something that is not a list, a field on a number, a call with the
+    /// wrong arity. The note used to say the opposite, that this was a gap in
+    /// the interpreter rather than something the language forbids, so a reader
+    /// who believed it would go looking for a missing feature when what they
+    /// have is an unchecked file or a hole in the check.
+    ///
+    /// The "yet" went with it, for the same reason. It promised work that is
+    /// not coming: the answer to every one of these is a diagnostic from an
+    /// earlier pass, and there is nothing here left to implement.
+    ///
+    /// The three shapes that are not the checker's business do not come
+    /// through here. Two are the interpreter's own gap and say so through
+    /// [`Interp::interpreter_gap`]; the third is a call into a module the
+    /// interpreter was never handed, which is neither.
     fn not_runnable(&self, span: Span, what: &str) -> Signal {
+        self.fail(
+            Diagnostic::error(
+                codes::NOT_RUNNABLE,
+                self.file(),
+                span,
+                format!("the interpreter cannot run {what}"),
+            )
+            .with_primary_label("not runnable")
+            .with_note(
+                "nothing that passes `deed check` reaches this, so either this file was not checked or the check has a hole",
+            ),
+        )
+    }
+
+    /// Something the language allows and the interpreter has not implemented.
+    ///
+    /// Kept apart from [`Interp::not_runnable`] because the note is the
+    /// opposite claim, and only two shapes can honestly make it. Both are the
+    /// same gap: handler state is read through whichever handler is innermost
+    /// when the read happens, so a closure written inside a handler operation
+    /// and called after that operation returned looks in the wrong table, or
+    /// in no table at all. `deed check` accepts both, which is what makes them
+    /// the interpreter's rather than the checker's.
+    fn interpreter_gap(&self, span: Span, what: &str) -> Signal {
         self.fail(
             Diagnostic::error(
                 codes::NOT_RUNNABLE,
@@ -747,7 +812,36 @@ impl<'a> Interp<'a> {
                 format!("the interpreter cannot run {what} yet"),
             )
             .with_primary_label("not runnable")
-            .with_note("this is a gap in the interpreter, not something the language forbids"),
+            .with_note(
+                "this is a gap in the interpreter rather than something the language forbids; please report it",
+            ),
+        )
+    }
+
+    /// A call whose body is in a module the interpreter was never given.
+    ///
+    /// Neither a gap in the interpreter nor a hole in the check: the name
+    /// resolved, so the module is known and the call is honest, and what is
+    /// missing is code the caller of this library did not hand over. That is
+    /// what `crates/deed-interp/src/codes.rs` has said about it all along,
+    /// while the message itself carried the note saying the language permits
+    /// something the interpreter has not got round to.
+    ///
+    /// `file` is passed in because one of the two callers has already made the
+    /// callee's module current, and `span` is the caller's either way.
+    fn no_code_for(&self, file: FileId, span: Span, def: DefId) -> Signal {
+        let name = self.resolutions().def(def).name.clone();
+        self.fail(
+            Diagnostic::error(
+                codes::NOT_RUNNABLE,
+                file,
+                span,
+                format!("`{name}` was imported from a module whose code was not handed to the interpreter"),
+            )
+            .with_primary_label("no body to run")
+            .with_note(
+                "every module a program calls into has to be in the `Program`, and this one was resolved without being added",
+            ),
         )
     }
 
@@ -790,7 +884,7 @@ impl<'a> Interp<'a> {
                 }
 
                 let receiver_value = self.eval(receiver)?;
-                self.field(&receiver_value, name)
+                self.field(&receiver_value, receiver.span(), name)
             }
 
             Expr::Call { callee, args, span } => self.call_expr(callee, args, *span),
@@ -815,7 +909,14 @@ impl<'a> Interp<'a> {
                         .map(Value::Int)
                         .ok_or_else(|| self.overflow(*span)),
                     (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
-                    _ => Err(self.not_runnable(*span, "this operator on this value")),
+                    // Named, like the binary case two arms down. "this
+                    // operator on this value" told the reader nothing the
+                    // caret had not already told them, and the sibling
+                    // handling `1 + true` names both sides.
+                    (op, other) => Err(self.not_runnable(
+                        *span,
+                        &format!("`{}` on {}", unary_op_as_str(*op), other.describe()),
+                    )),
                 }
             }
 
@@ -1081,14 +1182,25 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// Reads handler state, out of whichever handler is innermost.
+    ///
+    /// Both refusals here are the same gap rather than two, and both are
+    /// reached by a program `deed check` accepts. A closure written inside a
+    /// handler operation captures the frame but not the handler, so calling it
+    /// after the operation returned looks in no handler at all, and calling it
+    /// inside another handler's operation looks in that one's table. When the
+    /// two handlers happen to share a state name there is no refusal and no
+    /// message: the closure quietly reads the other handler's number. That is
+    /// an interpreter bug rather than a wording problem, and it is reported
+    /// separately.
     fn read_state(&self, def: DefId, span: Span) -> Eval<Value> {
         let Some(index) = self.inside_handler.last().copied() else {
-            return Err(self.not_runnable(span, "handler state from outside a handler"));
+            return Err(self.interpreter_gap(span, "handler state from outside a handler"));
         };
         let name = self.state_name(def);
         match self.handlers[index].state.get(&name) {
             Some(value) => Ok(value.clone()),
-            None => Err(self.not_runnable(span, "handler state that was never initialised")),
+            None => Err(self.interpreter_gap(span, "handler state that was never initialised")),
         }
     }
 
@@ -1101,7 +1213,7 @@ impl<'a> Interp<'a> {
             .map(|instance| instance.state.clone())
     }
 
-    fn field(&self, value: &Value, name: &Ident) -> Eval<Value> {
+    fn field(&self, value: &Value, receiver: Span, name: &Ident) -> Eval<Value> {
         // `System` carries narrower capabilities. Taking one out is how
         // authority gets delegated, and it only ever narrows.
         if let Value::Capability(Capability::System) = value {
@@ -1113,9 +1225,23 @@ impl<'a> Interp<'a> {
                     // Nothing granted a directory, so there is not one to hand
                     // out. Inventing the working directory here would be the
                     // ambient authority the whole design is against.
-                    None => Err(self.not_runnable(
-                        name.span,
-                        "`sys.files`, because this program was not given a directory",
+                    //
+                    // The one message in this crate that a reader meets on a
+                    // file that checked and a program that is right. It used
+                    // to be phrased as a gap in the interpreter, which sent
+                    // whoever typed `deed run --dir` at a directory that is
+                    // not there looking in the compiler for their own typo.
+                    None => Err(self.fail(
+                        Diagnostic::error(
+                            codes::NOT_RUNNABLE,
+                            self.file(),
+                            name.span,
+                            "this program was not given a directory",
+                        )
+                        .with_primary_label("there is no `Dir` to hand out")
+                        .with_note(
+                            "`sys.files` hands out the directory the run was rooted at; `deed run` roots it at `--dir`, or at the working directory when there is no `--dir`, and a path it cannot open leaves the program with none",
+                        ),
                     )),
                 },
                 other => Err(self.not_runnable(
@@ -1128,9 +1254,13 @@ impl<'a> Interp<'a> {
         let fields = match value {
             Value::Record(fields) => &**fields,
             Value::Variant(variant) => &variant.fields,
+            // The receiver rather than the name. Nothing is wrong with the
+            // name: a value of the right shape would have had it, and what
+            // the reader has to look at is the thing that turned out not to
+            // be that shape.
             other => {
                 return Err(
-                    self.not_runnable(name.span, &format!("field access on {}", other.describe()))
+                    self.not_runnable(receiver, &format!("field access on {}", other.describe()))
                 );
             }
         };
@@ -1262,7 +1392,8 @@ impl<'a> Interp<'a> {
                 let Some(function) = self.function(def) else {
                     return Err(self.not_runnable(callee.span(), "this call"));
                 };
-                self.call(function, values, span, None)
+                let here = self.file();
+                self.call(function, values, span, here, None)
             }
             DefKind::EffectOp => self.dispatch(def, values, span),
             DefKind::Builtin => {
@@ -1367,19 +1498,19 @@ impl<'a> Interp<'a> {
             // call runs with that module current. Reading the callee's names
             // out of the caller's scope would be a class of bug that does not
             // announce itself.
-            DefKind::Import => match self.imported_function(def) {
-                Some((module, function)) => {
-                    let caller = self.current;
-                    self.current = module;
-                    let result = self.call(function, values, span, None);
-                    self.current = caller;
-                    result
+            DefKind::Import => {
+                let here = self.file();
+                match self.imported_function(def) {
+                    Some((module, function)) => {
+                        let caller = self.current;
+                        self.current = module;
+                        let result = self.call(function, values, span, here, None);
+                        self.current = caller;
+                        result
+                    }
+                    None => Err(self.no_code_for(here, callee.span(), def)),
                 }
-                None => Err(self.not_runnable(
-                    callee.span(),
-                    "a call into a module whose code was not handed to the interpreter",
-                )),
-            },
+            }
             _ => Err(self.not_runnable(callee.span(), "this call")),
         }
     }
@@ -1389,6 +1520,13 @@ impl<'a> Interp<'a> {
     /// The module is part of what was handed over, because a definition is an
     /// index into one module's table and reading the callee's names out of the
     /// caller's scope is a class of bug that does not announce itself.
+    ///
+    /// Nothing reaches the refusals below, which want a function value whose
+    /// definition is an import with no body behind it, so swapping the file
+    /// they are filed against leaves every test green. The caller's file is
+    /// still threaded through rather than read off `self`, because it is the
+    /// same rule as the one [`Interp::call_body`] is held to, and a site that
+    /// only has to be right sometimes is a site that stops being right.
     fn call_declared(
         &mut self,
         module: usize,
@@ -1398,24 +1536,32 @@ impl<'a> Interp<'a> {
         callee_span: Span,
     ) -> Eval<Value> {
         let caller = self.current;
+        let here = self.file();
         self.current = module;
 
+        // Every span in the failures below is the caller's, so the caller's
+        // module goes back on the front before one is built. `self.file()` is
+        // whatever is current, and a diagnostic filed against the callee with
+        // the caller's byte offsets underlines a line in the wrong file.
         let result = match self.kind_of(def) {
             DefKind::Function => match self.function(def) {
-                Some(function) => self.call(function, args, span, None),
-                None => Err(self.not_runnable(callee_span, "this call")),
+                Some(function) => self.call(function, args, span, here, None),
+                None => {
+                    self.current = caller;
+                    Err(self.not_runnable(callee_span, "this call"))
+                }
             },
             DefKind::Import => match self.imported_function(def) {
                 Some((module, function)) => {
                     self.current = module;
-                    self.call(function, args, span, None)
+                    self.call(function, args, span, here, None)
                 }
-                None => Err(self.not_runnable(
-                    callee_span,
-                    "a call into a module whose code was not handed to the interpreter",
-                )),
+                None => Err(self.no_code_for(here, callee_span, def)),
             },
-            _ => Err(self.not_runnable(callee_span, "this call")),
+            _ => {
+                self.current = caller;
+                Err(self.not_runnable(callee_span, "this call"))
+            }
         };
 
         self.current = caller;
@@ -1487,8 +1633,9 @@ impl<'a> Interp<'a> {
         };
 
         let caller = self.current;
+        let here = self.file();
         self.current = home;
-        let result = self.call(operation_decl, args, span, Some(index));
+        let result = self.call(operation_decl, args, span, here, Some(index));
         self.current = caller;
         result
     }
@@ -1725,6 +1872,21 @@ impl<'a> Interp<'a> {
         args: Vec<(Value, Span)>,
         span: Span,
     ) -> Eval<Value> {
+        // Before the module switch below. `span` is the call, which was
+        // written here, and once `self.current` is the closure's module
+        // `self.file()` is a different file for the same bytes.
+        //
+        // Unlike the same fix on [`Interp::call`], nothing can currently see
+        // the difference, and it is worth saying why rather than leaving the
+        // next reader to wonder. A closure cannot name itself, so a recursion
+        // through one has to fetch it again at every turn, and that fetch is a
+        // call one frame deeper than the closure call it feeds. The depth
+        // limit therefore always trips on the fetch first. The two paths say
+        // the same thing anyway, because the one that says something else is
+        // the one that will be wrong when a closure can be reached without a
+        // call in front of it.
+        let call_file = self.file();
+
         let Some(&Closure {
             module,
             params,
@@ -1748,7 +1910,9 @@ impl<'a> Interp<'a> {
         let caller = self.current;
         self.current = module;
         self.frames.push(frame);
-        let result = self.too_deep(span).and_then(|()| self.eval(body));
+        let result = self
+            .too_deep(call_file, span)
+            .and_then(|()| self.eval(body));
         self.frames.pop();
         self.current = caller;
         result
@@ -1759,6 +1923,7 @@ impl<'a> Interp<'a> {
         function: &'a FnDecl,
         args: Vec<(Value, Span)>,
         call_span: Span,
+        call_file: FileId,
         handler: Option<usize>,
     ) -> Eval<Value> {
         let plan = self.plan_of(function);
@@ -1781,8 +1946,8 @@ impl<'a> Interp<'a> {
         }
 
         let result = self
-            .too_deep(call_span)
-            .and_then(|()| self.call_body(function, call_span, plan.captures));
+            .too_deep(call_file, call_span)
+            .and_then(|()| self.call_body(function, call_span, call_file, plan.captures));
 
         if handler.is_some() {
             self.inside_handler.pop();
@@ -1941,14 +2106,19 @@ impl<'a> Interp<'a> {
     /// return, so something has to answer for the case where it does not, and
     /// a runner that can be taken down by the program it is running is a runner
     /// nobody can point at an unfamiliar file.
-    fn too_deep(&self, span: Span) -> Eval<()> {
+    ///
+    /// `file` is the caller's rather than `self.file()`. The span is the call,
+    /// and by the time this runs the current module is the callee's, so a
+    /// recursion that crosses a module boundary used to be reported at the
+    /// caller's byte offsets inside the callee's file.
+    fn too_deep(&self, file: FileId, span: Span) -> Eval<()> {
         if self.frames.len() <= MAX_DEPTH {
             return Ok(());
         }
         Err(self.fail(
             Diagnostic::error(
                 codes::TOO_DEEP,
-                self.file(),
+                file,
                 span,
                 format!("this call went more than {MAX_DEPTH} deep"),
             )
@@ -1965,23 +2135,41 @@ impl<'a> Interp<'a> {
     /// A function with no `ensures` and no `old` or `unchanged` in it has
     /// nothing to snapshot for, and snapshotting anyway copied every installed
     /// handler's state on every call in a program that installs one.
-    fn call_body(&mut self, function: &'a FnDecl, call_span: Span, captures: bool) -> Eval<Value> {
+    ///
+    /// `call_file` is the caller's. See [`Interp::too_deep`]: a precondition
+    /// failure is the caller's bug and points at the call, so it has to be
+    /// filed against the file that call was written in.
+    fn call_body(
+        &mut self,
+        function: &'a FnDecl,
+        call_span: Span,
+        call_file: FileId,
+        captures: bool,
+    ) -> Eval<Value> {
         // Preconditions first. A failure here is the caller's fault, so the
         // diagnostic points at the call and only mentions the clause.
         for requirement in &function.contract.requires {
             if !self.in_a_contract(|me| me.condition(requirement))? {
                 let name = function.sig.name.name.clone();
-                return Err(self.fail(
-                    Diagnostic::error(
-                        codes::PRECONDITION_FAILED,
-                        self.file(),
-                        call_span,
-                        format!("this call does not satisfy what `{name}` requires"),
-                    )
-                    .with_primary_label("precondition not met")
-                    .with_secondary(requirement.span(), "the clause that failed")
-                    .with_note("a precondition failure is a bug in the caller"),
-                ));
+                let mut diagnostic = Diagnostic::error(
+                    codes::PRECONDITION_FAILED,
+                    call_file,
+                    call_span,
+                    format!("this call does not satisfy what `{name}` requires"),
+                )
+                .with_primary_label("precondition not met")
+                .with_note("a precondition failure is a bug in the caller");
+                // A label carries a span and no file, so one pointing into
+                // another module lands on whatever happens to be at those
+                // byte offsets in this one. The clause is worth showing when
+                // it can be shown correctly and worth nothing at all when it
+                // cannot. Giving `Label` a file of its own is the real answer
+                // and is a change to `deed-diagnostics` rather than to this.
+                if call_file == self.file() {
+                    diagnostic =
+                        diagnostic.with_secondary(requirement.span(), "the clause that failed");
+                }
+                return Err(self.fail(diagnostic));
             }
         }
 
@@ -2002,7 +2190,8 @@ impl<'a> Interp<'a> {
             }
         };
 
-        let obligations = self.in_a_contract(|me| me.check_ensures(function, &value, call_span));
+        let obligations =
+            self.in_a_contract(|me| me.check_ensures(function, &value, call_span, call_file));
         if captures {
             self.olds.pop();
             self.entry_states.pop();
@@ -2045,7 +2234,13 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
-    fn check_ensures(&mut self, function: &'a FnDecl, value: &Value, call_span: Span) -> Eval<()> {
+    fn check_ensures(
+        &mut self,
+        function: &'a FnDecl,
+        value: &Value,
+        call_span: Span,
+        call_file: FileId,
+    ) -> Eval<()> {
         // The outcome is whatever the function actually produced. A function
         // that does not return a `Result` cannot fail, so everything it does is
         // an `ok` outcome.
@@ -2071,19 +2266,21 @@ impl<'a> Interp<'a> {
 
             if !self.condition(&obligation.condition)? {
                 let name = function.sig.name.name.clone();
-                return Err(self.fail(
-                    Diagnostic::error(
-                        codes::POSTCONDITION_FAILED,
-                        self.file(),
-                        obligation.span,
-                        format!("`{name}` did not keep this promise"),
-                    )
-                    .with_primary_label("postcondition not met")
-                    .with_secondary(call_span, "called from here")
-                    .with_note(
-                        "a postcondition failure is a bug in the function, not in the caller",
-                    ),
-                ));
+                let mut diagnostic = Diagnostic::error(
+                    codes::POSTCONDITION_FAILED,
+                    self.file(),
+                    obligation.span,
+                    format!("`{name}` did not keep this promise"),
+                )
+                .with_primary_label("postcondition not met")
+                .with_note("a postcondition failure is a bug in the function, not in the caller");
+                // The other half of the same rule as the precondition above:
+                // the clause is here and the call may not be, and a label
+                // cannot say which file it means.
+                if call_file == self.file() {
+                    diagnostic = diagnostic.with_secondary(call_span, "called from here");
+                }
+                return Err(self.fail(diagnostic));
             }
         }
         Ok(())

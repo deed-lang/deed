@@ -415,7 +415,15 @@ fn a_precondition_nothing_can_satisfy_is_reported_rather_than_passed() {
     let failure = outcome.failure.as_ref().expect("should not look green");
     assert_eq!(failure.code, codes::NOT_ENOUGH_CASES);
     assert_eq!(outcome.cases, 0);
-    assert!(render_human(&sources, failure).contains("worse than no property"));
+    let text = render_human(&sources, failure);
+    // The headline as well as the note. The note says why the warning is worth
+    // having; only the headline says what actually happened, and it was the
+    // one part of this diagnostic nothing had ever looked at.
+    assert!(
+        text.contains("only 0 of 100 generated inputs got past the preconditions"),
+        "{text}"
+    );
+    assert!(text.contains("worse than no property"), "{text}");
 }
 
 // -- generation ------------------------------------------------------------
