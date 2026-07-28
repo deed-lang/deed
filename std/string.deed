@@ -13,7 +13,7 @@
 // Everything walks. `slice` is a fold over the characters, `index_of` is a
 // `split`, and a program that holds enough text for that to matter wants a
 // different representation rather than a different language. That is the same
-// answer `examples/table.deed` gives about lookups.
+// answer `std/table` gives about lookups.
 
 module std/string
 

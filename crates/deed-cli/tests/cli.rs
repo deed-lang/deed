@@ -1166,6 +1166,28 @@ fn a_program_anywhere_can_import_the_shipped_list_library() {
 }
 
 #[test]
+fn a_program_anywhere_can_import_the_shipped_table_library() {
+    // The same move as the list library, and the one that carried tests with
+    // it. A keyed collection is not in the language, so a program counting by
+    // key needs this and used to need its own copy of `examples/table.deed`.
+    let scratch = Scratch::new("shipped-table");
+    let file = scratch.write(
+        "report.deed",
+        "module scratch/report\n\n\
+         use std/table.{get, or_else, set}\n\n\
+         test \"the library is there\" {\n\
+         \x20 let counts = set([], \"a\", or_else([], \"a\", 0) + 1)\n\
+         \x20 assert get(counts, \"a\") == ok(1)\n\
+         \x20 assert or_else(counts, \"b\", 0) == 0\n\
+         }\n",
+    );
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
+}
+
+#[test]
 fn a_shipped_module_is_context_rather_than_subject() {
     // Its tests are not the ones you asked about, the same way an imported
     // file's are not. Otherwise every program that used the library would

@@ -3177,9 +3177,8 @@ impl<'a> Checker<'a> {
     /// That is where the similarity ends, and the difference matters enough
     /// to write down. `at`, `push` and `repeat` are here for a mechanical
     /// reason only: they are polymorphic in the element and the table holds
-    /// concrete types. Nothing stops anyone writing them, and
-    /// `examples/table.deed` writes the `at`-shaped one. They are not
-    /// exempt from anything.
+    /// concrete types. Nothing stops anyone writing them, and `std/table`
+    /// writes the `at`-shaped one. They are not exempt from anything.
     ///
     /// `ok` and `err`, typed further down, are the ones that are. They
     /// return an error type that appears nowhere in their arguments, which

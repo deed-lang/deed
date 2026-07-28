@@ -17,11 +17,10 @@
 // contain both spellings of a filter, which is the only reason it showed.
 //
 // The third was neither. Counting by key took two walks and a branch, and the
-// answer was not a keyed collection in the language: it is
-// `examples/table.deed`, written in Deed, which the compiler knows nothing
-// about. `or_else` makes adding the first one and bumping a later one the same
-// sentence. The test for the prelude is whether something can be written here,
-// and this one could.
+// answer was not a keyed collection in the language: it is `std/table`,
+// written in Deed, which the compiler knows nothing about. `or_else` makes
+// adding the first one and bumping a later one the same sentence. The test for
+// the prelude is whether something can be written here, and this one could.
 //
 // One awkward shape is left and it is staying. `placed` sorts by walking three
 // times, because there is no `insert` and no way to join two lists except by
@@ -45,7 +44,7 @@
 
 module examples/logs
 
-use examples/table.{Entry, Table, or_else, set}
+use std/table.{Entry, Table, or_else, set}
 
 // What this program counts: a key, and how many times it turned up. Naming it
 // is why the signatures below fit on one line, and the name it is built from
