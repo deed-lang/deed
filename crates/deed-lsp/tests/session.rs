@@ -638,14 +638,21 @@ fn hovering_over_nothing_is_null_rather_than_an_empty_tooltip() {
 
 // -- the tier, where the reader is ------------------------------------------
 
-/// One file carrying one obligation of each kind.
+/// One file carrying one obligation of each kind, and one contract of each
+/// shape.
 ///
-/// `deed check target/tmp/tier_probe.deed --obligations` on this text reports
-/// three: `halve ensures ok` is tested, `Positive` on the call is guarded, and
-/// `halve requires` at the same call is proven. The last two sit on the same
-/// span, which is why a hover reports every obligation covering a position
-/// rather than picking one.
+/// `deed check --obligations` on this text reports three: `halve ensures ok`
+/// is tested, `Positive` on the call is guarded, and `halve requires` at the
+/// same call is proven. The last two sit on the same span, which is why a
+/// hover reports every obligation covering a position rather than picking one.
+///
+/// `announce` is the one that writes all three contract clauses. It performs
+/// an effect and nothing calls it, so `use_it` stays pure and stays the one
+/// with no contract at all.
 const CONTRACTS: &str = "module a\n\n\
+     effect Log {\n\
+     \x20   fn note(line: String) -> ()\n\
+     }\n\n\
      type Positive = Int where value > 0\n\n\
      fn halve(n: Int) -> Int\n\
      \x20 where\n\
@@ -657,6 +664,17 @@ const CONTRACTS: &str = "module a\n\n\
      }\n\n\
      fn use_it() -> Positive {\n\
      \x20   halve(10)\n\
+     }\n\n\
+     fn announce(line: String) -> Int\n\
+     \x20 where\n\
+     \x20   length(line) > 0,\n\
+     \x20 uses\n\
+     \x20   Log.note,\n\
+     \x20 ensures\n\
+     \x20   ok => result > 0,\n\
+     {\n\
+     \x20   Log.note(line)\n\
+     \x20   1\n\
      }\n";
 
 #[test]
@@ -667,7 +685,7 @@ fn hovering_over_a_call_says_which_tier_its_precondition_landed_in() {
     let sent = session(&[
         request(1, "initialize"),
         did_open(URI, CONTRACTS),
-        at(2, "textDocument/hover", URI, 14, 4),
+        at(2, "textDocument/hover", URI, 18, 4),
     ]);
 
     let text = hover_text(&sent[2]);
@@ -682,7 +700,7 @@ fn a_position_carrying_two_obligations_reports_both_of_them() {
     let sent = session(&[
         request(1, "initialize"),
         did_open(URI, CONTRACTS),
-        at(2, "textDocument/hover", URI, 14, 4),
+        at(2, "textDocument/hover", URI, 18, 4),
     ]);
 
     let text = hover_text(&sent[2]);
@@ -698,7 +716,7 @@ fn hovering_over_an_ensures_clause_says_it_is_tested() {
     let sent = session(&[
         request(1, "initialize"),
         did_open(URI, CONTRACTS),
-        at(2, "textDocument/hover", URI, 8, 6),
+        at(2, "textDocument/hover", URI, 12, 6),
     ]);
 
     let text = hover_text(&sent[2]);
@@ -708,12 +726,36 @@ fn hovering_over_an_ensures_clause_says_it_is_tested() {
 #[test]
 fn hovering_over_a_function_name_shows_its_contract() {
     // The review surface, quoted from the file. The type line above it says
-    // what goes in and comes out and says nothing about what is required or
-    // guaranteed, which is the half this language is about.
+    // what goes in and comes out and says nothing about what is required,
+    // performed or guaranteed, which is the half this language is about.
+    //
+    // All three clauses and in the order they are written, because the tree
+    // keeps them in three lists and a renderer that dropped one would still
+    // look like a contract to anyone who did not know what was in the file.
     let sent = session(&[
         request(1, "initialize"),
         did_open(URI, CONTRACTS),
-        at(2, "textDocument/hover", URI, 4, 4),
+        at(2, "textDocument/hover", URI, 21, 4),
+    ]);
+
+    let text = hover_text(&sent[2]);
+    assert!(
+        text.contains(
+            "```deed\nwhere length(line) > 0\nuses Log.note\nensures ok => result > 0\n```"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_contract_with_only_some_clauses_writes_only_those() {
+    // `halve` performs nothing, so there is no `uses` line to write. A
+    // renderer that wrote every heading whether or not it had anything under
+    // it would be saying something about the function that is not in the file.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, CONTRACTS),
+        at(2, "textDocument/hover", URI, 8, 4),
     ]);
 
     let text = hover_text(&sent[2]);
@@ -731,7 +773,7 @@ fn a_function_with_nothing_in_its_contract_gets_no_empty_block() {
     let sent = session(&[
         request(1, "initialize"),
         did_open(URI, CONTRACTS),
-        at(2, "textDocument/hover", URI, 13, 4),
+        at(2, "textDocument/hover", URI, 17, 4),
     ]);
 
     let text = hover_text(&sent[2]);

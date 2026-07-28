@@ -425,12 +425,19 @@ fn opened(folder: &Path, path: &Path) -> Server {
     server
 }
 
-/// Every tier a hover names at a zero based line and character.
+/// Every obligation a hover names at a zero based line and character.
 ///
 /// Read back out of the markdown the way a person reads it, rather than from
 /// somewhere only a test can see. A tooltip nobody can parse is a tooltip that
 /// says nothing, and the shape is the one the type and the name lines already
 /// use.
+///
+/// Every line of that shape is taken, and one whose second half is neither an
+/// article nor a tier brings this down rather than being skipped. Skipping was
+/// the first version of this and it let a hover invent an obligation and stay
+/// green: the only lines being compared were the ones already spelled the way
+/// the comparison expected, so the half of the claim about what an editor must
+/// not say was answering about nothing.
 fn tiers_from_the_editor(
     server: &mut Server,
     uri: &str,
@@ -466,18 +473,28 @@ fn tiers_from_the_editor(
         .unwrap_or_else(|| panic!("nothing was hovered at {line}:{character}"))
         .to_string();
 
-    text.lines()
-        .filter_map(|line| {
-            let (subject, tier) = line.rsplit_once("`, ")?;
-            if !["proven", "tested", "guarded"].contains(&tier) {
-                return None;
-            }
-            Some((
-                tier.to_string(),
-                subject.trim_start_matches('`').to_string(),
-            ))
-        })
-        .collect()
+    let mut named = Vec::new();
+    for written in text.lines() {
+        let Some((subject, rest)) = written.rsplit_once("`, ") else {
+            continue;
+        };
+        // The line saying what a name refers to, which reads "`n`, a
+        // parameter". Not an obligation, and the only other thing a hover
+        // writes this way.
+        if rest.starts_with("a ") || rest.starts_with("an ") {
+            continue;
+        }
+        assert!(
+            ["proven", "tested", "guarded"].contains(&rest),
+            "a hover wrote {written:?}, and an obligation goes by proven, \
+             tested or guarded and by nothing else"
+        );
+        named.push((
+            rest.to_string(),
+            subject.trim_start_matches('`').to_string(),
+        ));
+    }
+    named
 }
 
 #[test]
