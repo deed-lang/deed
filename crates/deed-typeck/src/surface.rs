@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use deed_ast::{Expr, FieldDecl, Ident, Item, Module, Outcome, Type};
+use deed_diagnostics::{FileId, Span};
 use deed_resolve::{DefKind, Resolutions, RowLowering};
 
 use crate::facts::{self, Guarantee, Range};
@@ -46,11 +47,26 @@ use crate::ty::{FnRow, Ty};
 /// identity of a type at all.
 pub use deed_resolve::PRELUDE_MODULE;
 
+/// Where a declaration is written.
+///
+/// Carried across the boundary because a diagnostic about a call can now point
+/// into the file that declares what was called. Before a `Label` had a file of
+/// its own there was nowhere to put this, so the checker filled the span with
+/// `Span::at(0)` and then declined to draw it.
+#[derive(Clone, Copy, Debug)]
+pub struct Declared {
+    pub file: FileId,
+    /// The whole declaration, which is what "declared here" underlines.
+    pub span: Span,
+}
+
 /// One exported declaration, with its types readable from outside.
 #[derive(Clone, Debug)]
 pub enum SurfaceItem {
     Function {
         params: Vec<Ty>,
+        /// Where each parameter is written, in the same order.
+        param_spans: Vec<Span>,
         ret: Ty,
         /// The type parameters it was declared with, in order.
         ///
@@ -65,6 +81,7 @@ pub enum SurfaceItem {
         /// What a call is promised to hand back. See the note at the top about
         /// why the bounds cross and the predicate does not.
         guarantee: Guarantee,
+        declared: Declared,
     },
     Record {
         fields: Vec<(String, Ty)>,
@@ -218,16 +235,20 @@ fn expand_item(item: &SurfaceItem, aliases: &BTreeMap<(&str, &str), &Ty>) -> Sur
     match item {
         SurfaceItem::Function {
             params,
+            param_spans,
             ret,
             generics,
             row,
             guarantee,
+            declared,
         } => SurfaceItem::Function {
             params: params.iter().map(one).collect(),
+            param_spans: param_spans.clone(),
             ret: one(ret),
             generics: generics.clone(),
             row: row.clone(),
             guarantee: guarantee.clone(),
+            declared: *declared,
         },
         SurfaceItem::Record { fields, generics } => SurfaceItem::Record {
             fields: named(fields),
@@ -334,7 +355,7 @@ fn expand_ty(
 }
 
 /// Lowers one module's declarations into something other modules can read.
-pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
+pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surface {
     let Some(path) = module.name.as_ref().map(|name| name.to_string_path()) else {
         // A file with no `module` line cannot be imported, so its surface is
         // nobody's business.
@@ -427,6 +448,7 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                                 None => Ty::Unknown,
                             })
                             .collect(),
+                        param_spans: decl.sig.params.iter().map(|param| param.span).collect(),
                         ret: match &decl.sig.ret {
                             Some(ty) => lowerer.ty(ty),
                             None => Ty::Unit,
@@ -439,6 +461,10 @@ pub fn surface(module: &Module, resolutions: &Resolutions) -> Surface {
                             .map(|parameter| parameter.name.clone())
                             .collect(),
                         guarantee: Guarantee::of(declared).meet(promised),
+                        declared: Declared {
+                            file,
+                            span: decl.sig.span,
+                        },
                     },
                 );
             }

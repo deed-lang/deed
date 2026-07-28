@@ -88,7 +88,7 @@ fn universe_of(modules: &[&str]) -> Deps {
         if let Some(name) = &parsed.module.name {
             surfaces.push((
                 name.to_string_path(),
-                surface(&parsed.module, &resolved.resolutions),
+                surface(file, &parsed.module, &resolved.resolutions),
             ));
         }
     }

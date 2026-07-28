@@ -653,3 +653,80 @@ fn the_multi_module_example_runs_its_tests() {
         }
     }
 }
+
+// -- pointing across the boundary ------------------------------------------
+//
+// A call into another module used to say less than the same call at home. The
+// declaration's span was filled with `Span::at(0)` and the label then declined
+// to draw itself, because a `Label` carried no file and would have landed on
+// whatever sat at those offsets here. A surface carries where a function is
+// written now.
+
+/// The callee, written longer than its caller so that reading one file's
+/// offsets out of the other cannot land on the same words by accident.
+const DECLARES_ARITY: &str = "module other\n\n\
+     // Longer than the file that calls into it, on purpose.\n\n\
+     fn arity(a: Int, b: Int) -> Int {\n    a + b\n}\n";
+
+#[test]
+fn the_wrong_number_of_arguments_points_at_the_declaration_in_the_other_file() {
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{arity}\n\nfn f() -> Int {\n    arity(1)\n}\n",
+        DECLARES_ARITY,
+    ]);
+    let [problem] = checked.diagnostics.as_slice() else {
+        panic!("{}", rendered(&sources, &checked.diagnostics));
+    };
+    assert_eq!(problem.code, deed_typeck::codes::WRONG_ARITY);
+
+    // The name too. It came from the signature's span, so losing the span lost
+    // the name with it and the message read `this takes` instead.
+    assert!(problem.message.starts_with("`arity` takes"), "{problem:?}");
+
+    let [declared] = problem.secondary.as_slice() else {
+        panic!("{}", render_human(&sources, problem));
+    };
+    let file = sources.file(declared.file_or(problem.file));
+    assert_ne!(declared.file_or(problem.file), problem.file);
+    assert_eq!(
+        &file.text()[declared.span.as_range()],
+        "fn arity(a: Int, b: Int) -> Int"
+    );
+    assert!(render_human(&sources, problem).contains(file.name()));
+}
+
+#[test]
+fn an_argument_of_the_wrong_type_points_at_the_parameter_in_the_other_file() {
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{arity}\n\nfn f() -> Int {\n    arity(\"no\", 2)\n}\n",
+        DECLARES_ARITY,
+    ]);
+    let [problem] = checked.diagnostics.as_slice() else {
+        panic!("{}", rendered(&sources, &checked.diagnostics));
+    };
+    assert_eq!(problem.code, deed_typeck::codes::TYPE_MISMATCH);
+
+    let [param] = problem.secondary.as_slice() else {
+        panic!("{}", render_human(&sources, problem));
+    };
+    assert_eq!(param.message, "the parameter it is passed to");
+    let file = sources.file(param.file_or(problem.file));
+    assert_ne!(param.file_or(problem.file), problem.file);
+    assert_eq!(&file.text()[param.span.as_range()], "a: Int");
+}
+
+#[test]
+fn the_same_call_at_home_says_the_same_thing_without_naming_a_second_file() {
+    // The other 23 label sites. A label about the file being checked may not
+    // grow a header, and the wording may not change with the boundary.
+    let (sources, checked) = check(&[
+        "module a\n\nfn arity(a: Int, b: Int) -> Int {\n    a + b\n}\n\n\
+         fn f() -> Int {\n    arity(1)\n}\n",
+    ]);
+    let [problem] = checked.diagnostics.as_slice() else {
+        panic!("{}", rendered(&sources, &checked.diagnostics));
+    };
+    assert!(problem.message.starts_with("`arity` takes"), "{problem:?}");
+    assert_eq!(problem.secondary[0].file, None);
+    assert_eq!(render_human(&sources, problem).matches("-->").count(), 1);
+}
