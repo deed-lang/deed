@@ -86,7 +86,9 @@ fn backticked(text: &str) -> Vec<String> {
 /// happened to wrap at.
 ///
 /// A rewording therefore drops the rest of the names rather than reaching past
-/// them, and the caller's comparison is what says which ones went missing.
+/// them. That is the safe direction, but it means a missing name and a name
+/// this stopped short of look the same from here, so a caller reporting one
+/// has to say it could be either and show how far it got.
 fn enumerated(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut rest = text;
@@ -375,7 +377,7 @@ fn the_functions_the_syntax_document_lists_are_the_ones_the_modules_declare() {
         for name in &declared {
             assert!(
                 named.contains(name),
-                "`{module}` declares `{name}` and the sentence in design/02-syntax.md does not name it"
+                "`{module}` declares `{name}` and the sentence in design/02-syntax.md does not list it: either the name is missing, or the enumeration is worded in a way this stops reading before reaching it. What it read was {named:?}"
             );
         }
         for name in &named {

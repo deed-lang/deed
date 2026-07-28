@@ -91,9 +91,12 @@ optimisation worth measuring before taking.
 Nothing here is prose on its own. `crates/deed-lsp/tests/session.rs` starts a
 server and compares what it advertises against the sentence above naming what
 it answers, in both directions, so a provider that lands without a line here
-fails the build and so does a line here with no provider behind it. The
-keywords the VS Code grammar paints are compared with the lexer's in
+fails the build and so does a line here with no provider behind it. What it
+compares them through is a rule and not a list: a capability is written here
+the way its field name reads with `Provider` taken off, and the handful that
+are not are each held to the field they claim to be about. The keywords the VS
+Code grammar paints are compared with the lexer's in
 `crates/deed-parser/tests/grammar.rs`. The module named in `use std/list` above
 is checked against the ones that really ship in
-`crates/deed-driver/tests/documentation.rs`, whose header says why those three
-checks live in three different crates.
+`crates/deed-driver/tests/documentation.rs`, whose header says why these checks
+sit beside the things they read rather than together.
