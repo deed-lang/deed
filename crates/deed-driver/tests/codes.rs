@@ -14,10 +14,11 @@
 //!
 //! One test per code, and nothing finer. It matches on the constant's name and
 //! on the number, so a code with several messages behind it is satisfied by a
-//! test that reads any one of them, and the rest are as unread as a code with
-//! no test at all. `DEED5004` was that: four messages, one of them ever
-//! rendered by a test, and a comment in the effects tests asserting that the
-//! tested one was the only shape left.
+//! test that names either, whether or not any of those messages is ever
+//! rendered, and the rest are as unread as a code with no test at all.
+//! `DEED5004` was that: four messages, one of them ever rendered by a test,
+//! and a comment in the effects tests asserting that the tested one was the
+//! only shape left.
 //!
 //! So if you put a second message under an existing code, nothing here will
 //! ask you for a test. Write one anyway, next to the message, and have it read

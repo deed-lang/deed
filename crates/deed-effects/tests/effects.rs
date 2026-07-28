@@ -3,10 +3,11 @@
 //! The "too wide" rule gets as much attention as "too narrow", because it is
 //! the one that decides whether an effect row means anything.
 //!
-//! A code is not a message. `DEED5004` stands for three different sentences
-//! and had a test for one of them, which is how a comment claiming it had only
-//! one shape left survived being false. So the tests here read the words a
-//! person sees, not only the code they were filed under.
+//! A code is not a message. `DEED5004` stood for several sentences and had a
+//! test for one of them, which is how a comment claiming it had only one shape
+//! left survived being false. Counting them again here would go stale the same
+//! way, so the rule instead: every sentence the checker can print has a test
+//! that reads the words a person sees, not only the code they were filed under.
 
 use std::collections::HashMap;
 
@@ -787,6 +788,53 @@ fn an_uncheckable_row_does_not_make_its_callers_look_pure() {
     );
 }
 
+#[test]
+fn the_call_site_hears_about_a_star_rather_than_about_a_capability() {
+    // What decides the message above is `Export.row_complete`, and that is set
+    // from the syntax of the `uses` clause: false as soon as an entry is
+    // starred, whatever the star is on. Pinned in both directions, because the
+    // comments on the code say so now and a sentence nothing holds is how this
+    // code got its false one in the first place.
+    //
+    // A declared effect with a star. Where it is written it means the whole of
+    // `Log` and checks fine, so the declaration is silent and the call site is
+    // told the row is not checked anyway. The exported row is empty, which is
+    // what would have made this caller look pure.
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse starred.{everything}\n\nfn f() -> Int { everything() }\n",
+        &universe_of(&[
+            "module starred\n\neffect Log {\n  fn note(message: String) -> ()\n}\n\nfn everything() -> Int\n  uses Log.*,\n{\n  Log.note(\"hi\")\n  0\n}\n",
+        ]),
+    );
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNVERIFIABLE_ROW]
+    );
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(
+        text.contains("`everything` has a row that is not checked, so this call is not either"),
+        "{text}"
+    );
+
+    // A capability with no star. Nothing is dropped, so the row is exported as
+    // the whole story and the call site is not told anything about it being
+    // unchecked. What the caller gets instead is the entry itself, under the
+    // callee's module, with advice to import one of the callee's parameters.
+    // The row really is unreadable and the call site is the one place that is
+    // never said, which is the half of this rule that is too coarse the other
+    // way.
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse wide.{everything}\n\nfn f(sys: System) -> Int { everything(sys) }\n",
+        &universe_of(&["module wide\n\nfn everything(sys: System) -> Int\n  uses sys,\n{ 0 }\n"]),
+    );
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::EFFECT_NOT_IMPORTED],
+        "{}",
+        rendered(&sources, &analysis.diagnostics)
+    );
+}
+
 // -- rows across a module boundary -----------------------------------------
 
 #[test]
@@ -945,6 +993,72 @@ fn a_wrong_entry_does_not_switch_off_the_rest_of_the_row() {
         text.contains("`Ledger.post` is declared but never performed"),
         "{text}"
     );
+}
+
+#[test]
+fn an_import_with_nothing_behind_it_is_not_evidence_that_it_is_not_an_effect() {
+    // What keeps the error above off correct programs. Rejecting an imported
+    // name needs the export to say which kind of thing it is, and with no
+    // module behind the import there is no export to read. "I could not look"
+    // is not "it is not an effect", and the resolver has already said the
+    // module is missing, so a second sentence here would be a second complaint
+    // about one mistake.
+    //
+    // Not hypothetical. `deed fix` checks a file without building a universe,
+    // so `Sink` in `examples/greeting.deed` arrives here every time it runs,
+    // and `Sink` is a perfectly good effect declared in `examples/sink.deed`.
+    // Rejecting here would tell a correct program in this repository that its
+    // own effect is not one.
+    let source =
+        "module a\n\nuse sink.{Sink}\n\nfn f() -> ()\n  uses Sink.emit,\n{ Sink.emit(\"hi\") }\n";
+    let mut sources = SourceMap::new();
+    let file = sources.add("test.deed", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
+
+    // The premise, rather than an accident of the fixture: the resolver has
+    // already said the module is missing. Without that this test would be
+    // asking the effect checker to swallow a mistake nobody reported.
+    assert!(
+        resolved.has_errors(),
+        "{}",
+        rendered(&sources, &resolved.diagnostics)
+    );
+
+    let analysis = analyse(
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &analysis.diagnostics)
+    );
+
+    // The other half of the same arm. Staying quiet is only right because the
+    // row is also marked unchecked: an entry nobody could read leaves a row
+    // that means nothing, so reporting the rest of it as too wide or too
+    // narrow would be reporting a check that never happened. `deed fix` reads
+    // this flag for the same reason, and skips the function rather than
+    // rewriting a row out of half an answer.
+    let function = parsed
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) => Some(f),
+            _ => None,
+        })
+        .expect("the source declares a function");
+    let def = resolved
+        .resolutions
+        .resolution(function.sig.name.span)
+        .expect("the function resolves to itself");
+    assert!(analysis.effects.is_unverifiable(def));
 }
 
 // -- robustness ------------------------------------------------------------

@@ -188,9 +188,17 @@ impl RowLowering {
 
     /// The entries, and whether they are the whole story.
     ///
-    /// The flag is false when the clause contains something no caller could
-    /// read, which today means `sys.*`: it grants everything a capability
-    /// carries and there is no name for "everything" on the far side.
+    /// The flag is false as soon as any entry is starred, and a starred entry
+    /// is left out of the entries themselves. The star is the only thing asked
+    /// about, because nothing here is resolved and which kind of thing a name
+    /// is does not show in the syntax.
+    ///
+    /// That is exact for `sys.*`, the case it was written for: it grants
+    /// everything a capability carries and there is no name for "everything" on
+    /// the far side. It is coarse everywhere else. `Log.*` on a declared effect
+    /// means the whole of `Log`, which a caller can read perfectly well, and it
+    /// still comes out incomplete. See `UNVERIFIABLE_ROW` in `deed-effects` for
+    /// what that costs a caller.
     pub fn row(&self, uses: &[deed_ast::EffectRef]) -> (Vec<RowEntry>, bool) {
         let complete = uses.iter().all(|entry| !entry.all);
         let entries = uses

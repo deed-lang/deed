@@ -1235,9 +1235,16 @@ impl<'a> Checker<'a> {
                 let complete = export.row_complete;
                 let span = callee.span();
 
-                // The callee's own row is not checked, so nothing built on it
-                // is either. Inheriting an empty row here would move the
+                // The export dropped a starred entry, so what came across is
+                // not the whole row. Inheriting it silently would move the
                 // loophole rather than close it: the caller would look pure.
+                //
+                // `row_complete` is the star and only the star, so this fires
+                // for a callee whose row said `Log.*` even though that one was
+                // checked where it was written, and not at all for one whose
+                // row named a bare capability even though that one was not.
+                // See `codes::UNVERIFIABLE_ROW` for why that is written down
+                // rather than fixed.
                 if !complete {
                     let name = self.name_of(def);
                     self.emit(
