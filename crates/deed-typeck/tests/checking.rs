@@ -277,11 +277,17 @@ fn plus_still_adds_two_numbers() {
 /// The rule this test guards replaced one that asked only that both sides
 /// agree, so text was comparable before anybody narrowed anything and the
 /// narrowing left it in. It stays because it is the only thing in the language
-/// that ranks text without being told how: a record is refused below and a
-/// caller who wants two of them ranked passes the comparison in, which costs
-/// that caller nothing because the fields already have an order. `split(s,
-/// "")` reaches the characters, so a comparator over text is writable too, but
-/// only over the characters it names, and everything else ties.
+/// that puts two pieces of text in an order and never ties two of them that
+/// differ: `length` and `to_int` both rank text and both tie, `ab` with `ba`
+/// and `007` with `7`, and `Io.list` sorts file names but wants a `Dir` and a
+/// written file per comparison and ties whatever the filesystem does not tell
+/// apart. A record is refused below and a caller who wants two of them ranked
+/// passes the comparison in, which asks that caller for nothing it does not
+/// already have to have, since the shape of a record does not say which field
+/// decides the order and some of those fields have no order of their own.
+/// `split(s, "")` reaches the characters, so a comparator over text is
+/// writable too, but only over the characters it names, and everything else
+/// ties.
 #[test]
 fn strings_are_ordered() {
     check_ok("module a\n\nfn f(a: String, b: String) -> Bool { a < b }\n");

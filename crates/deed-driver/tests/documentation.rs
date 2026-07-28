@@ -1013,9 +1013,13 @@ fn the_syntax_document_counts_them_the_same_way() {
 /// This is the decision the sentence above turned up. `String` was never
 /// added to the ordering rule; it was what survived the rule being narrowed
 /// from "both sides agree" down to two types, and it stays because nothing
-/// else in the language ranks text without being told how. A set stated in a
-/// document and argued for in it is worth holding to what the checker does
-/// with it, since the argument is the reason anyone would trust the set.
+/// else in the language orders text without tying two pieces that differ:
+/// `length` ties `ab` with `ba`, `to_int` ties `007` with `7` and refuses
+/// everything that does not spell a number, and `Io.list` sorts file names but
+/// wants a `Dir` and a written file per comparison and ties whatever the
+/// filesystem does not tell apart. A set stated in a document and argued for
+/// in it is worth holding to what the checker does with it, since the argument
+/// is the reason anyone would trust the set.
 #[test]
 fn the_types_ordering_takes_are_the_ones_the_syntax_document_names() {
     let syntax = read("design/02-syntax.md");
