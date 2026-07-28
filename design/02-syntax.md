@@ -674,7 +674,9 @@ discharged.
 
 `refuses` is a name everywhere else. It is the marker only when an identifier follows it, and
 no statement could ever have been two names in a row, so `assert refuses(x)` is still a call
-to a function somebody called `refuses`. Same reasoning as `state` and as the `at` in a `for`.
+to a function somebody called `refuses`. Same reasoning as `state` and as the `at` in a `for`,
+and it sits with them in the parser's `SOFT_KEYWORDS`, which is the list the editor grammar is
+held to, so a word nothing reserves is still a word the reader sees coloured.
 
 ### What `Proven` can decide
 

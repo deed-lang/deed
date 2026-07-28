@@ -7,9 +7,17 @@
 //! they are reading a program and one word is the wrong colour for a reason
 //! they cannot see.
 //!
-//! So the grammar is held to the set rather than trusted to keep up. Both
-//! directions: every keyword is coloured, and nothing is coloured that is not
-//! a keyword.
+//! Two sets are held rather than one. `Keyword::ALL` is what the lexer
+//! reserves and `SOFT_KEYWORDS` is what the parser reads by name in a single
+//! position, and somebody reading a file cannot tell those apart, so the
+//! grammar owes both a colour. Its own groups are no help in telling them
+//! apart either: they are named for what a word does rather than for whether
+//! it is reserved, which is why `state` sits among the declaration keywords
+//! and `at` among the contract ones.
+//!
+//! So the grammar is held to both sets rather than trusted to keep up. Both
+//! directions: every word in them is coloured, and nothing is coloured that is
+//! in neither.
 
 use std::collections::BTreeSet;
 

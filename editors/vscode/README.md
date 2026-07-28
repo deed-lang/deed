@@ -30,9 +30,11 @@ start it.
 Highlighting comes from a TextMate grammar rather than from the compiler,
 which means it works on a file that does not parse. That is the right way
 round for the case that matters, a file being typed, but it also means the
-grammar is a second copy of the keyword set. It is held to the first copy by
-`crates/deed-parser/tests/grammar.rs`, which fails if the two disagree in
-either direction.
+grammar is a second copy of the words the compiler reads as keywords: the ones
+the lexer reserves, and the ones the parser reads by name in a single position
+such as `state` and `refuses`. It is held to both by
+`crates/deed-parser/tests/grammar.rs`, which fails if they disagree in either
+direction.
 
 ## Not published
 

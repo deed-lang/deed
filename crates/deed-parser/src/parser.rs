@@ -35,12 +35,14 @@ impl Parsed {
 
 /// Words the parser reads in one position but which are not keywords.
 ///
-/// `state` opens a handler field, `at` names the index of a `for`, and `while`
-/// is the condition a `for` stops on. None of them is reserved: a variable may
-/// still be called `at`, which is why they are read with `eat_named` rather
-/// than lexed. An editor still has to colour them, so the set is written down
-/// here rather than being three string literals scattered through the file.
-pub const SOFT_KEYWORDS: [&str; 3] = ["state", "at", "while"];
+/// `state` opens a handler field, `at` names the index of a `for`, `while` is
+/// the condition a `for` stops on, and `refuses` is the marker on the `assert`
+/// that expects a contract to turn something down. None of them is reserved: a
+/// variable may still be called `at`, which is why they are read with
+/// `eat_named` rather than lexed. An editor still has to colour them, so the
+/// set is written down here rather than being four string literals scattered
+/// through the file.
+pub const SOFT_KEYWORDS: [&str; 4] = ["state", "at", "while", "refuses"];
 
 /// Parses a token stream. Always produces a module, possibly containing error nodes.
 pub fn parse(file: FileId, tokens: &[Token]) -> Parsed {
@@ -1401,11 +1403,9 @@ impl<'a> Parser<'a> {
             // the marker only when an identifier follows it, and no statement
             // could ever have been two names in a row. So `assert refuses(x)`
             // is still a call to a function somebody called `refuses`, which
-            // is the direction this has to fail in.
-            if matches!(self.kind(), TokenKind::Ident(found) if found == "refuses")
-                && matches!(self.nth_kind(1), TokenKind::Ident(_))
-            {
-                self.bump();
+            // is the direction this has to fail in. The lookahead is asked
+            // before the word because `eat_named` consumes what it matches.
+            if matches!(self.nth_kind(1), TokenKind::Ident(_)) && self.eat_named("refuses") {
                 let subject = self.parse_expr();
                 return Stmt::Refuses {
                     span: start.to(subject.span()),
