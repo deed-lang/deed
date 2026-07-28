@@ -72,9 +72,15 @@ No plugin. `vim.lsp.start` is in the editor.
 
 The server reads `workspaceFolders` from `initialize` and answers about every
 `.deed` file under them, so point whatever you use at the folder rather than
-at one file. It publishes diagnostics on open and on change, and answers
-hover, go to definition, references, rename, formatting, code actions,
-document symbol, completion, signature help and workspace symbol.
+at one file. The modules that ship inside the compiler are checked alongside
+them, so a `use std/list` is not an error in an editor any more than it is on
+the command line. They are context rather than files: nothing is reported
+against one, and go to definition and rename do not lead into one, because
+there is no file behind it to open or to change.
+
+It publishes diagnostics on open and on change, and answers hover, go to
+definition, references, rename, formatting, code actions, document symbol,
+completion, signature help and workspace symbol.
 
 Full sync only. The server asks for whole documents rather than incremental
 changes, because a sync that can drift out of step with the file is an

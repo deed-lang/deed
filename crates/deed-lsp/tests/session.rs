@@ -136,6 +136,9 @@ impl Scratch {
 
     fn write(&self, name: &str, contents: &str) -> String {
         let path = self.0.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
         std::fs::write(&path, contents).unwrap();
         file_uri(&path)
     }
@@ -175,7 +178,11 @@ fn file_uri(path: &Path) -> String {
 
 /// `initialize`, with a workspace folder the way an editor sends one.
 fn initialize_in(id: i64, scratch: &Scratch) -> String {
-    let uri = scratch.uri();
+    initialize_at(id, &scratch.uri())
+}
+
+/// The same, for a folder that is not a scratch one.
+fn initialize_at(id: i64, uri: &str) -> String {
     framed(&format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"initialize\",\"params\":\
          {{\"workspaceFolders\":[{{\"uri\":\"{uri}\",\"name\":\"scratch\"}}]}}}}"
@@ -971,10 +978,13 @@ const IMPORTER: &str =
 
 #[test]
 fn a_file_that_imports_another_one_is_fine_when_the_workspace_has_it() {
-    // The bug this fixes. Every file with a `use` in it used to get a red line
-    // under the import, because the module it names was not among the files
-    // being compiled. A server that reports errors on a working program is
-    // worse than one that reports nothing.
+    // The first half of the bug this fixes. Every file with a `use` in it used
+    // to get a red line under the import, because the module it names was not
+    // among the files being compiled. A server that reports errors on a
+    // working program is worse than one that reports nothing.
+    //
+    // The second half was the same thing for a module that is in the compiler
+    // rather than next door, and is further down under its own heading.
     let scratch = Scratch::new("imports");
     scratch.write("one.deed", EXPORTER);
     let two = scratch.write("two.deed", IMPORTER);
@@ -1149,6 +1159,143 @@ fn an_import_with_nothing_behind_it_leads_to_the_use_line() {
         Some(2),
         "{location:?}"
     );
+}
+
+// -- the library that ships inside the compiler ------------------------------
+
+/// The folder of examples in this repository.
+///
+/// Real files rather than made up ones, because the bug was reported against
+/// these three: `deed check` was silent on them and the editor was not.
+fn examples() -> PathBuf {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("this crate lives two directories under the repository root");
+    crates.join("examples")
+}
+
+/// A file's own module, which is a workspace's own answer to a `use`.
+const OWN_LIST: &str = "module std/list\n\nfn mine(n: Int) -> Int {\n    n\n}\n";
+
+#[test]
+fn an_example_that_imports_the_library_that_ships_is_not_an_error() {
+    // The finding. `examples/todo.deed`, `examples/using_list.deed` and
+    // `examples/logs.deed` all import a module that lives inside the compiler,
+    // and the server used to know nothing about those, so it put
+    // `DEED3007 UNKNOWN_MODULE` under a `use` line that `deed check` accepts.
+    let examples = examples();
+    let folder = file_uri(&examples);
+
+    let named = ["todo.deed", "using_list.deed", "logs.deed"];
+    let mut checked = 0;
+    for name in named {
+        let path = examples.join(name);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{} should be readable: {error}", path.display()));
+        // The file has to be the kind of file this is about, or the test below
+        // passes for the wrong reason. `lines()` and `trim_end()` because the
+        // text on disk has whichever line ending this checkout was made with.
+        assert!(
+            text.lines()
+                .any(|line| line.trim_end().starts_with("use std/")),
+            "{name} should import a module that ships"
+        );
+
+        let uri = file_uri(&path);
+        let sent = session(&[initialize_at(1, &folder), did_open(&uri, &text)]);
+
+        let unknown: Vec<&Json> = published_for(&sent, &uri)
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.at(&["code"]).and_then(Json::as_str) == Some("DEED3007")
+            })
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "{name} should have nothing unknown in it: {unknown:?}"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, named.len(), "every named example should be opened");
+}
+
+#[test]
+fn a_workspaces_own_module_wins_over_the_one_that_ships() {
+    // The precedence half, and the reason the compiler's table is asked last
+    // rather than first. The one that is right there is the one they can read
+    // and the one they can change, so it is the one that answers.
+    let scratch = Scratch::new("shipped-own");
+    scratch.write("std/list.deed", OWN_LIST);
+    let text = "module two\n\nuse std/list.{mine}\n\nfn f() -> Int {\n    mine(1)\n}\n";
+    let two = scratch.write("two.deed", text);
+
+    let sent = session(&[initialize_in(1, &scratch), did_open(&two, text)]);
+    assert_eq!(
+        published_for(&sent, &two).len(),
+        0,
+        "their own `std/list` declares `mine`: {sent:?}"
+    );
+}
+
+#[test]
+fn what_the_shipped_module_exports_is_not_reachable_once_it_has_been_replaced() {
+    // The other side of the same rule, and the one that fails if the table is
+    // consulted first: `map` is in the module that ships and not in theirs, so
+    // importing it has to be an error about a name rather than silently
+    // reaching past the file they wrote.
+    let scratch = Scratch::new("shipped-replaced");
+    scratch.write("std/list.deed", OWN_LIST);
+    let text = "module two\n\nuse std/list.{map}\n\nfn f() -> Int {\n    1\n}\n";
+    let two = scratch.write("two.deed", text);
+
+    let sent = session(&[initialize_in(1, &scratch), did_open(&two, text)]);
+    let diagnostics = published_for(&sent, &two);
+    assert_eq!(
+        diagnostics
+            .first()
+            .and_then(|diagnostic| diagnostic.at(&["code"]))
+            .and_then(Json::as_str),
+        Some("DEED3008"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn nothing_is_published_for_a_file_the_person_does_not_have() {
+    // A module that ships is context, the same way it is for `deed check`. It
+    // has no file behind it, so there is no document for the editor to put a
+    // squiggle on and no event that would ever clear one.
+    let scratch = Scratch::new("shipped-quiet");
+    let text = "module two\n\nuse std/list.{map}\n\nfn f(xs: List<Int>) -> List<Int> {\n    map(xs, |n: Int| n + 1)\n}\n";
+    let two = scratch.write("two.deed", text);
+
+    let sent = session(&[initialize_in(1, &scratch), did_open(&two, text)]);
+
+    let addressed: Vec<&str> = sent
+        .iter()
+        .filter(|message| published(message).is_some())
+        .filter_map(|message| message.at(&["params", "uri"]).and_then(Json::as_str))
+        .collect();
+    assert!(
+        !addressed.is_empty(),
+        "something should have been published"
+    );
+    for uri in addressed {
+        assert_eq!(uri, two, "only the open document is published for");
+    }
+}
+
+#[test]
+fn a_module_that_ships_is_there_even_without_a_workspace_folder() {
+    // An editor that names no folder gets the single file behaviour, and this
+    // is the one thing that behaviour still has: a module inside the compiler
+    // is under no folder, so there is no folder to be missing. `deed check`
+    // handed one file answers the same way.
+    let text = "module a\n\nuse std/list.{map}\n\nfn f(xs: List<Int>) -> List<Int> {\n    map(xs, |n: Int| n + 1)\n}\n";
+    let sent = session(&[request(1, "initialize"), did_open(URI, text)]);
+
+    assert_eq!(published_for(&sent, URI).len(), 0, "{sent:?}");
 }
 
 // -- find references --------------------------------------------------------
@@ -1548,6 +1695,30 @@ fn a_use_line_offers_what_the_other_module_exports() {
 
     let found = labels(sent.last().unwrap());
     assert!(found.contains(&"double".to_string()), "{found:?}");
+}
+
+#[test]
+fn a_use_line_offers_what_the_module_that_ships_exports() {
+    // The names in a module that lives inside the compiler are the ones least
+    // likely to be remembered exactly, because there is no file to go and look
+    // at. This used to come back empty: the list is read off the check, and
+    // the check had never been told the module existed.
+    let scratch = Scratch::new("completion-shipped");
+    let typing = "module two\n\nuse std/list.{\n";
+    let two = scratch.write("two.deed", typing);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, typing),
+        // Inside the braces, with nothing written yet.
+        completion(2, &two, 2, 14),
+    ]);
+
+    let found = labels(sent.last().unwrap());
+    assert!(!found.is_empty(), "the module exports something");
+    for name in ["map", "filter", "fold"] {
+        assert!(found.contains(&name.to_string()), "{name} in {found:?}");
+    }
 }
 
 #[test]
