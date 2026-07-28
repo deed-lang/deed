@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use deed_diagnostics::Span;
+use deed_diagnostics::{FileId, Span};
 use deed_resolve::{DefId, RowEntry};
 
 /// What a function value is allowed to perform.
@@ -305,6 +305,9 @@ pub struct FieldTy {
     pub name: String,
     pub ty: Ty,
     pub span: Span,
+    /// Which file `span` is an offset into. `None` is the file being checked,
+    /// which is every field declared at home.
+    pub file: Option<FileId>,
 }
 
 #[derive(Clone, Debug)]

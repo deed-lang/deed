@@ -85,9 +85,12 @@ pub enum SurfaceItem {
     },
     Record {
         fields: Vec<(String, Ty)>,
+        /// Where each field is written, in the same order.
+        field_spans: Vec<Span>,
         /// The type parameters it was declared with. A use of it owes exactly
         /// this many arguments.
         generics: Vec<String>,
+        declared: Declared,
     },
     Choice {
         variants: Vec<SurfaceVariant>,
@@ -250,9 +253,16 @@ fn expand_item(item: &SurfaceItem, aliases: &BTreeMap<(&str, &str), &Ty>) -> Sur
             guarantee: guarantee.clone(),
             declared: *declared,
         },
-        SurfaceItem::Record { fields, generics } => SurfaceItem::Record {
+        SurfaceItem::Record {
+            fields,
+            field_spans,
+            generics,
+            declared,
+        } => SurfaceItem::Record {
             fields: named(fields),
+            field_spans: field_spans.clone(),
             generics: generics.clone(),
+            declared: *declared,
         },
         SurfaceItem::Choice { variants, generics } => SurfaceItem::Choice {
             variants: variants
@@ -474,7 +484,12 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
                     decl.name.name.clone(),
                     SurfaceItem::Record {
                         fields: lowerer.fields(&decl.fields),
+                        field_spans: decl.fields.iter().map(|field| field.span).collect(),
                         generics: named(&decl.generics),
+                        declared: Declared {
+                            file,
+                            span: decl.name.span,
+                        },
                     },
                 );
             }
