@@ -990,11 +990,26 @@ fn the_config_example_reads_itself_and_nothing_else() {
     let run = run_main(&program_of(&checked), checked.file, Path::new(dir), &[])
         .expect("the example has a main");
     assert!(run.result.is_ok());
-    assert_eq!(run.output[0], "found it");
-    assert!(
-        run.output[1..].iter().all(|line| line != "found it"),
-        "something escaped: {:?}",
-        run.output
+
+    // The whole line, in order. This used to read the first line and then say
+    // that nothing in `output[1..]` was `"found it"`, which is empty whenever
+    // the program prints one line, so the half the test is named after cost
+    // nothing to satisfy and the five refusals were never looked at.
+    //
+    // They are the subject. Each one says which rule turned it down, and a
+    // change to `examples/config.deed` that stops refusing something has to
+    // land here rather than only in the command-line test, because this is
+    // where the claim about a `Dir` is made.
+    assert_eq!(
+        run.output,
+        vec![
+            "found it",
+            "`..` would leave the directory, and there is no way out of a `Dir`",
+            "`../Cargo.toml` is not a single name, and a `Dir` only takes one at a time",
+            "`/etc/passwd` is not a single name, and a `Dir` only takes one at a time",
+            "`nowhere` is not there",
+            "used the fallback",
+        ]
     );
 }
 

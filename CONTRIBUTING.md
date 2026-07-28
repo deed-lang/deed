@@ -46,6 +46,39 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
+## Tests
+
+**No assertion may be satisfied by an empty collection.** If a test asserts something about
+every element of a list, or about no element of one, then the empty list satisfies it and
+the test says nothing. So whenever a test builds a collection and then asserts over it, it
+also has to establish that the collection is not empty, from inside the test.
+
+This is about any collection, not about directories. It has been fixed three times here and
+written down three times as a rule about walking a directory, and both times it came back it
+was somewhere else: an `all(...)` over the obligations a check produced, and a slice from
+index one over the lines a program printed, which is empty whenever the program prints one
+line. Naming the container is what let it come back, so the rule is about the shape.
+
+The shapes to look for, all of which hold for free on nothing:
+
+- `xs.iter().all(...)`, and `!xs.iter().any(...)`
+- `xs.is_empty()`, where what is being claimed is that nothing in `xs` is wrong rather than
+  that `xs` is empty
+- `xs[n..]`, and anything else that can slice down to nothing
+- a loop with the assertions inside it
+
+An `any(...)` asserted true is fine, because that one fails on nothing. So is asserting a
+collection is empty when emptiness is the claim itself, as in "this raises no obligation".
+
+Two ways to establish the collection is real. Assert a count first, which is best when the
+count is knowable and worth pinning down, and otherwise count what the loop actually
+compared and assert that came to more than zero. Prefer routing through a helper that
+already makes the guarantee over writing a fresh assertion beside it; if a test cannot use
+the helper, say why in the test.
+
+Verify a strengthened assertion by breaking the thing it now guards and watching it fail by
+name. An assertion nobody has seen fail is an assertion nobody has read.
+
 ## Commits and PRs
 
 Conventional commits, so history stays greppable:

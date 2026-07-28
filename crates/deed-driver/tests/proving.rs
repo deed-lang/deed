@@ -59,6 +59,35 @@ fn expect(tier: Tier, body: &str) {
     );
 }
 
+/// Asserts the obligations `body` raised are exactly `wanted`, in source order.
+///
+/// The general form of `expect`, for a body that raises more than one or
+/// raises something other than a refinement. It exists so that such a test has
+/// somewhere to go other than a hand-written loop: the one below this used to
+/// say `all(|tier| *tier == Proven)` over a list nothing had said was not
+/// empty, and an empty list satisfies that for free.
+fn expect_each(wanted: &[(&str, Tier)], body: &str) {
+    let (sources, checked) = check(body);
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+
+    let raised: Vec<(&str, Tier)> = checked
+        .obligations
+        .iter()
+        .map(|obligation| (obligation.subject.as_str(), obligation.tier))
+        .collect();
+
+    assert_eq!(
+        raised,
+        wanted,
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
 // -- how long the thing is -------------------------------------------------
 //
 // A predicate about a length used to be unsettleable. `value` had no
@@ -104,35 +133,27 @@ fn a_length_nothing_settled_is_still_guarded() {
 /// The whole point. A `where` clause and a refinement say the same thing about
 /// the same guard, and they used to disagree: the call site read the caller's
 /// facts for one and a bare range for the other.
+///
+/// Both are named here rather than asserted over. The version that collected
+/// the tiers and asked whether they were all `Proven` was satisfied by no
+/// obligations at all, so the one test in this file that is about two of them
+/// agreeing was the one that could not tell whether either had happened.
 #[test]
 fn a_where_clause_and_a_refinement_agree_about_a_length() {
-    let (sources, checked) = check(&format!(
-        "{TAKES}fn f(s: String) -> Int {{\n\
-         \x20   if length(s) > 0 {{\n\
-         \x20       required(s) + take(s)\n\
-         \x20   }} else {{\n\
-         \x20       0\n\
-         \x20   }}\n\
-         }}\n"
-    ));
-    assert!(
-        !checked.has_errors(),
-        "{}",
-        rendered(&sources, &checked.diagnostics)
-    );
-    let tiers: Vec<Tier> = checked
-        .obligations
-        .iter()
-        .map(|obligation| obligation.tier)
-        .collect();
-    assert!(
-        tiers.iter().all(|tier| *tier == Tier::Proven),
-        "{:?}",
-        checked
-            .obligations
-            .iter()
-            .map(|o| (&o.subject, o.tier))
-            .collect::<Vec<_>>()
+    expect_each(
+        &[
+            ("required requires", Tier::Proven),
+            ("NonEmpty", Tier::Proven),
+        ],
+        &format!(
+            "{TAKES}fn f(s: String) -> Int {{\n\
+             \x20   if length(s) > 0 {{\n\
+             \x20       required(s) + take(s)\n\
+             \x20   }} else {{\n\
+             \x20       0\n\
+             \x20   }}\n\
+             }}\n"
+        ),
     );
 }
 
@@ -1100,6 +1121,29 @@ fn a_precondition_does_not_cross_a_module_boundary() {
     // refinement's does. What crosses is bounds, and there is nowhere in them
     // to put a clause about an argument, so a caller in another file answers
     // for this at runtime and the checker says nothing either way.
+
+    // The same call in one module first, so that the absence below is the
+    // boundary rather than the obligation never existing at all. Without it
+    // the assertion is over a list nothing said was not empty, and a compiler
+    // that stopped reporting preconditions entirely would pass here.
+    let (_, together) = check(
+        "fn halve(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n >= 0,\n\
+         {\n\
+         \x20 n\n\
+         }\n\n\
+         fn caller() -> Int { halve(5) }\n",
+    );
+    assert_eq!(
+        together
+            .obligations
+            .iter()
+            .map(|o| (o.subject.as_str(), o.tier))
+            .collect::<Vec<_>>(),
+        vec![("halve requires", Tier::Proven)]
+    );
+
     let mut sources = SourceMap::new();
     let ids: Vec<_> = [
         "module app\n\n\
@@ -1125,11 +1169,13 @@ fn a_precondition_does_not_cross_a_module_boundary() {
         "{}",
         rendered(&sources, &checked.diagnostics)
     );
-    assert!(
+    assert_eq!(
         checked
             .obligations
             .iter()
-            .all(|obligation| !obligation.subject.ends_with(" requires")),
+            .map(|o| (o.subject.as_str(), o.tier))
+            .collect::<Vec<_>>(),
+        Vec::<(&str, Tier)>::new(),
         "a precondition from another module should not be reported as settled"
     );
 }

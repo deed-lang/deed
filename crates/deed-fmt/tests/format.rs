@@ -51,6 +51,7 @@ fn formatting_does_not_change_what_the_program_means() {
 
 #[test]
 fn every_comment_survives() {
+    let mut seen = 0;
     for source in SOURCES {
         let formatted = fmt(source);
         for comment in comments(source) {
@@ -58,8 +59,14 @@ fn every_comment_survives() {
                 formatted.contains(&comment),
                 "lost `{comment}` from:\n{formatted}"
             );
+            seen += 1;
         }
     }
+
+    // One of these sources has comments in it and the rest do not, so the loop
+    // above is empty twenty-odd times out of twenty-odd. If `comments` ever
+    // stops finding them, every iteration is empty and nothing here notices.
+    assert!(seen > 0, "no comment was found to survive anything");
 }
 
 #[test]
