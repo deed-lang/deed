@@ -79,6 +79,12 @@ struct ParamTy {
     span: Span,
 }
 
+/// Where the expected type was written, for the label on a mismatch.
+///
+/// The file is `None` for the file being checked, which is everything except a
+/// signature that came across a module boundary.
+type Because = Option<(Option<FileId>, Span, String)>;
+
 /// What is known about a value nothing in the source names.
 ///
 /// There is one such value: the number inside the `ok` of a `Result` that came
@@ -121,6 +127,9 @@ struct Signature {
     params: Vec<ParamTy>,
     ret: Ty,
     span: Span,
+    /// Which file `span` and the parameter spans are offsets into. `None` is
+    /// the file being checked, which is every signature declared at home.
+    file: Option<FileId>,
     /// The type parameters this was declared with, in order, and where each
     /// was written. Empty for almost everything.
     generics: Vec<(String, Span)>,
@@ -223,6 +232,7 @@ impl<'a> Checker<'a> {
                         .collect(),
                     ret,
                     span: Span::at(0),
+                    file: None,
                     generics: Vec::new(),
                     // An operation performs its own effect and nothing else,
                     // so naming one where a function type was wanted is only
@@ -297,6 +307,7 @@ impl<'a> Checker<'a> {
                         .collect(),
                     ret,
                     span: Span::at(0),
+                    file: None,
                     generics: Vec::new(),
                     row: FnRow::Declared(Vec::new()),
                     guarantee,
@@ -554,6 +565,7 @@ impl<'a> Checker<'a> {
             params,
             ret,
             span: sig.span,
+            file: None,
             generics: sig
                 .generics
                 .iter()
@@ -628,6 +640,7 @@ impl<'a> Checker<'a> {
                 .collect(),
             ret: signature.ret.substitute(&bindings),
             span: signature.span,
+            file: signature.file,
             generics: Vec::new(),
             row: signature.row.clone(),
             guarantee: signature.guarantee.clone(),
@@ -646,28 +659,29 @@ impl<'a> Checker<'a> {
         let name = &self.resolutions.def(def).name;
         let Some(SurfaceItem::Function {
             params,
+            param_spans,
             ret,
             generics,
             row,
             guarantee,
+            declared,
         }) = self.world.get(module, name)
         else {
             return None;
         };
 
         Some(Signature {
-            // Nowhere to point at. The declaration is in a file this
-            // diagnostic cannot draw, so a mismatch lands on the argument and
-            // says what was wanted rather than pointing across the boundary.
             params: params
                 .iter()
-                .map(|ty| ParamTy {
+                .zip(param_spans)
+                .map(|(ty, span)| ParamTy {
                     ty: ty.clone(),
-                    span: Span::at(0),
+                    span: *span,
                 })
                 .collect(),
             ret: ret.clone(),
-            span: Span::at(0),
+            span: declared.span,
+            file: Some(declared.file),
             generics: generics
                 .iter()
                 .map(|name| (name.clone(), Span::at(0)))
@@ -719,7 +733,12 @@ impl<'a> Checker<'a> {
             )
             .with_primary_label("wrong number of arguments");
             if !signature.span.is_empty() {
-                diagnostic = diagnostic.with_secondary(signature.span, "declared here");
+                diagnostic = match signature.file {
+                    Some(other) => {
+                        diagnostic.with_secondary_in(other, signature.span, "declared here")
+                    }
+                    None => diagnostic.with_secondary(signature.span, "declared here"),
+                };
             }
             self.emit(diagnostic);
         }
@@ -746,8 +765,13 @@ impl<'a> Checker<'a> {
                 continue;
             };
             let param_ty = param.ty.clone();
-            let because = (!param.span.is_empty())
-                .then(|| (param.span, "the parameter it is passed to".to_string()));
+            let because = (!param.span.is_empty()).then(|| {
+                (
+                    signature.file,
+                    param.span,
+                    "the parameter it is passed to".to_string(),
+                )
+            });
             self.assign(&actual[index], &param_ty, Some(arg), arg.span(), because);
         }
 
@@ -1371,7 +1395,7 @@ impl<'a> Checker<'a> {
         expected: &Ty,
         expr: Option<&Expr>,
         span: Span,
-        because: Option<(Span, String)>,
+        because: Because,
     ) {
         self.assign_carrying(actual, expected, expr, Carried::default(), span, because);
     }
@@ -1389,7 +1413,7 @@ impl<'a> Checker<'a> {
         expr: Option<&Expr>,
         carried: Carried,
         span: Span,
-        because: Option<(Span, String)>,
+        because: Because,
     ) {
         // A function type says what a value of it performs, and whether a
         // value keeps that promise is a question for the pass that knows about
@@ -1494,8 +1518,11 @@ impl<'a> Checker<'a> {
         )
         .with_primary_label(format!("this is {found}"));
 
-        if let Some((where_span, why)) = because {
-            diagnostic = diagnostic.with_secondary(where_span, why);
+        if let Some((file, where_span, why)) = because {
+            diagnostic = match file {
+                Some(other) => diagnostic.with_secondary_in(other, where_span, why),
+                None => diagnostic.with_secondary(where_span, why),
+            };
         }
 
         self.emit(diagnostic);
@@ -2147,7 +2174,7 @@ impl<'a> Checker<'a> {
         self.check_block_against(
             &function.body,
             &ret,
-            Some((ret_span, "the declared return type".to_string())),
+            Some((None, ret_span, "the declared return type".to_string())),
         );
         self.returns.pop();
     }
@@ -2184,12 +2211,7 @@ impl<'a> Checker<'a> {
     /// loses where each part of it was written, so the branch that established
     /// a fact is no longer the branch being checked and every refinement in a
     /// conditional falls back to a runtime guard.
-    fn check_against(
-        &mut self,
-        expr: &'a Expr,
-        expected: &Ty,
-        because: Option<(Span, String)>,
-    ) -> Ty {
+    fn check_against(&mut self, expr: &'a Expr, expected: &Ty, because: Because) -> Ty {
         match expr {
             Expr::If {
                 condition,
@@ -2216,12 +2238,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_block_against(
-        &mut self,
-        block: &'a Block,
-        expected: &Ty,
-        because: Option<(Span, String)>,
-    ) -> Ty {
+    fn check_block_against(&mut self, block: &'a Block, expected: &Ty, because: Because) -> Ty {
         let mut diverges = false;
         for stmt in &block.stmts {
             self.check_stmt(stmt);
@@ -2252,7 +2269,7 @@ impl<'a> Checker<'a> {
         condition: &'a Expr,
         then_branch: &'a Block,
         else_branch: Option<&'a Expr>,
-        wanted: Option<(Ty, Option<(Span, String)>)>,
+        wanted: Option<(Ty, Because)>,
     ) -> Ty {
         let condition_ty = self.infer(condition);
         self.assign(
@@ -2307,7 +2324,7 @@ impl<'a> Checker<'a> {
                             &then_ty,
                             Some(else_branch),
                             else_branch.span(),
-                            Some((then_branch.span, "the other branch".to_string())),
+                            Some((None, then_branch.span, "the other branch".to_string())),
                         );
                     }
                     // The branch that knows more decides. Taking the first one
@@ -2370,7 +2387,7 @@ impl<'a> Checker<'a> {
                             &declared,
                             Some(init),
                             init.span(),
-                            Some((annotation.span(), "declared here".to_string())),
+                            Some((None, annotation.span(), "declared here".to_string())),
                         );
                         declared
                     }
@@ -2431,7 +2448,7 @@ impl<'a> Checker<'a> {
                     &declared,
                     Some(value),
                     value.span(),
-                    Some((field_span, "the state it is assigned to".to_string())),
+                    Some((None, field_span, "the state it is assigned to".to_string())),
                 );
 
                 // What was known about the old value is not known about the new
@@ -2454,7 +2471,7 @@ impl<'a> Checker<'a> {
                     &ret,
                     value.as_ref(),
                     value.as_ref().map(Expr::span).unwrap_or(*span),
-                    Some((ret_span, "the declared return type".to_string())),
+                    Some((None, ret_span, "the declared return type".to_string())),
                 );
             }
             Stmt::Assert { condition, .. } => {
@@ -2668,10 +2685,12 @@ impl<'a> Checker<'a> {
 
         let because = match accumulator {
             Some(accumulator) => Some((
+                None,
                 accumulator.span,
                 "the accumulator this has to produce again".to_string(),
             )),
             None => Some((
+                None,
                 span,
                 "a `for` with no `with` produces `()` on every turn".to_string(),
             )),
@@ -2786,7 +2805,11 @@ impl<'a> Checker<'a> {
                         &expected_err,
                         None,
                         operand.span(),
-                        Some((ret_span, "the error type this function returns".to_string())),
+                        Some((
+                            None,
+                            ret_span,
+                            "the error type this function returns".to_string(),
+                        )),
                     ),
                     Some((other, ret_span)) if !other.absorbs() => {
                         let described = self.types.describe(&other);
@@ -3225,6 +3248,7 @@ impl<'a> Checker<'a> {
                 Some(expr),
                 expr.span(),
                 Some((
+                    None,
                     elements[0].span(),
                     "the first element, which decides the element type".to_string(),
                 )),
@@ -3341,7 +3365,11 @@ impl<'a> Checker<'a> {
             &element,
             Some(&args[1]),
             args[1].span(),
-            Some((args[0].span(), "the list it is pushed onto".to_string())),
+            Some((
+                None,
+                args[0].span(),
+                "the list it is pushed onto".to_string(),
+            )),
         );
         // What is in the list after this, rather than what was in it before.
         // `[]` is a list of unknown, so pushing onto one used to hand back
@@ -3439,7 +3467,8 @@ impl<'a> Checker<'a> {
             && self.resolutions.def(def).kind == DefKind::Import
             && let Some(signature) = self.imported_function_signature(def)
         {
-            return self.check_call_against(&signature, callee, args, span, None);
+            let name = self.resolutions.def(def).name.clone();
+            return self.check_call_against(&signature, callee, args, span, Some(name));
         }
 
         // A direct call to a declared function, where the parameter spans are
@@ -3763,7 +3792,7 @@ impl<'a> Checker<'a> {
                 // An empty span means the declaration is in another file, so
                 // there is nothing here to point at.
                 (field.span != Span::at(0))
-                    .then(|| (field.span, "the field it is assigned to".to_string())),
+                    .then(|| (None, field.span, "the field it is assigned to".to_string())),
             );
         }
 
@@ -3809,7 +3838,7 @@ impl<'a> Checker<'a> {
         scrutinee: &'a Expr,
         arms: &'a [MatchArm],
         span: Span,
-        wanted: Option<(Ty, Option<(Span, String)>)>,
+        wanted: Option<(Ty, Because)>,
     ) -> Ty {
         let scrutinee_ty = self.infer(scrutinee);
         let payload = self.ok_range_of(scrutinee);
@@ -3861,7 +3890,7 @@ impl<'a> Checker<'a> {
                             &expected,
                             Some(&arm.body),
                             arm.body.span(),
-                            Some((arms[0].span, "the first arm".to_string())),
+                            Some((None, arms[0].span, "the first arm".to_string())),
                         );
                     }
                 }
@@ -4317,14 +4346,14 @@ impl<'a> Checker<'a> {
                     &Ty::Str,
                     Some(rhs),
                     rhs.span(),
-                    Some((lhs.span(), "joined with this".to_string())),
+                    Some((None, lhs.span(), "joined with this".to_string())),
                 );
                 self.assign(
                     left,
                     &Ty::Str,
                     Some(lhs),
                     lhs.span(),
-                    Some((rhs.span(), "joined with this".to_string())),
+                    Some((None, rhs.span(), "joined with this".to_string())),
                 );
                 Ty::Str
             }
@@ -4349,7 +4378,7 @@ impl<'a> Checker<'a> {
                         left,
                         Some(rhs),
                         rhs.span(),
-                        Some((lhs.span(), "compared with this".to_string())),
+                        Some((None, lhs.span(), "compared with this".to_string())),
                     );
                     // Only when the sides agreed. Telling someone their two
                     // types do not match and then that the type they do not
@@ -4367,7 +4396,7 @@ impl<'a> Checker<'a> {
                         left,
                         Some(rhs),
                         rhs.span(),
-                        Some((lhs.span(), "compared with this".to_string())),
+                        Some((None, lhs.span(), "compared with this".to_string())),
                     );
                 }
                 Ty::Bool

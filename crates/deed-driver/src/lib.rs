@@ -278,7 +278,7 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
                 let name = entry.module.name.as_ref()?;
                 Some((
                     name.to_string_path(),
-                    deed_typeck::surface(&entry.module, &resolved.resolutions),
+                    deed_typeck::surface(entry.file, &entry.module, &resolved.resolutions),
                 ))
             }),
     );
