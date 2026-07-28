@@ -15,7 +15,7 @@
 //! This is the invariant that would have caught all of them at once.
 
 use deed_diagnostics::{SourceMap, render_human};
-use deed_driver::{Checked, check_all, check_text};
+use deed_driver::{Checked, check_all, check_text, shipped_modules, shipped_source};
 
 /// Every span in `checked` whose expression the checker never worked out.
 fn unknowns(sources: &SourceMap, checked: &Checked) -> Vec<String> {
@@ -75,9 +75,10 @@ fn every_example_is_fully_typed() {
 
     // The ones that import each other have to be checked together, or the
     // imported names have nothing behind them and are unknown for a reason
-    // that is nothing to do with this.
+    // that is nothing to do with this. One of the things they import ships
+    // inside the compiler, so it comes from there rather than from a path.
     let mut sources = SourceMap::new();
-    let ids: Vec<_> = paths
+    let mut ids: Vec<_> = paths
         .iter()
         .map(|path| {
             let text = std::fs::read_to_string(path).expect("an example should be readable");
@@ -86,7 +87,13 @@ fn every_example_is_fully_typed() {
         })
         .collect();
 
-    for checked in check_all(&sources, &ids) {
+    let subject = ids.len();
+    for module in shipped_modules() {
+        let text = shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
+    }
+
+    for checked in &check_all(&sources, &ids)[..subject] {
         assert!(
             !checked.has_errors(),
             "the examples should check cleanly:\n{}",
@@ -98,7 +105,7 @@ fn every_example_is_fully_typed() {
                 .join("\n")
         );
 
-        let unknown = unknowns(&sources, &checked);
+        let unknown = unknowns(&sources, checked);
         assert!(
             unknown.is_empty(),
             "{} checks cleanly but {} expression(s) have no type:\n  {}",

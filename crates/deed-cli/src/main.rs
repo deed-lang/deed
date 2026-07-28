@@ -728,9 +728,15 @@ fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) ->
                 }
                 candidate.set_extension("deed");
 
-                if candidate.is_file() && !files.contains(&candidate) {
-                    files.push(candidate);
-                    added = true;
+                // Already picked up counts as found. Two files asking for the
+                // same module put its name in this list twice, and the second
+                // ask used to fall through to the compiler's table and add a
+                // second copy of a module that was already there.
+                if candidate.is_file() {
+                    if !files.contains(&candidate) {
+                        files.push(candidate);
+                        added = true;
+                    }
                     found = true;
                     break;
                 }

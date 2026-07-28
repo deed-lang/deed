@@ -18,6 +18,12 @@
 //! result to go, so `design/02-syntax.md` listed the string operations as
 //! missing for as long as they were writable.
 //!
+//! The other thing that belongs here is a library that was already written and
+//! had nowhere to be. The list library sat under `examples/` for months, and a
+//! module's name says where it lives, so importing it meant writing
+//! `use examples/list` and a program outside this repository had to copy the
+//! file to get one.
+//!
 //! These are checked like any other file. `crates/deed-driver/tests/shipped.rs`
 //! runs their tests, and `deed fmt` reaches them through the repository walk
 //! because they are also files here.
@@ -27,7 +33,10 @@
 /// The name and the text, rather than a path, because at run time there is no
 /// path. The file in this repository is where the text is edited and the
 /// constant is what a program gets.
-const SHIPPED: &[(&str, &str)] = &[("std/string", include_str!("../../../std/string.deed"))];
+const SHIPPED: &[(&str, &str)] = &[
+    ("std/string", include_str!("../../../std/string.deed")),
+    ("std/list", include_str!("../../../std/list.deed")),
+];
 
 /// Every module that ships, in the order they are declared.
 pub fn shipped_modules() -> impl Iterator<Item = &'static str> {

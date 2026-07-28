@@ -398,7 +398,7 @@ name has to be performed for its own entry in `uses` to be justified.
 
 **It crosses a module boundary as a position.** Which parameter a variable comes from is what
 travels, for the same reason a type parameter travels as a position: a `DefId` is an index
-into one module's table. `examples/list.deed` is a list library written in Deed and
+into one module's table. `std/list` is a list library written in Deed and
 `examples/using_list.deed` imports it, which is the test for whether any of this worked.
 
 **It may only be written where a call can fill it in**, which means the row of a parameter

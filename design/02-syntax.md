@@ -38,8 +38,8 @@ small fixed set of primitives. If a name is in scope, some line in this file put
 
 **A module's name says where it lives.** A module named `a/b` is at `<root>/a/b.deed`, and the
 root is worked out from a file that was named on the command line: take its own module path
-off the end of its own file path, and what is left is the root. So `deed run examples/todo.deed`
-finds `examples/list.deed` for a `use examples/list`, and nothing has to be listed twice.
+off the end of its own file path, and what is left is the root. So `deed run examples/greeting.deed`
+finds `examples/names.deed` for a `use examples/names`, and nothing has to be listed twice.
 
 There is no search path, no config file and no manifest. One layout, and the `use` line
 already says where to look. That rule had been true of every file in this repository since
@@ -186,6 +186,11 @@ either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `pad_l
 written in the language is written in the language. What they were waiting for was somewhere
 to live.
 
+That is also where the list library is. `std/list` has `map`, `map_at`, `filter`, `fold`,
+`any`, `all`, `count_where`, `filtered_with`, `first`, `last`, `reversed` and `prepend`. It
+was written long before there was anywhere to put it and sat under `examples/`, where its
+name said it lived in this repository and a program elsewhere had to copy it.
+
 ## A library that ships with the compiler
 
 A module named `std/x` lives inside the compiler.
@@ -203,6 +208,11 @@ What goes here is what the prelude turns away. `contains` and `replace` can be w
 language and so they are not prelude names; before this they were not anywhere. `trim` stays
 in the prelude because it cannot be written, and case will stay out of both until it is one or
 the other.
+
+The other thing that goes here is a library that was already written and had nowhere to be.
+`std/list` was under `examples/` for months, which made its name a path into this repository,
+so a program elsewhere could not import it and had to copy the file instead. Two modules ship
+today, `std/string` and `std/list`, and `crates/deed-driver/src/shipped.rs` is the table.
 
 ## Lists
 
@@ -299,7 +309,7 @@ that can follow a `for` binder is `at` or `in`, so there is nothing here for it 
 confused with. That is the same reasoning that took `state` back out of the keyword list.
 
 This is in the language rather than in the library because the library cannot have it
-otherwise. Everything in `examples/list.deed` is written with a `for`, so `map` cannot hand a
+otherwise. Everything in `std/list` is written with a `for`, so `map` cannot hand a
 callback something the walk never knew. With this, the library builds its own indexed forms:
 `map_at` is four lines and no part of the language grew a second `map`. Before it,
 `examples/todo.deed` had three walks carrying a counter in a record, all the same shape, each
@@ -361,7 +371,7 @@ the body is this, so there is nothing here for it to be confused with, which is 
 reasoning that kept `at` out of the keyword list and took `state` back out of it.
 
 This document said for a while that `break` and `continue` had not come up in a program
-written here. They had. `any` and `all` in `examples/list.deed` both opened with a branch whose
+written here. They had. `any` and `all` in `std/list` both opened with a branch whose
 only job was to notice that the answer was already in, which is control flow inside a fold,
 which is the thing a fold exists to not have. And the branch could skip the work but not the
 turn, so `any` over a thousand elements took a thousand turns to find the first one.
@@ -372,7 +382,7 @@ reason for having `for`. `break` and `continue` want a loop with control flow in
 than a fold, and the one thing they were wanted for is the clause above.
 
 What is deliberately absent from lists: slicing, searching, and any operation that takes a
-function. The last one is now writable, and `examples/list.deed` is a list library written in
+function. The last one is now writable, and `std/list` is a list library written in
 Deed rather than built into the compiler. It stays out of the prelude, because the prelude is
 where names go to become unavailable to everyone else and a library does not need to be
 there.
@@ -1348,7 +1358,7 @@ using an effect to get around not having a loop.
   thing the language can now express, and whether the prelude should carry one is the
   question.
 - Position is not something a callback can be handed by a library that does not already have
-  it. A `for` says where it is now, so `examples/list.deed` can write `map_at` and anything
+  it. A `for` says where it is now, so `std/list` can write `map_at` and anything
   else it wants out of that. What is still unanswered is whether an indexed form of every
   walk belongs in that library at all, since one of each doubles it and nobody has wanted
   more than `map_at` yet.

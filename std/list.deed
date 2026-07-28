@@ -18,7 +18,13 @@
 // Nothing in here is special to the compiler. Every function below could have
 // been written by anybody, which is the first time that has been true of
 // anything in this repository.
-module examples/list
+//
+// It lived under `examples/` for a while, and a module's name says where it
+// lives, so the only way to import it was `use examples/list` and a program
+// outside this repository had to copy the file. Nothing about the library
+// changed to fix that. It ships now, so the name a program writes is the name
+// it has here.
+module std/list
 
 // Turn each element into something else. The classic one, and the one that
 // could not be written until now.

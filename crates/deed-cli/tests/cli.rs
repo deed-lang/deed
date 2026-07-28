@@ -860,12 +860,23 @@ fn a_program_that_imports_can_be_run_by_naming_its_own_file() {
     // handed can say which other ones to pick up.
     //
     // Without this, `examples/todo.deed` could not be run at all once it
-    // started using `examples/list.deed`, and the workaround was to name every
-    // file the program transitively needs.
+    // started using a library in another file, and the workaround was to name
+    // every file the program transitively needs.
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
     let output = run(&["run", TODO, "--dir", dir]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("done"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_root_relative_import_is_still_found_from_the_named_file_alone() {
+    // The half above stopped covering, because the library `todo.deed` imports
+    // ships with the compiler now and is found without a root at all.
+    // `examples/greeting.deed` imports two files beside it, so this is the
+    // rule working out a root from the path it was given.
+    let greeting = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/greeting.deed");
+    let output = run(&["check", greeting]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
 }
 
 #[test]
@@ -1134,6 +1145,27 @@ fn a_program_anywhere_can_import_a_shipped_module() {
 }
 
 #[test]
+fn a_program_anywhere_can_import_the_shipped_list_library() {
+    // The list library used to live under `examples/`, so this same file had
+    // to say `use examples/list` and only worked from inside a checkout of
+    // this repository. It says `std/list` now and there is nothing to copy.
+    let scratch = Scratch::new("shipped-list");
+    let file = scratch.write(
+        "report.deed",
+        "module scratch/report\n\n\
+         use std/list.{map, count_where}\n\n\
+         test \"the library is there\" {\n\
+         \x20 assert map([1, 2], |n: Int| n + n) == [2, 4]\n\
+         \x20 assert count_where([1, 2, 3], |n: Int| n > 1) == 2\n\
+         }\n",
+    );
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
+}
+
+#[test]
 fn a_shipped_module_is_context_rather_than_subject() {
     // Its tests are not the ones you asked about, the same way an imported
     // file's are not. Otherwise every program that used the library would
@@ -1178,6 +1210,36 @@ fn a_file_of_their_own_wins_over_the_shipped_one() {
     let output = run(&["test", file.to_str().unwrap()]);
     assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
     assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
+}
+
+#[test]
+fn two_files_asking_for_the_same_one_pick_it_up_once() {
+    // Their own file wins, and it has to keep winning for the second file that
+    // asks. The name went into the wanted list twice, the first ask picked the
+    // file up and the second ask found it already picked up, read that as not
+    // found, and fell through to the compiler's table, so the module was there
+    // twice and `DEED3002` said so.
+    let scratch = Scratch::new("shipped-twice");
+    scratch.write(
+        "std/string.deed",
+        "module std/string\n\n\
+         fn pad_right(text: String, width: Int) -> String {\n\
+         \x20 \"theirs\"\n\
+         }\n",
+    );
+    let one = scratch.write(
+        "one.deed",
+        "module one\n\nuse std/string.{pad_right}\n\nfn a() -> String { pad_right(\"x\", 2) }\n",
+    );
+    let two = scratch.write(
+        "two.deed",
+        "module two\n\nuse std/string.{pad_right}\n\nfn b() -> String { pad_right(\"y\", 2) }\n",
+    );
+
+    // Named rather than handed the directory, so their `std/string.deed`
+    // arrives through the import rule that had the hole in it.
+    let output = run(&["check", one.to_str().unwrap(), two.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
 }
 
 #[test]

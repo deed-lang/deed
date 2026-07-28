@@ -21,7 +21,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use deed_diagnostics::{Diagnostic, SourceMap, render_human};
-use deed_driver::check_all;
+use deed_driver::{check_all, shipped_modules, shipped_source};
 
 /// Every `.deed` file in `examples/`, checked together.
 ///
@@ -46,7 +46,7 @@ fn corpus() -> (SourceMap, Vec<Diagnostic>) {
     );
 
     let mut sources = SourceMap::new();
-    let ids: Vec<_> = paths
+    let mut ids: Vec<_> = paths
         .iter()
         .map(|path| {
             let text = fs::read_to_string(path).expect("an example should be readable");
@@ -58,7 +58,18 @@ fn corpus() -> (SourceMap, Vec<Diagnostic>) {
         })
         .collect();
 
-    let said = check_all(&sources, &ids)
+    // The corpus imports a module that ships inside the compiler, so it is
+    // here for the same reason the command line puts it there. Last, and the
+    // diagnostics below are read off the first `subject` of them: what this
+    // test is about is the warnings `examples/` produces, and a library
+    // shipping with the compiler is checked by `shipped.rs`.
+    let subject = ids.len();
+    for module in shipped_modules() {
+        let text = shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
+    }
+
+    let said = check_all(&sources, &ids)[..subject]
         .iter()
         .flat_map(|one| one.diagnostics.clone())
         .collect();
