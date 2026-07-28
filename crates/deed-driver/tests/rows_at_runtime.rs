@@ -32,7 +32,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use deed_diagnostics::{Diagnostic, SourceMap, render_human};
-use deed_driver::check_all;
+use deed_driver::{check_all, shipped_modules, shipped_source};
 use deed_interp::{Program, run_tests};
 
 fn rendered(sources: &SourceMap, diagnostics: &[Diagnostic]) -> String {
@@ -117,6 +117,13 @@ fn examples() -> Vec<(String, String)> {
                 .replace('\\', "/");
             (name, fs::read_to_string(path).expect("readable"))
         })
+        .chain(shipped_modules().map(|module| {
+            // The corpus imports one of these, so it has to be here for a
+            // `use` to have something to point at, which is the same reason
+            // the command line puts it in front of the checker.
+            let text = shipped_source(module).expect("a module that ships has a source");
+            (format!("<shipped>/{module}.deed"), text.to_string())
+        }))
         .collect()
 }
 

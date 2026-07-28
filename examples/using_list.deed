@@ -1,9 +1,13 @@
 // Using the list library, which is the point of it existing.
 //
-// `examples/list.deed` is written in Deed. Nothing in it is known to the
+// `std/list` is written in Deed. Nothing in it is known to the
 // compiler: no builtin, no special case, no name in the prelude. This file
 // imports it and uses it three ways, and the third is the one that was
 // impossible until row variables landed.
+//
+// The import says `std/list` rather than a path under `examples/` because the
+// library ships inside the compiler now. This file would read exactly the same
+// if it lived anywhere else, which is the whole point of moving it.
 //
 // 1. A callback that performs nothing. `map` performs nothing either, so
 //    `doubled` declares nothing.
@@ -16,7 +20,7 @@
 //    was.
 module examples/using_list
 
-use examples/list.{map, map_at, filter, filtered_with, fold, any, all, count_where, first, reversed}
+use std/list.{map, map_at, filter, filtered_with, fold, any, all, count_where, first, reversed}
 
 effect Log {
     fn note(message: String) -> ()

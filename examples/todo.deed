@@ -46,15 +46,19 @@
 //    say so. Writing `map` once rather than once per element type needed a
 //    generic function (#113); writing it once rather than once per effect
 //    needed a row variable (#117). Those two are what
-//    `examples/list.deed` is made of, and the section below is four functions
+//    `std/list` is made of, and the section below is four functions
 //    now, three of them one line.
 //
 // 6. Pointing this file at that library found the last one. The compiler only
 //    looks at the files it was handed, so `deed run examples/todo.deed` could
-//    not find `examples/list` and the workaround was to name every file the
+//    not find the library and the workaround was to name every file the
 //    program needs. A library nobody can use without knowing its file layout
 //    is not a library. A module's name says where it lives now (#118), which
 //    is a rule every file here already followed and nothing said out loud.
+//
+//    The library was still under `examples/` then, so the name that rule made
+//    you write was `use examples/list`, which is a path into this repository.
+//    It ships with the compiler now and the line above reads `use std/list`.
 //
 // 7. Marking a task done, which is what this file said for months it could
 //    not do, is one `map` over the tasks with one of them replaced. It took
@@ -99,12 +103,12 @@
 //
 //    That is the fifth thing this file decided about the language, and the
 //    argument for putting it in the language rather than in the library is the
-//    library itself: everything in `examples/list.deed` is written with a
+//    library itself: everything in `std/list` is written with a
 //    `for`, so `map` could not hand a callback something the walk never knew.
 //    `map_at` is four lines of Deed now and nothing here grew a second `map`.
 module examples/todo
 
-use examples/list.{map, any, count_where}
+use std/list.{map, any, count_where}
 
 record Task {
     done: Bool,
@@ -129,7 +133,7 @@ fn parse(line: String) -> Result<Task, String> {
 
 // The three walks, which used to be three recursive functions and three
 // `Diverge` declarations. They became three `for` loops, and they are three
-// calls into `examples/list.deed` now, which is a library written in Deed rather
+// calls into `std/list` now, which is a library written in Deed rather
 // than built into the compiler.
 //
 // That is the fifth thing this file found, and it took the longest to fix.

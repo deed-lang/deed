@@ -172,6 +172,29 @@ fn the_odd_operation_is_odd_among_however_many_there_are() {
     );
 }
 
+/// What ships inside the compiler, where the document says what ships.
+///
+/// The table is a list of names the compiler holds, so it is the checkable
+/// kind of claim. It is also the kind that goes stale quietly: adding a module
+/// is one line in one file and nothing about that line has any reason to look
+/// at a paragraph in a design document.
+#[test]
+fn the_modules_that_ship_are_the_ones_the_syntax_document_names() {
+    let syntax = read("design/02-syntax.md");
+    let sentence = between(&syntax, "modules ship", ", and `crates/");
+
+    let shipping: Vec<String> = deed_driver::shipped_modules().map(str::to_string).collect();
+    assert_eq!(backticked(sentence), shipping);
+
+    let claim = format!("{} modules ship", spelled(shipping.len()));
+    let claim = claim[..1].to_uppercase() + &claim[1..];
+    assert!(
+        syntax.contains(&claim),
+        "{} modules ship, so the sentence should read {claim:?}",
+        shipping.len()
+    );
+}
+
 #[test]
 fn the_examples_the_readme_names_are_the_examples_there_are() {
     let readme = read("README.md");
@@ -224,7 +247,7 @@ fn the_library_the_readme_lists_is_the_library_that_is_written() {
         "none of them known",
     );
 
-    let written: Vec<String> = read("examples/list.deed")
+    let written: Vec<String> = read("std/list.deed")
         .lines()
         .filter_map(|line| line.strip_prefix("fn "))
         .map(|rest| {
@@ -234,7 +257,7 @@ fn the_library_the_readme_lists_is_the_library_that_is_written() {
         })
         .collect();
 
-    assert!(!written.is_empty(), "examples/list.deed declares nothing");
+    assert!(!written.is_empty(), "std/list.deed declares nothing");
     assert_eq!(backticked(sentence), written);
 }
 
@@ -379,6 +402,16 @@ fn the_readme_reports_the_number_of_tests_the_corpus_runs() {
         ids.push(sources.add(format!("examples/{name}"), text));
     }
 
+    // The corpus imports a module that ships inside the compiler, so it goes
+    // in last and the count below is taken off the first `subject` of them.
+    // That is the same split the command line makes: a library is context,
+    // and its tests are not the ones the transcript reports.
+    let subject = ids.len();
+    for module in deed_driver::shipped_modules() {
+        let text = deed_driver::shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
+    }
+
     // Together, because they import each other, and every file runs only its
     // own tests, which is what `deed test examples/` does.
     let checks = deed_driver::check_all(&sources, &ids);
@@ -399,7 +432,7 @@ fn the_readme_reports_the_number_of_tests_the_corpus_runs() {
     }
 
     let mut passed = 0;
-    for checked in &checks {
+    for checked in &checks[..subject] {
         for outcome in run_tests(&program, checked.file) {
             assert!(
                 outcome.failure.is_none(),

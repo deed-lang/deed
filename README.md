@@ -260,7 +260,7 @@ The examples are [transfer.deed](examples/transfer.deed),
 [closures.deed](examples/closures.deed), [diverge.deed](examples/diverge.deed),
 [strings.deed](examples/strings.deed), [lists.deed](examples/lists.deed),
 [generics.deed](examples/generics.deed),
-[generic_types.deed](examples/generic_types.deed), [list.deed](examples/list.deed),
+[generic_types.deed](examples/generic_types.deed),
 [using_list.deed](examples/using_list.deed), [table.deed](examples/table.deed), and the three
 that see
 each other: [names.deed](examples/names.deed), [sink.deed](examples/sink.deed) and
@@ -332,7 +332,7 @@ indexes a list, and it is known to be a real one: not negative, and below the le
 is being walked. Before it, three walks in that file carried a counter in a record so that
 something could ride alongside the answer, and every branch had to remember to bump it. The
 reason this is in the language rather than in the library is that the library cannot have it
-otherwise: everything in `list.deed` is written with a `for`, so `map` cannot hand a callback
+otherwise: everything in `std/list` is written with a `for`, so `map` cannot hand a callback
 something the walk never knew. With it, `map_at` is four lines of Deed and no part of the
 language grew a second `map`. `at` is still an ordinary name, since the only thing that can
 follow a `for` binder is `at` or `in`.
@@ -529,11 +529,16 @@ at the type it was applied to, and so does a pattern binder, which is the part a
 `Some { value }` on an `Option<Int>` has to bind an `Int` rather than the `T` the choice was
 declared with.
 
-`list.deed` and `using_list.deed` are the point of the three changes above. `list.deed` is a
+`std/list` and `using_list.deed` are the point of the three changes above. `std/list` is a
 list library written in Deed: `map`, `map_at`, `filter`, `fold`, `any`, `all`, `count_where`,
 `filtered_with`, `first`, `last`, `reversed` and `prepend`, none of them known to the
 compiler, no builtin, no special case, no name in the prelude. It is the first thing in this
 repository anybody else could have written.
+
+It ships with the compiler, and it did not always. It sat under `examples/` for months, and a
+module's name says where it lives, so the only way to import it was `use examples/list` and a
+program written anywhere else had to copy the file. Nothing about the library changed when it
+moved.
 
 It is also what got the language a way to stop a walk. `any` and `all` in it both used to
 open with a branch whose only job was to notice that the answer was already in, which is
@@ -548,7 +553,7 @@ be, so the termination argument that keeps a `while` statement out is untouched.
 
 Pointing `todo.deed` at it found the last thing missing. The compiler only looks at the files
 it was handed, which is a rule worth having, and it meant `deed run examples/todo.deed` could
-not find `examples/list` and the workaround was to name every file the program transitively
+not find the library and the workaround was to name every file the program transitively
 needs. A library nobody can use without knowing its file layout is not a library. A module's
 name says where it lives now: a module named `a/b` is at `<root>/a/b.deed`, and the root comes
 from taking a named file's module path off the end of its own path. No search path, no config
@@ -559,7 +564,7 @@ does not run a library's tests and `deed check app.deed` does report a library's
 is the same split the language server already makes between the workspace and the open
 document.
 
-What `list.deed` needed last was a row variable. Before that there were two ways to write
+What `std/list` needed last was a row variable. Before that there were two ways to write
 `map` and both were wrong: `Fn(A) -> B` promises to perform nothing, so the callback could
 not log or read a file, and `Fn(A) uses Log.note -> B` works for one effect and needs a
 second copy for the next one. `uses r` stands for whatever the callback performs and passes
