@@ -667,17 +667,17 @@ fn plural(count: usize, noun: &str) -> String {
 /// and the search stops at the root the named files imply.
 ///
 /// One thing is not under a root: a module that ships inside the compiler.
-/// Those are looked at only after every root has been asked, so a file called
-/// `std/string.deed` sitting under somebody's own root is the one that wins.
-/// Nobody should have to know which is which, and the one that is right there
-/// is the one they can read.
+/// Those are looked at only after every root has been asked, which is
+/// [`deed_driver::take_shipped`] and is the same call the language server
+/// makes, so a file called `std/string.deed` sitting under somebody's own root
+/// is the one that wins. Nobody should have to know which is which, and the
+/// one that is right there is the one they can read.
 fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) -> io::Result<()> {
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut have: HashSet<String> = HashSet::new();
     let mut wanted: Vec<String> = Vec::new();
 
     let mut next = 0usize;
-    let mut next_shipped = 0usize;
     loop {
         // Read what has arrived since the last pass, which on the first pass
         // is everything that was named.
@@ -700,22 +700,8 @@ fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) ->
             wanted.extend(uses);
         }
 
-        // A shipped module can import another one, and it says so the same way
-        // anything else does. It contributes no root: it is not under one.
-        while next_shipped < shipped.len() {
-            let module = shipped[next_shipped];
-            next_shipped += 1;
-            let Some(text) = deed_driver::shipped_source(module) else {
-                continue;
-            };
-            let Some((name, uses)) = deed_driver::imports_of(text) else {
-                continue;
-            };
-            have.insert(name);
-            wanted.extend(uses);
-        }
-
         let mut added = false;
+        let mut unanswered: Vec<String> = Vec::new();
         for module in std::mem::take(&mut wanted) {
             if have.contains(&module) {
                 continue;
@@ -742,13 +728,17 @@ fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) ->
                 }
             }
 
-            if !found
-                && let Some(name) = deed_driver::shipped_modules().find(|name| *name == module)
-                && !shipped.contains(&name)
-            {
-                shipped.push(name);
-                added = true;
+            if !found {
+                unanswered.push(module);
             }
+        }
+
+        // Last, once every root has had its turn. What those modules import in
+        // turn comes back in `wanted`, so the roots get asked about those too
+        // before the compiler's table is.
+        wanted = unanswered;
+        if deed_driver::take_shipped(&mut have, &mut wanted, shipped) {
+            added = true;
         }
 
         // A `use` naming a module that is nowhere is left alone. The resolver

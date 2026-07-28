@@ -8,10 +8,11 @@
 //!
 //! A document is checked together with every other `.deed` file in the folders
 //! the editor said it has open, with the text of anything open coming from the
-//! editor's buffer rather than from disk. See [`crate::workspace`] for why the
-//! set is that one and not another. An editor that names no folder gets the
-//! single file behaviour, which is honest for a server that has been handed
-//! one file and nothing else.
+//! editor's buffer rather than from disk, and with the modules that ship inside
+//! the compiler after those. See [`crate::workspace`] for why the set is that
+//! one and not another. An editor that names no folder gets the single file
+//! behaviour, which is honest for a server that has been handed one file and
+//! nothing else.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -70,7 +71,13 @@ impl Document {
 
 /// One file of the workspace, checked, and the URI it is known by.
 struct Entry {
-    uri: String,
+    /// `None` for a module that ships inside the compiler. It is checked so
+    /// that a `use` naming it resolves, and there is no file behind it: no
+    /// place to open, no place to edit, and nowhere to put a squiggle. Every
+    /// answer that hands the editor a location has to say what it does with
+    /// one of these, which is why this is an `Option` rather than a made up
+    /// URI that fails when somebody clicks it.
+    uri: Option<String>,
     checked: Checked,
 }
 
@@ -412,9 +419,14 @@ impl Server {
                 data.name == name && declares(data.kind) && !data.span.is_empty()
             })?;
 
+        // A module that ships inside the compiler is not a place to go. There
+        // is no file to open, so the answer is the one for a module that is
+        // not there at all: the `use` line, where a reader can at least see
+        // what was imported and what it came from.
+        let uri = entry.uri.as_ref()?;
         let text = sources.file(entry.checked.file).text();
         Some(Json::object(vec![
-            ("uri", Json::string(&entry.uri)),
+            ("uri", Json::string(uri)),
             ("range", range_in(text, declared.span)),
         ]))
     }
@@ -501,6 +513,14 @@ impl Server {
         let mut found = Vec::new();
 
         for entry in &entries {
+            // A module that ships inside the compiler is not a place. Nothing
+            // written in it is somewhere to jump to, and nothing written in it
+            // is this workspace's to rewrite: renaming an export of
+            // `std/list` here would edit the caller and leave the declaration
+            // alone, in a file that is inside the binary.
+            let Some(uri) = &entry.uri else {
+                continue;
+            };
             let here = entry
                 .checked
                 .module
@@ -512,9 +532,7 @@ impl Server {
             let local = match &home {
                 // Not exportable, so only the file it was asked from can hold
                 // an answer, and the definition is the one already in hand.
-                None => {
-                    (entry.uri == text_document_uri(message).unwrap_or_default()).then_some(def)
-                }
+                None => (*uri == text_document_uri(message).unwrap_or_default()).then_some(def),
                 Some(home) if here.as_deref() == Some(home.as_str()) => entry
                     .checked
                     .resolutions
@@ -556,7 +574,7 @@ impl Server {
 
             if !spans.is_empty() {
                 found.push(Found {
-                    uri: entry.uri.clone(),
+                    uri: uri.clone(),
                     file: entry.checked.file,
                     spans,
                 });
@@ -1055,6 +1073,12 @@ impl Server {
         let mut symbols = Vec::new();
 
         for entry in &entries {
+            // A module that ships inside the compiler is not somewhere this
+            // workspace can be navigated to, so it is not in the box that
+            // exists to navigate one.
+            let Some(uri) = &entry.uri else {
+                continue;
+            };
             let text = sources.file(entry.checked.file).text();
             let container = entry
                 .checked
@@ -1081,7 +1105,7 @@ impl Server {
                     (
                         "location",
                         Json::object(vec![
-                            ("uri", Json::string(&entry.uri)),
+                            ("uri", Json::string(uri)),
                             ("range", range_in(text, data.span)),
                         ]),
                     ),
@@ -1089,11 +1113,7 @@ impl Server {
                 if let Some(container) = &container {
                     fields.push(("containerName", Json::string(container)));
                 }
-                symbols.push((
-                    data.name.to_string(),
-                    entry.uri.clone(),
-                    Json::object(fields),
-                ));
+                symbols.push((data.name.to_string(), uri.clone(), Json::object(fields)));
             }
         }
 
@@ -1185,18 +1205,36 @@ impl Server {
     /// diagnostics for a document it never opened has nowhere obvious to put
     /// them and no event that clears them.
     fn published(&self) -> Vec<Json> {
-        let (_, checked) = self.check_workspace();
-        checked
+        let (_, entries) = self.check_workspace();
+        self.publish_all(&entries)
+    }
+
+    /// The messages for a set of already checked entries.
+    ///
+    /// Split out from [`Self::published`] so that a test can hand it an entry
+    /// with a problem in it. Nothing that ships inside the compiler fails to
+    /// check today, and waiting for the day one does is not a test.
+    fn publish_all(&self, entries: &[Entry]) -> Vec<Json> {
+        entries
             .iter()
             .filter_map(|entry| {
-                let document = self.documents.get(&entry.uri)?;
+                // A module that ships inside the compiler has no URI, so it
+                // never gets past here. That is the answer to what happens
+                // when one of them fails to check: nothing is said to the
+                // person. It is not their file, they cannot open it and they
+                // cannot fix it, and a squiggle they can do nothing about on a
+                // document they never opened is worse than none. A shipped
+                // module that stops checking is a broken compiler, and
+                // `crates/deed-driver/tests/shipped.rs` is what fails then.
+                let uri = entry.uri.as_ref()?;
+                let document = self.documents.get(uri)?;
                 let reported = entry
                     .checked
                     .diagnostics
                     .iter()
-                    .map(|diagnostic| self.render(document, diagnostic, &entry.uri))
+                    .map(|diagnostic| self.render(document, diagnostic, uri))
                     .collect();
-                Some(publish(&entry.uri, reported))
+                Some(publish(uri, reported))
             })
             .collect()
     }
@@ -1211,18 +1249,24 @@ impl Server {
     /// because the buffer is what the person is looking at and the file behind
     /// it may not have been saved.
     ///
+    /// The modules that ship inside the compiler go on the end, after every
+    /// file the person could open has been offered, so their own
+    /// `std/string.deed` still wins. That is the command line tool's rule and
+    /// literally its code: `deed check` accepted `use std/list` on three files
+    /// in this repository while the editor put `DEED3007` under the same line,
+    /// because this used to be the set of files nobody had told about them.
+    ///
     /// The [`SourceMap`] comes back with the results because a question about
     /// one file can be answered in another, and turning a span in that other
     /// file into a range needs its text.
     fn check_workspace(&self) -> (SourceMap, Vec<Entry>) {
-        let mut sources = SourceMap::new();
-        let mut ids = Vec::new();
-        let mut uris = Vec::new();
+        // Held before anything is checked, because which modules ship inside
+        // the compiler is a question about all of them at once.
+        let mut pending: Vec<(String, Option<String>, String)> = Vec::new();
         let mut open: Vec<Option<PathBuf>> = Vec::new();
 
         for (uri, document) in &self.documents {
-            ids.push(sources.add(uri.as_str(), document.text.clone()));
-            uris.push(uri.clone());
+            pending.push((uri.clone(), Some(uri.clone()), document.text.clone()));
             open.push(uri::to_path(uri).map(|path| canonical(&path)));
         }
 
@@ -1243,8 +1287,26 @@ impl Server {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            ids.push(sources.add(path.display().to_string(), text));
-            uris.push(uri::from_path(&path));
+            pending.push((
+                path.display().to_string(),
+                Some(uri::from_path(&path)),
+                text,
+            ));
+        }
+
+        for module in deed_driver::shipped_for(pending.iter().map(|(_, _, text)| text.as_str())) {
+            let Some(text) = deed_driver::shipped_source(module) else {
+                continue;
+            };
+            pending.push((format!("<shipped>/{module}.deed"), None, text.to_string()));
+        }
+
+        let mut sources = SourceMap::new();
+        let mut ids = Vec::new();
+        let mut uris = Vec::new();
+        for (name, uri, text) in pending {
+            ids.push(sources.add(name, text));
+            uris.push(uri);
         }
 
         let entries = uris
@@ -1261,7 +1323,7 @@ impl Server {
         let (_, checked) = self.check_workspace();
         checked
             .into_iter()
-            .find(|entry| entry.uri == uri)
+            .find(|entry| entry.uri.as_deref() == Some(uri))
             .map(|entry| entry.checked)
     }
 
@@ -1710,4 +1772,86 @@ fn error(id: &Json, code: i64, message: &str) -> Json {
             ]),
         ),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const URI: &str = "file:///work/two.deed";
+    /// A file that reaches for a module living inside the compiler.
+    const IMPORTER: &str = "module two\n\nuse std/list.{map}\n\nfn f(xs: List<Int>) -> List<Int> {\n    map(xs, |n: Int| n + 1)\n}\n";
+
+    fn server_with(uri: &str, text: &str) -> Server {
+        let mut server = Server::new();
+        server
+            .documents
+            .insert(uri.to_string(), Document::new(text.to_string()));
+        server
+    }
+
+    #[test]
+    fn a_module_that_ships_is_checked_alongside_the_document() {
+        // The half that makes the `use` resolve. It is here, it went through
+        // the same pipeline as everything else, and it is context: nobody
+        // named it, so it is not a place.
+        let server = server_with(URI, IMPORTER);
+        let (_, entries) = server.check_workspace();
+
+        let shipped: Vec<&Entry> = entries.iter().filter(|entry| entry.uri.is_none()).collect();
+        assert_eq!(
+            shipped.len(),
+            1,
+            "one module was imported, so one should have been taken"
+        );
+        assert_eq!(
+            shipped[0]
+                .checked
+                .module
+                .name
+                .as_ref()
+                .map(|path| path.to_string_path()),
+            Some("std/list".to_string())
+        );
+    }
+
+    #[test]
+    fn a_problem_in_a_module_that_ships_is_not_published_as_the_persons_own() {
+        // The decision this records: a shipped module that fails to check says
+        // nothing to the person at the keyboard. It is not their file, they
+        // cannot open it and they cannot fix it.
+        //
+        // Nothing that ships fails to check today, so the failure is put here
+        // by hand. The alternative is a test that passes because the thing it
+        // guards against has not happened yet, which is the same as no test.
+        let server = server_with(URI, IMPORTER);
+        let (_, mut entries) = server.check_workspace();
+
+        let shipped = entries
+            .iter()
+            .position(|entry| entry.uri.is_none())
+            .expect("std/list should have been checked alongside");
+        let file = entries[shipped].checked.file;
+        entries[shipped].checked.diagnostics.push(Diagnostic::error(
+            "DEED0000",
+            file,
+            Span::new(0, 1),
+            "a module that ships stopped checking",
+        ));
+
+        let sent = server.publish_all(&entries);
+        assert_eq!(sent.len(), 1, "only the open document is published for");
+        assert_eq!(
+            sent[0].at(&["params", "uri"]).and_then(Json::as_str),
+            Some(URI)
+        );
+        assert_eq!(
+            sent[0]
+                .at(&["params", "diagnostics"])
+                .and_then(Json::as_array)
+                .map(<[Json]>::len),
+            Some(0),
+            "the invented failure belongs to nobody's document"
+        );
+    }
 }

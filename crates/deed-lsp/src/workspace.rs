@@ -12,6 +12,14 @@
 //! says is the folder is the same answer `deed check src/` gives when a person
 //! says which directory they mean.
 //!
+//! It is not quite the whole set, and this file used to say it was. A module
+//! that ships inside the compiler is under no folder and cannot be walked to,
+//! so [`crate::server`] adds those after this walk has had its turn, which
+//! leaves a workspace's own `std/list.deed` winning over the one in the
+//! binary. The same thing bit the same way twice: the first time the missing
+//! file was the one next door, the second time it was the one inside the
+//! compiler.
+//!
 //! The walk is the walk the command line tool does, skipping build output and
 //! version control, and it happens on every check. That is O(workspace) per
 //! keystroke, and this file used to say P9 had never been measured and that

@@ -22,7 +22,7 @@ mod imports;
 mod rows;
 mod shipped;
 
-pub use shipped::{shipped_modules, shipped_source};
+pub use shipped::{shipped_for, shipped_modules, shipped_source, take_shipped};
 
 use std::time::{Duration, Instant};
 
