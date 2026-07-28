@@ -3,8 +3,11 @@
 //! `crates/deed-driver/tests/codes.rs` matches on a code's name, so one tested
 //! shape satisfies it for a code with several messages behind it. The
 //! interpreter had ten codes and forty-eight messages, and eight of the
-//! forty-eight, plus one note, had ever been rendered by a test. `DEED6006`
-//! alone had thirty-six, three of them read.
+//! forty-eight had ever been rendered by a test. Three more had a note read
+//! while the message it hangs off was not: `DEED6008`'s in `properties.rs`,
+//! `DEED6007`'s and `DEED6001`'s in `running.rs`. How the forty-eight divide
+//! between the ten codes is written down once, on the constants in
+//! `crates/deed-interp/src/codes.rs`.
 //!
 //! A runtime message is worse to leave unread than a checker message. It fires
 //! on a program that already type checked, so the reader has been told
@@ -13,15 +16,15 @@
 //!
 //! # Three kinds of message, and why the note is not the same for all of them
 //!
-//! Reading them turned up that they are not one family. Thirty of the
-//! thirty-four shapes that used to share one helper are shapes `deed check`
-//! refuses, so they are reached only when the interpreter is handed a program
-//! the checker would have turned down. The message said the language permits
-//! them and the interpreter has not got round to it, which is the opposite of
-//! true, and it said "yet", which promised work that is not coming.
+//! Reading them turned up that they are not one family. Most of the shapes
+//! that used to share one helper are shapes `deed check` refuses, so they are
+//! reached only when the interpreter is handed a program the checker would
+//! have turned down. The message said the language permits them and the
+//! interpreter has not got round to it, which is the opposite of true, and it
+//! said "yet", which promised work that is not coming.
 //!
-//! Two of the four left really are the interpreter's own gap, and `deed check`
-//! accepts both. One is neither: a call into a module whose code was never
+//! Four are not that. Two really are the interpreter's own gap, and `deed
+//! check` accepts both. One is neither: a call into a module whose code was never
 //! handed over, which is a gap in what this library was given, as its own
 //! `codes.rs` has said all along. And one, `sys.files` with no directory
 //! behind it, is an ordinary runtime fact about a program that is right.
@@ -62,7 +65,7 @@
 //! all: `Program::add` takes a parse tree and a set of resolutions, and
 //! nothing makes it ask whether anybody checked them.
 
-use deed_diagnostics::{SourceMap, render_human};
+use deed_diagnostics::{Diagnostic, SourceMap, render_human};
 use deed_interp::{DeclaredRows, Guards, Program, codes, run_main, run_tests};
 use deed_lexer::tokenize;
 use deed_parser::parse;
@@ -73,6 +76,7 @@ use std::path::Path;
 struct Reported {
     code: &'static str,
     text: String,
+    underlined: String,
 }
 
 impl Reported {
@@ -95,11 +99,27 @@ impl Reported {
         self
     }
 
+    /// What the caret is drawn under.
+    ///
+    /// The rendering says the same thing, but only as a row of arrows under a
+    /// line of source, so reading it out of the text would pin the renderer's
+    /// layout rather than the span.
+    fn underlines(&self, expected: &str) -> &Self {
+        assert_eq!(self.underlined, expected, "in:\n{}", self.text);
+        self
+    }
+
     /// Which code it arrived under.
     fn under(&self, code: &str) -> &Self {
         assert_eq!(self.code, code, "in:\n{}", self.text);
         self
     }
+}
+
+/// The source the primary caret is drawn over, in the file the failure names.
+fn underlined(sources: &SourceMap, failure: &Diagnostic) -> String {
+    let span = failure.primary.span;
+    sources.file(failure.file).text()[span.start as usize..span.end as usize].to_string()
 }
 
 /// The one failure the single test in `src` produces.
@@ -136,6 +156,7 @@ fn message_in(src: &str, universe: &Universe) -> Reported {
         .expect("the test should have failed");
     Reported {
         code: failure.code,
+        underlined: underlined(&sources, &failure),
         text: render_human(&sources, &failure),
     }
 }
@@ -164,6 +185,7 @@ fn message_from_main(src: &str, root: &Path) -> Reported {
     let failure = run.result.expect_err("`main` should have failed");
     Reported {
         code: failure.code,
+        underlined: underlined(&sources, &failure),
         text: render_human(&sources, &failure),
     }
 }
@@ -245,7 +267,7 @@ fn an_io_operation_names_the_capability_it_was_handed() {
 
 // -- DEED6006, the shapes the checker refuses ------------------------------
 
-/// The note the other thirty behind this code share.
+/// The note every message through the shared helper carries.
 ///
 /// It used to say the opposite, that this was a gap in the interpreter rather
 /// than something the language forbids, and it is read here once rather than
@@ -354,7 +376,8 @@ fn a_field_on_something_with_no_fields_says_what_it_was() {
     // the reader has to look at is the thing that turned out not to be that
     // shape.
     message(&wrap("  let n = 1\n  assert n.x == 1"))
-        .says("the interpreter cannot run field access on an Int");
+        .says("the interpreter cannot run field access on an Int")
+        .underlines("n");
 }
 
 #[test]
@@ -370,8 +393,13 @@ fn a_field_a_value_does_not_have_says_which_field() {
 fn a_call_that_is_not_a_call_says_only_that() {
     // One message, eleven emission sites: a callee that is not a name, a
     // declaration with no body, a prelude function handed the wrong shapes,
-    // and so on. They are left sharing a sentence deliberately, argued at the
-    // bottom of this file.
+    // and so on. They are left sharing a sentence deliberately. What tells
+    // them apart is which arm of the interpreter's call machinery gave up,
+    // and a reader cannot act on that: the note already says the file was not
+    // checked or the check has a hole, and the caret is already on the call.
+    // Eleven sentences would name parts of the interpreter rather than parts
+    // of the program, which is the mistake this change is undoing everywhere
+    // else in this file.
     message(&wrap("  assert length(1) == 1")).says("the interpreter cannot run this call");
 }
 
@@ -538,7 +566,7 @@ fn contents_that_are_not_a_string_say_what_they_were() {
 ///
 /// `deed check` accepts this program, which is what makes it the interpreter's
 /// gap rather than the checker's, and why it does not carry the note the
-/// thirty-one shapes above carry.
+/// shapes above carry.
 #[test]
 fn a_closure_that_outlives_its_handler_operation_says_the_gap_is_here() {
     message(
@@ -673,9 +701,10 @@ fn a_run_that_went_too_deep_says_how_deep_it_was_willing_to_go() {
 /// Two arms are unreachable, and both are kept.
 ///
 /// `this effect operation` needs an effect operation whose definition has no
-/// parent. The resolver writes the parent in at both of the two places an
-/// operation gets a definition, the declaration and the first mention through
-/// an import, so there is no operation without one.
+/// parent. The resolver writes the parent in at all three places an operation
+/// gets a definition: the declaration, the first mention through an import,
+/// and the built-in `Io` operations it seeds a universe with. So there is no
+/// operation without one.
 ///
 /// `a closure the interpreter lost track of` needs a closure value holding an
 /// index that is not in the table. The table is only ever appended to, never

@@ -763,22 +763,27 @@ impl<'a> Interp<'a> {
 
     /// Something the running program did that `deed check` refuses.
     ///
-    /// Thirty-one of the thirty-four shapes that arrive here are shapes the
-    /// type checker turns down: `+` on an Int and a Bool, a `for` over
-    /// something that is not a list, a field on a number, a call with the
-    /// wrong arity. The note used to say the opposite, that this was a gap in
-    /// the interpreter rather than something the language forbids, so a reader
-    /// who believed it would go looking for a missing feature when what they
-    /// have is an unchecked file or a hole in the check.
+    /// Nearly everything that arrives here is a shape the type checker turns
+    /// down: `+` on an Int and a Bool, a `for` over something that is not a
+    /// list, a field on a number, a call with the wrong arity. The note used
+    /// to say the opposite, that this was a gap in the interpreter rather than
+    /// something the language forbids, so a reader who believed it would go
+    /// looking for a missing feature when what they have is an unchecked file
+    /// or a hole in the check.
     ///
     /// The "yet" went with it, for the same reason. It promised work that is
     /// not coming: the answer to every one of these is a diagnostic from an
     /// earlier pass, and there is nothing here left to implement.
     ///
-    /// The three shapes that are not the checker's business do not come
-    /// through here. Two are the interpreter's own gap and say so through
-    /// [`Interp::interpreter_gap`]; the third is a call into a module the
-    /// interpreter was never handed, which is neither.
+    /// The rest of what arrives here are invariants nothing has violated,
+    /// argued about at the bottom of `crates/deed-interp/tests/messages.rs`.
+    ///
+    /// The shapes that are not the checker's business no longer come through
+    /// here at all: the interpreter's own gap says so through
+    /// [`Interp::interpreter_gap`], a call into a module the interpreter was
+    /// never handed through [`Interp::no_code_for`], and `sys.files` in a
+    /// program with no directory through an arm of its own. How this code's
+    /// messages divide up is written down once, on [`codes::NOT_RUNNABLE`].
     fn not_runnable(&self, span: Span, what: &str) -> Signal {
         self.fail(
             Diagnostic::error(
