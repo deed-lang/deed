@@ -2,6 +2,11 @@
 //!
 //! The "too wide" rule gets as much attention as "too narrow", because it is
 //! the one that decides whether an effect row means anything.
+//!
+//! A code is not a message. `DEED5004` stands for three different sentences
+//! and had a test for one of them, which is how a comment claiming it had only
+//! one shape left survived being false. So the tests here read the words a
+//! person sees, not only the code they were filed under.
 
 use std::collections::HashMap;
 
@@ -762,7 +767,11 @@ fn an_effect_travels_through_a_module_in_the_middle() {
 #[test]
 fn an_uncheckable_row_does_not_make_its_callers_look_pure() {
     // `sys.*` is not a row anyone can read, so a caller inheriting an empty
-    // one would move the loophole rather than close it.
+    // one would move the loophole rather than close it. The message is the
+    // whole of what stops that here: the exported row really is empty, and
+    // nothing else at the call site would tell the reader otherwise. So this
+    // reads the sentence rather than the label, and it names the callee,
+    // because a caller with two imported calls needs to know which one it is.
     let (sources, _, _, analysis) = analyse_source_in(
         "module a\n\nuse wide.{everything}\n\nfn f(sys: System) -> Int { everything(sys) }\n",
         &universe_of(&["module wide\n\nfn everything(sys: System) -> Int\n  uses sys.*,\n{ 0 }\n"]),
@@ -771,7 +780,11 @@ fn an_uncheckable_row_does_not_make_its_callers_look_pure() {
         codes_of(&analysis.diagnostics),
         vec![codes::UNVERIFIABLE_ROW]
     );
-    assert!(rendered(&sources, &analysis.diagnostics).contains("not checked"));
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(
+        text.contains("`everything` has a row that is not checked, so this call is not either"),
+        "{text}"
+    );
 }
 
 // -- rows across a module boundary -----------------------------------------
@@ -845,11 +858,31 @@ fn granting_everything_a_capability_carries_is_reported() {
 }
 
 #[test]
+fn a_capability_named_in_a_row_without_the_star_is_reported() {
+    // The same code with a different sentence, because it is a different
+    // mistake: `sys.*` says "everything this carries" on purpose, and `sys`
+    // says it by leaving a character out. Both leave the row unchecked, so the
+    // message has to say which one happened or the fix is a guess.
+    let (sources, _, _, analysis) =
+        analyse_source("module a\n\nfn main(sys: System) -> Int\n  uses sys,\n{ 0 }\n");
+    assert_eq!(
+        codes_of(&analysis.diagnostics),
+        vec![codes::UNVERIFIABLE_ROW]
+    );
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(text.contains("`sys` is a value, not an effect"), "{text}");
+    assert!(
+        text.contains("a row names effects, not the capabilities they are performed with"),
+        "{text}"
+    );
+}
+
+#[test]
 fn an_unverifiable_row_suppresses_both_checks() {
     // Otherwise every entry would be reported as unused, which is noise about
-    // something the compiler already admitted it cannot see. `sys.*` is the
-    // remaining way to get an unverifiable row, since an imported effect is
-    // checked properly now.
+    // something the compiler already admitted it cannot see. This is about what
+    // an unverifiable row costs the rest of the function, not about which
+    // spellings produce one; each of those has a test of its own next to it.
     let (_, _, _, analysis) = analyse_source(
         "module a\n\neffect Ledger {\n  fn post(n: Int) -> ()\n}\n\nfn main(sys: System) -> Int\n  uses sys.*, Ledger.post,\n{ 0 }\n",
     );
@@ -869,6 +902,49 @@ fn a_uses_entry_naming_something_that_is_not_an_effect_is_rejected() {
     );
     assert_eq!(codes_of(&analysis.diagnostics), vec![codes::NOT_AN_EFFECT]);
     assert!(rendered(&sources, &analysis.diagnostics).contains("is a record, not an effect"));
+}
+
+#[test]
+fn an_imported_name_that_is_not_an_effect_is_rejected_the_same_way() {
+    // It used to be a warning saying the row was not checked, which read as if
+    // the compiler could not tell what `quiet` was. It can: the kind is on the
+    // export, so the answer is as definite as it is for a local declaration.
+    // Warning about it also switched the too-wide and too-narrow checks off for
+    // the whole function, so one wrong entry bought silence about the rest.
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse logger.{quiet}\n\nfn f() -> Int\n  uses quiet,\n{ 0 }\n",
+        &universe_of(&[LOGGER]),
+    );
+    assert_eq!(codes_of(&analysis.diagnostics), vec![codes::NOT_AN_EFFECT]);
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(
+        text.contains("`quiet` is a function, not an effect"),
+        "{text}"
+    );
+    assert!(
+        text.contains("an imported one is checked the same way a local one is"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_wrong_entry_does_not_switch_off_the_rest_of_the_row() {
+    // The point of making the entry above an error rather than a warning. The
+    // function still declares `Ledger.post` and still never performs it, and
+    // that is still reported.
+    let (sources, _, _, analysis) = analyse_source_in(
+        "module a\n\nuse logger.{quiet}\n\neffect Ledger {\n  fn post(n: Int) -> ()\n}\n\nfn f() -> Int\n  uses quiet, Ledger.post,\n{ 0 }\n",
+        &universe_of(&[LOGGER]),
+    );
+    let text = rendered(&sources, &analysis.diagnostics);
+    assert!(
+        codes_of(&analysis.diagnostics).contains(&codes::UNUSED_EFFECT),
+        "{text}"
+    );
+    assert!(
+        text.contains("`Ledger.post` is declared but never performed"),
+        "{text}"
+    );
 }
 
 // -- robustness ------------------------------------------------------------

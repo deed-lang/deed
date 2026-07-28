@@ -14,13 +14,23 @@ pub const UNDECLARED_EFFECT: &str = "DEED5001";
 pub const UNUSED_EFFECT: &str = "DEED5002";
 
 /// A `uses` entry naming something that is not an effect.
+///
+/// An imported name lands here too. Which kind of thing it is comes off the
+/// export rather than off a declaration in this file, but it comes off
+/// something either way, so the module boundary does not soften the answer.
 pub const NOT_AN_EFFECT: &str = "DEED5003";
 
 /// A row the compiler cannot check.
 ///
-/// Either it names an effect from a module that has not been loaded, or it
-/// grants everything a capability carries. Both make the row vacuous, and the
+/// Three shapes reach it, and each says something different: `sys.*` grants
+/// everything a capability carries, a bare capability in a `uses` clause names
+/// a value where an effect belongs, and a call into a function whose own row is
+/// one of those inherits the hole. All three make the row vacuous, and the
 /// compiler says so rather than reporting a clean check it did not perform.
+///
+/// A `uses` entry that is simply the wrong kind of name is not here. That is
+/// DEED5003, whether the name is local or imported: the compiler knows what it
+/// is, so there is nothing it failed to verify.
 pub const UNVERIFIABLE_ROW: &str = "DEED5004";
 
 /// A test performs an effect with no handler in scope.

@@ -96,6 +96,15 @@ name what it grants would not be a row. Declaring an effect means having a word 
 Effects the language provides are the exception, and only because they need no word. `Io` and
 `Diverge` are in the prelude, so every module can already name them.
 
+**The boundary does not soften a rule either.** A `uses` entry naming something that is not
+an effect is an error whether the name was declared here or imported: which kind of thing it
+is comes off the export, so the compiler is exactly as sure of it either way. That was a
+warning on the imported side for a while, which read as if it could not tell, and it also
+switched both rules above off for the rest of the function, so one wrong entry bought silence
+about the whole row. What genuinely cannot be read across the boundary is a callee whose own
+row said `sys.*`; the caller is told at the call site rather than quietly inheriting an empty
+row and looking pure.
+
 ## Specification is not action
 
 A `where` or `ensures` clause may mention any effect operation and contributes nothing to
