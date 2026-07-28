@@ -511,6 +511,7 @@ impl<'a> Checker<'a> {
                 name: field.name.name.clone(),
                 ty: self.lower_type(&field.ty),
                 span: field.span,
+                file: None,
             })
             .collect()
     }
@@ -3671,10 +3672,12 @@ impl<'a> Checker<'a> {
         match self.world.get(&module, &name)? {
             SurfaceItem::Record {
                 fields: declared,
+                field_spans,
                 generics,
+                declared: at,
             } => {
                 let arity = generics.len();
-                let declared = external_fields(declared);
+                let declared = external_fields(declared, Some((field_spans, at.file)));
                 let args = self.check_literal_fields(&declared, fields, span, &name, arity);
                 Some(Ty::External {
                     module,
@@ -3689,7 +3692,10 @@ impl<'a> Checker<'a> {
             } => {
                 let choice = Rc::clone(choice);
                 let arity = generics.len();
-                let declared = declared.as_deref().map(external_fields).unwrap_or_default();
+                let declared = declared
+                    .as_deref()
+                    .map(|fields| external_fields(fields, None))
+                    .unwrap_or_default();
                 let args = self.check_literal_fields(&declared, fields, span, &name, arity);
                 Some(Ty::External {
                     module,
@@ -3698,7 +3704,7 @@ impl<'a> Checker<'a> {
                 })
             }
             SurfaceItem::Handler { state } => {
-                let declared = external_fields(state);
+                let declared = external_fields(state, None);
                 self.check_literal_fields(&declared, fields, span, &name, 0);
                 Some(Ty::External {
                     module,
@@ -3789,10 +3795,14 @@ impl<'a> Checker<'a> {
                 &field.ty.substitute(&bindings),
                 init.value.as_ref(),
                 *value_span,
-                // An empty span means the declaration is in another file, so
-                // there is nothing here to point at.
-                (field.span != Span::at(0))
-                    .then(|| (None, field.span, "the field it is assigned to".to_string())),
+                // An empty span means there is nothing to point at.
+                (field.span != Span::at(0)).then(|| {
+                    (
+                        field.file,
+                        field.span,
+                        "the field it is assigned to".to_string(),
+                    )
+                }),
             );
         }
 
@@ -4668,16 +4678,27 @@ fn promised_by(ensures: &[Ensures], sig: &deed_ast::FnSig) -> Guarantee {
 
 /// Fields from another module's surface, as the checker's own field type.
 ///
-/// The span is empty because the declaration is in a file this pass is not
-/// looking at. Diagnostics that would point at it fall back to saying nothing
-/// rather than pointing at the wrong place.
-fn external_fields(fields: &[(String, Ty)]) -> Vec<FieldTy> {
+/// `written` is where they are declared, for the kinds of surface that carry
+/// it. A variant's and a handler's do not yet, so a diagnostic about one falls
+/// back to saying nothing rather than pointing at the wrong place.
+fn external_fields(fields: &[(String, Ty)], written: Option<(&[Span], FileId)>) -> Vec<FieldTy> {
     fields
         .iter()
-        .map(|(name, ty)| FieldTy {
-            name: name.clone(),
-            ty: ty.clone(),
-            span: Span::at(0),
+        .enumerate()
+        .map(|(index, (name, ty))| {
+            let (span, file) = match written {
+                Some((spans, file)) => (
+                    spans.get(index).copied().unwrap_or_else(|| Span::at(0)),
+                    Some(file),
+                ),
+                None => (Span::at(0), None),
+            };
+            FieldTy {
+                name: name.clone(),
+                ty: ty.clone(),
+                span,
+                file,
+            }
         })
         .collect()
 }

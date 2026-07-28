@@ -730,3 +730,50 @@ fn the_same_call_at_home_says_the_same_thing_without_naming_a_second_file() {
     assert_eq!(problem.secondary[0].file, None);
     assert_eq!(render_human(&sources, problem).matches("-->").count(), 1);
 }
+
+#[test]
+fn a_field_of_the_wrong_type_points_at_the_declaration_in_the_other_file() {
+    // The third of the labels #298 unblocked. A record's fields arrive through
+    // `FieldTy`, which the runtime type table shares, so this one waited for a
+    // file on that too.
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{Point}\n\nfn f() -> Point {\n    Point { x: \"no\", y: 2 }\n}\n",
+        "module other\n\n// Longer than the file that uses it, on purpose.\n\n\
+         record Point {\n    x: Int,\n    y: Int,\n}\n",
+    ]);
+    let [problem] = checked.diagnostics.as_slice() else {
+        panic!("{}", rendered(&sources, &checked.diagnostics));
+    };
+    assert_eq!(problem.code, deed_typeck::codes::TYPE_MISMATCH);
+
+    let [field] = problem.secondary.as_slice() else {
+        panic!("{}", render_human(&sources, problem));
+    };
+    assert_eq!(field.message, "the field it is assigned to");
+    let file = sources.file(field.file_or(problem.file));
+    assert_ne!(field.file_or(problem.file), problem.file);
+    assert_eq!(&file.text()[field.span.as_range()], "x: Int");
+}
+
+#[test]
+fn a_variant_from_another_module_still_points_at_nothing() {
+    // Written down rather than left to be discovered. A variant's fields do
+    // not carry where they were declared, so this label is still withheld, and
+    // the mismatch itself is still reported.
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{Loud}\n\nfn f() -> Tone {\n    Loud { volume: \"no\" }\n}\n\
+         \n\nuse other.{Tone}\n",
+        "module other\n\n\
+         choice Tone {\n    Plain,\n    Loud { volume: Int },\n}\n",
+    ]);
+    let mismatch = checked
+        .diagnostics
+        .iter()
+        .find(|d| d.code == deed_typeck::codes::TYPE_MISMATCH)
+        .unwrap_or_else(|| panic!("{}", rendered(&sources, &checked.diagnostics)));
+    assert!(
+        mismatch.secondary.is_empty(),
+        "{}",
+        render_human(&sources, mismatch)
+    );
+}
