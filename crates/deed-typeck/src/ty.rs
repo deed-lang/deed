@@ -528,6 +528,17 @@ impl Types {
             .map(|(span, _)| *span)
     }
 
+    /// How many expressions the checker worked out a type for.
+    ///
+    /// This is here for [`Types::unknowns`]'s sake. That one hands back a
+    /// subset of this table, so a test asserting the subset is empty is
+    /// asserting nothing unless something says the table itself is real: a
+    /// checker that recorded no type for anything has no unknowns in it
+    /// either, and the invariant reads as satisfied.
+    pub fn recorded(&self) -> usize {
+        self.exprs.len()
+    }
+
     pub fn obligations_at(&self, tier: Tier) -> usize {
         self.obligations.iter().filter(|o| o.tier == tier).count()
     }

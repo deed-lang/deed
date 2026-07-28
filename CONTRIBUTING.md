@@ -53,11 +53,18 @@ every element of a list, or about no element of one, then the empty list satisfi
 the test says nothing. So whenever a test builds a collection and then asserts over it, it
 also has to establish that the collection is not empty, from inside the test.
 
-This is about any collection, not about directories. It has been fixed three times here and
-written down three times as a rule about walking a directory, and both times it came back it
-was somewhere else: an `all(...)` over the obligations a check produced, and a slice from
-index one over the lines a program printed, which is empty whenever the program prints one
-line. Naming the container is what let it come back, so the rule is about the shape.
+This is about any collection, not about directories. It has been repaired three times here
+(`2944fab`, `4e9151f`, `44082b4`) and each time the reasoning was written as a comment
+beside the one assertion being repaired, which is the right place for it and the only place
+it went. Two of those three are not about directories at all: one pins the number of
+diagnostic codes a test parsed out of the source before comparing anything, and one asserts
+that a perturbation actually perturbed something. So the general shape was understood, it
+was just never stated anywhere a test author would meet it before writing a test, and the
+one commit message that did generalise put the boundary in the wrong place: "only walking a
+directory can quietly produce nothing". It came back twice somewhere else, as an `all(...)`
+over the obligations a check produced and as a slice from index one over the lines a program
+printed, which is empty whenever the program prints one line. Naming the container is what
+let it come back, so the rule here is about the shape.
 
 The shapes to look for, all of which hold for free on nothing:
 

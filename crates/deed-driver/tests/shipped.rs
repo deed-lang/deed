@@ -71,6 +71,7 @@ fn what_ships_is_what_the_file_says() {
     // table is the one place a name and a path are written next to each other,
     // and a copied line with one of them changed would ship the wrong module
     // under the right name.
+    let mut compared = 0;
     for module in shipped_modules() {
         let text = shipped_source(module).expect("a module that ships has a source");
         let declared = format!("module {module}");
@@ -78,7 +79,13 @@ fn what_ships_is_what_the_file_says() {
             text.lines().any(|line| line.trim_end() == declared),
             "`{module}` ships text whose own module line is not `{declared}`"
         );
+        compared += 1;
     }
+
+    // An empty table satisfies the loop above. The test next door already
+    // pins the table against a directory walk that is guarded, but this one
+    // should not need the one next door to be about something.
+    assert!(compared > 0, "nothing ships, so nothing was compared");
 }
 
 #[test]
