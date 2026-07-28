@@ -13,6 +13,12 @@
 //! checked in the language. All three were found by accident, one at a time.
 //!
 //! This is the invariant that would have caught all of them at once.
+//!
+//! Which it only is if the table it reads has something in it. `unknowns` is
+//! a filter over the expressions the checker recorded a type for, so a checker
+//! that recorded none has no unknowns either and every assertion below holds
+//! for free. Each of them therefore says how many expressions were looked at
+//! before saying none of them came out untyped.
 
 use deed_diagnostics::{SourceMap, render_human};
 use deed_driver::{Checked, check_all, check_text, shipped_modules, shipped_source};
@@ -50,6 +56,14 @@ fn expect_all_known(name: &str, source: &str) {
     );
 
     let unknown = unknowns(&sources, &checked);
+    // The claim is that nothing the checker looked at came out untyped, not
+    // that it looked at nothing. Without this, a checker that recorded no type
+    // for any expression passes every test in this file.
+    assert!(
+        checked.types.recorded() > 0,
+        "{name} checks cleanly and the checker worked out no type for anything, \
+         so there was nothing for the assertion below to be about"
+    );
     assert!(
         unknown.is_empty(),
         "{name} checks cleanly but {} expression(s) have no type, \
@@ -93,6 +107,7 @@ fn every_example_is_fully_typed() {
         ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
     }
 
+    let mut looked_at = 0usize;
     for checked in &check_all(&sources, &ids)[..subject] {
         assert!(
             !checked.has_errors(),
@@ -107,13 +122,29 @@ fn every_example_is_fully_typed() {
 
         let unknown = unknowns(&sources, checked);
         assert!(
+            checked.types.recorded() > 0,
+            "{} checks cleanly and the checker worked out no type for anything",
+            sources.file(checked.file).name()
+        );
+        assert!(
             unknown.is_empty(),
             "{} checks cleanly but {} expression(s) have no type:\n  {}",
             sources.file(checked.file).name(),
             unknown.len(),
             unknown.join("\n  ")
         );
+        looked_at += checked.types.recorded();
     }
+
+    // A floor rather than a count, because the number moves whenever anybody
+    // edits an example and pinning it would make this a test about the corpus
+    // rather than about the checker. The corpus produces about 3800 today, so
+    // this fails long before the table gets thin enough to be suspicious.
+    assert!(
+        looked_at > 2000,
+        "the corpus produced only {looked_at} typed expressions, \
+         which is too few for the invariant above to be about anything"
+    );
 }
 
 // -- one per construct the language has ------------------------------------

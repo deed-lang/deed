@@ -49,6 +49,16 @@ fn coloured_words(grammar: &str) -> BTreeSet<&str> {
         found.extend(after[..end].split('|'));
         rest = &after[end + CLOSE.len()..];
     }
+
+    // Here rather than in one of the tests, because both of them are satisfied
+    // by an empty set: one has nothing missing from it and the other has
+    // nothing invented in it. Losing every alternation is the shape a bad edit
+    // to the grammar takes, and it is the shape neither test would report.
+    assert!(
+        !found.is_empty(),
+        "no `\\b(one|two)\\b` groups in the grammar, so nothing was compared"
+    );
+
     found
 }
 
@@ -64,13 +74,6 @@ fn grammar() -> String {
 fn the_grammar_colours_every_keyword() {
     let grammar = grammar();
     let coloured = coloured_words(&grammar);
-
-    // Without this the test passes on a grammar that lost every alternation,
-    // which is the shape a bad edit takes.
-    assert!(
-        !coloured.is_empty(),
-        "no `\\b(one|two)\\b` groups in the grammar, so nothing was compared"
-    );
 
     let missing: Vec<&str> = Keyword::ALL
         .iter()

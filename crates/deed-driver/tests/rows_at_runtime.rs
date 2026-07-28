@@ -77,11 +77,20 @@ fn run_all(files: &[(String, String)]) -> (SourceMap, Vec<Diagnostic>) {
     }
 
     let mut said = Vec::new();
+    let mut ran = 0;
     for one in &checked {
         for outcome in run_tests(&program, one.file) {
             said.extend(outcome.failure);
+            ran += 1;
         }
     }
+
+    // Everything in this file asserts that some list of failures is empty, and
+    // a run that executed nothing hands that over for free. The corpus check
+    // below counts its files and this counts what those files did, which are
+    // two different ways of ending up with nothing to report.
+    assert!(ran > 0, "no test ran, so no row was held to anything");
+
     (sources, said)
 }
 

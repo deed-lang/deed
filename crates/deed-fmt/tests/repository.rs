@@ -117,6 +117,7 @@ fn a_closing_brace_sits_under_the_line_that_opened_it() {
     files.sort();
     assert!(!files.is_empty(), "no `.deed` files found under {root:?}");
 
+    let mut checked = 0;
     for path in &files {
         let source = std::fs::read_to_string(path).unwrap();
         let mut opened: Vec<(usize, usize)> = Vec::new();
@@ -148,6 +149,7 @@ fn a_closing_brace_sits_under_the_line_that_opened_it() {
                         path.display(),
                         number + 1
                     );
+                    checked += 1;
                 }
                 leading = false;
             }
@@ -160,6 +162,12 @@ fn a_closing_brace_sits_under_the_line_that_opened_it() {
             opened[0].0
         );
     }
+
+    // A non-empty corpus is not enough here. The comparison happens once per
+    // brace that starts its own line, so a `braces` that stopped finding any
+    // would leave every file balanced at zero and every assertion above
+    // unreached, which is the same nothing the file list was checked for.
+    assert!(checked > 0, "no closing brace was compared to anything");
 }
 
 /// The braces on a line, with the ones inside text and comments left out.
