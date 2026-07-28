@@ -61,6 +61,7 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         returns: Vec::new(),
         facts: Facts::new(),
         refuting: false,
+        in_closure: 0,
     };
 
     checker.collect(module);
@@ -181,6 +182,16 @@ struct Checker<'a> {
     /// right rather than a mistake, so the two diagnostics that would report
     /// it are silent inside one, and nothing is recorded as discharged.
     refuting: bool,
+    /// How many closure bodies deep the expression being checked is.
+    ///
+    /// A closure captures the frame by value, so every name it reads is a copy
+    /// taken where the closure was written. Handler state is the one name that
+    /// is not a frame binding, and reading it through a closure is `DEED4030`.
+    /// A depth rather than a flag because a closure can be written inside a
+    /// closure, and nothing else nests: a declaration cannot appear inside an
+    /// expression, so the count is only ever unwound by the closure that
+    /// raised it.
+    in_closure: usize,
 }
 
 impl<'a> Checker<'a> {
@@ -2408,6 +2419,11 @@ impl<'a> Checker<'a> {
                     return;
                 }
 
+                self.closed_over_state(target, def, "assigned to inside a closure");
+                if self.in_closure > 0 {
+                    return;
+                }
+
                 let declared = self.def_types.get(&def).cloned().unwrap_or(Ty::Unknown);
                 let field_span = self.resolutions.def(def).span;
                 self.assign(
@@ -2837,7 +2853,9 @@ impl<'a> Checker<'a> {
                     }
                     param_types.push(ty);
                 }
+                self.in_closure += 1;
                 let ret = self.infer(body);
+                self.in_closure -= 1;
                 Ty::Fn {
                     params: param_types,
                     row: FnRow::Inferred,
@@ -2857,10 +2875,56 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Refuses a closure that names the handler state around it.
+    ///
+    /// Handler state is the one mutable thing in the language and its lifetime
+    /// is the `with` block that installed the handler. A closure's is not: it
+    /// is a value, it leaves through a function type, and it can be called
+    /// after the block has ended or underneath a different handler entirely.
+    /// The interpreter used to answer such a read out of whichever handler was
+    /// innermost when the call landed, which is a wrong number rather than a
+    /// refusal whenever two handlers share a state name.
+    ///
+    /// Capturing the handler was the other way out and it is refused here
+    /// instead, because the closure's type would not say it. `Fn() -> Int`
+    /// says the value takes nothing and performs nothing, and one that is also
+    /// a live window onto a particular handler's state carries an input and a
+    /// lifetime through a signature that mentions neither. See
+    /// `design/03-effects.md`.
+    ///
+    /// Lexical rather than about where the closure ends up. Working out
+    /// whether a particular closure escapes is escape analysis, and the reason
+    /// a closure's effects are charged to whoever wrote it is that this
+    /// language does not want to have to answer that question.
+    fn closed_over_state(&mut self, ident: &Ident, def: DefId, label: &str) {
+        if self.in_closure == 0 || self.resolutions.def(def).kind != DefKind::State {
+            return;
+        }
+        let declared = self.resolutions.def(def).span;
+        let name = ident.name.clone();
+        self.emit(
+            Diagnostic::error(
+                codes::CLOSURE_OVER_STATE,
+                self.file,
+                ident.span,
+                format!("`{name}` is handler state, and this closure can outlive the handler"),
+            )
+            .with_primary_label(label)
+            .with_secondary(declared, "the handler state it names")
+            .with_note(
+                "a closure captures the frame by value, so read the state into a local and let the closure carry that number",
+            )
+            .with_note(
+                "a handler lives as long as the `with` block that installed it, and nothing in the closure's type says which handler it came from",
+            ),
+        );
+    }
+
     fn ident_ty(&mut self, ident: &Ident) -> Ty {
         let Some(def) = self.def_of(ident) else {
             return Ty::Unknown;
         };
+        self.closed_over_state(ident, def, "read inside a closure");
         if let Some(ty) = self.def_types.get(&def) {
             return ty.clone();
         }

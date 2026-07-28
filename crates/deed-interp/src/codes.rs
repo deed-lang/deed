@@ -44,19 +44,24 @@ pub const NO_HANDLER: &str = "DEED6005";
 /// Something the run could not do.
 ///
 /// Thirty-six messages, which is three quarters of everything in this range,
-/// and they are not one thing. Thirty arrive through one helper and say only
-/// that the run met a shape `deed check` refuses first, so meeting one means
-/// the file was not checked or the check has a hole; two are a real gap in the
-/// interpreter, which is handler state read from a closure that outlived the
-/// handler operation it was written in; one is a call into a module whose code
-/// was never handed over, which is a gap in what this library was given rather
-/// than in the library; one is `sys.files` in a program that was not given a
-/// directory, which is an ordinary runtime fact about a program that is right;
-/// and two name a particular part of the compiler, a match that ran out of
-/// arms and a handler with a state field nobody gave a value to.
+/// and they are not one thing. Thirty-two arrive through one helper and say
+/// only that the run met a shape `deed check` refuses first, so meeting one
+/// means the file was not checked or the check has a hole; one is a call into
+/// a module whose code was never handed over, which is a gap in what this
+/// library was given rather than in the library; one is `sys.files` in a
+/// program that was not given a directory, which is an ordinary runtime fact
+/// about a program that is right; and two name a particular part of the
+/// compiler, a match that ran out of arms and a handler with a state field
+/// nobody gave a value to.
 ///
-/// Five notes say which of those a reader has. There used to be one, claiming
+/// Four notes say which of those a reader has. There used to be one, claiming
 /// all thirty-six were the interpreter's own unfinished work.
+///
+/// Two of them said the opposite, and were the only two that could: handler
+/// state read from a closure that outlived the handler operation it was
+/// written in, which `deed check` accepted. It does not any more. `DEED4030`
+/// refuses the closure where it is written, so those two joined the thirty
+/// and the fifth note went away with the helper behind it.
 pub const NOT_RUNNABLE: &str = "DEED6006";
 
 /// Arithmetic that has no answer, such as overflow or division by zero.

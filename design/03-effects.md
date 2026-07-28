@@ -299,6 +299,68 @@ escapes, and not having to answer that is the point.
 
 Closure parameters still need types, for the same reason every other parameter does.
 
+### A closure may not be written over handler state
+
+Handler state is the only mutable thing in the language and its lifetime is the `with` block
+that installed the handler. Everything that reads it runs inside one of that handler's
+operations, so the question of which handler a read belongs to never comes up.
+
+Except for a closure. A closure captures the frame, and state is not in the frame; it is in
+the handler instance. So a closure written inside a handler operation and called later read
+whichever handler was innermost when the call landed. Called after the operation returned
+that was no handler at all, and called inside another handler's operation it was that
+handler's table. When the two handlers happened to use the same state name there was no
+refusal and no message: `deed check` exited 0, the run exited 0, and the closure answered
+with the other handler's number.
+
+There were two ways out and they are not the same size.
+
+The obvious one is to capture the handler along with the frame. It gives the right answer to
+the case above, and it changes what a value is: a closure would keep a handler alive past the
+`with` block that installed it, so the program would hold a mutable cell with no name, no
+declared lifetime, and two live copies of "the" state of one handler as soon as the block ran
+twice. The reason to refuse it is not that, though. It is that the closure's type would not
+say any of it. `Fn() -> Int` says the value takes nothing, hands back an `Int` and performs
+nothing, and the section above argues that a row left off a function type cannot mean "any
+row", because a signature here is complete. A value that is also a live window onto one
+particular handler's state carries an input and a lifetime through a signature that mentions
+neither, and there is no notation for either. Whatever `with` discharges, it would stop being
+the whole story about what installing a handler costs.
+
+So it is refused instead, at the closure, as `DEED4030`. What to write is the snapshot the
+rest of the language already takes:
+
+```deed
+handler A implements Give {
+    state n: Int
+
+    fn getter() -> Fn() -> Int {
+        let current = n
+        || { current }
+    }
+}
+```
+
+The closure now carries a number, which is what `Fn() -> Int` said it carried.
+
+**What this rules out.** A closure cannot give a live view of handler state, so a handler
+cannot hand out something that reads or writes its state later, and a handler holding a
+capability in its state cannot let a closure carry that capability out of the `with` block.
+It also refuses closures that never leave: one written inside a handler operation and called
+on the next line is refused too. That is the price of the rule being lexical, and lexical is
+deliberate. Deciding which closures escape is escape analysis, and not having to answer that
+question is the same reason a closure's effects are charged to whoever wrote it rather than
+to whoever calls it. A closure that is called on the next line is one line away from being
+returned instead, and a rule that changes its answer over that line is a rule nobody can
+apply while reading.
+
+**What it leaves alone.** A closure written anywhere else is untouched, because handler state
+is in scope inside the handler that declared it and nowhere else, so there is no name to
+reach it by. Closures still cross into handler operations as arguments, still get stored in
+handler state and called later, and still leave a `with` block carrying whatever they were
+handed. `DEED4030` is about one thing: a closure written where the state is in scope, naming
+it.
+
 ### Function values
 
 A function value can cross a boundary, and the type it crosses through says what it may do
