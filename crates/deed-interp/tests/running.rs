@@ -853,6 +853,9 @@ fn a_contract_on_an_imported_function_is_still_enforced() {
 /// contract failure landing inside a callee that had declared everything
 /// correctly, and it was still live for this one.
 ///
+/// A `Label` carries a file of its own now, so the secondary is no longer a
+/// choice between the wrong bytes and nothing.
+///
 /// The two files are deliberately different lengths, so that reading the
 /// caller's offsets out of the callee's text cannot land on the same words by
 /// accident.
@@ -870,15 +873,31 @@ fn a_precondition_that_fails_across_a_module_boundary_underlines_the_call() {
     let underlined = &file.text()[span.start as usize..span.end as usize];
     assert_eq!(underlined, "halve(3)", "underlined in `{}`", file.name());
 
-    // And the clause is not shown at all. It lives in the other file, a label
-    // cannot say which file it means, and a caret drawn over the wrong bytes
-    // is worse than no caret. Giving `Label` a file of its own is the real
-    // answer and belongs to `deed-diagnostics` rather than here.
-    assert!(
-        failure.secondary.is_empty(),
-        "{}",
-        render_human(&sources, &failure)
+    // And the clause is shown, in the file it is written in. This used to be
+    // left off entirely, because a label carried a span and no file and would
+    // have been drawn over whatever sat at those offsets in the caller. It
+    // says which file it means now, so both halves of the failure are on the
+    // screen: what the caller wrote and what it did not satisfy.
+    let [clause] = failure.secondary.as_slice() else {
+        panic!("{}", render_human(&sources, &failure));
+    };
+    let clause_file = sources.file(clause.file_or(failure.file));
+    assert_ne!(
+        clause.file_or(failure.file),
+        failure.file,
+        "the clause is in the callee and the diagnostic is filed against the caller"
     );
+    assert_eq!(
+        &clause_file.text()[clause.span.as_range()],
+        "n % 2 == 0",
+        "underlined in `{}`",
+        clause_file.name()
+    );
+
+    // And the rendering says so, or a reader watches the caret change files
+    // with nothing to tell them it did.
+    let text = render_human(&sources, &failure);
+    assert!(text.contains(clause_file.name()), "{text}");
 }
 
 /// The same rule, for the depth limit.
@@ -913,11 +932,11 @@ fn a_run_that_goes_too_deep_across_a_module_boundary_underlines_a_call() {
 ///
 /// A postcondition failure is the function's bug, so the primary stays on the
 /// clause and the file stays the callee's. What moves is the `called from
-/// here` label, which carries a span and no file of its own: when the call is
-/// in another module it would be drawn over whatever sits at those offsets
-/// here, so it is left off instead.
+/// here` label, and it goes to the caller's file and says so. For a library
+/// function called from twenty places that label is the whole diagnosis, and
+/// it used to be left off whenever the call was in another module.
 #[test]
-fn a_postcondition_that_fails_across_a_module_boundary_leaves_the_call_out() {
+fn a_postcondition_that_fails_across_a_module_boundary_names_the_call() {
     let (sources, failure) = expect_failure_together(&[
         "module a\n\nuse b.{promise}\n\ntest \"breaks it\" {\n  assert promise(1) == 1\n}\n",
         "module b\n\n// Longer than the file that calls into it, on purpose.\n\n\
@@ -939,11 +958,25 @@ fn a_postcondition_that_fails_across_a_module_boundary_leaves_the_call_out() {
         "underlined in `{}`",
         file.name()
     );
-    assert!(
-        failure.secondary.is_empty(),
-        "{}",
-        render_human(&sources, &failure)
+
+    let [call] = failure.secondary.as_slice() else {
+        panic!("{}", render_human(&sources, &failure));
+    };
+    let call_file = sources.file(call.file_or(failure.file));
+    assert_ne!(
+        call.file_or(failure.file),
+        failure.file,
+        "the call is in the caller and the diagnostic is filed against the function"
     );
+    assert_eq!(
+        &call_file.text()[call.span.as_range()],
+        "promise(1)",
+        "underlined in `{}`",
+        call_file.name()
+    );
+
+    let text = render_human(&sources, &failure);
+    assert!(text.contains(call_file.name()), "{text}");
 }
 
 #[test]

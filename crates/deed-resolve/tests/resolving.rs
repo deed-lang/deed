@@ -655,6 +655,29 @@ fn a_parameter_hiding_a_declaration_warns() {
         vec![codes::SHADOWED_DECLARATION]
     );
     assert!(!resolved.has_errors());
+    // The declaration it hides is in this file, so it is worth pointing at.
+    assert_eq!(resolved.diagnostics[0].secondary.len(), 1);
+}
+
+#[test]
+fn hiding_a_builtin_points_at_nothing_rather_than_at_the_top_of_the_file() {
+    // A builtin is declared nowhere and its span says so by being empty. This
+    // pointed at it anyway: offsets clamp, so `declared here` was drawn under
+    // the first byte of the file, which is the `module` line and is not where
+    // `length` comes from. It fires on a two line program with no imports and
+    // nothing noticed, because the caret landed somewhere rather than
+    // panicking.
+    let (sources, _, resolved) =
+        resolve_source("module a\n\nfn f(length: Int) -> Int { length }\n");
+    assert_eq!(
+        codes_of(&resolved.diagnostics),
+        vec![codes::SHADOWED_DECLARATION]
+    );
+    assert!(
+        resolved.diagnostics[0].secondary.is_empty(),
+        "{}",
+        deed_diagnostics::render_human(&sources, &resolved.diagnostics[0])
+    );
 }
 
 #[test]

@@ -2158,24 +2158,26 @@ impl<'a> Interp<'a> {
         for requirement in &function.contract.requires {
             if !self.in_a_contract(|me| me.condition(requirement))? {
                 let name = function.sig.name.name.clone();
-                let mut diagnostic = Diagnostic::error(
+                let diagnostic = Diagnostic::error(
                     codes::PRECONDITION_FAILED,
                     call_file,
                     call_span,
                     format!("this call does not satisfy what `{name}` requires"),
                 )
                 .with_primary_label("precondition not met")
-                .with_note("a precondition failure is a bug in the caller");
-                // A label carries a span and no file, so one pointing into
-                // another module lands on whatever happens to be at those
-                // byte offsets in this one. The clause is worth showing when
-                // it can be shown correctly and worth nothing at all when it
-                // cannot. Giving `Label` a file of its own is the real answer
-                // and is a change to `deed-diagnostics` rather than to this.
-                if call_file == self.file() {
-                    diagnostic =
-                        diagnostic.with_secondary(requirement.span(), "the clause that failed");
-                }
+                .with_note("a precondition failure is a bug in the caller")
+                // The clause is in the callee and the call is in the caller,
+                // and this is filed against the caller because that is whose
+                // bug it is. So the label says which file it means. This used
+                // to be dropped whenever the two differed, because a label
+                // carried a span and no file and would have landed on
+                // whatever happened to sit at those byte offsets in the wrong
+                // one.
+                .with_secondary_in(
+                    self.file(),
+                    requirement.span(),
+                    "the clause that failed",
+                );
                 return Err(self.fail(diagnostic));
             }
         }
@@ -2273,20 +2275,19 @@ impl<'a> Interp<'a> {
 
             if !self.condition(&obligation.condition)? {
                 let name = function.sig.name.name.clone();
-                let mut diagnostic = Diagnostic::error(
+                let diagnostic = Diagnostic::error(
                     codes::POSTCONDITION_FAILED,
                     self.file(),
                     obligation.span,
                     format!("`{name}` did not keep this promise"),
                 )
                 .with_primary_label("postcondition not met")
-                .with_note("a postcondition failure is a bug in the function, not in the caller");
-                // The other half of the same rule as the precondition above:
-                // the clause is here and the call may not be, and a label
-                // cannot say which file it means.
-                if call_file == self.file() {
-                    diagnostic = diagnostic.with_secondary(call_span, "called from here");
-                }
+                .with_note("a postcondition failure is a bug in the function, not in the caller")
+                // The other direction: this is filed against the function,
+                // because a broken promise is the function's bug, and the
+                // call that caught it can be anywhere. For a library function
+                // called from twenty places that label is the diagnosis.
+                .with_secondary_in(call_file, call_span, "called from here");
                 return Err(self.fail(diagnostic));
             }
         }

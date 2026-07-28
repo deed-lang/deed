@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use deed_ast::Item;
-use deed_diagnostics::{Applicability, Diagnostic, Severity, SourceMap, Span};
+use deed_diagnostics::{Applicability, Diagnostic, FileId, Severity, SourceMap, Span};
 use deed_driver::{Checked, ObligationReport};
 use deed_resolve::{DefId, DefKind};
 use deed_typeck::ty::{FnRow, Ty};
@@ -779,9 +779,18 @@ impl Server {
         };
         let start = document.lines.offset(&document.text, range.0);
         let end = document.lines.offset(&document.text, range.1);
-        let Some(checked) = self.check_one(&uri) else {
+        // The whole workspace rather than one file, out of the same single
+        // check: an action carries the diagnostic it answers, and that
+        // diagnostic can have a label about another file in it.
+        let (sources, entries) = self.check_workspace();
+        let Some(checked) = entries
+            .iter()
+            .find(|entry| entry.uri.as_deref() == Some(uri.as_str()))
+            .map(|entry| &entry.checked)
+        else {
             return Json::Array(Vec::new());
         };
+        let elsewhere = reachable(&sources, &entries);
 
         let actions: Vec<Json> = checked
             .diagnostics
@@ -807,7 +816,7 @@ impl Server {
                     ("kind", Json::string("quickfix")),
                     (
                         "diagnostics",
-                        Json::Array(vec![self.render(document, diagnostic, &uri)]),
+                        Json::Array(vec![self.render(document, diagnostic, &uri, &elsewhere)]),
                     ),
                     (
                         "isPreferred",
@@ -1242,8 +1251,8 @@ impl Server {
     /// diagnostics for a document it never opened has nowhere obvious to put
     /// them and no event that clears them.
     fn published(&self) -> Vec<Json> {
-        let (_, entries) = self.check_workspace();
-        self.publish_all(&entries)
+        let (sources, entries) = self.check_workspace();
+        self.publish_all(&sources, &entries)
     }
 
     /// The messages for a set of already checked entries.
@@ -1251,7 +1260,8 @@ impl Server {
     /// Split out from [`Self::published`] so that a test can hand it an entry
     /// with a problem in it. Nothing that ships inside the compiler fails to
     /// check today, and waiting for the day one does is not a test.
-    fn publish_all(&self, entries: &[Entry]) -> Vec<Json> {
+    fn publish_all(&self, sources: &SourceMap, entries: &[Entry]) -> Vec<Json> {
+        let elsewhere = reachable(sources, entries);
         entries
             .iter()
             .filter_map(|entry| {
@@ -1269,7 +1279,7 @@ impl Server {
                     .checked
                     .diagnostics
                     .iter()
-                    .map(|diagnostic| self.render(document, diagnostic, uri))
+                    .map(|diagnostic| self.render(document, diagnostic, uri, &elsewhere))
                     .collect();
                 Some(publish(uri, reported))
             })
@@ -1364,7 +1374,21 @@ impl Server {
             .map(|entry| entry.checked)
     }
 
-    fn render(&self, document: &Document, diagnostic: &Diagnostic, uri: &str) -> Json {
+    /// One diagnostic, as the protocol wants it.
+    ///
+    /// `elsewhere` is every file the editor could be sent to, so that a
+    /// secondary label about another one lands there instead of being dropped
+    /// or, worse, drawn over whatever sits at those byte offsets in this
+    /// document. A module that ships inside the compiler is not in that list
+    /// and its labels are left out, for the same reason nothing else leads
+    /// into one: there is no file to open.
+    fn render(
+        &self,
+        document: &Document,
+        diagnostic: &Diagnostic,
+        uri: &str,
+        elsewhere: &[(FileId, &str, &str)],
+    ) -> Json {
         let mut message = diagnostic.message.clone();
         // The notes are where a diagnostic explains itself, and a hover that
         // dropped them would be a worse version of the terminal output.
@@ -1376,17 +1400,25 @@ impl Server {
         let related: Vec<Json> = diagnostic
             .secondary
             .iter()
-            .map(|label| {
-                Json::object(vec![
-                    (
-                        "location",
+            .filter_map(|label| {
+                let location = match label.file {
+                    Some(other) if other != diagnostic.file => {
+                        let (_, other_uri, text) =
+                            elsewhere.iter().find(|(id, _, _)| *id == other)?;
                         Json::object(vec![
-                            ("uri", Json::string(uri)),
-                            ("range", self.range(document, label.span)),
-                        ]),
-                    ),
+                            ("uri", Json::string(*other_uri)),
+                            ("range", range_in(text, label.span)),
+                        ])
+                    }
+                    _ => Json::object(vec![
+                        ("uri", Json::string(uri)),
+                        ("range", self.range(document, label.span)),
+                    ]),
+                };
+                Some(Json::object(vec![
+                    ("location", location),
                     ("message", Json::string(&label.message)),
-                ])
+                ]))
             })
             .collect();
 
@@ -1423,6 +1455,23 @@ fn range_in(text: &str, span: Span) -> Json {
         ("start", position(lines.position(text, span.start))),
         ("end", position(lines.position(text, span.end))),
     ])
+}
+
+/// Every checked file the editor could be pointed at, with its text.
+///
+/// A module that ships inside the compiler is left out. It has no URI because
+/// there is no file behind it, and that is the same answer go to definition,
+/// rename and workspace symbol already give: a location nobody can open is
+/// worse than none.
+fn reachable<'a>(sources: &'a SourceMap, entries: &'a [Entry]) -> Vec<(FileId, &'a str, &'a str)> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let uri = entry.uri.as_deref()?;
+            let file = entry.checked.file;
+            Some((file, uri, sources.file(file).text()))
+        })
+        .collect()
 }
 
 /// Whether a kind of definition is something a module can export.
@@ -1935,7 +1984,7 @@ mod tests {
         // by hand. The alternative is a test that passes because the thing it
         // guards against has not happened yet, which is the same as no test.
         let server = server_with(URI, IMPORTER);
-        let (_, mut entries) = server.check_workspace();
+        let (sources, mut entries) = server.check_workspace();
 
         let shipped = entries
             .iter()
@@ -1949,7 +1998,7 @@ mod tests {
             "a module that ships stopped checking",
         ));
 
-        let sent = server.publish_all(&entries);
+        let sent = server.publish_all(&sources, &entries);
         assert_eq!(sent.len(), 1, "only the open document is published for");
         assert_eq!(
             sent[0].at(&["params", "uri"]).and_then(Json::as_str),
@@ -1963,5 +2012,127 @@ mod tests {
             Some(0),
             "the invented failure belongs to nobody's document"
         );
+    }
+
+    /// Two open documents, so a label about one can be filed against the other.
+    fn server_with_two() -> Server {
+        let mut server = server_with(
+            "file:///work/a.deed",
+            "module a\n\nuse b.{g}\n\nfn f() -> Int {\n    g(1)\n}\n",
+        );
+        server.documents.insert(
+            "file:///work/b.deed".to_string(),
+            Document::new(
+                "module b\n\n// a longer file, on purpose\n\nfn g(n: Int) -> Int {\n    n\n}\n"
+                    .to_string(),
+            ),
+        );
+        server
+    }
+
+    #[test]
+    fn a_label_about_another_file_is_reported_against_that_file() {
+        // Put here by hand for the same reason as the test above: nothing that
+        // the server publishes carries a cross-file label today, because the
+        // two producers that have one are the interpreter's and a run is not
+        // something an editor asks for. Waiting for a check to grow one is the
+        // same as no test, and the thing being guarded is that the location
+        // this hands the editor is the label's own rather than the document
+        // the diagnostic happened to be filed against.
+        let server = server_with_two();
+        let (sources, mut entries) = server.check_workspace();
+
+        let a = entries
+            .iter()
+            .position(|entry| entry.uri.as_deref() == Some("file:///work/a.deed"))
+            .expect("the document was opened");
+        let b = entries
+            .iter()
+            .position(|entry| entry.uri.as_deref() == Some("file:///work/b.deed"))
+            .expect("the document was opened");
+        let (a_file, b_file) = (entries[a].checked.file, entries[b].checked.file);
+        entries[a].checked.diagnostics.push(
+            Diagnostic::error("DEED0000", a_file, Span::new(0, 1), "about the call")
+                // `fn g` on line 5 of the other file.
+                .with_secondary_in(b_file, Span::new(46, 50), "declared here"),
+        );
+
+        let sent = server.publish_all(&sources, &entries);
+        let published = sent
+            .iter()
+            .find(|message| {
+                message.at(&["params", "uri"]).and_then(Json::as_str) == Some("file:///work/a.deed")
+            })
+            .expect("the document with the problem is published for");
+        let reported = published
+            .at(&["params", "diagnostics"])
+            .and_then(Json::as_array)
+            .expect("a list of diagnostics");
+        let mine = reported
+            .iter()
+            .find(|d| d.at(&["code"]).and_then(Json::as_str) == Some("DEED0000"))
+            .unwrap_or_else(|| panic!("the invented diagnostic should be published: {reported:?}"));
+        let related = mine
+            .at(&["relatedInformation"])
+            .and_then(Json::as_array)
+            .expect("a list of labels");
+        let [label] = related else {
+            panic!("one label, got {related:?}");
+        };
+
+        assert_eq!(
+            label.at(&["location", "uri"]).and_then(Json::as_str),
+            Some("file:///work/b.deed"),
+            "{label:?}"
+        );
+        // Line 4 zero based, which is where `fn g` is in `b.deed` and is not
+        // where those byte offsets land in `a.deed`.
+        assert_eq!(
+            label
+                .at(&["location", "range", "start", "line"])
+                .and_then(Json::as_i64),
+            Some(4),
+            "{label:?}"
+        );
+    }
+
+    #[test]
+    fn a_label_about_a_module_that_ships_is_left_off() {
+        // The same answer go to definition, rename and workspace symbol give.
+        // There is no file behind a shipped module, so a location pointing
+        // into one is one nobody can open, and the label goes rather than the
+        // diagnostic it is attached to.
+        let server = server_with(URI, IMPORTER);
+        let (sources, mut entries) = server.check_workspace();
+
+        let shipped = entries
+            .iter()
+            .position(|entry| entry.uri.is_none())
+            .expect("std/list should have been checked alongside");
+        let shipped_file = entries[shipped].checked.file;
+        let open = entries
+            .iter()
+            .position(|entry| entry.uri.as_deref() == Some(URI))
+            .expect("the document was opened");
+        let open_file = entries[open].checked.file;
+        entries[open].checked.diagnostics.push(
+            Diagnostic::error("DEED0000", open_file, Span::new(0, 1), "about the call")
+                .with_secondary_in(shipped_file, Span::new(0, 1), "declared here"),
+        );
+
+        let sent = server.publish_all(&sources, &entries);
+        let reported = sent[0]
+            .at(&["params", "diagnostics"])
+            .and_then(Json::as_array)
+            .expect("a list of diagnostics");
+        let mine = reported
+            .iter()
+            .find(|d| d.at(&["code"]).and_then(Json::as_str) == Some("DEED0000"))
+            .unwrap_or_else(|| panic!("the invented diagnostic should be published: {reported:?}"));
+        let related = mine
+            .at(&["relatedInformation"])
+            .and_then(Json::as_array)
+            .expect("a list of labels");
+        assert!(related.is_empty(), "{related:?}");
     }
 }
