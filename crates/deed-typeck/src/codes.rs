@@ -171,3 +171,26 @@ pub const REFINEMENT_TYPE_PARAM: &str = "DEED4028";
 /// claim that every call underneath has somewhere to go, and a row saying
 /// `uses Counter.total` is a caller taking that claim at its word.
 pub const HANDLER_MISSING_OPERATION: &str = "DEED4029";
+
+/// A closure that names the handler state around it.
+///
+/// A closure captures the frame by value, so everything else it sees is a
+/// number it was handed. Handler state would be the one thing it saw through a
+/// reference, and the reference is to something whose lifetime is a `with`
+/// block while the closure's is not. The interpreter used to read it out of
+/// whichever handler happened to be innermost when the call landed, so a
+/// closure written in one handler and called under another quietly answered
+/// out of the other one's table when the two shared a state name.
+///
+/// Capturing the handler instead was the other way out, and it is refused for
+/// a reason that outlives the interpreter: the closure's type would not say it.
+/// `Fn() -> Int` claims to take nothing and perform nothing, and a value that
+/// is also a live window onto a particular handler's state carries an input
+/// and a lifetime through a signature that mentions neither. A signature is
+/// complete here, which is the same rule `DEED4023` and the row before the
+/// arrow are both instances of.
+///
+/// What to write instead is the snapshot the rest of the language already
+/// takes: read the state into a local and let the closure capture that. The
+/// value is then a number, which is what a `Fn() -> Int` says it is.
+pub const CLOSURE_OVER_STATE: &str = "DEED4030";

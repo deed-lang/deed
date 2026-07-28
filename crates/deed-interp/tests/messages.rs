@@ -23,11 +23,14 @@
 //! interpreter has not got round to it, which is the opposite of true, and it
 //! said "yet", which promised work that is not coming.
 //!
-//! Four are not that. Two really are the interpreter's own gap, and `deed
-//! check` accepts both. One is neither: a call into a module whose code was never
-//! handed over, which is a gap in what this library was given, as its own
-//! `codes.rs` has said all along. And one, `sys.files` with no directory
-//! behind it, is an ordinary runtime fact about a program that is right.
+//! Four are not that. Two used to be the interpreter's own gap, and `deed
+//! check` accepted both: handler state read from a closure written inside a
+//! handler operation. `DEED4030` refuses that closure now, so those two joined
+//! the family above and the note that said the language permits them went
+//! away. One is neither: a call into a module whose code was never handed
+//! over, which is a gap in what this library was given, as its own `codes.rs`
+//! has said all along. And one, `sys.files` with no directory behind it, is an
+//! ordinary runtime fact about a program that is right.
 //!
 //! # What is not here
 //!
@@ -557,18 +560,20 @@ fn contents_that_are_not_a_string_say_what_they_were() {
     .says("the interpreter cannot run a file's contents that are an Int");
 }
 
-// -- DEED6006, the interpreter's own gap -----------------------------------
+// -- DEED6006, handler state reached from a closure ------------------------
 
-/// A closure written inside a handler operation reads handler state through
-/// whichever handler is innermost when the closure is called, not the one it
-/// was written in. Called after the operation returned, that is no handler at
-/// all.
+/// A closure written inside a handler operation used to read handler state
+/// through whichever handler was innermost when the closure was called, not
+/// the one it was written in. Called after the operation returned, that is no
+/// handler at all.
 ///
-/// `deed check` accepts this program, which is what makes it the interpreter's
-/// gap rather than the checker's, and why it does not carry the note the
-/// shapes above carry.
+/// `deed check` accepted this program, which made it the interpreter's gap
+/// rather than the checker's, and it is the reason `DEED4030` exists. It is
+/// refused where the closure is written now, so this shape is read here the
+/// way the rest of this file reads the shapes the checker turns down: by
+/// handing the interpreter a file nobody checked.
 #[test]
-fn a_closure_that_outlives_its_handler_operation_says_the_gap_is_here() {
+fn a_closure_that_outlives_its_handler_operation_says_whose_problem_it_is() {
     message(
         "module a\n\n\
          effect Give {\n\
@@ -591,22 +596,20 @@ fn a_closure_that_outlives_its_handler_operation_says_the_gap_is_here() {
          }\n",
     )
     .under(codes::NOT_RUNNABLE)
-    .says("the interpreter cannot run handler state from outside a handler yet")
-    .says(
-        "this is a gap in the interpreter rather than something the language forbids; please report it",
-    );
+    .says("the interpreter cannot run handler state from outside a handler")
+    .says("nothing that passes `deed check` reaches this")
+    .never_says("a gap in the interpreter rather than something the language forbids");
 }
 
-/// The same gap, one step along: the closure is called inside another
+/// The same shape, one step along: the closure is called inside another
 /// handler's operation, so it looks in that handler's state and does not find
 /// the name.
 ///
-/// When the two handlers happen to use the same state name there is no message
-/// at all and the closure quietly reads the other handler's number. That is a
-/// bug in the interpreter rather than a wording problem, and it is reported
-/// rather than fixed here.
+/// When the two handlers used the same state name there was no message at all
+/// and the closure quietly read the other handler's number. That was the worst
+/// of it, and it is what `DEED4030` was written for.
 #[test]
-fn a_closure_reaching_into_another_handlers_state_says_the_gap_is_here() {
+fn a_closure_reaching_into_another_handlers_state_says_whose_problem_it_is() {
     message(
         "module a\n\n\
          effect Give {\n\
@@ -637,7 +640,7 @@ fn a_closure_reaching_into_another_handlers_state_says_the_gap_is_here() {
          \x20 }\n\
          }\n",
     )
-    .says("the interpreter cannot run handler state that was never initialised yet");
+    .says("the interpreter cannot run handler state that was never initialised");
 }
 
 // -- DEED6006, a gap in what the runner was given --------------------------

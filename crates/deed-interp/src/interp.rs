@@ -779,11 +779,16 @@ impl<'a> Interp<'a> {
     /// argued about at the bottom of `crates/deed-interp/tests/messages.rs`.
     ///
     /// The shapes that are not the checker's business no longer come through
-    /// here at all: the interpreter's own gap says so through
-    /// [`Interp::interpreter_gap`], a call into a module the interpreter was
-    /// never handed through [`Interp::no_code_for`], and `sys.files` in a
-    /// program with no directory through an arm of its own. How this code's
-    /// messages divide up is written down once, on [`codes::NOT_RUNNABLE`].
+    /// here at all: a call into a module the interpreter was never handed goes
+    /// through [`Interp::no_code_for`], and `sys.files` in a program with no
+    /// directory through an arm of its own. How this code's messages divide up
+    /// is written down once, on [`codes::NOT_RUNNABLE`].
+    ///
+    /// There used to be a third helper for the two shapes the language allowed
+    /// and the interpreter had not implemented, both of them handler state read
+    /// from a closure. `DEED4030` refuses those where they are written, so the
+    /// language does forbid them now and the note saying otherwise went with
+    /// the helper.
     fn not_runnable(&self, span: Span, what: &str) -> Signal {
         self.fail(
             Diagnostic::error(
@@ -795,30 +800,6 @@ impl<'a> Interp<'a> {
             .with_primary_label("not runnable")
             .with_note(
                 "nothing that passes `deed check` reaches this, so either this file was not checked or the check has a hole",
-            ),
-        )
-    }
-
-    /// Something the language allows and the interpreter has not implemented.
-    ///
-    /// Kept apart from [`Interp::not_runnable`] because the note is the
-    /// opposite claim, and only two shapes can honestly make it. Both are the
-    /// same gap: handler state is read through whichever handler is innermost
-    /// when the read happens, so a closure written inside a handler operation
-    /// and called after that operation returned looks in the wrong table, or
-    /// in no table at all. `deed check` accepts both, which is what makes them
-    /// the interpreter's rather than the checker's.
-    fn interpreter_gap(&self, span: Span, what: &str) -> Signal {
-        self.fail(
-            Diagnostic::error(
-                codes::NOT_RUNNABLE,
-                self.file(),
-                span,
-                format!("the interpreter cannot run {what} yet"),
-            )
-            .with_primary_label("not runnable")
-            .with_note(
-                "this is a gap in the interpreter rather than something the language forbids; please report it",
             ),
         )
     }
@@ -1154,6 +1135,26 @@ impl<'a> Interp<'a> {
         self.frames.last()?.get(&def).cloned()
     }
 
+    /// What a name holds, wherever the value it holds lives.
+    ///
+    /// A name is looked up in the frame everywhere except one: handler state
+    /// lives in the handler instance instead. Everything that reads a name
+    /// goes through [`Interp::read`], which knows that, but calling one goes
+    /// through the callee expression, which used to ask the frame alone. So a
+    /// closure kept in handler state could be stored and never called: the
+    /// value was there and `held()` said the interpreter could not run the
+    /// call.
+    fn bound_value(&self, def: DefId) -> Option<Value> {
+        if self.kind_of(def) == DefKind::State {
+            let index = self.inside_handler.last().copied()?;
+            return self.handlers[index]
+                .state
+                .get(&self.state_name(def))
+                .cloned();
+        }
+        self.lookup(def)
+    }
+
     fn read(&mut self, ident: &Ident) -> Eval<Value> {
         let Some(def) = self.def_of(ident) else {
             return Err(self.not_runnable(ident.span, "an unresolved name"));
@@ -1187,25 +1188,26 @@ impl<'a> Interp<'a> {
         }
     }
 
-    /// Reads handler state, out of whichever handler is innermost.
+    /// Reads handler state, out of the handler whose operation is running.
     ///
-    /// Both refusals here are the same gap rather than two, and both are
-    /// reached by a program `deed check` accepts. A closure written inside a
-    /// handler operation captures the frame but not the handler, so calling it
-    /// after the operation returned looks in no handler at all, and calling it
-    /// inside another handler's operation looks in that one's table. When the
-    /// two handlers happen to share a state name there is no refusal and no
-    /// message: the closure quietly reads the other handler's number. That is
-    /// an interpreter bug rather than a wording problem, and it is reported
-    /// separately.
+    /// Both refusals here are the same gap rather than two, and neither is
+    /// reachable from a file `deed check` accepts. A state name is only in
+    /// scope inside the handler that declared it, and the one shape that could
+    /// carry a read out of the running operation was a closure: a closure
+    /// captures the frame and the frame is not where state lives, so calling
+    /// it after the operation returned looked in no handler at all and calling
+    /// it inside another handler's operation looked in that one's table. When
+    /// the two handlers shared a state name there was no refusal and no
+    /// message, and the closure quietly answered with the other handler's
+    /// number. `DEED4030` refuses that where it is written instead.
     fn read_state(&self, def: DefId, span: Span) -> Eval<Value> {
         let Some(index) = self.inside_handler.last().copied() else {
-            return Err(self.interpreter_gap(span, "handler state from outside a handler"));
+            return Err(self.not_runnable(span, "handler state from outside a handler"));
         };
         let name = self.state_name(def);
         match self.handlers[index].state.get(&name) {
             Some(value) => Ok(value.clone()),
-            None => Err(self.interpreter_gap(span, "handler state that was never initialised")),
+            None => Err(self.not_runnable(span, "handler state that was never initialised")),
         }
     }
 
@@ -1374,7 +1376,7 @@ impl<'a> Interp<'a> {
         // at what the callee evaluates to rather than at what it resolves to.
         if let Expr::Ident(ident) = callee
             && let Some(def) = self.def_of(ident)
-            && let Some(bound) = self.lookup(def)
+            && let Some(bound) = self.bound_value(def)
         {
             match bound {
                 Value::Closure(closure) => return self.call_closure(&closure, values, span),
