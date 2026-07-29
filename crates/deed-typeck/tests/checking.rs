@@ -235,6 +235,11 @@ fn an_operator_with_two_known_sides_is_checked() {
         "{}",
         rendered(&sources, &checked.diagnostics)
     );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("found `Money`") || text.contains("`Money`"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -264,7 +269,12 @@ fn plus_will_not_join_a_number_to_a_string() {
     let (sources, checked) =
         check_source("module a\n\nfn f(n: Int) -> String { \"count: \" + n }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    assert!(rendered(&sources, &checked.diagnostics).contains("joined with this"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("joined with this"), "{text}");
+    assert!(
+        text.contains("`String`") && text.contains("`Int`"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -353,10 +363,13 @@ fn a_type_parameter_is_still_comparable_for_equality() {
 fn two_types_that_do_not_match_are_one_mistake_not_two() {
     // Saying the sides disagree and then that the type they do not share has
     // no ordering is two diagnostics for one edit.
-    let (_, checked) = check_source(
+    let (sources, checked) = check_source(
         "module a\n\nrecord Point { x: Int }\n\nfn f(a: Point, b: Int) -> Bool { a < b }\n",
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    assert_eq!(checked.diagnostics.len(), 1);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("Point") || text.contains("Int"), "{text}");
 }
 
 #[test]
@@ -462,7 +475,12 @@ fn a_handler_operation_is_checked_against_those_types() {
          }}\n"
     ));
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    assert!(rendered(&sources, &checked.diagnostics).contains("found `Int`"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("found `Int`"), "{text}");
+    assert!(
+        text.contains("expected `String`") || text.contains("String"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -859,7 +877,7 @@ fn a_handler_literal_from_another_module_is_checked_too() {
 fn a_call_to_an_imported_effect_operation_is_checked() {
     // This one had no type at all, so the arguments, the arity and the result
     // were all unchecked the moment the effect came from another file.
-    let (_, checked) = check_source_in(
+    let (sources, checked) = check_source_in(
         "module a\n\n\
          use other.{Sink}\n\n\
          fn f() -> Int\n\
@@ -872,6 +890,13 @@ fn a_call_to_an_imported_effect_operation_is_checked() {
         &universe_of(&["module other\n\neffect Sink {\n    fn emit(line: String) -> ()\n}\n"]),
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("found `Int`")
+            || text.contains("expected `String`")
+            || text.contains("`String`"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -891,7 +916,7 @@ fn an_imported_effect_operation_call_gives_back_its_declared_type() {
 
 #[test]
 fn an_imported_effect_operation_called_with_the_wrong_arity_is_an_error() {
-    let (_, checked) = check_source_in(
+    let (sources, checked) = check_source_in(
         "module a\n\n\
          use other.{Sink}\n\n\
          fn f() -> Int\n\
@@ -903,6 +928,11 @@ fn an_imported_effect_operation_called_with_the_wrong_arity_is_an_error() {
         &universe_of(&["module other\n\neffect Sink {\n    fn count() -> Int\n}\n"]),
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::WRONG_ARITY]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("takes 0") || text.contains("1 was given") || text.contains("argument"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1024,10 +1054,15 @@ fn an_alias_without_a_predicate_is_transparent() {
 
 #[test]
 fn a_self_referential_alias_is_reported_once() {
-    let (_, checked) = check_source("module a\n\ntype Loop = Loop\n\nfn f(x: Loop) -> Int { 0 }\n");
+    let (sources, checked) = check_source("module a\n\ntype Loop = Loop\n\nfn f(x: Loop) -> Int { 0 }\n");
     assert_eq!(
         codes_of(&checked.diagnostics),
         vec![codes::TYPE_ALIAS_CYCLE]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("Loop") || text.contains("cycle") || text.contains("refers"),
+        "{text}"
     );
 }
 
@@ -1506,10 +1541,15 @@ fn alternatives_work_across_a_module_boundary() {
 
 #[test]
 fn all_arms_must_agree() {
-    let (_, checked) = check_source(
+    let (sources, checked) = check_source(
         "module a\n\nchoice E { A, B }\n\nfn f(e: E) -> Int {\n  match e {\n    A => 1,\n    B => true,\n  }\n}\n",
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("found `Bool`") || text.contains("expected `Int`"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1587,8 +1627,13 @@ fn a_body_ending_in_return_is_accepted() {
 
 #[test]
 fn a_return_is_checked_against_the_signature() {
-    let (_, checked) = check_source("module a\n\nfn f() -> Int {\n  return true\n}\n");
+    let (sources, checked) = check_source("module a\n\nfn f() -> Int {\n  return true\n}\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("found `Bool`") || text.contains("expected `Int`"),
+        "{text}"
+    );
 }
 
 #[test]
