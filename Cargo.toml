@@ -24,3 +24,10 @@ rust-version = "1.85"
 
 [workspace.lints.clippy]
 all = "warn"
+
+# For `cargo mutants`, which builds the tree once per mutant. A mutant is meant
+# to fail a test, and the test's name is what says which one, so debug symbols
+# are paid for on every build and read on none.
+[profile.mutants]
+inherits = "test"
+debug = "none"

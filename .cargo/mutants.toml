@@ -1,0 +1,19 @@
+# What `cargo mutants` does here.
+#
+# CONTRIBUTING.md asks for a strengthened assertion to be verified by breaking
+# the thing it guards and watching it fail by name. That was done by hand, one
+# edit at a time, which meant a handful of breakages got tried per change and
+# the rest were never asked about. This asks about all of them.
+#
+# `nextest` rather than `cargo test`, because a mutant is one build and one
+# test run and this workspace has forty test binaries for nextest to run at
+# once.
+test_tool = "nextest"
+
+# No debug symbols. A mutant is expected to fail a test, and the name of the
+# test is what says which one, so the symbols are paid for on every build and
+# read on none.
+profile = "mutants"
+
+# Doctests are a separate binary each and there are eight of them.
+additional_cargo_test_args = ["--all-targets"]
