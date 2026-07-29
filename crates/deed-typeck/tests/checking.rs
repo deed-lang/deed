@@ -236,7 +236,10 @@ fn an_operator_with_two_known_sides_is_checked() {
         rendered(&sources, &checked.diagnostics)
     );
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("found `Money`") || text.contains("`Money`"), "{text}");
+    assert!(
+        text.contains("found `Money`") || text.contains("`Money`"),
+        "{text}"
+    );
 }
 
 #[test]
