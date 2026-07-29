@@ -239,7 +239,7 @@ That is also where the list library is. `std/list` has `map`, `map_at`, `filter`
 copy it.
 
 The keyed collection is there too. `std/table` has `holds`, `get`, `set`, `or_else`, `keys`,
-`values` and `size`, built out of a generic record and a `for`, and it is the answer to what
+`values`, `size` and `remove`, built out of a generic record and a `for`, and it is the answer to what
 a program does when it wants to count by key. It came out of `examples/` for the same reason
 the list library did.
 
