@@ -146,6 +146,7 @@ impl Server {
             "textDocument/inlayHint" => result(id, self.inlay_hint(message)),
             "textDocument/definition" => result(id, self.definition(message)),
             "textDocument/references" => result(id, self.references(message)),
+            "textDocument/documentHighlight" => result(id, self.document_highlight(message)),
             "textDocument/prepareRename" => result(id, self.prepare_rename(message)),
             // Answers with the whole response rather than a value, because
             // refusing a rename has to be an error: an editor told "here is an
@@ -569,6 +570,55 @@ impl Server {
                             ("range", range_in(text, *span)),
                         ])
                     })
+                })
+                .collect(),
+        )
+    }
+
+    /// Every place the name under the cursor is written in this file.
+    ///
+    /// The one-file version of `references`: the same walk through `occurrences`,
+    /// stopped at the document being painted. An editor asks this on every cursor
+    /// move to highlight the other mentions of the name the cursor is on.
+    ///
+    /// Kind 1 (Text) for every occurrence. The resolver does not record which
+    /// occurrences are assignments, so claiming 2 (Read) or 3 (Write) would
+    /// invent a distinction the data does not support.
+    ///
+    /// An empty array when the cursor is on nothing. An editor handed `null`
+    /// here logs a protocol failure on every keystroke.
+    fn document_highlight(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Array(Vec::new());
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Array(Vec::new());
+        };
+        // Always include the declaration: a cursor on a use expects the
+        // declaration lit up too, which is what `prepareRename` already treats
+        // as one thing.
+        let Some((_, found)) = self.occurrences(message, true) else {
+            return Json::Array(Vec::new());
+        };
+
+        // Only the file the editor is painting, which is what separates this
+        // from `references`.
+        let Some(here) = found.iter().find(|f| f.uri == uri) else {
+            return Json::Array(Vec::new());
+        };
+
+        Json::Array(
+            here.spans
+                .iter()
+                .map(|span| {
+                    Json::object(vec![
+                        ("range", self.range(document, *span)),
+                        // 1 is Text. The resolver does not record which
+                        // occurrences are assignments, so 2 (Read) and 3
+                        // (Write) would invent a distinction the data does
+                        // not support.
+                        ("kind", Json::number(1)),
+                    ])
                 })
                 .collect(),
         )
@@ -1824,6 +1874,7 @@ fn initialize_result() -> Json {
             ("inlayHintProvider", Json::Bool(true)),
             ("definitionProvider", Json::Bool(true)),
             ("referencesProvider", Json::Bool(true)),
+            ("documentHighlightProvider", Json::Bool(true)),
             // `prepareProvider` is what lets an editor grey the command out
             // on a prelude name instead of asking for a new spelling and then
             // refusing it.
