@@ -413,9 +413,11 @@ of them are calls rather than values.
 
 What crosses into a clause is the caller's facts said in the callee's parameter names: each
 argument's range, how long it is, and the differences between them. That last part is what
-settles `index < length(items)`, which is the clause the whole detour was about. A predicate
-does not cross a module boundary, the same as a refinement's does not, so a caller in another
-file answers for a precondition at runtime and the checker says nothing either way.
+settles `index < length(items)`, which is the clause the whole detour was about. The clause
+itself crosses a module boundary whole, unlike a refinement predicate, because a refinement
+is a proof the declaring module already did and a precondition is a question only the caller
+can answer. What travels with it is what each name in it refers to, worked out where it was
+written, since a clause's spans are offsets into that file and nowhere else.
 
 A refinement could say the same thing about a length and could not be settled, which is the
 kind of gap you only find by writing the two side by side. `value` has no declaration of its

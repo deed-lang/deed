@@ -26,7 +26,7 @@ use deed_resolve::{DefId, DefKind, Resolutions, RowLowering};
 
 use crate::codes;
 use crate::facts::{self, Facts, Guarantee, Promise, Range, Truth};
-use crate::surface::{PRELUDE_MODULE, SurfaceItem, World};
+use crate::surface::{ClauseName, PRELUDE_MODULE, SurfaceItem, SurfaceRequires, World};
 use crate::ty::{
     FieldTy, FnRow, Nominal, Obligation, Precondition, Tier, Ty, Types, VariantTy, bindings_for,
 };
@@ -116,10 +116,52 @@ struct Walk<'a> {
 /// would mean deciding ahead of time which shapes are worth keeping.
 #[derive(Debug)]
 struct Requires {
-    clauses: Vec<Expr>,
     /// The definition of each parameter, in order, so a clause naming one can
     /// be told what was passed there.
     params: Vec<Option<DefId>>,
+    origin: Origin,
+}
+
+/// Which module wrote the clauses, which decides how a name in one is read.
+#[derive(Debug)]
+enum Origin {
+    /// This one. Every name in a clause resolves the way every other name in
+    /// the file does.
+    Here { clauses: Vec<Expr> },
+    /// Another one, whose resolution this side does not have. The names were
+    /// worked out where they were written and crossed as roles; see
+    /// [`imported_name`] for the ids they stand for here.
+    Elsewhere {
+        /// The file the clauses are written in, so a label about one is drawn
+        /// against the right bytes.
+        file: FileId,
+        declared: Rc<SurfaceRequires>,
+    },
+}
+
+impl Requires {
+    fn clauses(&self) -> &[Expr] {
+        match &self.origin {
+            Origin::Here { clauses } => clauses,
+            Origin::Elsewhere { declared, .. } => &declared.clauses,
+        }
+    }
+}
+
+/// The id a name in an imported clause stands for while it is being read.
+///
+/// Invented rather than resolved, and safe to invent because nothing real ever
+/// enters the table these are keys into. A call site building facts for an
+/// imported clause writes them under exactly these ids and reads them back
+/// under exactly these ids, so the numbers only have to agree with themselves.
+/// The alternative, resolving the clause's spans against this module, would
+/// not merely fail: it would answer about whatever this file happens to have
+/// written at the same byte offset.
+fn imported_name(name: ClauseName) -> DefId {
+    match name {
+        ClauseName::Length => DefId::from_raw(0),
+        ClauseName::Param(index) => DefId::from_raw(index as u32 + 1),
+    }
 }
 
 #[derive(Clone)]
@@ -489,13 +531,15 @@ impl<'a> Checker<'a> {
                         .meet(promised_by(&function.contract.ensures, &function.sig));
                     if !function.contract.requires.is_empty() {
                         signature.requires = Some(Rc::new(Requires {
-                            clauses: function.contract.requires.clone(),
                             params: function
                                 .sig
                                 .params
                                 .iter()
                                 .map(|param| self.def_of(&param.name))
                                 .collect(),
+                            origin: Origin::Here {
+                                clauses: function.contract.requires.clone(),
+                            },
                         }));
                     }
                     self.check_type_params_are_determined(&signature);
@@ -667,6 +711,7 @@ impl<'a> Checker<'a> {
             generics,
             row,
             guarantee,
+            requires,
             declared,
         }) = self.world.get(module, name)
         else {
@@ -691,11 +736,23 @@ impl<'a> Checker<'a> {
                 .collect(),
             row: row.clone(),
             guarantee: guarantee.clone(),
-            // A predicate does not cross a module boundary. What travels is
-            // bounds, the same as for an `ensures` clause, so a caller in
-            // another file answers for a precondition at runtime and the
-            // checker says nothing about it either way.
-            requires: None,
+            // A precondition crosses whole. It is not a proof the callee did,
+            // it is a question the caller has to answer, and the caller is the
+            // only one who can: `halve(0 - 5)` against `where n >= 0` used to
+            // pass in silence purely because `halve` was written next door.
+            // What still does not cross is a refinement predicate, for the
+            // reason given at the top of `surface.rs`.
+            requires: requires.as_ref().map(|declared_requires| {
+                Rc::new(Requires {
+                    params: (0..declared_requires.arity)
+                        .map(|index| Some(imported_name(ClauseName::Param(index))))
+                        .collect(),
+                    origin: Origin::Elsewhere {
+                        file: declared.file,
+                        declared: Rc::clone(declared_requires),
+                    },
+                })
+            }),
         })
     }
 
@@ -811,16 +868,8 @@ impl<'a> Checker<'a> {
             None => "this".to_string(),
         };
 
-        for clause in &requires.clauses {
-            let outcome = {
-                let (def_of, call) = self.env();
-                let env = facts::Env {
-                    def_of: &def_of,
-                    length: self.resolutions.builtin("length"),
-                    call: &call,
-                };
-                facts::holds(clause, &facts, &env)
-            };
+        for clause in requires.clauses() {
+            let outcome = self.clause_holds(requires, clause, &facts);
 
             // Inside an `assert refuses`, a clause that will not hold is the
             // statement being right. Nothing is reported and nothing is
@@ -833,19 +882,26 @@ impl<'a> Checker<'a> {
             let tier = match outcome {
                 Truth::Always => Tier::Proven,
                 Truth::Never => {
-                    self.emit(
-                        Diagnostic::error(
-                            codes::BROKEN_PRECONDITION,
-                            self.file,
-                            span,
-                            format!("this call does not satisfy what {called} requires"),
-                        )
-                        .with_primary_label("the precondition does not hold here")
-                        .with_secondary(clause.span(), "the clause it has to satisfy")
-                        .with_note(
-                            "a precondition failure is a mistake in the caller, so it is reported here rather than inside the function",
+                    let diagnostic = Diagnostic::error(
+                        codes::BROKEN_PRECONDITION,
+                        self.file,
+                        span,
+                        format!("this call does not satisfy what {called} requires"),
+                    )
+                    .with_primary_label("the precondition does not hold here");
+                    let diagnostic = match &requires.origin {
+                        Origin::Here { .. } => {
+                            diagnostic.with_secondary(clause.span(), "the clause it has to satisfy")
+                        }
+                        Origin::Elsewhere { file, .. } => diagnostic.with_secondary_in(
+                            *file,
+                            clause.span(),
+                            "the clause it has to satisfy",
                         ),
-                    );
+                    };
+                    self.emit(diagnostic.with_note(
+                        "a precondition failure is a mistake in the caller, so it is reported here rather than inside the function",
+                    ));
                     Tier::Guarded
                 }
                 Truth::Unknown => Tier::Guarded,
@@ -856,6 +912,39 @@ impl<'a> Checker<'a> {
                 tier,
                 callee: name.clone().unwrap_or_default(),
             });
+        }
+    }
+
+    /// Whether one clause holds, read the way the module that wrote it meant.
+    ///
+    /// A clause written here is read with this module's resolver. One that
+    /// crossed a boundary is read against the roles its own module worked out,
+    /// and against nothing else: a call inside it names a function this side
+    /// cannot look up, so it promises nothing rather than promising whatever a
+    /// function of the same name here would.
+    fn clause_holds(&self, requires: &Requires, clause: &Expr, facts: &Facts) -> Truth {
+        match &requires.origin {
+            Origin::Here { .. } => {
+                let (def_of, call) = self.env();
+                let env = facts::Env {
+                    def_of: &def_of,
+                    length: self.resolutions.builtin("length"),
+                    call: &call,
+                };
+                facts::holds(clause, facts, &env)
+            }
+            Origin::Elsewhere { declared, .. } => {
+                let def_of = |expr: &Expr| match expr {
+                    Expr::Ident(ident) => declared.name_at(ident.span).map(imported_name),
+                    _ => None,
+                };
+                let env = facts::Env {
+                    def_of: &def_of,
+                    length: Some(imported_name(ClauseName::Length)),
+                    call: &|_| Promise::any(),
+                };
+                facts::holds(clause, facts, &env)
+            }
         }
     }
 

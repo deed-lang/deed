@@ -505,9 +505,16 @@ A caller that checked the length first proves both clauses. A caller that did no
 
 The runtime check stays either way, for the same reason an `ensures` clause is evaluated on
 every call whatever tier it landed in: the tier says how much was settled ahead of time, not
-whether the check happens. And a predicate does not cross a module boundary, the same as a
-refinement's does not, so a caller in another file answers for a precondition at runtime and
-the checker says nothing about it in either direction.
+whether the check happens.
+
+A clause crosses a module boundary whole, which is the opposite of what a refinement
+predicate does and is not a contradiction. A refinement is a proof the declaring module
+already did, so what a caller needs is the conclusion. A precondition is a question the
+caller has to answer, and the caller is the only one who can answer it, so there is nothing
+to reduce it to. What travels with the clause is what each name in it refers to, worked out
+in the module that wrote it, because a clause's spans are offsets into that file and reading
+them against the importing file would answer about whatever happens to sit at the same
+offsets there.
 
 ### `uses`, the effect row
 
