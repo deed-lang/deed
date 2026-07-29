@@ -1614,6 +1614,62 @@ fn a_use_of_a_shipped_module_is_not_a_definition() {
     assert_eq!(reply.at(&["result"]), Some(&Json::Null), "{reply:?}");
 }
 
+// -- type definition ---------------------------------------------------------
+
+#[test]
+fn type_definition_of_a_variant_is_its_choice() {
+    // Go to definition lands on the variant. Type definition lands on the
+    // choice that owns it, which is what somebody means when they ask what
+    // type a constructor is.
+    let text = "module a\n\n\
+         choice Color {\n\
+         \x20   Rgb { r: Int, g: Int, b: Int },\n\
+         \x20   Named { name: String },\n\
+         }\n\n\
+         fn f() -> Color {\n\
+         \x20   Rgb { r: 1, g: 2, b: 3 }\n\
+         }\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, text),
+        // The `Rgb` in the body (not the declaration).
+        at(2, "textDocument/typeDefinition", URI, 8, 5),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("typeDefinition reply");
+    let location = reply.at(&["result"]).expect("a location");
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{location:?}"
+    );
+    assert_eq!(
+        location
+            .at(&["range", "start", "character"])
+            .and_then(Json::as_i64),
+        Some(7),
+        "{location:?}"
+    );
+}
+
+#[test]
+fn type_definition_of_an_ordinary_name_is_null() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, "module a\n\nfn f() -> Int {\n    1\n}\n"),
+        at(2, "textDocument/typeDefinition", URI, 2, 3),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("typeDefinition reply");
+    assert_eq!(reply.at(&["result"]), Some(&Json::Null), "{reply:?}");
+}
+
 // -- the library that ships inside the compiler ------------------------------
 
 /// The folder of examples in this repository.
