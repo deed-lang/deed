@@ -2163,7 +2163,262 @@ fn a_folding_range_request_for_a_document_nobody_opened_is_null() {
     assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
 }
 
-// -- rename ------------------------------------------------------------------
+// -- selection range ---------------------------------------------------------
+
+fn selection_range(id: i64, uri: &str, positions: &[(u32, u32)]) -> String {
+    let positions_json: Vec<String> = positions
+        .iter()
+        .map(|(line, character)| format!("{{\"line\":{line},\"character\":{character}}}"))
+        .collect();
+    let positions_str = positions_json.join(",");
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/selectionRange\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}},\"positions\":[{positions_str}]}}}}"
+    ))
+}
+
+fn selection_ranges(message: &Json) -> &[Json] {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| {
+            panic!("a selection range request should answer with a list: {message:?}")
+        })
+}
+
+/// Collects the start lines of every range in the chain, innermost first.
+fn chain_start_lines(entry: &Json) -> Vec<i64> {
+    let mut lines = Vec::new();
+    let mut current = entry;
+    loop {
+        let line = current
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64);
+        match line {
+            Some(l) => lines.push(l),
+            None => break,
+        }
+        match current.at(&["parent"]) {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    lines
+}
+
+/// Collects every (startLine, startChar, endLine, endChar) in the chain,
+/// innermost first.  Used to verify that no two consecutive steps are equal.
+fn chain_ranges(entry: &Json) -> Vec<(i64, i64, i64, i64)> {
+    let mut out = Vec::new();
+    let mut current = entry;
+    loop {
+        let r = (
+            current
+                .at(&["range", "start", "line"])
+                .and_then(Json::as_i64),
+            current
+                .at(&["range", "start", "character"])
+                .and_then(Json::as_i64),
+            current.at(&["range", "end", "line"]).and_then(Json::as_i64),
+            current
+                .at(&["range", "end", "character"])
+                .and_then(Json::as_i64),
+        );
+        match r {
+            (Some(sl), Some(sc), Some(el), Some(ec)) => out.push((sl, sc, el, ec)),
+            _ => break,
+        }
+        match current.at(&["parent"]) {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    out
+}
+
+#[test]
+fn an_expression_inside_a_function_expands_to_the_function() {
+    // `GOOD` is:
+    //  0: module a
+    //  1: (blank)
+    //  2: fn f(n: Int) -> Int {
+    //  3:     n + n
+    //  4: }
+    //
+    // The cursor on `n` on line 3 should produce a chain with at least the
+    // expression, the block, and the function, innermost first.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        selection_range(2, URI, &[(3, 4)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+
+    assert_eq!(
+        ranges.len(),
+        1,
+        "one position should give one entry: {sent:?}"
+    );
+
+    let lines = chain_start_lines(&ranges[0]);
+    // The chain must reach the function declaration on line 2.
+    assert!(
+        lines.contains(&2),
+        "the function declaration (line 2) should be in the chain: {lines:?}"
+    );
+    // The innermost range must start at or after line 3, where the expression is.
+    assert!(
+        lines.first().copied() >= Some(3),
+        "the innermost range should cover the expression on line 3: {lines:?}"
+    );
+    // The chain must have at least two steps: expression and function.
+    assert!(
+        lines.len() >= 2,
+        "there should be at least expression and function as separate steps: {lines:?}"
+    );
+}
+
+#[test]
+fn each_press_widens_strictly() {
+    // Two equal ranges are one step: the command appears to do nothing if an
+    // expand-selection press produces a range identical to the previous one.
+    // The chain must therefore contain no two consecutive entries whose ranges
+    // are the same (same start and end line/character).
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        // Cursor on the first `n` in `n + n` on line 3.
+        selection_range(2, URI, &[(3, 4)]),
+    ]);
+    let result = selection_ranges(&sent[2]);
+    let ranges = chain_ranges(&result[0]);
+
+    let has_consecutive_duplicate = ranges.windows(2).any(|w| w[0] == w[1]);
+    assert!(
+        !has_consecutive_duplicate,
+        "no two consecutive steps should produce the same range: {ranges:?}"
+    );
+}
+
+#[test]
+fn an_empty_positions_array_answers_with_an_empty_array() {
+    // An empty positions array is a valid request and should not error.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        selection_range(2, URI, &[]),
+    ]);
+    assert_eq!(
+        sent[2]
+            .at(&["result"])
+            .and_then(Json::as_array)
+            .map(<[Json]>::len),
+        Some(0),
+        "empty positions should answer with an empty array: {:?}",
+        sent[2]
+    );
+}
+
+#[test]
+fn a_position_outside_any_item_is_null_in_the_result() {
+    // Line 1 is the blank line between the module declaration and the function.
+    // Nothing is declared there, so the entry for that position is null.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        selection_range(2, URI, &[(1, 0)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+    assert_eq!(ranges.len(), 1, "one position gives one entry");
+    assert_eq!(
+        ranges[0],
+        Json::Null,
+        "a position in no item should be null: {:?}",
+        ranges[0]
+    );
+}
+
+#[test]
+fn multiple_positions_produce_one_entry_each() {
+    // Two positions in the same request come back in the same order.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        // Line 3, char 4 is inside the function; line 1 is outside any item.
+        selection_range(2, URI, &[(3, 4), (1, 0)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+    assert_eq!(ranges.len(), 2, "two positions give two entries: {sent:?}");
+    // First entry (inside function) should not be null.
+    assert_ne!(
+        ranges[0],
+        Json::Null,
+        "position inside function should have a range: {:?}",
+        ranges[0]
+    );
+    // Second entry (blank line) should be null.
+    assert_eq!(
+        ranges[1],
+        Json::Null,
+        "position outside any item should be null: {:?}",
+        ranges[1]
+    );
+}
+
+#[test]
+fn a_selection_range_request_for_a_document_nobody_opened_is_null() {
+    let sent = session(&[request(1, "initialize"), selection_range(2, URI, &[(0, 0)])]);
+    assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
+}
+
+#[test]
+fn a_file_that_does_not_check_still_has_selection_ranges() {
+    // Selection range reads the parse tree, not the checker.
+    let source = "module a\n\nfn f() -> Nope {\n    missing()\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // Line 3, character 4: inside `missing()`.
+        selection_range(2, URI, &[(3, 4)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+    assert_eq!(ranges.len(), 1);
+    assert_ne!(
+        ranges[0],
+        Json::Null,
+        "a file with errors should still produce a selection range: {:?}",
+        ranges[0]
+    );
+}
+
+#[test]
+fn a_position_in_a_handler_operation_expands_through_the_handler() {
+    // The handler declares `fn note`, whose body spans multiple lines.
+    // A position inside the body should expand through the operation and then
+    // through the handler.
+    let source = "module a\n\neffect Log {\n    fn note(message: String) -> ()\n}\n\n\
+                  handler Quiet implements Log {\n    fn note(message) -> () {\n        ()\n    }\n}\n";
+    // handler Quiet is on line 6, operation body opens on line 7:
+    //  6: handler Quiet implements Log {
+    //  7:     fn note(message) -> () {
+    //  8:         ()
+    //  9:     }
+    // 10: }
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // Inside `()` on line 8.
+        selection_range(2, URI, &[(8, 8)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+    assert_eq!(ranges.len(), 1);
+    let lines = chain_start_lines(&ranges[0]);
+    // The chain should reach the handler declaration on line 6.
+    assert!(
+        lines.contains(&6),
+        "the handler declaration (line 6) should be in the chain: {lines:?}"
+    );
+}
 
 fn rename(id: i64, uri: &str, line: u32, character: u32, to: &str) -> String {
     framed(&format!(

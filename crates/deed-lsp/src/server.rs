@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use deed_ast::{HandlerDecl, Item};
+use deed_ast::{Block, Expr, FieldInit, FnDecl, HandlerDecl, Item, MatchArm, Stmt, TestDecl};
 use deed_diagnostics::{Applicability, Diagnostic, FileId, Severity, SourceMap, Span};
 use deed_driver::{Checked, ObligationReport};
 use deed_resolve::{DefId, DefKind};
@@ -156,6 +156,7 @@ impl Server {
             "textDocument/codeAction" => result(id, self.code_action(message)),
             "textDocument/documentSymbol" => result(id, self.document_symbol(message)),
             "textDocument/foldingRange" => result(id, self.folding_range(message)),
+            "textDocument/selectionRange" => result(id, self.selection_range(message)),
             "textDocument/signatureHelp" => result(id, self.signature_help(message)),
             "workspace/symbol" => result(id, self.workspace_symbol(message)),
             "textDocument/completion" => result(id, self.completion(message)),
@@ -1251,7 +1252,56 @@ impl Server {
         Json::Array(ranges)
     }
 
-    /// Every declaration in the workspace whose name contains the query.
+    /// Which spans to select when the user asks to widen a selection.
+    ///
+    /// Reads the same parse tree as folding range, so a file that does not
+    /// check still answers. Each position in `params.positions` gets one entry
+    /// in the result, in the same order, innermost span first. Two positions
+    /// that land in the same node produce the same chain; a position outside
+    /// any item produces null for that entry.
+    fn selection_range(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Null;
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Null;
+        };
+
+        let Some(positions) = message
+            .at(&["params", "positions"])
+            .and_then(Json::as_array)
+            .filter(|a| !a.is_empty())
+        else {
+            return Json::Array(Vec::new());
+        };
+
+        let mut sources = SourceMap::new();
+        let file = sources.add(uri, document.text.clone());
+        let lexed = deed_lexer::tokenize(file, &document.text);
+        let parsed = deed_parser::parse(file, &lexed.tokens);
+
+        let result: Vec<Json> = positions
+            .iter()
+            .map(|pos| {
+                let position = Position::new(
+                    pos.at(&["line"]).and_then(Json::as_i64).unwrap_or(0) as u32,
+                    pos.at(&["character"]).and_then(Json::as_i64).unwrap_or(0) as u32,
+                );
+                let offset = document.lines.offset(&document.text, position);
+                let mut spans: Vec<Span> = Vec::new();
+                for item in &parsed.module.items {
+                    if item.span().contains(offset) {
+                        collect_item_spans(offset, item, &mut spans);
+                        break;
+                    }
+                }
+                build_selection_chain(document, &spans)
+            })
+            .collect();
+
+        Json::Array(result)
+    }
+
     ///
     /// The outline answers "what is in this file" and this answers "where is
     /// the thing I can only remember the name of", which is the question
@@ -2021,6 +2071,271 @@ fn comment_fold(start_line: u32, end_line: u32) -> Json {
     ])
 }
 
+// -- selection range ---------------------------------------------------------
+
+/// Pushes `span` onto `spans` only when it differs from the last entry.
+///
+/// Two equal spans are one step: the command appears to do nothing if an
+/// expand-selection press produces a range identical to the one it started
+/// with, so consecutive duplicates are collapsed before the chain is built.
+fn push_span_if_new(span: Span, spans: &mut Vec<Span>) {
+    if spans.last() != Some(&span) {
+        spans.push(span);
+    }
+}
+
+/// Builds the selection range JSON chain from a slice of spans, innermost first.
+///
+/// Returns `null` when the slice is empty (no item contained the position).
+fn build_selection_chain(document: &Document, spans: &[Span]) -> Json {
+    // Build from outermost inward so that each node can hold its parent.
+    let mut chain: Option<Json> = None;
+    for &span in spans.iter().rev() {
+        let start = document.lines.position(&document.text, span.start);
+        let end = document.lines.position(&document.text, span.end);
+        let range = Json::object(vec![("start", position(start)), ("end", position(end))]);
+        let mut fields = vec![("range", range)];
+        if let Some(parent) = chain {
+            fields.push(("parent", parent));
+        }
+        chain = Some(Json::object(fields));
+    }
+    chain.unwrap_or(Json::Null)
+}
+
+/// Collects selection-range spans for one top-level item, innermost first.
+///
+/// Walks into the body of functions, tests, and handler operations so that an
+/// expression, the statement holding it, the block holding that, and the
+/// declaration holding that each appear as a separate step.
+fn collect_item_spans(offset: u32, item: &Item, spans: &mut Vec<Span>) {
+    let item_span = item.span();
+    match item {
+        Item::Function(decl) => collect_fn_spans(offset, decl, spans),
+        Item::Test(decl) => collect_test_spans(offset, decl, spans),
+        Item::Handler(decl) => collect_handler_spans(offset, decl, spans),
+        Item::Record(_) | Item::Choice(_) | Item::Effect(_) | Item::TypeAlias(_) => {}
+    }
+    push_span_if_new(item_span, spans);
+}
+
+fn collect_fn_spans(offset: u32, decl: &FnDecl, spans: &mut Vec<Span>) {
+    collect_block_spans(offset, &decl.body, spans);
+}
+
+fn collect_test_spans(offset: u32, decl: &TestDecl, spans: &mut Vec<Span>) {
+    collect_block_spans(offset, &decl.body, spans);
+}
+
+fn collect_handler_spans(offset: u32, decl: &HandlerDecl, spans: &mut Vec<Span>) {
+    for op in &decl.operations {
+        if op.span.contains(offset) {
+            collect_block_spans(offset, &op.body, spans);
+            push_span_if_new(op.span, spans);
+            return;
+        }
+    }
+}
+
+/// Descends into a block, collecting spans innermost first, then pushes the
+/// block's own span.
+fn collect_block_spans(offset: u32, block: &Block, spans: &mut Vec<Span>) {
+    if !block.span.contains(offset) {
+        return;
+    }
+    let found = block
+        .stmts
+        .iter()
+        .any(|stmt| collect_stmt_spans(offset, stmt, spans));
+    if !found {
+        if let Some(tail) = &block.tail {
+            collect_expr_spans(offset, tail, spans);
+        }
+    }
+    push_span_if_new(block.span, spans);
+}
+
+/// Descends into a statement, collecting inner spans, then pushes the
+/// statement's span.  Returns `true` when the offset is inside this statement.
+fn collect_stmt_spans(offset: u32, stmt: &Stmt, spans: &mut Vec<Span>) -> bool {
+    let stmt_span = stmt.span();
+    if !stmt_span.contains(offset) {
+        return false;
+    }
+    match stmt {
+        Stmt::Let { init, .. } => {
+            collect_expr_spans(offset, init, spans);
+        }
+        Stmt::Assign { value, .. } => {
+            collect_expr_spans(offset, value, spans);
+        }
+        Stmt::Return { value: Some(v), .. } => {
+            collect_expr_spans(offset, v, spans);
+        }
+        Stmt::Assert { condition, .. } => {
+            collect_expr_spans(offset, condition, spans);
+        }
+        Stmt::Refuses { subject, .. } => {
+            collect_expr_spans(offset, subject, spans);
+        }
+        Stmt::Expr(expr) => {
+            collect_expr_spans(offset, expr, spans);
+        }
+        Stmt::Return { value: None, .. } => {}
+    }
+    push_span_if_new(stmt_span, spans);
+    true
+}
+
+/// Descends into an expression, collecting inner spans, then pushes the
+/// expression's span.  Returns `true` when the offset is inside this
+/// expression.
+fn collect_expr_spans(offset: u32, expr: &Expr, spans: &mut Vec<Span>) -> bool {
+    let expr_span = expr.span();
+    if !expr_span.contains(offset) {
+        return false;
+    }
+    match expr {
+        Expr::Unary { operand, .. } => {
+            collect_expr_spans(offset, operand, spans);
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            if !collect_expr_spans(offset, lhs, spans) {
+                collect_expr_spans(offset, rhs, spans);
+            }
+        }
+        Expr::Field { receiver, .. } => {
+            collect_expr_spans(offset, receiver, spans);
+        }
+        Expr::Call { callee, args, .. } => {
+            if !collect_expr_spans(offset, callee, spans) {
+                for arg in args {
+                    if collect_expr_spans(offset, arg, spans) {
+                        break;
+                    }
+                }
+            }
+        }
+        Expr::List { elements, .. } => {
+            for elem in elements {
+                if collect_expr_spans(offset, elem, spans) {
+                    break;
+                }
+            }
+        }
+        Expr::StructLit { path, fields, .. } => {
+            if !collect_expr_spans(offset, path, spans) {
+                for field in fields {
+                    if collect_field_spans(offset, field, spans) {
+                        break;
+                    }
+                }
+            }
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            if !collect_expr_spans(offset, condition, spans)
+                && !collect_block_spans_checked(offset, then_branch, spans)
+            {
+                if let Some(else_b) = else_branch {
+                    collect_expr_spans(offset, else_b, spans);
+                }
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            if !collect_expr_spans(offset, scrutinee, spans) {
+                for arm in arms {
+                    if collect_arm_spans(offset, arm, spans) {
+                        break;
+                    }
+                }
+            }
+        }
+        Expr::For {
+            iterable,
+            accumulator,
+            keep,
+            body,
+            ..
+        } => {
+            if !collect_expr_spans(offset, iterable, spans) {
+                let found = accumulator
+                    .as_ref()
+                    .is_some_and(|acc| collect_expr_spans(offset, &acc.init, spans));
+                if !found {
+                    let found = keep
+                        .as_ref()
+                        .is_some_and(|k| collect_expr_spans(offset, k, spans));
+                    if !found {
+                        collect_block_spans(offset, body, spans);
+                    }
+                }
+            }
+        }
+        Expr::Block(block) => {
+            collect_block_spans(offset, block, spans);
+        }
+        Expr::Closure { body, .. } => {
+            collect_expr_spans(offset, body, spans);
+        }
+        Expr::With { handlers, body, .. } => {
+            let found = handlers
+                .iter()
+                .any(|h| collect_expr_spans(offset, h, spans));
+            if !found {
+                collect_block_spans(offset, body, spans);
+            }
+        }
+        Expr::Old { expr, .. } => {
+            collect_expr_spans(offset, expr, spans);
+        }
+        // Leaf nodes (Int, Str, Bool, Unit, Ident, Unchanged, Error) and
+        // Expr::Block already handled above.
+        _ => {}
+    }
+    push_span_if_new(expr_span, spans);
+    true
+}
+
+/// Like `collect_block_spans` but returns whether the offset fell inside.
+fn collect_block_spans_checked(offset: u32, block: &Block, spans: &mut Vec<Span>) -> bool {
+    if !block.span.contains(offset) {
+        return false;
+    }
+    collect_block_spans(offset, block, spans);
+    true
+}
+
+/// Descends into a struct-literal field. Returns `true` when the offset is
+/// inside this field's span.
+fn collect_field_spans(offset: u32, field: &FieldInit, spans: &mut Vec<Span>) -> bool {
+    if !field.span.contains(offset) {
+        return false;
+    }
+    if let Some(val) = &field.value {
+        collect_expr_spans(offset, val, spans);
+    }
+    push_span_if_new(field.span, spans);
+    true
+}
+
+/// Descends into a match arm. Returns `true` when the offset is inside the
+/// arm's span.
+fn collect_arm_spans(offset: u32, arm: &MatchArm, spans: &mut Vec<Span>) -> bool {
+    if !arm.span.contains(offset) {
+        return false;
+    }
+    collect_expr_spans(offset, &arm.body, spans);
+    push_span_if_new(arm.span, spans);
+    true
+}
+
 fn initialize_result() -> Json {
     Json::object(vec![(
         "capabilities",
@@ -2042,6 +2357,7 @@ fn initialize_result() -> Json {
             ("documentFormattingProvider", Json::Bool(true)),
             ("documentSymbolProvider", Json::Bool(true)),
             ("foldingRangeProvider", Json::Bool(true)),
+            ("selectionRangeProvider", Json::Bool(true)),
             ("workspaceSymbolProvider", Json::Bool(true)),
             // A `(` opens an argument list and a `,` moves to the next one.
             // Nothing else changes which parameter is being written, and an
