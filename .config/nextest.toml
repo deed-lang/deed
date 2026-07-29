@@ -1,0 +1,17 @@
+# Nextest runs each test binary as its own process and runs them all at once.
+# This workspace has forty of them, which is where the time was going.
+
+[profile.default]
+# One failure stops the run locally, which is what you want while editing.
+fail-fast = true
+
+[profile.ci]
+# Everything, so one failing binary does not hide the next one. Running with
+# `--no-fail-fast` and reading only the first failure is how a break turns into
+# two rounds of CI instead of one.
+fail-fast = false
+# A test that fails once and passes on a retry is a flaky test, and this says
+# so out loud rather than hiding it: cargo-mutants is meaningless on a tree
+# with flaky tests, and nothing here should have any.
+retries = 0
+final-status-level = "flaky"

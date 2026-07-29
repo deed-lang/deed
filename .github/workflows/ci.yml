@@ -22,6 +22,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: taiki-e/install-action@nextest
+
       # Formatting is not configurable (P4), so it is checked, not suggested.
       - name: cargo fmt
         run: cargo fmt --all -- --check
@@ -29,5 +31,43 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: cargo test
-        run: cargo test --workspace
+      - name: cargo nextest
+        run: cargo nextest run --workspace --profile ci
+
+      # Nextest cannot run doctests, so they are their own step rather than
+      # quietly not running. This is the second time that has mattered here:
+      # `cargo test --all-targets` skips them too, and a public signature
+      # change broke the `//!` examples twice before anybody noticed.
+      - name: cargo test --doc
+        run: cargo test --doc --workspace
+
+  mutants:
+    name: mutants on the diff
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@cargo-mutants
+
+      # Only the lines this pull request touched. The point is not to hold the
+      # whole tree to a standard nothing here has met yet, it is that new code
+      # arrives with tests that would notice it being wrong.
+      - name: the diff
+        run: git diff origin/${{ github.base_ref }}... > pr.diff
+
+      - name: cargo mutants
+        run: cargo mutants --in-diff pr.diff --no-shuffle
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants
+          path: mutants.out

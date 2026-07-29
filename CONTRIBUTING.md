@@ -42,9 +42,14 @@ The compiler is Rust. Before opening a PR:
 
 ```
 cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --workspace
+cargo test --doc --workspace
 ```
+
+[cargo-nextest](https://nexte.st/) rather than `cargo test` because this workspace has forty
+test binaries and nextest runs them at once. It cannot run doctests, which is why they are
+the second line rather than folded into the first.
 
 ## Tests
 
@@ -85,6 +90,23 @@ the helper, say why in the test.
 
 Verify a strengthened assertion by breaking the thing it now guards and watching it fail by
 name. An assertion nobody has seen fail is an assertion nobody has read.
+
+That was done by hand here, one edit at a time, which meant a handful of breakages got tried
+per change and nobody asked about the rest. [cargo-mutants](https://mutants.rs/) asks about
+all of them:
+
+```
+cargo mutants --file crates/deed-typeck/src/check.rs
+```
+
+It edits one thing, builds, runs the tests, and reports every edit that no test noticed. The
+first file it was pointed at here produced fifty-one edits and fourteen that nothing caught,
+in under two minutes.
+
+CI runs it on the lines a pull request touched, and fails when one of them can be broken
+without a test noticing. Only the diff, deliberately: the point is not to hold the whole
+tree to a standard it has never met, it is that new code arrives with tests that would
+notice it being wrong. A mutant reported as `unviable` did not compile and is not a finding.
 
 ## Commits and PRs
 
