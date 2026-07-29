@@ -250,6 +250,42 @@ fn drop<T>(items: List<T>, count: Int) -> List<T> {
     }
 }
 
+// One list after another. The building block under `flatten`, and the thing a
+// caller reaches for when `push` is one element too small.
+fn concat<T>(left: List<T>, right: List<T>) -> List<T> {
+    for item in right with out = left {
+        push(out, item)
+    }
+}
+
+// One level of nesting undone. Nested `for` is writable, but every program that
+// wants it writes the same two lines, so they live here once.
+fn flatten<T>(items: List<List<T>>) -> List<T> {
+    for group in items with out = [] {
+        concat(out, group)
+    }
+}
+
+// Both sides of a filter, kept in order. Filter alone throws half away; a
+// caller that still wants the rest should not have to walk twice.
+record Parts<T> {
+    kept: List<T>,
+    rest: List<T>,
+}
+
+fn partition<T, uses r>(items: List<T>, keep: Fn(T) uses r -> Bool) -> Parts<T>
+  uses
+    r,
+{
+    for item in items with parts = Parts { kept: [], rest: [] } {
+        if keep(item) {
+            Parts { kept: push(parts.kept, item), rest: parts.rest }
+        } else {
+            Parts { kept: parts.kept, rest: push(parts.rest, item) }
+        }
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -349,4 +385,29 @@ test "take keeps a prefix and drop keeps the rest" {
     // front, and each side is what the other is not.
     assert take([1, 2, 3, 4], 2) == [1, 2]
     assert drop([1, 2, 3, 4], 2) == [3, 4]
+}
+
+test "concat puts one list after another" {
+    assert concat([1, 2], [3, 4]) == [1, 2, 3, 4]
+    assert concat([], [1]) == [1]
+    assert concat([1], []) == [1]
+    assert concat([], []) == []
+}
+
+test "flatten undoes one level of nesting" {
+    assert flatten([[1, 2], [3], [], [4, 5]]) == [1, 2, 3, 4, 5]
+    assert flatten([]) == []
+    assert flatten([[], []]) == []
+}
+
+test "partition keeps both sides in order" {
+    let parts = partition([1, 2, 3, 4], |n: Int| n > 2)
+    assert parts.kept == [3, 4]
+    assert parts.rest == [1, 2]
+    let none = partition([1, 2], |n: Int| n > 9)
+    assert none.kept == []
+    assert none.rest == [1, 2]
+    let empty = partition([], |n: Int| true)
+    assert empty.kept == []
+    assert empty.rest == []
 }
