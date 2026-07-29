@@ -286,6 +286,30 @@ fn partition<T, uses r>(items: List<T>, keep: Fn(T) uses r -> Bool) -> Parts<T>
     }
 }
 
+// Two lists walked together, stopping when either runs out. The pair is a
+// record rather than a language feature: the same shape anybody would write
+// next to `Parts` above, and the reason zip can live here without a new type.
+record Pair<A, B> {
+    left: A,
+    right: B,
+}
+
+fn zip<A, B>(left: List<A>, right: List<B>) -> List<Pair<A, B>> {
+    // The index is not in scope for `while` (it belongs to the turn the
+    // condition is deciding about), so the walk stops by refusing to grow
+    // once the other side has run out rather than by cutting the loop short.
+    for item at index in left with out = [] {
+        if index < length(right) {
+            match at(right, index) {
+                ok(other) => push(out, Pair { left: item, right: other }),
+                err(why) => out,
+            }
+        } else {
+            out
+        }
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -410,4 +434,11 @@ test "partition keeps both sides in order" {
     let empty = partition([], |n: Int| true)
     assert empty.kept == []
     assert empty.rest == []
+}
+
+test "zip stops when either list runs out" {
+    assert zip([1, 2, 3], ["a", "b"]) == [Pair { left: 1, right: "a" }, Pair { left: 2, right: "b" }]
+    assert zip([1], ["a", "b", "c"]) == [Pair { left: 1, right: "a" }]
+    assert zip([], ["a"]) == []
+    assert zip([1], []) == []
 }
