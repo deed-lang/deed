@@ -143,6 +143,7 @@ impl Server {
                 result(id, Json::Null)
             }
             "textDocument/hover" => result(id, self.hover(message)),
+            "textDocument/inlayHint" => result(id, self.inlay_hint(message)),
             "textDocument/definition" => result(id, self.definition(message)),
             "textDocument/references" => result(id, self.references(message)),
             "textDocument/prepareRename" => result(id, self.prepare_rename(message)),
@@ -252,6 +253,79 @@ impl Server {
             ),
             ("range", self.range(document, range)),
         ])
+    }
+
+    /// The tier of every obligation in view, written where it was settled.
+    ///
+    /// A tier is the thing this language has that others do not, and until now
+    /// it was visible one at a time, under a cursor. Somebody reading a screen
+    /// of code to find out which of it was proven had to hover every call on
+    /// it, which is the sort of answer nobody asks for twice.
+    ///
+    /// `proven` is shown along with the rest, for the same reason `hover` says
+    /// it: a reader shown nothing where a proof succeeded cannot tell a proof
+    /// from a question nobody asked.
+    ///
+    /// Read off [`Checked::obligations`], which the check behind this has
+    /// already built. Nothing here checks anything again.
+    fn inlay_hint(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Null;
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Null;
+        };
+        let Some(checked) = self.check_one(&uri) else {
+            return Json::Null;
+        };
+
+        let (start, end) = match range_of(message) {
+            Some((start, end)) => (
+                document.lines.offset(&document.text, start),
+                document.lines.offset(&document.text, end),
+            ),
+            // The protocol says a range is required. An editor that sends none
+            // is asking about the document rather than about nothing.
+            None => (0, document.text.len() as u32),
+        };
+
+        // Grouped by where the hint goes, because two obligations can end at
+        // the same place: a call whose precondition is proven and whose result
+        // is a refinement leaves two, and two hints in one column would be
+        // drawn as one word with no space in it.
+        let mut tiers: BTreeMap<u32, Vec<&'static str>> = BTreeMap::new();
+        for report in &checked.obligations {
+            if !touches(report.span, start, end) {
+                continue;
+            }
+            let at = tiers.entry(report.span.end).or_default();
+            // Two obligations that landed in the same tier at the same place
+            // are one thing to say, not two.
+            if !at.contains(&report.tier.name()) {
+                at.push(report.tier.name());
+            }
+        }
+
+        Json::Array(
+            tiers
+                .into_iter()
+                .map(|(offset, tiers)| {
+                    Json::object(vec![
+                        (
+                            "position",
+                            position(document.lines.position(&document.text, offset)),
+                        ),
+                        ("label", Json::string(tiers.join(" "))),
+                        // `Type` rather than `Parameter`, which are the two the
+                        // protocol has. A tier is something worked out about
+                        // the code to its left, which is what a type hint is,
+                        // rather than the name of a hole it goes into.
+                        ("kind", Json::number(1)),
+                        ("paddingLeft", Json::Bool(true)),
+                    ])
+                })
+                .collect(),
+        )
     }
 
     /// What could be written where the cursor is.
@@ -1747,6 +1821,7 @@ fn initialize_result() -> Json {
             // 1 is full sync. See the note in `didChange`.
             ("textDocumentSync", Json::number(1)),
             ("hoverProvider", Json::Bool(true)),
+            ("inlayHintProvider", Json::Bool(true)),
             ("definitionProvider", Json::Bool(true)),
             ("referencesProvider", Json::Bool(true)),
             // `prepareProvider` is what lets an editor grey the command out
@@ -2012,6 +2087,175 @@ mod tests {
             Some(0),
             "the invented failure belongs to nobody's document"
         );
+    }
+
+    /// One call that can be proven and one that cannot, plus a value whose
+    /// type has something to say about it.
+    const TIERED: &str = "module t\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn halve(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n >= 0,\n\
+         {\n\
+         \x20 n\n\
+         }\n\n\
+         fn settled() -> Int {\n\
+         \x20 halve(5)\n\
+         }\n\n\
+         fn unsettled(n: Int) -> Int {\n\
+         \x20 halve(n)\n\
+         }\n";
+
+    /// An inlay hint request over the whole of `text`.
+    fn hints_over(uri: &str, text: &str) -> Vec<Json> {
+        let end = text.lines().count() as i64;
+        hints_between(uri, text, (0, 0), (end, 0))
+    }
+
+    fn hints_between(uri: &str, text: &str, start: (i64, i64), end: (i64, i64)) -> Vec<Json> {
+        let corner = |(line, character): (i64, i64)| {
+            Json::object(vec![
+                ("line", Json::number(line)),
+                ("character", Json::number(character)),
+            ])
+        };
+        let server = server_with(uri, text);
+        let message = Json::object(vec![(
+            "params",
+            Json::object(vec![
+                (
+                    "textDocument",
+                    Json::object(vec![("uri", Json::string(uri))]),
+                ),
+                (
+                    "range",
+                    Json::object(vec![("start", corner(start)), ("end", corner(end))]),
+                ),
+            ]),
+        )]);
+        match server.inlay_hint(&message) {
+            Json::Array(hints) => hints,
+            other => panic!("an inlay hint request answers with an array, got {other:?}"),
+        }
+    }
+
+    /// The label of each hint, in the order they were sent.
+    fn labels(hints: &[Json]) -> Vec<&str> {
+        hints
+            .iter()
+            .map(|hint| {
+                hint.at(&["label"])
+                    .and_then(Json::as_str)
+                    .expect("a hint has a label")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_obligation_in_view_gets_its_tier() {
+        // Including the proven one. A reader shown only what went wrong cannot
+        // tell a discharged contract from a question nobody asked, which is
+        // the rule `hover` and `deed check --obligations` already follow.
+        let hints = hints_over("file:///work/t.deed", TIERED);
+        assert_eq!(labels(&hints), vec!["proven", "guarded"]);
+    }
+
+    #[test]
+    fn a_hint_sits_at_the_end_of_what_it_is_about() {
+        let uri = "file:///work/t.deed";
+        let hints = hints_over(uri, TIERED);
+        let lines = Lines::of(TIERED);
+
+        let offset_of = |hint: &Json| {
+            let line = hint
+                .at(&["position", "line"])
+                .and_then(Json::as_i64)
+                .expect("a hint has a line") as u32;
+            let character = hint
+                .at(&["position", "character"])
+                .and_then(Json::as_i64)
+                .expect("a hint has a character") as u32;
+            lines.offset(TIERED, Position::new(line, character))
+        };
+
+        // Each hint lands immediately after the call it is about, rather than
+        // at the start of it or at the end of the line.
+        assert_eq!(
+            offset_of(&hints[0]) as usize,
+            TIERED
+                .find("halve(5)")
+                .expect("the settled call is written")
+                + "halve(5)".len()
+        );
+        assert_eq!(
+            offset_of(&hints[1]) as usize,
+            TIERED
+                .find("halve(n)")
+                .expect("the unsettled call is written")
+                + "halve(n)".len()
+        );
+    }
+
+    #[test]
+    fn a_hint_is_shaped_the_way_an_editor_reads_one() {
+        let hints = hints_over("file:///work/t.deed", TIERED);
+        // `Type`, which is what the protocol numbers 1. A tier is worked out
+        // about the code to its left rather than being the name of a hole.
+        assert_eq!(hints[0].at(&["kind"]).and_then(Json::as_i64), Some(1));
+        // Without this the label is drawn against the last character of the
+        // call, which reads as part of it.
+        assert_eq!(hints[0].at(&["paddingLeft"]), Some(&Json::Bool(true)));
+    }
+
+    #[test]
+    fn a_range_covering_one_call_is_answered_about_that_call() {
+        let uri = "file:///work/t.deed";
+        // The line `halve(5)` is written on, and nothing else.
+        let line = TIERED
+            .lines()
+            .position(|line| line.contains("halve(5)"))
+            .expect("the settled call is written") as i64;
+        let hints = hints_between(uri, TIERED, (line, 0), (line, 40));
+        assert_eq!(labels(&hints), vec!["proven"]);
+    }
+
+    #[test]
+    fn a_range_with_no_obligation_in_it_gets_no_hints() {
+        // Not an error and not a `null`. An editor handed anything other than
+        // an array here logs a protocol failure at every keystroke.
+        let uri = "file:///work/t.deed";
+        assert!(hints_between(uri, TIERED, (0, 0), (1, 0)).is_empty());
+    }
+
+    #[test]
+    fn two_obligations_that_landed_alike_in_one_place_are_one_hint() {
+        // A call whose precondition is proven and whose result is a refinement
+        // leaves two obligations ending at the same offset. Two hints in one
+        // column are drawn as one word, so they are joined instead, and two
+        // that say the same word are one word.
+        let text = "module t\n\n\
+             type Positive = Int where value > 0\n\n\
+             fn twice(n: Positive) -> Positive\n\
+             \x20 where\n\
+             \x20   n > 0,\n\
+             {\n\
+             \x20 n\n\
+             }\n\n\
+             fn f() -> Positive {\n\
+             \x20 twice(2)\n\
+             }\n";
+        let hints = hints_over("file:///work/t.deed", text);
+        for label in labels(&hints) {
+            let words: Vec<&str> = label.split(' ').collect();
+            let mut seen = words.clone();
+            seen.sort_unstable();
+            seen.dedup();
+            assert_eq!(
+                seen.len(),
+                words.len(),
+                "`{label}` says the same tier twice"
+            );
+        }
     }
 
     /// Two open documents, so a label about one can be filed against the other.
