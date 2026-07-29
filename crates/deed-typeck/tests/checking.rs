@@ -511,6 +511,13 @@ fn a_handler_that_leaves_an_operation_out_is_an_error() {
     let text = rendered(&sources, &checked.diagnostics);
     assert!(text.contains("does not implement `value`"), "{text}");
     assert!(text.contains("one operation still to write"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "`Counter` declares them");
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the handler name"
+    );
 }
 
 #[test]
@@ -531,6 +538,9 @@ fn every_operation_left_out_is_named_at_once() {
     let text = rendered(&sources, &checked.diagnostics);
     assert!(text.contains("`set`") && text.contains("`value`"), "{text}");
     assert!(text.contains("2 operations still to write"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "`Counter` declares them");
 }
 
 #[test]
