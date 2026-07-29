@@ -266,7 +266,7 @@ impl<'a> Checker<'a> {
         // language, which is the test for whether something belongs in the
         // prelude at all.
         let lines = Ty::List(Box::new(Ty::Str));
-        let functions: [(&str, Vec<Ty>, Ty, Guarantee); 6] = [
+        let functions: [(&str, Vec<Ty>, Ty, Guarantee); 8] = [
             (
                 "length",
                 vec![Ty::Str],
@@ -281,6 +281,8 @@ impl<'a> Checker<'a> {
             ),
             ("join", vec![lines, Ty::Str], Ty::Str, Guarantee::any()),
             ("trim", vec![Ty::Str], Ty::Str, Guarantee::any()),
+            ("upper", vec![Ty::Str], Ty::Str, Guarantee::any()),
+            ("lower", vec![Ty::Str], Ty::Str, Guarantee::any()),
             ("to_string", vec![Ty::Int], Ty::Str, Guarantee::any()),
             (
                 "to_int",

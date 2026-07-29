@@ -213,8 +213,18 @@ Unicode whitespace table. That is a large amount of behaviour to hide behind a f
 name, and it would make what `trim` does depend on a table nobody reading the signature can
 see. A program that needs the full definition can say so in a name of its own.
 
-What is still missing is case. Deciding what an uppercase letter is needs a table, which is
-the same reason `trim` is in the prelude rather than written in the language.
+Case is `upper` and `lower`, and they are the twenty-six letters and nothing else, for the
+reason `trim` gives above. Deciding what an uppercase letter is in general needs a table, and
+a name this short may not depend on one a reader of the signature cannot see. Every other
+character comes back as it went in, so text in a script that has no case survives rather than
+being mangled by a rule that was not written for it. A program that needs the full definition
+can say so in a name of its own, the same way it can for whitespace.
+
+They are in the prelude rather than in `std/string` because the prelude test is whether a
+thing can be written in the language, and this cannot: a program can reach the characters of
+a string with `split(s, "")`, but there is nothing that turns one of them into a number
+except `to_int`, which speaks about text that spells a number and so covers the ten digits
+and no letter. Writing `upper` in Deed means writing the alphabet out by hand, twice.
 
 Slicing, searching and padding are not missing any more, and they are not in the prelude
 either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `pad_left` and
@@ -1181,8 +1191,9 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is twenty names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `length`, `List`, `at`, `push`, `repeat`, `split`, `join`, `trim`, `to_string`,
+**The prelude is twenty-two names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `length`, `List`, `at`, `push`, `repeat`, `split`, `join`, `trim`, `upper`, `lower`,
+`to_string`,
 `to_int`, `System`,
 `Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`, `now`, `epoch`, `open`,
 `read`, `save`, `remove`, `make`, `list` and `args` operations, and `Diverge`. Everything else
