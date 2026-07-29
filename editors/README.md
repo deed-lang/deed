@@ -79,8 +79,8 @@ against one, and go to definition and rename do not lead into one, because
 there is no file behind it to open or to change.
 
 It publishes diagnostics on open and on change, and answers hover, inlay hint,
-go to definition, references, rename, formatting, code actions, document symbol,
-completion, signature help and workspace symbol.
+go to definition, references, document highlight, rename, formatting, code actions,
+document symbol, completion, signature help and workspace symbol.
 
 A hover carries the part of a signature a diagnostic never gets to. On a
 function's name it quotes the contract, which is what that function requires,

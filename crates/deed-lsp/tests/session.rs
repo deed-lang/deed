@@ -1762,6 +1762,95 @@ fn a_builtin_has_no_useful_answer() {
     assert!(locations(sent.last().unwrap()).is_empty());
 }
 
+// -- document highlight ------------------------------------------------------
+
+#[test]
+fn document_highlight_lights_up_every_mention_in_the_file() {
+    // The `n` parameter: declared on line 2, used twice on line 3.
+    // Including the declaration is what an editor expects here: a cursor
+    // on a use should light up the declaration too, which is what
+    // `prepareRename` already treats as one thing.
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    n + n\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // The `n` in the parameter list.
+        at(2, "textDocument/documentHighlight", URI, 2, 5),
+    ]);
+
+    let highlights = sent[2]
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("{:?}", sent[2]));
+
+    // Declared on line 2, used twice on line 3.
+    let lines: Vec<i64> = highlights
+        .iter()
+        .filter_map(|h| h.at(&["range", "start", "line"]).and_then(Json::as_i64))
+        .collect();
+    assert_eq!(lines, vec![2, 3, 3], "{:?}", sent[2]);
+
+    // Kind 1 (Text) for all: the resolver does not track reads from writes.
+    let kinds: Vec<i64> = highlights
+        .iter()
+        .filter_map(|h| h.at(&["kind"]).and_then(Json::as_i64))
+        .collect();
+    assert!(kinds.iter().all(|&k| k == 1), "{:?}", sent[2]);
+}
+
+#[test]
+fn document_highlight_on_nothing_is_an_empty_array() {
+    // An editor handed null here logs a protocol failure on every keystroke.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        // The blank line between the module declaration and the function.
+        at(2, "textDocument/documentHighlight", URI, 1, 0),
+    ]);
+
+    assert_eq!(
+        sent[2]
+            .at(&["result"])
+            .and_then(Json::as_array)
+            .map(<[Json]>::len),
+        Some(0),
+        "{:?}",
+        sent[2]
+    );
+}
+
+#[test]
+fn document_highlight_stays_in_this_file() {
+    // `references` crosses files on purpose; this does not, because an
+    // editor asks about the document it is painting.
+    let scratch = Scratch::new("highlight-one-file");
+    let one = scratch.write("one.deed", EXPORTER);
+    let two = scratch.write("two.deed", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&one, EXPORTER),
+        // The `double` in `fn double` on line 2.
+        at(2, "textDocument/documentHighlight", &one, 2, 3),
+    ]);
+
+    let highlights = sent[2]
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("{:?}", sent[2]));
+
+    // `double` is declared once in `one.deed`. The call in `two.deed`
+    // should not appear here.
+    let lines: Vec<i64> = highlights
+        .iter()
+        .filter_map(|h| h.at(&["range", "start", "line"]).and_then(Json::as_i64))
+        .collect();
+    assert_eq!(lines, vec![2], "{:?}", sent[2]);
+
+    // `two` is open in the workspace but should contribute nothing here.
+    let _ = two;
+}
+
 // -- rename ------------------------------------------------------------------
 
 fn rename(id: i64, uri: &str, line: u32, character: u32, to: &str) -> String {
