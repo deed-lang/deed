@@ -1006,7 +1006,18 @@ fn the_shorthand_form_is_type_checked() {
     let (sources, checked) =
         check_source("module a\n\nrecord R { a: Int }\n\nfn f(a: Bool) -> R { R { a } }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    assert!(rendered(&sources, &checked.diagnostics).contains("the field it is assigned to"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("the field it is assigned to"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the field it is assigned to"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the value"
+    );
 }
 
 /// A literal is the one form whose head has to be a declaration rather than a
@@ -1379,8 +1390,11 @@ fn the_wrong_number_of_arguments_points_at_the_declaration() {
 
 #[test]
 fn calling_something_that_is_not_a_function_is_reported() {
-    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int { n(1) }\n");
+    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int { n(1) }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_CALLABLE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("`Int` is not a function"), "{text}");
+    assert!(text.contains("not callable"), "{text}");
 }
 
 #[test]
