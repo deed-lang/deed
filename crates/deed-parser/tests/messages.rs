@@ -481,14 +481,21 @@ fn a_missing_closing_brace_is_one_error() {
 fn a_positional_variant_does_not_swallow_what_follows() {
     // The choice keeps the variant and the function after it stays.
     let mut sources = SourceMap::new();
-    let file = sources.add("test.deed", "module a\n\nchoice C {\n  A(Int),\n}\n\nfn f() -> Int { 0 }\n");
+    let file = sources.add(
+        "test.deed",
+        "module a\n\nchoice C {\n  A(Int),\n}\n\nfn f() -> Int { 0 }\n",
+    );
     let lexed = tokenize(file, sources.file(file).text());
     assert!(!lexed.has_errors());
     let parsed = parse(file, &lexed.tokens);
     let errors: Vec<&deed_diagnostics::Diagnostic> =
         parsed.diagnostics.iter().filter(|d| d.is_error()).collect();
     assert_eq!(errors.len(), 1, "one positional variant is one error");
-    assert_eq!(parsed.module.items.len(), 2, "choice and function both survive");
+    assert_eq!(
+        parsed.module.items.len(),
+        2,
+        "choice and function both survive"
+    );
 }
 
 /// A range inside a `for` loop used to produce six cascading diagnostics.
