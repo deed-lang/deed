@@ -1588,8 +1588,13 @@ fn both_branches_of_an_if_must_agree() {
 
 #[test]
 fn contract_clauses_must_be_conditions() {
-    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
+    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("Bool") || text.contains("condition") || text.contains("expected"),
+        "{text}"
+    );
 }
 
 #[test]
