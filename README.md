@@ -537,8 +537,8 @@ at the type it was applied to, and so does a pattern binder, which is the part a
 declared with.
 
 `std/list` and `using_list.deed` are the point of the three changes above. `std/list` is a
-list library written in Deed: `map`, `map_at`, `filter`, `fold`, `any`, `all`, `count_where`,
-`filtered_with`, `first`, `last`, `reversed` and `prepend`, none of them known to the
+list library written in Deed: `map`, `map_at`, `filter`, `filter_at`, `fold`, `any`, `all`,
+`count_where`, `filtered_with`, `first`, `last`, `reversed` and `prepend`, none of them known to the
 compiler, no builtin, no special case, no name in the prelude. It is the first thing in this
 repository anybody else could have written.
 
