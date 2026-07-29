@@ -2032,42 +2032,87 @@ impl<'a> Checker<'a> {
         };
 
         let Some((params, ret)) = found else {
-            let effect_name = self.types.name_of(effect).to_string();
-            self.emit(
-                Diagnostic::error(
-                    codes::OPERATION_MISMATCH,
-                    self.file,
-                    operation.sig.name.span,
-                    format!("`{effect_name}` does not declare an operation called `{name}`"),
-                )
-                .with_primary_label("not part of the effect")
-                .with_secondary(handler.effect.span, "the effect this handler implements"),
+            let effect_name = self.resolutions.def(effect).name.clone();
+            let mut diagnostic = Diagnostic::error(
+                codes::OPERATION_MISMATCH,
+                self.file,
+                operation.sig.name.span,
+                format!("`{effect_name}` does not declare an operation called `{name}`"),
+            )
+            .with_primary_label("not part of the effect");
+            diagnostic = self.effect_secondary(
+                diagnostic,
+                effect,
+                handler.effect.span,
+                "the effect this handler implements",
             );
+            self.emit(diagnostic);
             return None;
         };
 
         if params.len() != operation.sig.params.len() {
-            let effect_name = self.types.name_of(effect).to_string();
-            self.emit(
-                Diagnostic::error(
-                    codes::OPERATION_MISMATCH,
-                    self.file,
-                    operation.sig.name.span,
-                    format!(
-                        "`{effect_name}.{name}` takes {} argument{}, and this takes {}",
-                        params.len(),
-                        if params.len() == 1 { "" } else { "s" },
-                        operation.sig.params.len()
-                    ),
-                )
-                .with_primary_label("does not match the effect")
-                .with_secondary(handler.effect.span, "the effect this handler implements")
-                .with_note("a handler operation writes no types because the effect declares them, so the shape has to line up"),
+            let effect_name = self.resolutions.def(effect).name.clone();
+            let mut diagnostic = Diagnostic::error(
+                codes::OPERATION_MISMATCH,
+                self.file,
+                operation.sig.name.span,
+                format!(
+                    "`{effect_name}.{name}` takes {} argument{}, and this takes {}",
+                    params.len(),
+                    if params.len() == 1 { "" } else { "s" },
+                    operation.sig.params.len()
+                ),
+            )
+            .with_primary_label("does not match the effect")
+            .with_note("a handler operation writes no types because the effect declares them, so the shape has to line up");
+            diagnostic = self.effect_secondary(
+                diagnostic,
+                effect,
+                handler.effect.span,
+                "the effect this handler implements",
             );
+            self.emit(diagnostic);
             return None;
         }
 
         Some((params, ret))
+    }
+
+    /// Points a secondary label at the effect a handler implements.
+    ///
+    /// Local effects sit on the use-site name already carried by
+    /// `handler.effect.span`. Imported ones have a real declaration in another
+    /// file now that the surface carries [`Declared`] for effects; without
+    /// that the secondary only underlined the import name.
+    fn effect_secondary(
+        &self,
+        diagnostic: Diagnostic,
+        effect: DefId,
+        fallback: Span,
+        why: &str,
+    ) -> Diagnostic {
+        match self.resolutions.def(effect).kind {
+            DefKind::Import => {
+                let Some(module) = self.resolutions.import_module(effect) else {
+                    return diagnostic.with_secondary(fallback, why);
+                };
+                let effect_name = &self.resolutions.def(effect).name;
+                match self.world.get(module, effect_name) {
+                    Some(SurfaceItem::Effect { declared, .. }) => {
+                        diagnostic.with_secondary_in(declared.file, declared.span, why)
+                    }
+                    _ => diagnostic.with_secondary(fallback, why),
+                }
+            }
+            _ => {
+                let span = self.resolutions.def(effect).span;
+                if span.is_empty() {
+                    diagnostic.with_secondary(fallback, why)
+                } else {
+                    diagnostic.with_secondary(span, why)
+                }
+            }
+        }
     }
 
     /// An operation of an effect declared in this module.
@@ -2132,7 +2177,9 @@ impl<'a> Checker<'a> {
             return;
         }
 
-        let effect_name = self.types.name_of(effect).to_string();
+        // The import's own name, not `name_of` on the import DefId (that is the
+        // local alias table and is not the effect's spelling across the boundary).
+        let effect_name = self.resolutions.def(effect).name.clone();
         let handler_name = &handler.name.name;
         let listed = missing
             .iter()
@@ -2145,22 +2192,23 @@ impl<'a> Checker<'a> {
             format!("{} operations", missing.len())
         };
 
-        self.emit(
-            Diagnostic::error(
-                codes::HANDLER_MISSING_OPERATION,
-                self.file,
-                handler.name.span,
-                format!("`{handler_name}` does not implement {listed}"),
-            )
-            .with_primary_label(format!("{counted} still to write"))
-            .with_secondary(
-                handler.effect.span,
-                format!("`{effect_name}` declares them"),
-            )
-            .with_note(
-                "a `with` block discharges the effect rather than the operations written inside the handler, so installing one is a claim that every call underneath has somewhere to go",
-            ),
+        let mut diagnostic = Diagnostic::error(
+            codes::HANDLER_MISSING_OPERATION,
+            self.file,
+            handler.name.span,
+            format!("`{handler_name}` does not implement {listed}"),
+        )
+        .with_primary_label(format!("{counted} still to write"))
+        .with_note(
+            "a `with` block discharges the effect rather than the operations written inside the handler, so installing one is a claim that every call underneath has somewhere to go",
         );
+        diagnostic = self.effect_secondary(
+            diagnostic,
+            effect,
+            handler.effect.span,
+            &format!("`{effect_name}` declares them"),
+        );
+        self.emit(diagnostic);
     }
 
     /// The operations of an effect declared in this module, in declaration
