@@ -4826,9 +4826,10 @@ fn escapes(known: Range, admitted: Range) -> Option<i64> {
 
 /// Fields from another module's surface, as the checker's own field type.
 ///
-/// `written` is where they are declared, for the kinds of surface that carry
-/// it. A variant's and a handler's do not yet, so a diagnostic about one falls
-/// back to saying nothing rather than pointing at the wrong place.
+/// `written` is where they are declared and which file that is. Records,
+/// variants and handlers all carry those spans now; callers that still have
+/// none pass `None` and the diagnostic points at nothing rather than at the
+/// wrong place.
 fn external_fields(fields: &[(String, Ty)], written: Option<(&[Span], FileId)>) -> Vec<FieldTy> {
     fields
         .iter()
