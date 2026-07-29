@@ -15,6 +15,7 @@ deed-resolve = { path = "../deed-resolve" }
 [dev-dependencies]
 deed-lexer = { path = "../deed-lexer" }
 deed-parser = { path = "../deed-parser" }
+deed-typeck = { path = "../deed-typeck" }
 
 [lints]
 workspace = true
