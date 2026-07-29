@@ -213,4 +213,14 @@ test "trimming" {
     assert cleaned(" \t\r\nboth ends\n\r\t ") == "both ends"
     // The reason it exists: a line off the end of a file written on Windows.
     assert cleaned(at(split("first\r\nsecond\r\n", "\n"), 0)?) == "first"
+
+    // Case is the same bargain as whitespace: the twenty-six letters, written
+    // down, rather than a table nobody reading the signature can see. Digits
+    // and punctuation are not letters and come back untouched, and neither is
+    // anything outside the alphabet, so text in a script with no case survives
+    // instead of being mangled by a rule that was not written for it.
+    assert upper("deed lang 1") == "DEED LANG 1"
+    assert lower("DEED Lang 1") == "deed lang 1"
+    assert upper("ünïcode") == "üNïCODE"
+    assert lower("") == ""
 }
