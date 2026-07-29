@@ -353,6 +353,18 @@ fn chunks<T>(items: List<T>, size: Int) -> List<List<T>> {
     }
 }
 
+// Put `sep` between each pair of elements. An empty list and a singleton are
+// unchanged: there is nowhere between elements to put anything.
+fn intersperse<T>(items: List<T>, sep: T) -> List<T> {
+    for item at index in items with out = [] {
+        if index == 0 {
+            push(out, item)
+        } else {
+            push(push(out, sep), item)
+        }
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -511,4 +523,11 @@ test "chunks walks non-overlapping slices" {
     assert chunks([1, 2], 3) == [[1, 2]]
     assert chunks([1, 2, 3], 0) == []
     assert chunks([], 1) == []
+}
+
+test "intersperse puts a separator between elements" {
+    assert intersperse([1, 2, 3], 0) == [1, 0, 2, 0, 3]
+    assert intersperse(["a", "b"], ",") == ["a", ",", "b"]
+    assert intersperse([1], 0) == [1]
+    assert intersperse([], 0) == []
 }
