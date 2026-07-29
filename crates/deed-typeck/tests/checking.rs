@@ -1559,7 +1559,7 @@ fn a_line_that_was_meant_to_continue_the_one_above_says_so() {
     // statements, which is the honest reading and still leaves a line doing
     // nothing. Saying so is the difference between a rule that is right and a
     // rule that helps.
-    let (_, checked) = check_source(
+    let (sources, checked) = check_source(
         "module a\n\n\
          fn f(n: Int) -> Int {\n\
          \x20 let a = 1\n\
@@ -1568,6 +1568,12 @@ fn a_line_that_was_meant_to_continue_the_one_above_says_so() {
          }\n",
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::DISCARDED_VALUE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("this produces `Int` and nothing reads it"),
+        "{text}"
+    );
+    assert!(text.contains("write `let _ = ...`"), "{text}");
 }
 
 #[test]
