@@ -1363,3 +1363,59 @@ fn the_proven_example_says_what_it_claims() {
     assert_eq!(checked.obligations_at(Tier::Proven), 45);
     assert_eq!(checked.obligations_at(Tier::Guarded), 2);
 }
+
+#[test]
+fn a_guard_weaker_than_the_predicate_says_what_gets_through() {
+    // The gap `design/02-syntax.md` names under open questions: a converter
+    // guarded by `n >= 0` for a `value > 0` refinement is accepted with a
+    // runtime check, which is honest and is not the same as catching it. It
+    // stays accepted, because a runtime check is what `Guarded` means, and the
+    // diagnostic now names the number the guard lets past.
+    let (sources, checked) = check(
+        "\
+         fn try_positive(n: Int) -> Result<Positive, String> {\n\
+         \x20   if n >= 0 {\n        ok(n)\n    } else {\n        err(\"no\")\n    }\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("cannot prove this satisfies `Positive`"),
+        "{text}"
+    );
+    assert!(
+        text.contains("when this is 0 it does not satisfy `Positive`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_guard_that_matches_the_predicate_proves_it_and_says_nothing() {
+    // The other side, and the one that says the note above is about the guard
+    // rather than about every conversion. One character apart.
+    let (sources, checked) = check(
+        "\
+         fn try_positive(n: Int) -> Result<Positive, String> {\n\
+         \x20   if n > 0 {\n        ok(n)\n    } else {\n        err(\"no\")\n    }\n}\n",
+    );
+    assert!(
+        checked.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(checked.obligations_at(deed_typeck::Tier::Proven), 1);
+}
+
+#[test]
+fn a_value_nothing_is_known_about_gets_no_invented_number() {
+    // A number would be an invention rather than a finding here, and this
+    // diagnostic is read by somebody deciding whether they have a bug.
+    let (sources, checked) = check(
+        "\
+         fn f(n: Int) -> Result<Positive, String> {\n    ok(n)\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("cannot prove this satisfies `Positive`"),
+        "{text}"
+    );
+    assert!(!text.contains("when this is"), "{text}");
+}
