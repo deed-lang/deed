@@ -1140,15 +1140,21 @@ impl<'a> Checker<'a> {
                         None => Ty::Unknown,
                     },
                     other => {
-                        self.emit(
-                            Diagnostic::error(
-                                codes::NOT_A_TYPE,
-                                self.file,
-                                name.span,
-                                format!("`{}` is a {}, not a type", name.name, other.describe()),
-                            )
-                            .with_primary_label("not a type"),
-                        );
+                        let mut diagnostic = Diagnostic::error(
+                            codes::NOT_A_TYPE,
+                            self.file,
+                            name.span,
+                            format!("`{}` is a {}, not a type", name.name, other.describe()),
+                        )
+                        .with_primary_label("not a type");
+                        // Same pin the imported path already has: the name is a
+                        // real declaration of the wrong kind, and "declared here"
+                        // is where that kind is written.
+                        let at = self.resolutions.def(def).span;
+                        if !at.is_empty() {
+                            diagnostic = diagnostic.with_secondary(at, "declared here");
+                        }
+                        self.emit(diagnostic);
                         Ty::Unknown
                     }
                 };
