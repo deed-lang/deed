@@ -1851,6 +1851,318 @@ fn document_highlight_stays_in_this_file() {
     let _ = two;
 }
 
+// -- folding range -----------------------------------------------------------
+
+fn folding_range(id: i64, uri: &str) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/foldingRange\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}}}}}}"
+    ))
+}
+
+fn folds(message: &Json) -> &[Json] {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("a folding range request should answer with a list: {message:?}"))
+}
+
+#[test]
+fn declarations_with_bodies_produce_fold_ranges() {
+    // `DECLARED` has one of everything, and each item with a body folds.
+    // Line numbers are zero based.
+    //
+    //  0: module a
+    //  1: (blank)
+    //  2: type Positive = Int where value > 0        <- no body, no fold
+    //  3: (blank)
+    //  4: record Point {
+    //  5:     x: Int,
+    //  6:     y: Int,
+    //  7: }
+    //  8: (blank)
+    //  9: choice Flag {
+    // 10:     On,
+    // 11:     Off,
+    // 12: }
+    // 13: (blank)
+    // 14: effect Log {
+    // 15:     fn note(message: String) -> ()
+    // 16: }
+    // 17: (blank)
+    // 18: handler Quiet implements Log {
+    // 19:     state seen: Int
+    // 20: (blank)
+    // 21:     fn note(message) -> () {}               <- single-line body, no fold
+    // 22: }
+    // 23: (blank)
+    // 24: fn f(n: Int) -> Int {
+    // 25:     n + n
+    // 26: }
+    // 27: (blank)
+    // 28: test "it doubles" {
+    // 29:     assert f(2) == 4
+    // 30: }
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, DECLARED),
+        folding_range(2, URI),
+    ]);
+    let ranges = folds(&sent[2]);
+
+    let start_end: Vec<(i64, i64)> = ranges
+        .iter()
+        .filter(|r| r.at(&["kind"]).is_none())
+        .filter_map(|r| {
+            Some((
+                r.at(&["startLine"]).and_then(Json::as_i64)?,
+                r.at(&["endLine"]).and_then(Json::as_i64)?,
+            ))
+        })
+        .collect();
+
+    assert!(
+        start_end.contains(&(4, 6)),
+        "record Point should fold: {start_end:?}"
+    );
+    assert!(
+        start_end.contains(&(9, 11)),
+        "choice Flag should fold: {start_end:?}"
+    );
+    assert!(
+        start_end.contains(&(14, 15)),
+        "effect Log should fold: {start_end:?}"
+    );
+    assert!(
+        start_end.contains(&(18, 21)),
+        "handler Quiet should fold: {start_end:?}"
+    );
+    assert!(
+        start_end.contains(&(24, 25)),
+        "fn f should fold: {start_end:?}"
+    );
+    assert!(
+        start_end.contains(&(28, 29)),
+        "test should fold: {start_end:?}"
+    );
+}
+
+#[test]
+fn a_type_alias_has_no_body_and_produces_no_fold() {
+    // `type Positive` has no braces, so there is nothing to collapse.
+    let source = "module a\n\ntype Positive = Int where value > 0\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    let ranges = folds(&sent[2]);
+    let item_ranges: Vec<_> = ranges
+        .iter()
+        .filter(|r| r.at(&["kind"]).is_none())
+        .collect();
+    assert!(
+        item_ranges.is_empty(),
+        "type alias should not produce a fold: {item_ranges:?}"
+    );
+}
+
+#[test]
+fn a_single_line_declaration_produces_no_fold() {
+    // A body on one line has nothing to collapse.
+    let source = "module a\n\nfn f(n: Int) -> Int { n + n }\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    let ranges = folds(&sent[2]);
+    let item_ranges: Vec<_> = ranges
+        .iter()
+        .filter(|r| r.at(&["kind"]).is_none())
+        .collect();
+    assert!(
+        item_ranges.is_empty(),
+        "single-line body should produce no fold: {item_ranges:?}"
+    );
+}
+
+#[test]
+fn handler_operations_with_multi_line_bodies_fold_independently() {
+    // The operation body is multi-line, so it folds inside the handler.
+    let source = "module a\n\neffect Log {\n    fn note(message: String) -> ()\n}\n\nhandler Quiet implements Log {\n    fn note(message: String) -> () {\n        ()\n    }\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    let ranges = folds(&sent[2]);
+
+    let item_starts: Vec<i64> = ranges
+        .iter()
+        .filter(|r| r.at(&["kind"]).is_none())
+        .filter_map(|r| r.at(&["startLine"]).and_then(Json::as_i64))
+        .collect();
+
+    // handler Quiet is on line 6, operation `fn note` body opens on line 7.
+    assert!(
+        item_starts.contains(&6),
+        "handler should fold: {item_starts:?}"
+    );
+    assert!(
+        item_starts.contains(&7),
+        "handler operation body should fold: {item_starts:?}"
+    );
+}
+
+#[test]
+fn consecutive_line_comments_fold_as_a_comment_range() {
+    // Two `//` lines in a row become one comment fold.
+    let source = "// first\n// second\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    let ranges = folds(&sent[2]);
+
+    let comment_ranges: Vec<(i64, i64)> = ranges
+        .iter()
+        .filter(|r| r.at(&["kind"]).and_then(Json::as_str) == Some("comment"))
+        .filter_map(|r| {
+            Some((
+                r.at(&["startLine"]).and_then(Json::as_i64)?,
+                r.at(&["endLine"]).and_then(Json::as_i64)?,
+            ))
+        })
+        .collect();
+
+    assert_eq!(
+        comment_ranges,
+        vec![(0, 1)],
+        "two consecutive comment lines should fold as one range: {comment_ranges:?}"
+    );
+}
+
+#[test]
+fn a_blank_line_ends_a_comment_run() {
+    // A gap between two single-line comments produces no range for either.
+    let source = "// first\n\n// second\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    let ranges = folds(&sent[2]);
+
+    let comment_ranges: Vec<_> = ranges
+        .iter()
+        .filter(|r| r.at(&["kind"]).and_then(Json::as_str) == Some("comment"))
+        .collect();
+
+    assert!(
+        comment_ranges.is_empty(),
+        "isolated comment lines should not fold: {comment_ranges:?}"
+    );
+}
+
+#[test]
+fn a_single_comment_line_produces_no_fold() {
+    // A run of one has nothing to collapse.
+    let source = "// just one\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    let ranges = folds(&sent[2]);
+
+    let comment_ranges: Vec<_> = ranges
+        .iter()
+        .filter(|r| r.at(&["kind"]).and_then(Json::as_str) == Some("comment"))
+        .collect();
+
+    assert!(
+        comment_ranges.is_empty(),
+        "a single comment line should produce no fold: {comment_ranges:?}"
+    );
+}
+
+/// The comment ranges in a file, as `(startLine, endLine)`.
+fn comment_folds_in(source: &str) -> Vec<(i64, i64)> {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    folds(&sent[2])
+        .iter()
+        .filter(|range| range.at(&["kind"]).and_then(Json::as_str) == Some("comment"))
+        .filter_map(|range| {
+            Some((
+                range.at(&["startLine"]).and_then(Json::as_i64)?,
+                range.at(&["endLine"]).and_then(Json::as_i64)?,
+            ))
+        })
+        .collect()
+}
+
+/// A run that ends because the next comment is a block one still folds.
+///
+/// A `/* */` is a comment too, so a run of `//` lines that meets one has
+/// ended rather than been interrupted, and what it collected up to there is
+/// still two lines a reader may want out of the way.
+#[test]
+fn a_block_comment_ends_a_run_without_taking_it_with_it() {
+    let source = "// first\n// second\n/* and a block */\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    assert_eq!(comment_folds_in(source), vec![(0, 1)]);
+}
+
+/// And a run of one that ends the same way is still a run of one.
+#[test]
+fn a_single_comment_line_before_a_block_comment_produces_no_fold() {
+    let source = "// just one\n/* and a block */\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    assert_eq!(comment_folds_in(source), Vec::new());
+}
+
+/// A run that ends because the next comment line is not the next line.
+///
+/// The blank line closes the first run in the middle of the walk rather than
+/// at the end of it, which is a different place in the code and was a
+/// different answer for as long as nothing asked.
+#[test]
+fn a_run_that_ends_at_a_gap_folds_before_the_next_one_starts() {
+    let source = "// first\n// second\n\n// apart\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    assert_eq!(comment_folds_in(source), vec![(0, 1)]);
+}
+
+#[test]
+fn a_file_that_does_not_check_still_folds() {
+    // Folding reads the parse tree, not the checker, so a bad type is no obstacle.
+    let source = "module a\n\nfn f() -> Nope {\n    missing()\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    let ranges = folds(&sent[2]);
+    let item_ranges: Vec<_> = ranges
+        .iter()
+        .filter(|r| r.at(&["kind"]).is_none())
+        .collect();
+    assert_eq!(
+        item_ranges.len(),
+        1,
+        "the function body should fold even when the file has errors: {ranges:?}"
+    );
+}
+
+#[test]
+fn a_folding_range_request_for_a_document_nobody_opened_is_null() {
+    let sent = session(&[request(1, "initialize"), folding_range(2, URI)]);
+    assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
+}
+
 // -- rename ------------------------------------------------------------------
 
 fn rename(id: i64, uri: &str, line: u32, character: u32, to: &str) -> String {
