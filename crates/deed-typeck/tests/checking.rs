@@ -985,6 +985,30 @@ fn field_access_on_a_missing_field_lists_what_is_there() {
         check_source("module a\n\nrecord R { alpha: Int }\n\nfn f(r: R) -> Int { r.beta }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NO_SUCH_FIELD]);
     assert!(rendered(&sources, &checked.diagnostics).contains("it has `alpha`"));
+    assert!(rendered(&sources, &checked.diagnostics).contains("declared here"));
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+}
+
+#[test]
+fn a_missing_field_on_an_imported_record_access_points_at_the_other_file() {
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Point}\n\nfn f(p: Point) -> Int { p.z }\n",
+        &universe_of(&["module other\n\nrecord Point { x: Int, y: Int }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NO_SUCH_FIELD]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the record lives in the other module"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the access"
+    );
 }
 
 /// `xs.length()` is what somebody writes on their first day here, because

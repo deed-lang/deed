@@ -3377,10 +3377,22 @@ impl<'a> Checker<'a> {
         {
             let available: Vec<&str> = fields.iter().map(|field| field.name.as_str()).collect();
             diagnostic = diagnostic.with_note(format!("it has {}", list(&available)));
+            let at = self.resolutions.def(def).span;
+            if !at.is_empty() {
+                diagnostic = diagnostic.with_secondary(at, "declared here");
+            }
         }
-        if let Some(SurfaceItem::Record { fields, .. }) = self.external_item(&looked_through) {
+        if let Some(SurfaceItem::Record {
+            fields,
+            declared: at,
+            ..
+        }) = self.external_item(&looked_through)
+        {
             let available: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
             diagnostic = diagnostic.with_note(format!("it has {}", list(&available)));
+            if !at.span.is_empty() {
+                diagnostic = diagnostic.with_secondary_in(at.file, at.span, "declared here");
+            }
         }
 
         // `xs.length()` is what somebody writes on their first day, because
