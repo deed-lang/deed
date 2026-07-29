@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use deed_ast::Item;
+use deed_ast::{HandlerDecl, Item};
 use deed_diagnostics::{Applicability, Diagnostic, FileId, Severity, SourceMap, Span};
 use deed_driver::{Checked, ObligationReport};
 use deed_resolve::{DefId, DefKind};
@@ -155,6 +155,7 @@ impl Server {
             "textDocument/formatting" => result(id, self.formatting(message)),
             "textDocument/codeAction" => result(id, self.code_action(message)),
             "textDocument/documentSymbol" => result(id, self.document_symbol(message)),
+            "textDocument/foldingRange" => result(id, self.folding_range(message)),
             "textDocument/signatureHelp" => result(id, self.signature_help(message)),
             "workspace/symbol" => result(id, self.workspace_symbol(message)),
             "textDocument/completion" => result(id, self.completion(message)),
@@ -1218,6 +1219,38 @@ impl Server {
         }
     }
 
+    /// What lines the editor can collapse in this file.
+    ///
+    /// Folding answers the same parse tree the outline reads, and a file that
+    /// does not check still folds. Every declaration that has a body produces
+    /// one range, and runs of consecutive `//` comments produce a second kind.
+    ///
+    /// The `endLine` is the last line kept inside the fold, which is the line
+    /// before the closing `}` so that brace stays on screen when the body is
+    /// collapsed.
+    fn folding_range(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Null;
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Null;
+        };
+
+        let mut sources = SourceMap::new();
+        let file = sources.add(uri, document.text.clone());
+        let lexed = deed_lexer::tokenize(file, &document.text);
+        let parsed = deed_parser::parse(file, &lexed.tokens);
+
+        let mut ranges: Vec<Json> = Vec::new();
+
+        for item in &parsed.module.items {
+            item_folds(document, item, &mut ranges);
+        }
+        comment_folds(document, &lexed.trivia, &mut ranges);
+
+        Json::Array(ranges)
+    }
+
     /// Every declaration in the workspace whose name contains the query.
     ///
     /// The outline answers "what is in this file" and this answers "where is
@@ -1864,6 +1897,130 @@ fn touches(span: Span, start: u32, end: u32) -> bool {
     span.start <= end && start <= span.end
 }
 
+/// Appends fold ranges for one top-level item.
+///
+/// Every item with a body folds. `TypeAlias` has none. Handler operations are
+/// nested one level and each fold independently.
+fn item_folds(document: &Document, item: &Item, ranges: &mut Vec<Json>) {
+    match item {
+        Item::Function(decl) => {
+            if let Some(r) = body_fold(document, decl.body.span) {
+                ranges.push(r);
+            }
+        }
+        Item::Test(decl) => {
+            if let Some(r) = body_fold(document, decl.body.span) {
+                ranges.push(r);
+            }
+        }
+        Item::Record(decl) => {
+            if let Some(r) = body_fold(document, decl.span) {
+                ranges.push(r);
+            }
+        }
+        Item::Choice(decl) => {
+            if let Some(r) = body_fold(document, decl.span) {
+                ranges.push(r);
+            }
+        }
+        Item::Effect(decl) => {
+            if let Some(r) = body_fold(document, decl.span) {
+                ranges.push(r);
+            }
+        }
+        Item::Handler(decl) => {
+            if let Some(r) = body_fold(document, decl.span) {
+                ranges.push(r);
+            }
+            handler_operation_folds(document, decl, ranges);
+        }
+        Item::TypeAlias(_) => {}
+    }
+}
+
+/// Appends fold ranges for the operation bodies inside a handler.
+fn handler_operation_folds(document: &Document, decl: &HandlerDecl, ranges: &mut Vec<Json>) {
+    for operation in &decl.operations {
+        if let Some(r) = body_fold(document, operation.body.span) {
+            ranges.push(r);
+        }
+    }
+}
+
+/// A fold range for a span whose last character is `}`.
+///
+/// `startLine` is the line the span opens on, `endLine` is the line before `}`
+/// so the brace stays on screen when collapsed. Returns `None` when the span
+/// fits on a single line, or when there are no lines between the opener and
+/// the closing brace.
+fn body_fold(document: &Document, span: Span) -> Option<Json> {
+    let start_line = document.lines.position(&document.text, span.start).line;
+    // span.end is exclusive; span.end - 1 is the `}` itself.
+    let close_offset = span.end.saturating_sub(1);
+    let close_line = document.lines.position(&document.text, close_offset).line;
+    // Nothing to fold when the body is on one line.
+    if close_line <= start_line {
+        return None;
+    }
+    let end_line = close_line - 1;
+    if end_line <= start_line {
+        return None;
+    }
+    Some(Json::object(vec![
+        ("startLine", Json::number(start_line as i64)),
+        ("endLine", Json::number(end_line as i64)),
+    ]))
+}
+
+/// Appends fold ranges for runs of consecutive `//` comments.
+///
+/// A blank line (or any non-line-comment trivia) ends a run. A run of one line
+/// has nothing to collapse and produces no range.
+fn comment_folds(document: &Document, trivia: &[deed_lexer::Trivia], ranges: &mut Vec<Json>) {
+    // (start_line, last_line) of the current run.
+    let mut run: Option<(u32, u32)> = None;
+
+    for item in trivia {
+        if item.kind != deed_lexer::TriviaKind::Line {
+            if let Some((start, end)) = run.take() {
+                if end > start {
+                    ranges.push(comment_fold(start, end));
+                }
+            }
+            continue;
+        }
+
+        let line = document
+            .lines
+            .position(&document.text, item.span.start)
+            .line;
+        run = match run {
+            Some((start, end)) if line == end + 1 => Some((start, line)),
+            Some((start, end)) => {
+                if end > start {
+                    ranges.push(comment_fold(start, end));
+                }
+                Some((line, line))
+            }
+            None => Some((line, line)),
+        };
+    }
+
+    if let Some((start, end)) = run {
+        if end > start {
+            ranges.push(comment_fold(start, end));
+        }
+    }
+}
+
+fn comment_fold(start_line: u32, end_line: u32) -> Json {
+    Json::object(vec![
+        ("startLine", Json::number(start_line as i64)),
+        ("endLine", Json::number(end_line as i64)),
+        ("kind", Json::string("comment")),
+    ])
+}
+
 fn initialize_result() -> Json {
     Json::object(vec![(
         "capabilities",
@@ -1884,6 +2041,7 @@ fn initialize_result() -> Json {
             ),
             ("documentFormattingProvider", Json::Bool(true)),
             ("documentSymbolProvider", Json::Bool(true)),
+            ("foldingRangeProvider", Json::Bool(true)),
             ("workspaceSymbolProvider", Json::Bool(true)),
             // A `(` opens an argument list and a `,` moves to the next one.
             // Nothing else changes which parameter is being written, and an
