@@ -3688,13 +3688,20 @@ impl<'a> Checker<'a> {
             SurfaceItem::Variant {
                 choice,
                 fields: declared,
+                field_spans,
                 generics,
+                declared: at,
             } => {
                 let choice = Rc::clone(choice);
                 let arity = generics.len();
                 let declared = declared
                     .as_deref()
-                    .map(|fields| external_fields(fields, None))
+                    .map(|fields| {
+                        external_fields(
+                            fields,
+                            field_spans.as_deref().map(|spans| (spans, at.file)),
+                        )
+                    })
                     .unwrap_or_default();
                 let args = self.check_literal_fields(&declared, fields, span, &name, arity);
                 Some(Ty::External {
@@ -3703,8 +3710,12 @@ impl<'a> Checker<'a> {
                     args,
                 })
             }
-            SurfaceItem::Handler { state } => {
-                let declared = external_fields(state, None);
+            SurfaceItem::Handler {
+                state,
+                state_spans,
+                declared: at,
+            } => {
+                let declared = external_fields(state, Some((state_spans, at.file)));
                 self.check_literal_fields(&declared, fields, span, &name, 0);
                 Some(Ty::External {
                     module,

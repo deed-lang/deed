@@ -10,6 +10,13 @@
 # once.
 test_tool = "nextest"
 
+# Every package's tests, not only the one the mutant is in. That is the default
+# and it is wrong here: the compiler crates are thin and most of what holds
+# them lives in `deed-driver`, which drives the whole pipeline. Mutating
+# `deed-typeck` ran its own 107 tests and none of `deed-driver`'s 504, one of
+# which was written to catch exactly the mutation that came back MISSED.
+test_workspace = true
+
 # No debug symbols. A mutant is expected to fail a test, and the name of the
 # test is what says which one, so the symbols are paid for on every build and
 # read on none.

@@ -60,11 +60,40 @@ jobs:
       # Only the lines this pull request touched. The point is not to hold the
       # whole tree to a standard nothing here has met yet, it is that new code
       # arrives with tests that would notice it being wrong.
+      #
+      # From the base commit rather than from a branch name, because the ref
+      # this job checks out is the merge commit and `origin/main` is not
+      # necessarily a name it has.
       - name: the diff
-        run: git diff origin/${{ github.base_ref }}... > pr.diff
+        run: git diff ${{ github.event.pull_request.base.sha }}...HEAD > pr.diff
+
+      # An empty diff makes the step below pass without testing anything, which
+      # is how a gate turns into decoration. The first version of this job did
+      # exactly that and reported success in 28 seconds.
+      - name: the diff is about something
+        run: |
+          rust=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...HEAD -- '*.rs' | wc -l)
+          echo "$rust Rust files changed, $(wc -c < pr.diff) bytes of diff"
+          if [ "$rust" -gt 0 ] && [ ! -s pr.diff ]; then
+            echo "Rust changed and the diff is empty, so nothing would be mutated." >&2
+            exit 1
+          fi
 
       - name: cargo mutants
         run: cargo mutants --in-diff pr.diff --no-shuffle
+
+      # `cargo mutants` exits 0 when it finds nothing to mutate, so a diff it
+      # does not understand looks exactly like a diff that survived it. This
+      # job reported success twice before anybody checked the number.
+      - name: something was mutated
+        run: |
+          tested=$(python3 -c "import json;print(json.load(open('mutants.out/outcomes.json'))['total_mutants'])")
+          echo "$tested mutants tested"
+          rust=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...HEAD -- '*.rs' | wc -l)
+          if [ "$rust" -gt 0 ] && [ "$tested" -eq 0 ]; then
+            echo "$rust Rust files changed and nothing was mutated, so this gate said nothing." >&2
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()

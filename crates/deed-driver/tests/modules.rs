@@ -756,14 +756,40 @@ fn a_field_of_the_wrong_type_points_at_the_declaration_in_the_other_file() {
 }
 
 #[test]
-fn a_variant_from_another_module_still_points_at_nothing() {
-    // Written down rather than left to be discovered. A variant's fields do
-    // not carry where they were declared, so this label is still withheld, and
-    // the mismatch itself is still reported.
+fn a_variant_from_another_module_can_be_built() {
+    // The positive half, and the one nothing held: `cargo mutants` deleted the
+    // arm of `imported_literal` that builds one and every test stayed green.
+    //
+    // Silence is not the claim. Without that arm the literal gets no type at
+    // all, and an unknown type agrees with everything, so nothing is reported
+    // and nothing was checked. What the type came out as is the claim.
+    let source =
+        "module a\n\nuse other.{Tone, Loud}\n\nfn f() -> Tone {\n    Loud { volume: 3 }\n}\n";
     let (sources, checked) = check(&[
-        "module a\n\nuse other.{Loud}\n\nfn f() -> Tone {\n    Loud { volume: \"no\" }\n}\n\
-         \n\nuse other.{Tone}\n",
-        "module other\n\n\
+        source,
+        "module other\n\nchoice Tone {\n    Plain,\n    Loud { volume: Int },\n}\n",
+    ]);
+    assert!(
+        checked.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+
+    let at = source
+        .find("Loud { volume: 3 }")
+        .expect("the literal is written") as u32;
+    let (_, ty) = checked
+        .types
+        .at(at)
+        .expect("the literal should have a type");
+    assert_eq!(checked.types.describe(ty), "`Tone` from `other`");
+}
+
+#[test]
+fn a_variant_field_points_at_the_declaration_in_the_other_file() {
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{Tone, Loud}\n\nfn f() -> Tone {\n    Loud { volume: \"no\" }\n}\n",
+        "module other\n\n// Longer than the file that uses it, on purpose.\n\n\
          choice Tone {\n    Plain,\n    Loud { volume: Int },\n}\n",
     ]);
     let mismatch = checked
@@ -771,9 +797,40 @@ fn a_variant_from_another_module_still_points_at_nothing() {
         .iter()
         .find(|d| d.code == deed_typeck::codes::TYPE_MISMATCH)
         .unwrap_or_else(|| panic!("{}", rendered(&sources, &checked.diagnostics)));
-    assert!(
-        mismatch.secondary.is_empty(),
-        "{}",
-        render_human(&sources, mismatch)
-    );
+
+    let [field] = mismatch.secondary.as_slice() else {
+        panic!("{}", render_human(&sources, mismatch));
+    };
+    assert_eq!(field.message, "the field it is assigned to");
+    let file = sources.file(field.file_or(mismatch.file));
+    assert_ne!(field.file_or(mismatch.file), mismatch.file);
+    assert_eq!(&file.text()[field.span.as_range()], "volume: Int");
+}
+
+#[test]
+fn a_handler_state_field_points_at_the_declaration_in_the_other_file() {
+    // The other half. A `with` block installing an imported handler is still
+    // writing a literal, and a literal nobody points at is one whose
+    // declaration a reader has to go and find.
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{Tally, Counter, count}\n\n\
+         fn f() -> Int {\n    with Tally { seen: \"no\" } {\n        count()\n    }\n}\n",
+        "module other\n\n// Longer than the file that uses it, on purpose.\n\n\
+         effect Counter {\n    fn count() -> Int\n}\n\n\
+         handler Tally implements Counter {\n    state seen: Int\n\n\
+         \x20   fn count() -> Int {\n        seen\n    }\n}\n",
+    ]);
+    let mismatch = checked
+        .diagnostics
+        .iter()
+        .find(|d| d.code == deed_typeck::codes::TYPE_MISMATCH)
+        .unwrap_or_else(|| panic!("{}", rendered(&sources, &checked.diagnostics)));
+
+    let [field] = mismatch.secondary.as_slice() else {
+        panic!("{}", render_human(&sources, mismatch));
+    };
+    assert_eq!(field.message, "the field it is assigned to");
+    let file = sources.file(field.file_or(mismatch.file));
+    assert_ne!(field.file_or(mismatch.file), mismatch.file);
+    assert_eq!(&file.text()[field.span.as_range()], "seen: Int");
 }
