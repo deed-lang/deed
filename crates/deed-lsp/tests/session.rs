@@ -2163,7 +2163,555 @@ fn a_folding_range_request_for_a_document_nobody_opened_is_null() {
     assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
 }
 
-// -- rename ------------------------------------------------------------------
+// -- selection range ---------------------------------------------------------
+
+fn selection_range(id: i64, uri: &str, positions: &[(u32, u32)]) -> String {
+    let positions_json: Vec<String> = positions
+        .iter()
+        .map(|(line, character)| format!("{{\"line\":{line},\"character\":{character}}}"))
+        .collect();
+    let positions_str = positions_json.join(",");
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/selectionRange\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}},\"positions\":[{positions_str}]}}}}"
+    ))
+}
+
+fn selection_ranges(message: &Json) -> &[Json] {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| {
+            panic!("a selection range request should answer with a list: {message:?}")
+        })
+}
+
+/// Collects the start lines of every range in the chain, innermost first.
+fn chain_start_lines(entry: &Json) -> Vec<i64> {
+    let mut lines = Vec::new();
+    let mut current = entry;
+    loop {
+        let line = current
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64);
+        match line {
+            Some(l) => lines.push(l),
+            None => break,
+        }
+        match current.at(&["parent"]) {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    lines
+}
+
+/// Collects every (startLine, startChar, endLine, endChar) in the chain,
+/// innermost first.  Used to verify that no two consecutive steps are equal.
+fn chain_ranges(entry: &Json) -> Vec<(i64, i64, i64, i64)> {
+    let mut out = Vec::new();
+    let mut current = entry;
+    loop {
+        let r = (
+            current
+                .at(&["range", "start", "line"])
+                .and_then(Json::as_i64),
+            current
+                .at(&["range", "start", "character"])
+                .and_then(Json::as_i64),
+            current.at(&["range", "end", "line"]).and_then(Json::as_i64),
+            current
+                .at(&["range", "end", "character"])
+                .and_then(Json::as_i64),
+        );
+        match r {
+            (Some(sl), Some(sc), Some(el), Some(ec)) => out.push((sl, sc, el, ec)),
+            _ => break,
+        }
+        match current.at(&["parent"]) {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    out
+}
+
+#[test]
+fn an_expression_inside_a_function_expands_to_the_function() {
+    // `GOOD` is:
+    //  0: module a
+    //  1: (blank)
+    //  2: fn f(n: Int) -> Int {
+    //  3:     n + n
+    //  4: }
+    //
+    // The cursor on `n` on line 3 should produce a chain with at least the
+    // expression, the block, and the function, innermost first.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        selection_range(2, URI, &[(3, 4)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+
+    assert_eq!(
+        ranges.len(),
+        1,
+        "one position should give one entry: {sent:?}"
+    );
+
+    let lines = chain_start_lines(&ranges[0]);
+    // The chain must reach the function declaration on line 2.
+    assert!(
+        lines.contains(&2),
+        "the function declaration (line 2) should be in the chain: {lines:?}"
+    );
+    // The innermost range must start at or after line 3, where the expression is.
+    assert!(
+        lines.first().copied() >= Some(3),
+        "the innermost range should cover the expression on line 3: {lines:?}"
+    );
+    // The chain must have at least two steps: expression and function.
+    assert!(
+        lines.len() >= 2,
+        "there should be at least expression and function as separate steps: {lines:?}"
+    );
+}
+
+#[test]
+fn each_press_widens_strictly() {
+    // Two equal ranges are one step: the command appears to do nothing if an
+    // expand-selection press produces a range identical to the previous one.
+    // The chain must therefore contain no two consecutive entries whose ranges
+    // are the same (same start and end line/character).
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        // Cursor on the first `n` in `n + n` on line 3.
+        selection_range(2, URI, &[(3, 4)]),
+    ]);
+    let result = selection_ranges(&sent[2]);
+    let ranges = chain_ranges(&result[0]);
+
+    let has_consecutive_duplicate = ranges.windows(2).any(|w| w[0] == w[1]);
+    assert!(
+        !has_consecutive_duplicate,
+        "no two consecutive steps should produce the same range: {ranges:?}"
+    );
+}
+
+#[test]
+fn an_empty_positions_array_answers_with_an_empty_array() {
+    // An empty positions array is a valid request and should not error.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        selection_range(2, URI, &[]),
+    ]);
+    assert_eq!(
+        sent[2]
+            .at(&["result"])
+            .and_then(Json::as_array)
+            .map(<[Json]>::len),
+        Some(0),
+        "empty positions should answer with an empty array: {:?}",
+        sent[2]
+    );
+}
+
+#[test]
+fn a_position_outside_any_item_is_null_in_the_result() {
+    // Line 1 is the blank line between the module declaration and the function.
+    // Nothing is declared there, so the entry for that position is null.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        selection_range(2, URI, &[(1, 0)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+    assert_eq!(ranges.len(), 1, "one position gives one entry");
+    assert_eq!(
+        ranges[0],
+        Json::Null,
+        "a position in no item should be null: {:?}",
+        ranges[0]
+    );
+}
+
+#[test]
+fn multiple_positions_produce_one_entry_each() {
+    // Two positions in the same request come back in the same order.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, GOOD),
+        // Line 3, char 4 is inside the function; line 1 is outside any item.
+        selection_range(2, URI, &[(3, 4), (1, 0)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+    assert_eq!(ranges.len(), 2, "two positions give two entries: {sent:?}");
+    // First entry (inside function) should not be null.
+    assert_ne!(
+        ranges[0],
+        Json::Null,
+        "position inside function should have a range: {:?}",
+        ranges[0]
+    );
+    // Second entry (blank line) should be null.
+    assert_eq!(
+        ranges[1],
+        Json::Null,
+        "position outside any item should be null: {:?}",
+        ranges[1]
+    );
+}
+
+#[test]
+fn a_selection_range_request_for_a_document_nobody_opened_is_null() {
+    let sent = session(&[request(1, "initialize"), selection_range(2, URI, &[(0, 0)])]);
+    assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
+}
+
+#[test]
+fn a_file_that_does_not_check_still_has_selection_ranges() {
+    // Selection range reads the parse tree, not the checker.
+    let source = "module a\n\nfn f() -> Nope {\n    missing()\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        // Line 3, character 4: inside `missing()`.
+        selection_range(2, URI, &[(3, 4)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+    assert_eq!(ranges.len(), 1);
+    assert_ne!(
+        ranges[0],
+        Json::Null,
+        "a file with errors should still produce a selection range: {:?}",
+        ranges[0]
+    );
+}
+
+#[test]
+fn a_position_in_a_handler_operation_expands_through_the_handler() {
+    // The handler declares `fn note`, whose body spans multiple lines.
+    // A position inside the body should expand through the operation and then
+    // through the handler. Without `collect_handler_spans` the chain never
+    // names the operation — only the top-level handler item.
+    let source = "module a\n\neffect Log {\n    fn note(message: String) -> ()\n}\n\n\
+                  handler Quiet implements Log {\n    fn note(message) -> () {\n        ()\n    }\n}\n";
+    //  6: handler Quiet implements Log {
+    //  7:     fn note(message) -> () {
+    //  8:         ()
+    //  9:     }
+    // 10: }
+    assert_eq!(
+        selection_chain(source, 8, 8),
+        vec![
+            (8, 8, 8, 10), // `()`
+            (7, 27, 9, 5), // operation body block
+            (7, 4, 9, 5),  // whole operation
+            (6, 0, 10, 1), // handler
+        ]
+    );
+}
+
+#[test]
+fn a_position_in_a_test_block_expands_through_the_test() {
+    // Without `collect_test_spans` a cursor inside a `test` body still answers
+    // (the item span is pushed either way), but the block never appears as its
+    // own step — expand-selection jumps straight to the whole test.
+    let source = "module a\n\ntest \"one\" {\n    1 + 1\n}\n";
+    assert_eq!(
+        selection_chain(source, 3, 4),
+        vec![
+            (3, 4, 3, 5),  // first `1`
+            (3, 4, 3, 9),  // `1 + 1`
+            (2, 11, 4, 1), // test body block
+            (2, 0, 4, 1),  // test item
+        ]
+    );
+}
+
+/// One selection-range answer, as the exact chain the server should produce.
+///
+/// Pinning the whole chain (not just "function is somewhere in it") is what
+/// holds the walk: delete a match arm or a contains-guard and a middle step
+/// disappears or the wrong statement is chosen.
+fn selection_chain(source: &str, line: u32, character: u32) -> Vec<(i64, i64, i64, i64)> {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        selection_range(2, URI, &[(line, character)]),
+    ]);
+    let ranges = selection_ranges(&sent[2]);
+    assert_eq!(ranges.len(), 1, "one position gives one entry: {sent:?}");
+    assert_ne!(
+        ranges[0],
+        Json::Null,
+        "expected a chain, got null: {sent:?}"
+    );
+    chain_ranges(&ranges[0])
+}
+
+#[test]
+fn a_binary_expression_is_a_step_between_operand_and_block() {
+    // GOOD line 3 is `    n + n`. Cursor on the first `n`.
+    // Without the Binary arm the middle step collapses to the bare operand.
+    assert_eq!(
+        selection_chain(GOOD, 3, 4),
+        vec![
+            (3, 4, 3, 5),  // first `n`
+            (3, 4, 3, 9),  // `n + n`
+            (2, 20, 4, 1), // block
+            (2, 0, 4, 1),  // fn
+        ]
+    );
+    // Right-hand side: delete the `!` on the lhs walk and the rhs is never
+    // visited when the lhs does not contain the offset.
+    assert_eq!(
+        selection_chain(GOOD, 3, 8),
+        vec![
+            (3, 8, 3, 9),  // second `n`
+            (3, 4, 3, 9),  // `n + n`
+            (2, 20, 4, 1), // block
+            (2, 0, 4, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_unary_operand_expands_through_the_unary() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    -n\n}\n";
+    assert_eq!(
+        selection_chain(source, 3, 5),
+        vec![
+            (3, 5, 3, 6),  // `n`
+            (3, 4, 3, 6),  // `-n`
+            (2, 20, 4, 1), // block
+            (2, 0, 4, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_call_argument_expands_through_the_call() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    f(n)\n}\n";
+    assert_eq!(
+        selection_chain(source, 3, 6),
+        vec![
+            (3, 6, 3, 7),  // arg `n`
+            (3, 4, 3, 8),  // `f(n)`
+            (2, 20, 4, 1), // block
+            (2, 0, 4, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_field_receiver_expands_through_the_field() {
+    let source = "module a\n\nrecord P { x: Int }\n\nfn f(p: P) -> Int {\n    p.x\n}\n";
+    assert_eq!(
+        selection_chain(source, 5, 4),
+        vec![
+            (5, 4, 5, 5),  // `p`
+            (5, 4, 5, 7),  // `p.x`
+            (4, 18, 6, 1), // block
+            (4, 0, 6, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_list_element_expands_through_the_list() {
+    let source = "module a\n\nfn f() -> List<Int> {\n    [1, 2]\n}\n";
+    // Second element: without the List arm the chain never names the brackets.
+    assert_eq!(
+        selection_chain(source, 3, 8),
+        vec![
+            (3, 8, 3, 9),  // `2`
+            (3, 4, 3, 10), // `[1, 2]`
+            (2, 20, 4, 1), // block
+            (2, 0, 4, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_block_expression_is_its_own_step() {
+    let source = "module a\n\nfn f() -> Int {\n    { 1 }\n}\n";
+    assert_eq!(
+        selection_chain(source, 3, 6),
+        vec![
+            (3, 6, 3, 7),  // `1`
+            (3, 4, 3, 9),  // `{ 1 }`
+            (2, 14, 4, 1), // outer block
+            (2, 0, 4, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_closure_body_expands_through_the_closure() {
+    let source = "module a\n\nfn f() -> Fn() -> Int {\n    || 1\n}\n";
+    assert_eq!(
+        selection_chain(source, 3, 7),
+        vec![
+            (3, 7, 3, 8),  // `1`
+            (3, 4, 3, 8),  // `|| 1`
+            (2, 22, 4, 1), // block
+            (2, 0, 4, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_for_body_expands_through_the_for() {
+    let source =
+        "module a\n\nfn f(xs: List<Int>) -> Int {\n    for x in xs with s = 0 { s + x }\n}\n";
+    // Inside `s + x`. Without the For arm the walk stops at the outer block.
+    assert_eq!(
+        selection_chain(source, 3, 30),
+        vec![
+            (3, 29, 3, 34), // `s + x`
+            (3, 27, 3, 36), // `{ s + x }`
+            (3, 4, 3, 36),  // whole `for ...`
+            (2, 27, 4, 1),  // fn body
+            (2, 0, 4, 1),   // fn
+        ]
+    );
+}
+
+#[test]
+fn a_with_body_expands_through_the_with() {
+    let source = "module a\n\neffect L { fn n() -> () }\n\n\
+                  handler H implements L {\n    fn n() -> () { () }\n}\n\n\
+                  fn f() -> () {\n    with H {\n        ()\n    }\n}\n";
+    assert_eq!(
+        selection_chain(source, 10, 8),
+        vec![
+            (10, 8, 10, 10), // `()`
+            (9, 11, 11, 5),  // with-body block
+            (9, 4, 11, 5),   // `with H { ... }`
+            (8, 13, 12, 1),  // fn body
+            (8, 0, 12, 1),   // fn
+        ]
+    );
+}
+
+#[test]
+fn an_if_then_branch_does_not_pick_the_else() {
+    // The `&&` between condition/then/else is load-bearing: flip it to `||`
+    // and a cursor in the then-branch still walks the else arm first.
+    let source = "module a\n\nfn f(b: Bool) -> Int {\n    if b {\n        1\n    } else {\n        2\n    }\n}\n";
+    assert_eq!(
+        selection_chain(source, 4, 8),
+        vec![
+            (4, 8, 4, 9),  // `1`
+            (3, 9, 5, 5),  // then block
+            (3, 4, 7, 5),  // whole `if`
+            (2, 21, 8, 1), // fn body
+            (2, 0, 8, 1),  // fn
+        ]
+    );
+    assert_eq!(
+        selection_chain(source, 6, 8),
+        vec![
+            (6, 8, 6, 9),  // `2`
+            (5, 11, 7, 5), // else block
+            (3, 4, 7, 5),  // whole `if`
+            (2, 21, 8, 1), // fn body
+            (2, 0, 8, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_match_arm_body_expands_through_the_arm() {
+    let source = "module a\n\nfn f(r: Result<Int, Int>) -> Int {\n    match r {\n        ok(n) => n\n        err(e) => e\n    }\n}\n";
+    // Cursor on the `n` after `=>`. Without the Match arm there is no
+    // arm-sized step between the body and the whole match.
+    let chain = selection_chain(source, 4, 17);
+    // Innermost is the arm body `n`.
+    assert_eq!(chain[0], (4, 17, 4, 18), "arm body: {chain:?}");
+    // Somewhere above that sits the whole match (starts on line 3).
+    assert!(
+        chain.iter().any(|r| r.0 == 3 && r.2 >= 5),
+        "match expression should be in the chain: {chain:?}"
+    );
+    // And the arm itself is a step between body and match: same start line as
+    // the body, end at or before the match's end, longer than the body alone.
+    assert!(
+        chain.iter().any(|r| r.0 == 4 && r != &chain[0] && r.2 == 4),
+        "arm should be its own step: {chain:?}"
+    );
+}
+
+#[test]
+fn a_struct_field_value_expands_through_the_field() {
+    let source = "module a\n\nrecord P { x: Int }\n\nfn f() -> P {\n    P { x: 1 }\n}\n";
+    assert_eq!(
+        selection_chain(source, 5, 11),
+        vec![
+            (5, 11, 5, 12), // `1`
+            (5, 8, 5, 12),  // `x: 1`
+            (5, 4, 5, 14),  // `P { x: 1 }`
+            (4, 12, 6, 1),  // block
+            (4, 0, 6, 1),   // fn
+        ]
+    );
+}
+
+#[test]
+fn a_later_statement_does_not_claim_an_earlier_one() {
+    // The contains-guard on statements is what stops a cursor on `a + 1` from
+    // expanding as if it were inside `let a = n`. Delete the `!` and the walk
+    // accepts the first statement and never reaches the second.
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    let a = n\n    a + 1\n}\n";
+    assert_eq!(
+        selection_chain(source, 4, 4),
+        vec![
+            (4, 4, 4, 5),  // `a`
+            (4, 4, 4, 9),  // `a + 1`
+            (2, 20, 5, 1), // block
+            (2, 0, 5, 1),  // fn
+        ]
+    );
+}
+
+#[test]
+fn a_let_initializer_expands_through_the_let() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    let a = n + 1\n    a\n}\n";
+    assert_eq!(
+        selection_chain(source, 3, 12),
+        vec![
+            (3, 12, 3, 13), // `n`
+            (3, 12, 3, 17), // `n + 1`
+            (3, 4, 3, 17),  // whole `let`
+            (2, 20, 5, 1),  // block
+            (2, 0, 5, 1),   // fn
+        ]
+    );
+}
+
+#[test]
+fn an_old_expression_in_ensures_expands_through_old() {
+    // `old` only appears in contracts. Without the Old arm the chain jumps
+    // from the inner name straight to the ensures clause.
+    let source = "module a\n\nfn f(n: Int) -> Int\nensures ok => result == old(n) {\n    n\n}\n";
+    // `old(n)` sits on the ensures line. Cursor on the `n` inside it.
+    let chain = selection_chain(source, 3, 28);
+    assert!(
+        chain.len() >= 3,
+        "name, old, ensures/fn at least: {chain:?}"
+    );
+    // Innermost is `n` inside old(...).
+    assert_eq!(chain[0], (3, 28, 3, 29), "inner name: {chain:?}");
+    // Next step is wider (old wraps it).
+    assert!(
+        chain[1].1 <= chain[0].1 && chain[1].3 >= chain[0].3 && chain[1] != chain[0],
+        "old should wrap the name: {chain:?}"
+    );
+}
 
 fn rename(id: i64, uri: &str, line: u32, character: u32, to: &str) -> String {
     framed(&format!(
