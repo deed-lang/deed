@@ -1764,6 +1764,53 @@ fn implementation_of_a_function_is_empty() {
     assert!(locations.is_empty(), "{reply:?}");
 }
 
+#[test]
+fn implementation_finds_a_handler_in_another_workspace_file() {
+    // The walk is over the workspace, not the open buffer. A pin that only
+    // looks at one file would still pass the same-file test above.
+    let scratch = Scratch::new("impl-across");
+    let effect = "module scratch/effect\n\n\
+         effect Log {\n\
+         \x20   fn note(line: String) -> ()\n\
+         }\n";
+    let handlers = "module scratch/handlers\n\n\
+         use scratch/effect.{Log}\n\n\
+         handler Quiet implements Log {\n\
+         \x20   fn note(line: String) -> () {}\n\
+         }\n";
+    let effect_uri = scratch.write("effect.deed", effect);
+    let handlers_uri = scratch.write("handlers.deed", handlers);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&effect_uri, effect),
+        did_open(&handlers_uri, handlers),
+        // The effect name on line 2 of effect.deed.
+        at(2, "textDocument/implementation", &effect_uri, 2, 7),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("implementation reply");
+    let locations = reply
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("{reply:?}"));
+    assert_eq!(locations.len(), 1, "{reply:?}");
+    assert_eq!(
+        locations[0].at(&["uri"]).and_then(Json::as_str),
+        Some(handlers_uri.as_str()),
+        "{reply:?}"
+    );
+    assert_eq!(
+        locations[0]
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(4),
+        "{reply:?}"
+    );
+}
+
 // -- the library that ships inside the compiler ------------------------------
 
 /// The folder of examples in this repository.
