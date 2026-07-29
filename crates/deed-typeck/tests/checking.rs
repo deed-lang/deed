@@ -1558,7 +1558,12 @@ fn calling_something_that_is_not_a_function_is_reported() {
 fn a_body_must_produce_the_declared_return_type() {
     let (sources, checked) = check_source("module a\n\nfn f() -> Int { true }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    assert!(rendered(&sources, &checked.diagnostics).contains("the declared return type"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("the declared return type"), "{text}");
+    assert!(
+        text.contains("expected `Int`, found `Bool`") || text.contains("found `Bool`"),
+        "{text}"
+    );
 }
 
 #[test]
