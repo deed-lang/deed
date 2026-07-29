@@ -365,6 +365,19 @@ fn intersperse<T>(items: List<T>, sep: T) -> List<T> {
     }
 }
 
+// The inverse of `zip`: pull the lefts into one list and the rights into
+// another, keeping order. Empty input yields two empty lists.
+record Sides<A, B> {
+    left: List<A>,
+    right: List<B>,
+}
+
+fn unzip<A, B>(items: List<Pair<A, B>>) -> Sides<A, B> {
+    for pair in items with out = Sides { left: [], right: [] } {
+        Sides { left: push(out.left, pair.left), right: push(out.right, pair.right) }
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -530,4 +543,16 @@ test "intersperse puts a separator between elements" {
     assert intersperse(["a", "b"], ",") == ["a", ",", "b"]
     assert intersperse([1], 0) == [1]
     assert intersperse([], 0) == []
+}
+
+test "unzip splits pairs into two lists" {
+    let sides = unzip([Pair { left: 1, right: "a" }, Pair { left: 2, right: "b" }])
+    assert sides.left == [1, 2]
+    assert sides.right == ["a", "b"]
+    let empty = unzip([])
+    assert empty.left == []
+    assert empty.right == []
+    let one = unzip([Pair { left: 9, right: true }])
+    assert one.left == [9]
+    assert one.right == [true]
 }
