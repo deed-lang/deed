@@ -691,31 +691,67 @@ impl Server {
         // Always include the declaration: a cursor on a use expects the
         // declaration lit up too, which is what `prepareRename` already treats
         // as one thing.
-        let Some((_, found)) = self.occurrences(message, true) else {
-            return Json::Array(Vec::new());
-        };
+        if let Some((_, found)) = self.occurrences(message, true) {
+            // Only the file the editor is painting, which is what separates this
+            // from `references`.
+            if let Some(here) = found.iter().find(|f| f.uri == uri) {
+                return Json::Array(
+                    here.spans
+                        .iter()
+                        .map(|span| {
+                            Json::object(vec![
+                                ("range", self.range(document, *span)),
+                                // 1 is Text. The resolver does not record which
+                                // occurrences are assignments, so 2 (Read) and 3
+                                // (Write) would invent a distinction the data does
+                                // not support.
+                                ("kind", Json::number(1)),
+                            ])
+                        })
+                        .collect(),
+                );
+            }
+        }
 
-        // Only the file the editor is painting, which is what separates this
-        // from `references`.
-        let Some(here) = found.iter().find(|f| f.uri == uri) else {
-            return Json::Array(Vec::new());
-        };
-
-        Json::Array(
-            here.spans
+        // A `use` path is not a resolved name. Hover and go to definition already
+        // answer about it; without this the path goes dark under the cursor even
+        // though it is the thing documentLink underlines. Every `use` of the
+        // same module path in this file lights up together.
+        if let Some(checked) = self.check_one(&uri)
+            && let Some(position) = position_of(message)
+        {
+            let offset = document.lines.offset(&document.text, position);
+            if let Some(import) = checked
+                .module
+                .uses
                 .iter()
-                .map(|span| {
-                    Json::object(vec![
-                        ("range", self.range(document, *span)),
-                        // 1 is Text. The resolver does not record which
-                        // occurrences are assignments, so 2 (Read) and 3
-                        // (Write) would invent a distinction the data does
-                        // not support.
-                        ("kind", Json::number(1)),
-                    ])
-                })
-                .collect(),
-        )
+                .find(|import| import.path.span.contains(offset))
+            {
+                let wanted = import.path.to_string_path();
+                let spans: Vec<Span> = checked
+                    .module
+                    .uses
+                    .iter()
+                    .filter(|other| other.path.to_string_path() == wanted)
+                    .map(|other| other.path.span)
+                    .collect();
+                if !spans.is_empty() {
+                    return Json::Array(
+                        spans
+                            .iter()
+                            .map(|span| {
+                                Json::object(vec![
+                                    ("range", self.range(document, *span)),
+                                    ("kind", Json::number(1)),
+                                ])
+                            })
+                            .collect(),
+                    );
+                }
+            }
+        }
+
+        Json::Array(Vec::new())
     }
 
     /// Every place the name under the cursor is written, across the workspace.
