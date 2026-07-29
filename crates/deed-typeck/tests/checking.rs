@@ -761,6 +761,31 @@ fn a_wrong_arity_call_to_an_imported_fn_points_at_the_other_file() {
     );
 }
 
+#[test]
+fn a_type_mismatch_on_an_imported_param_points_at_the_other_file() {
+    // assign()'s because-clause carries signature.file across the boundary.
+    // Without a pin, a regression that drops the file still has the phrase.
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{take}\n\nfn f() -> Int { take(true) }\n",
+        &universe_of(&["module other\n\nfn take(n: Int) -> Int { n }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the parameter it is passed to"
+    );
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the parameter lives in the other module"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the argument"
+    );
+}
+
 // -- refinements -----------------------------------------------------------
 
 #[test]
