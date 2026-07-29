@@ -112,6 +112,20 @@ fn size<K, V>(entries: Table<K, V>) -> Int {
     length(entries)
 }
 
+// Without this key, whether or not it was there. Missing is quiet: the table
+// after is the table that does not hold the key, and asking twice is the same
+// as asking once. `set` is the only way anything gets in; this is the only way
+// anything gets out.
+fn remove<K, V>(entries: Table<K, V>, key: K) -> Table<K, V> {
+    for one in entries with out = [] {
+        if one.key == key {
+            out
+        } else {
+            push(out, one)
+        }
+    }
+}
+
 test "a table remembers what was put in it" {
     let t = set(set([], "a", 1), "b", 2)
     assert get(t, "a") == ok(1)
@@ -158,4 +172,15 @@ test "an empty table has nothing and says so" {
     assert keys(empty) == []
     assert values(empty) == []
     assert size(empty) == 0
+}
+
+test "remove drops a key and leaves the others alone" {
+    let t = set(set(set([], "a", 1), "b", 2), "c", 3)
+    let without = remove(t, "b")
+    assert holds(without, "b") == false
+    assert keys(without) == ["a", "c"]
+    assert values(without) == [1, 3]
+    assert size(without) == 2
+    assert remove(without, "b") == without
+    assert remove([], "a") == []
 }
