@@ -1093,6 +1093,30 @@ fn a_value_is_not_something_a_literal_can_build_either() {
     );
 }
 
+#[test]
+fn naming_a_generic_function_as_a_value_is_reported() {
+    let (sources, checked) = check_source(
+        "module a\n\n\
+         fn first<T>(items: List<T>) -> Result<T, String> { at(items, 0) }\n\n\
+         fn apply(f: Fn(List<Int>) -> Result<Int, String>) -> Int { 0 }\n\n\
+         fn f() -> Int { apply(first) }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::GENERIC_AS_VALUE]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`first` is generic, so naming it does not say what it is"),
+        "{text}"
+    );
+    assert!(text.contains("nothing here says what `T` is"), "{text}");
+    assert!(
+        text.contains("call it, or write a closure that calls it at the type you want"),
+        "{text}"
+    );
+}
+
 /// A type name in that position is a different mistake with a message of its
 /// own, and this one has to stay out of its way. `Int` is not a value at all,
 /// so saying it is not a record would be answering the second question first.
