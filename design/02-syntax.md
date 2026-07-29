@@ -168,7 +168,7 @@ It carries four more for taking a string apart and putting one back together:
 
 ```deed
 split("a,b,c", ",")      // ["a", "b", "c"]
-split("gün", "")         // ["g", "ü", "n"]
+split("gÃ¼n", "")         // ["g", "Ã¼", "n"]
 join(["a", "b"], ",")    // "a,b"
 to_string(0 - 12)        // "-12"
 to_int("41")             // ok(41)
@@ -227,14 +227,14 @@ except `to_int`, which speaks about text that spells a number and so covers the 
 and no letter. Writing `upper` in Deed means writing the alphabet out by hand, twice.
 
 Slicing, searching and padding are not missing any more, and they are not in the prelude
-either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `pad_left` and
+either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `contains`, `replace`, `pad_left` and
 `pad_right`, all of them written in Deed, because the prelude test says a thing that can be
 written in the language is written in the language. What they were waiting for was somewhere
 to live.
 
 That is also where the list library is. `std/list` has `map`, `map_at`, `filter`, `filter_at`,
-`fold`, `fold_at`, `any`, `all`, `count_where`, `filtered_with`, `first`, `last`, `reversed`
-and `prepend`. It was written long before there was anywhere to put it and sat under
+`fold`, `fold_at`, `any`, `all`, `count_where`, `filtered_with`, `first`, `last`, `reversed`,
+`prepend`, `find`, `take` and `drop`. It was written long before there was anywhere to put it and sat under
 `examples/`, where its name said it lived in this repository and a program elsewhere had to
 copy it.
 
