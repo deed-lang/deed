@@ -60,6 +60,20 @@ fn ends_with(text: String, suffix: String) -> Bool {
     slice(text, length(text) - length(suffix), length(text)) == suffix
 }
 
+// Whether `needle` appears anywhere in `text`.
+//
+// One comparison on a split, which is what design/02-syntax.md already names
+// as the reason this is not a prelude function: it can be written here.
+fn contains(text: String, needle: String) -> Bool {
+    length(split(text, needle)) > 1
+}
+
+// Every `from` replaced by `to`. Split and join are already inverse on the
+// pieces they make, so this is the same walk written once.
+fn replace(text: String, from: String, to: String) -> String {
+    join(split(text, from), to)
+}
+
 // `text` in a column `width` wide, or `text` when it is already wider.
 //
 // Wider is not an error. The call that wants this is building a report, and a
@@ -104,6 +118,20 @@ test "the ends" {
     assert ends_with("hello", "lo") == true
     assert ends_with("hello", "he") == false
     assert starts_with("hello", "") == true
+}
+
+test "contains is whether a split found a cut" {
+    assert contains("hello world", "world") == true
+    assert contains("hello world", "planet") == false
+    assert contains("aaa", "aa") == true
+    assert contains("", "x") == false
+}
+
+test "replace puts the new piece where the old one was" {
+    assert replace("a-b-c", "-", "/") == "a/b/c"
+    assert replace("hello", "l", "L") == "heLLo"
+    assert replace("hello", "z", "Z") == "hello"
+    assert replace("", "a", "b") == ""
 }
 
 test "padding fills to a width and never cuts" {
