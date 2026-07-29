@@ -1705,6 +1705,92 @@ fn type_definition_of_an_effect_operation_is_its_effect() {
     );
 }
 
+#[test]
+fn type_definition_of_an_imported_variant_is_its_choice() {
+    // Bare `use other.{Rgb}`: go to definition lands on the variant, type
+    // definition lands on the choice in the other file.
+    let colors = "module scratch/colors\n\n\
+         choice Color {\n\
+         \x20   Rgb { r: Int, g: Int, b: Int },\n\
+         \x20   Named { name: String },\n\
+         }\n";
+    let body = "module scratch/paint\n\n\
+         use scratch/colors.{Color, Rgb}\n\n\
+         fn f() -> Color {\n\
+         \x20   Rgb { r: 1, g: 2, b: 3 }\n\
+         }\n";
+    let scratch = Scratch::new("typedef-imported-variant");
+    let colors_uri = scratch.write("colors.deed", colors);
+    let paint_uri = scratch.write("paint.deed", body);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&paint_uri, body),
+        // The `Rgb` in the body (line 5, after module/blank/use/blank/fn).
+        at(2, "textDocument/typeDefinition", &paint_uri, 5, 5),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("typeDefinition reply");
+    let location = reply.at(&["result"]).expect("a location");
+    assert_eq!(
+        location.at(&["uri"]).and_then(Json::as_str),
+        Some(colors_uri.as_str()),
+        "{location:?}"
+    );
+    // `choice Color` is on line 2 of colors.deed.
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{location:?}"
+    );
+}
+
+#[test]
+fn type_definition_of_a_qualified_imported_variant_is_its_choice() {
+    // `Color.Rgb` when `Color` came from another file: parent is the import,
+    // and the answer is still the choice over there.
+    let colors = "module scratch/colors\n\n\
+         choice Color {\n\
+         \x20   Rgb { r: Int, g: Int, b: Int },\n\
+         }\n";
+    let body = "module scratch/paint\n\n\
+         use scratch/colors.{Color}\n\n\
+         fn f() -> Color {\n\
+         \x20   Color.Rgb { r: 1, g: 2, b: 3 }\n\
+         }\n";
+    let scratch = Scratch::new("typedef-qualified-imported");
+    let colors_uri = scratch.write("colors.deed", colors);
+    let paint_uri = scratch.write("paint.deed", body);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&paint_uri, body),
+        // The `Rgb` after `Color.` on the body line.
+        at(2, "textDocument/typeDefinition", &paint_uri, 5, 11),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("typeDefinition reply");
+    let location = reply.at(&["result"]).expect("a location");
+    assert_eq!(
+        location.at(&["uri"]).and_then(Json::as_str),
+        Some(colors_uri.as_str()),
+        "{location:?}"
+    );
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{location:?}"
+    );
+}
+
 // -- go to implementation ----------------------------------------------------
 
 #[test]

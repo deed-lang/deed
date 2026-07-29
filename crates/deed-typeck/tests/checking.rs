@@ -1628,9 +1628,18 @@ fn an_imported_generic_type_takes_the_arguments_it_declared() {
 
 #[test]
 fn a_value_used_as_a_type_is_reported() {
-    let (_, checked) =
+    let (sources, checked) =
         check_source("module a\n\nfn thing() -> Int { 0 }\n\nfn f(x: thing) -> Int { 0 }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_TYPE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("declared here"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the use site"
+    );
 }
 
 #[test]
