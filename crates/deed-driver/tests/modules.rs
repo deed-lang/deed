@@ -834,3 +834,203 @@ fn a_handler_state_field_points_at_the_declaration_in_the_other_file() {
     assert_ne!(field.file_or(mismatch.file), mismatch.file);
     assert_eq!(&file.text()[field.span.as_range()], "seen: Int");
 }
+
+// -- what a caller in another file has to answer for ------------------------
+//
+// A `where` clause is checked at the call site when it can be settled there,
+// which is what `design/02-syntax.md` says and what #312 finished at home. It
+// stopped at the module boundary: an imported signature arrived with no
+// clauses on it at all, so `halve(0 - 5)` was a refused mistake when `halve`
+// was written in the same file and silence when it was written next door.
+//
+// A precondition is not a proof the callee did, it is a question the caller
+// has to answer, and the caller is the only one who can answer it. So unlike a
+// refinement predicate the clause crosses whole, along with what every name in
+// it refers to, worked out on the side that has the resolution to work it out.
+
+/// A function nobody may call with a negative number, in another module.
+///
+/// Written longer than the files that call into it, so that reading one file's
+/// offsets out of the other cannot land on the same words by accident.
+const HALVE: &str = "module other\n\n\
+     // Longer than the files that call into it, on purpose.\n\
+     // Longer than the files that call into it, on purpose.\n\n\
+     fn halve(n: Int) -> Int\n\
+     \x20 where\n\
+     \x20   n >= 0,\n\
+     {\n\
+     \x20 n\n\
+     }\n";
+
+/// The tiers of every precondition the first file's calls left behind.
+fn precondition_tiers(checked: &Checked) -> Vec<deed_typeck::Tier> {
+    checked
+        .obligations
+        .iter()
+        .filter(|obligation| obligation.subject.ends_with(" requires"))
+        .map(|obligation| obligation.tier)
+        .collect()
+}
+
+#[test]
+fn a_call_into_another_module_that_breaks_a_precondition_is_refused() {
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{halve}\n\nfn f() -> Int {\n    halve(0 - 5)\n}\n",
+        HALVE,
+    ]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(checked.has_errors(), "this should not have been accepted");
+
+    let [problem] = checked.diagnostics.as_slice() else {
+        panic!("{text}");
+    };
+    assert_eq!(problem.code, deed_typeck::codes::BROKEN_PRECONDITION);
+    assert_eq!(
+        problem.message,
+        "this call does not satisfy what `halve` requires"
+    );
+
+    // And the clause it broke is drawn against the file that declares it,
+    // rather than against these bytes of this one.
+    let [clause] = problem.secondary.as_slice() else {
+        panic!("{text}");
+    };
+    let file = sources.file(clause.file_or(problem.file));
+    assert_ne!(clause.file_or(problem.file), problem.file);
+    assert_eq!(&file.text()[clause.span.as_range()], "n >= 0");
+    assert!(text.contains(file.name()), "{text}");
+}
+
+#[test]
+fn a_caller_in_another_module_that_can_show_it_holds_proves_it() {
+    // The half that says the clause was read rather than merely carried. A
+    // clause nobody could make sense of is `Unknown`, which is `Guarded`, and
+    // `Guarded` is also what you get for doing nothing.
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{halve}\n\n\
+         fn f(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n > 3,\n\
+         {\n\
+         \x20 halve(n)\n\
+         }\n",
+        HALVE,
+    ]);
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    // `f`'s own clause is checked by its callers, of which it has none here,
+    // so the only precondition standing is the one the call to `halve` left.
+    assert_eq!(
+        precondition_tiers(&checked),
+        vec![deed_typeck::Tier::Proven]
+    );
+}
+
+#[test]
+fn a_caller_in_another_module_that_cannot_tell_is_guarded() {
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{halve}\n\nfn f(n: Int) -> Int {\n    halve(n)\n}\n",
+        HALVE,
+    ]);
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(
+        precondition_tiers(&checked),
+        vec![deed_typeck::Tier::Guarded]
+    );
+}
+
+#[test]
+fn a_clause_from_another_module_is_read_by_role_rather_than_by_offset() {
+    // The reason the roles cross at all. A clause's spans are offsets into the
+    // file that declares it, so asking this module's resolution about them
+    // answers about whatever this module happens to have written at the same
+    // offsets. Here that is a different `n`: the caller has one of its own,
+    // known to be negative, sitting where the callee's is.
+    //
+    // If the clause were read against this file, `n >= 0` would be read as a
+    // claim about the caller's `n` and the call would be refused. It is not
+    // the caller's `n` that is passed.
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{halve}\n\n\
+         fn f(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n < 0,\n\
+         {\n\
+         \x20 halve(0 - n)\n\
+         }\n",
+        HALVE,
+    ]);
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(
+        precondition_tiers(&checked),
+        vec![deed_typeck::Tier::Proven]
+    );
+}
+
+#[test]
+fn length_in_a_clause_from_another_module_still_means_length() {
+    // The second of the two things a clause can name. `length` is a definition
+    // rather than a spelling, and the definition it is on the far side is not
+    // one this module has, so it crosses as a role like a parameter does.
+    let callee = "module other\n\n\
+         // Longer than the file that calls into it, on purpose.\n\
+         // Longer than the file that calls into it, on purpose.\n\n\
+         fn head(items: List<Int>) -> Int\n\
+         \x20 where\n\
+         \x20   length(items) > 0,\n\
+         {\n\
+         \x20 0\n\
+         }\n";
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{head}\n\nfn f() -> Int {\n    head([])\n}\n",
+        callee,
+    ]);
+    let text = rendered(&sources, &checked.diagnostics);
+    let [problem] = checked.diagnostics.as_slice() else {
+        panic!("{text}");
+    };
+    assert_eq!(problem.code, deed_typeck::codes::BROKEN_PRECONDITION);
+
+    // And a list that is long enough settles it.
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{head}\n\nfn f() -> Int {\n    head([1, 2])\n}\n",
+        callee,
+    ]);
+    assert!(
+        !checked.has_errors(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert_eq!(
+        precondition_tiers(&checked),
+        vec![deed_typeck::Tier::Proven]
+    );
+}
+
+#[test]
+fn an_assert_refuses_across_the_boundary_is_the_statement_being_right() {
+    // A contract the checker can see will be broken is what the statement
+    // claims, so it is not also a mistake. The boundary does not change that.
+    let (sources, checked) = check(&[
+        "module a\n\nuse other.{halve}\n\n\
+         test \"negative is refused\" {\n    assert refuses halve(0 - 5)\n}\n",
+        HALVE,
+    ]);
+    assert!(
+        checked.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    assert!(precondition_tiers(&checked).is_empty());
+}

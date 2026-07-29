@@ -1116,16 +1116,20 @@ fn an_index_off_the_end_of_a_list_written_on_the_spot_is_refused() {
 }
 
 #[test]
-fn a_precondition_does_not_cross_a_module_boundary() {
-    // A predicate stays inside the module that wrote it, the same as a
-    // refinement's does. What crosses is bounds, and there is nowhere in them
-    // to put a clause about an argument, so a caller in another file answers
-    // for this at runtime and the checker says nothing either way.
+fn a_precondition_crosses_a_module_boundary() {
+    // It did not, and that was the one place the rule this whole section is
+    // about had a hole in it. A clause was a fact for the callee's body and a
+    // check inside the callee at runtime, and an imported signature arrived
+    // with no clause on it at all, so the same broken call was a refused
+    // mistake at home and silence one file away.
+    //
+    // A precondition is a question the caller has to answer and the caller is
+    // the only one who can answer it, so it crosses whole. A refinement
+    // predicate still does not, for the reason at the top of `surface.rs`.
 
-    // The same call in one module first, so that the absence below is the
-    // boundary rather than the obligation never existing at all. Without it
-    // the assertion is over a list nothing said was not empty, and a compiler
-    // that stopped reporting preconditions entirely would pass here.
+    // The same call in one module first, so that what happens below is the
+    // boundary rather than the obligation never existing at all. Without it a
+    // compiler that stopped reporting preconditions entirely would pass here.
     let (_, together) = check(
         "fn halve(n: Int) -> Int\n\
          \x20 where\n\
@@ -1164,19 +1168,12 @@ fn a_precondition_does_not_cross_a_module_boundary() {
     let mut checks = deed_driver::check_all(&sources, &ids);
     let checked = checks.remove(0);
 
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(checked.has_errors(), "this should not have been accepted");
+    assert!(text.contains("DEED4025"), "{text}");
     assert!(
-        !checked.has_errors(),
-        "{}",
-        rendered(&sources, &checked.diagnostics)
-    );
-    assert_eq!(
-        checked
-            .obligations
-            .iter()
-            .map(|o| (o.subject.as_str(), o.tier))
-            .collect::<Vec<_>>(),
-        Vec::<(&str, Tier)>::new(),
-        "a precondition from another module should not be reported as settled"
+        text.contains("does not satisfy what `halve` requires"),
+        "{text}"
     );
 }
 
