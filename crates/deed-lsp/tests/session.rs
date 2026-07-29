@@ -2713,6 +2713,81 @@ fn an_old_expression_in_ensures_expands_through_old() {
     );
 }
 
+// -- document link -----------------------------------------------------------
+
+fn document_link(id: i64, uri: &str) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/documentLink\",\"params\":\
+         {{\"textDocument\":{{\"uri\":\"{uri}\"}}}}}}"
+    ))
+}
+
+fn links(message: &Json) -> &[Json] {
+    message
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("a document link request should answer with a list: {message:?}"))
+}
+
+#[test]
+fn a_use_path_links_to_the_module_it_names() {
+    // Go to definition answers about an imported name. This answers about the
+    // path itself: click `scratch/one` and the file opens.
+    let scratch = Scratch::new("document-link");
+    let one = scratch.write("one.deed", EXPORTER);
+    let two = scratch.write("two.deed", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&one, EXPORTER),
+        did_open(&two, IMPORTER),
+        document_link(2, &two),
+    ]);
+    let answer = sent
+        .iter()
+        .find(|message| message.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .unwrap_or_else(|| panic!("no answer for documentLink: {sent:?}"));
+    let found = links(answer);
+    assert_eq!(found.len(), 1, "one use path, one link: {answer:?}");
+    assert_eq!(
+        found[0].at(&["target"]).and_then(Json::as_str),
+        Some(one.as_str()),
+        "the path should open the module it names: {found:?}"
+    );
+    // The range is the path, not the whole `use` line: line 2 is
+    // `use scratch/one.{double}`.
+    assert_eq!(
+        found[0]
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_use_of_a_shipped_module_is_not_a_link() {
+    // There is no file behind `std/list`. Inventing a target would hand the
+    // editor a place it cannot open, which is worse than nothing.
+    let source = "module a\n\nuse std/list.{map}\n\nfn f(xs: List<Int>) -> List<Int> {\n    map(xs, |n: Int| n)\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        document_link(2, URI),
+    ]);
+    assert_eq!(
+        links(&sent[2]).len(),
+        0,
+        "a shipped module has no file to open: {sent:?}"
+    );
+}
+
+#[test]
+fn a_document_link_request_for_a_document_nobody_opened_is_null() {
+    let sent = session(&[request(1, "initialize"), document_link(2, URI)]);
+    assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
+}
+
 fn rename(id: i64, uri: &str, line: u32, character: u32, to: &str) -> String {
     framed(&format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/rename\",\"params\":\

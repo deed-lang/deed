@@ -157,6 +157,7 @@ impl Server {
             "textDocument/documentSymbol" => result(id, self.document_symbol(message)),
             "textDocument/foldingRange" => result(id, self.folding_range(message)),
             "textDocument/selectionRange" => result(id, self.selection_range(message)),
+            "textDocument/documentLink" => result(id, self.document_link(message)),
             "textDocument/signatureHelp" => result(id, self.signature_help(message)),
             "workspace/symbol" => result(id, self.workspace_symbol(message)),
             "textDocument/completion" => result(id, self.completion(message)),
@@ -1302,6 +1303,54 @@ impl Server {
         Json::Array(result)
     }
 
+    /// Every `use` path that names a file the editor can open.
+    ///
+    /// Go to definition answers about a name under the cursor. This answers
+    /// about the module path itself: click `scratch/one` in
+    /// `use scratch/one.{double}` and the file opens, without first landing
+    /// on an imported name. A path that names a shipped module, or a module
+    /// that is not in the workspace, is left alone, for the same reason go to
+    /// definition does not invent a place to open for either of those.
+    ///
+    /// Reads the parse tree of this document only for the paths, then asks
+    /// the workspace which of them have a URI. Checking still runs, because
+    /// that is how a module's URI is known, but a file that does not check
+    /// still gets links for the imports that resolve.
+    fn document_link(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Null;
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Null;
+        };
+
+        let mut sources = SourceMap::new();
+        let file = sources.add(uri.clone(), document.text.clone());
+        let lexed = deed_lexer::tokenize(file, &document.text);
+        let parsed = deed_parser::parse(file, &lexed.tokens);
+
+        let (_, entries) = self.check_workspace();
+        let mut links = Vec::new();
+        for import in &parsed.module.uses {
+            let path = import.path.to_string_path();
+            let Some(target) = entries.iter().find_map(|entry| {
+                let module = entry.checked.module.name.as_ref()?;
+                if module.to_string_path() != path {
+                    return None;
+                }
+                entry.uri.clone()
+            }) else {
+                continue;
+            };
+            links.push(Json::object(vec![
+                ("range", self.range(document, import.path.span)),
+                ("target", Json::string(target)),
+            ]));
+        }
+        Json::Array(links)
+    }
+
+    /// Every declaration in the workspace whose name contains the query.
     ///
     /// The outline answers "what is in this file" and this answers "where is
     /// the thing I can only remember the name of", which is the question
@@ -2384,6 +2433,7 @@ fn initialize_result() -> Json {
             ("documentSymbolProvider", Json::Bool(true)),
             ("foldingRangeProvider", Json::Bool(true)),
             ("selectionRangeProvider", Json::Bool(true)),
+            ("documentLinkProvider", Json::Bool(true)),
             ("workspaceSymbolProvider", Json::Bool(true)),
             // A `(` opens an argument list and a `,` moves to the next one.
             // Nothing else changes which parameter is being written, and an
