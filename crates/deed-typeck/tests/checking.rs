@@ -1054,7 +1054,8 @@ fn an_alias_without_a_predicate_is_transparent() {
 
 #[test]
 fn a_self_referential_alias_is_reported_once() {
-    let (sources, checked) = check_source("module a\n\ntype Loop = Loop\n\nfn f(x: Loop) -> Int { 0 }\n");
+    let (sources, checked) =
+        check_source("module a\n\ntype Loop = Loop\n\nfn f(x: Loop) -> Int { 0 }\n");
     assert_eq!(
         codes_of(&checked.diagnostics),
         vec![codes::TYPE_ALIAS_CYCLE]
