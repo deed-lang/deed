@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use deed_ast::{Block, Expr, FieldInit, FnDecl, HandlerDecl, Item, MatchArm, Stmt, TestDecl};
 use deed_diagnostics::{Applicability, Diagnostic, FileId, Severity, SourceMap, Span};
 use deed_driver::{Checked, ObligationReport};
-use deed_resolve::{DefId, DefKind};
+use deed_resolve::{DefId, DefKind, ExportKind};
 use deed_typeck::ty::{FnRow, Ty};
 
 use crate::json::Json;
@@ -567,6 +567,12 @@ impl Server {
     /// are the two kinds the resolver already threads a parent through; nothing
     /// else in this language has a type declaration separate from its name.
     ///
+    /// An imported variant is the same question on the other side of a `use`:
+    /// the parent is either the imported choice (for `Color.Rgb`) or the choice
+    /// that exported the variant (for a bare `use other.{Rgb}`). Both land in
+    /// the file that declares the type, which is what go-to-definition already
+    /// does for the name itself.
+    ///
     /// `null` when the name has no parent type, which is most names and is not
     /// an error.
     fn type_definition(&self, message: &Json) -> Json {
@@ -577,22 +583,75 @@ impl Server {
             return Json::Null;
         };
         let data = checked.resolutions.def(def);
-        let parent = match data.kind {
-            DefKind::Variant | DefKind::EffectOp => data.parent,
-            _ => None,
-        };
-        let Some(parent) = parent else {
-            return Json::Null;
-        };
-        let declared = checked.resolutions.def(parent).span;
-        if declared.is_empty() {
-            return Json::Null;
+        match data.kind {
+            DefKind::Variant | DefKind::EffectOp => {
+                let Some(parent) = data.parent else {
+                    return Json::Null;
+                };
+                // `Color.Rgb` when `Color` came from another file: the parent
+                // is the import, and the choice lives in that file.
+                if checked.resolutions.def(parent).kind == DefKind::Import {
+                    return self
+                        .imported_definition(&checked, parent)
+                        .unwrap_or(Json::Null);
+                }
+                let declared = checked.resolutions.def(parent).span;
+                if declared.is_empty() {
+                    return Json::Null;
+                }
+                let uri = text_document_uri(message).unwrap_or_default();
+                Json::object(vec![
+                    ("uri", Json::string(uri)),
+                    ("range", self.range(document, declared)),
+                ])
+            }
+            // A bare imported variant (`use other.{Rgb}`). The import has no
+            // parent edge; the choice is whatever owns the variant on the
+            // other side.
+            DefKind::Import => self
+                .imported_type_definition(&checked, def)
+                .unwrap_or(Json::Null),
+            _ => Json::Null,
         }
-        let uri = text_document_uri(message).unwrap_or_default();
-        Json::object(vec![
+    }
+
+    /// The choice (or effect) that owns an imported variant, in the file that
+    /// declares it.
+    ///
+    /// Only variants travel as their own import today. Effect operations stay
+    /// behind the effect name (`Log.note`), which is the parent path above.
+    fn imported_type_definition(&self, from: &Checked, def: DefId) -> Option<Json> {
+        let export = from.resolutions.import(def)?;
+        if export.kind != ExportKind::Variant {
+            return None;
+        }
+        let module = from.resolutions.import_module(def)?.to_string();
+        let name = from.resolutions.def(def).name.clone();
+
+        let (sources, entries) = self.check_workspace();
+        let entry = entries.iter().find(|entry| {
+            entry
+                .checked
+                .module
+                .name
+                .as_ref()
+                .is_some_and(|path| path.to_string_path() == module)
+        })?;
+
+        let (variant, _) = entry.checked.resolutions.defs().find(|(_, data)| {
+            data.name == name && data.kind == DefKind::Variant && !data.span.is_empty()
+        })?;
+        let parent = entry.checked.resolutions.def(variant).parent?;
+        let declared = entry.checked.resolutions.def(parent).span;
+        if declared.is_empty() {
+            return None;
+        }
+        let uri = entry.uri.as_ref()?;
+        let text = sources.file(entry.checked.file).text();
+        Some(Json::object(vec![
             ("uri", Json::string(uri)),
-            ("range", self.range(document, declared)),
-        ])
+            ("range", range_in(text, declared)),
+        ]))
     }
 
     /// Handlers that implement the effect under the cursor.
