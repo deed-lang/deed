@@ -1436,6 +1436,29 @@ fn a_value_used_as_a_type_is_reported() {
 }
 
 #[test]
+fn an_imported_value_used_as_a_type_points_at_the_other_file() {
+    // The secondary used to underline the same use-site span again and only
+    // say which module. The declaration lives in the other file; that is what
+    // "declared in `other`" has to mean.
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{thing}\n\nfn f(x: thing) -> Int { 0 }\n",
+        &universe_of(&["module other\n\nfn thing() -> Int { 0 }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_TYPE]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared in `other`");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the declaration is in another module"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the use site"
+    );
+}
+
+#[test]
 fn broken_input_does_not_panic_and_does_not_pile_on() {
     let mut sources = SourceMap::new();
     let file = sources.add(
