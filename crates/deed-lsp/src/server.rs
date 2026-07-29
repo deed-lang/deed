@@ -2120,11 +2120,37 @@ fn collect_item_spans(offset: u32, item: &Item, spans: &mut Vec<Span>) {
 }
 
 fn collect_fn_spans(offset: u32, decl: &FnDecl, spans: &mut Vec<Span>) {
-    collect_block_spans(offset, &decl.body, spans);
+    // Contract first: `old(...)` only lives there, and a cursor on an ensures
+    // clause should widen through the obligation before the body.
+    if !collect_contract_spans(offset, &decl.contract, spans) {
+        collect_block_spans(offset, &decl.body, spans);
+    }
 }
 
 fn collect_test_spans(offset: u32, decl: &TestDecl, spans: &mut Vec<Span>) {
     collect_block_spans(offset, &decl.body, spans);
+}
+
+/// Walks `where` / `ensures` expressions. Returns true when the offset landed
+/// in one of them (so the caller does not also walk the body).
+fn collect_contract_spans(
+    offset: u32,
+    contract: &deed_ast::Contract,
+    spans: &mut Vec<Span>,
+) -> bool {
+    for req in &contract.requires {
+        if collect_expr_spans(offset, req, spans) {
+            return true;
+        }
+    }
+    for ens in &contract.ensures {
+        if collect_expr_spans(offset, &ens.condition, spans) {
+            // The whole ensures clause is a step above the condition alone.
+            push_span_if_new(ens.span, spans);
+            return true;
+        }
+    }
+    false
 }
 
 fn collect_handler_spans(offset: u32, decl: &HandlerDecl, spans: &mut Vec<Span>) {
