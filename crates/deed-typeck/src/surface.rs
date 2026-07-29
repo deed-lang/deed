@@ -28,6 +28,14 @@
 //! ties it to. That is the difference between exporting a proof and exporting
 //! the conclusion of one. A caller gets what it needs to reason, and nothing
 //! about how the callee decided it.
+//!
+//! A `where` clause crosses whole, which looks like the opposite decision and
+//! is not. A precondition is not a proof the callee did, it is a question the
+//! caller has to answer, and the caller is the only one who can. So the clause
+//! travels as written, along with [`SurfaceRequires::names`], which says what
+//! every identifier in it refers to. That part is resolved here, in the module
+//! that declared the function, because a `DefId` belongs to the resolution
+//! that made it and a span means nothing in another file.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -60,6 +68,45 @@ pub struct Declared {
     pub span: Span,
 }
 
+/// What an identifier written inside a `where` clause refers to.
+///
+/// Only the two things a call site can do anything with. Anything else in a
+/// clause is left unresolved on the far side, which makes the clause unknown
+/// rather than false, which is the safe direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClauseName {
+    /// The parameter at this position in the declaration.
+    Param(usize),
+    /// The `length` the language provides.
+    Length,
+}
+
+/// A function's preconditions, readable from another module.
+#[derive(Debug)]
+pub struct SurfaceRequires {
+    /// The clauses as written. A call site on the far side reads them with its
+    /// own facts, which is exactly what a call site at home does.
+    pub clauses: Vec<Expr>,
+    /// How many parameters the declaration has, so an argument list can be
+    /// lined up against it.
+    pub arity: usize,
+    /// What each identifier inside the clauses refers to, by where it is
+    /// written. A list rather than a map because a clause holds a handful of
+    /// names and looking one up is not worth a hash.
+    pub names: Vec<(Span, ClauseName)>,
+}
+
+impl SurfaceRequires {
+    /// What the identifier at `span` refers to, or `None` for anything this
+    /// side cannot say.
+    pub fn name_at(&self, span: Span) -> Option<ClauseName> {
+        self.names
+            .iter()
+            .find(|(at, _)| *at == span)
+            .map(|(_, name)| *name)
+    }
+}
+
 /// One exported declaration, with its types readable from outside.
 #[derive(Clone, Debug)]
 pub enum SurfaceItem {
@@ -81,6 +128,12 @@ pub enum SurfaceItem {
         /// What a call is promised to hand back. See the note at the top about
         /// why the bounds cross and the predicate does not.
         guarantee: Guarantee,
+        /// What a caller has to answer for. `None` for a function with no
+        /// `where` clause, which is most of them.
+        ///
+        /// Shared rather than cloned, because expanding aliases rebuilds every
+        /// item and a clause has no types in it to expand.
+        requires: Option<Rc<SurfaceRequires>>,
         declared: Declared,
     },
     Record {
@@ -251,6 +304,7 @@ fn expand_item(item: &SurfaceItem, aliases: &BTreeMap<(&str, &str), &Ty>) -> Sur
             generics,
             row,
             guarantee,
+            requires,
             declared,
         } => SurfaceItem::Function {
             params: params.iter().map(one).collect(),
@@ -259,6 +313,7 @@ fn expand_item(item: &SurfaceItem, aliases: &BTreeMap<(&str, &str), &Ty>) -> Sur
             generics: generics.clone(),
             row: row.clone(),
             guarantee: guarantee.clone(),
+            requires: requires.clone(),
             declared: *declared,
         },
         SurfaceItem::Record {
@@ -382,6 +437,58 @@ fn expand_ty(
     }
 }
 
+/// A function's `where` clauses, with every name in them resolved.
+///
+/// `None` when there is no clause, so a function without a contract costs
+/// nothing.
+///
+/// The resolution happens here rather than at the call site because this is
+/// the only place it can happen. On the far side of the boundary the clause's
+/// spans are offsets into a file nobody has, and asking that file's resolution
+/// about them would not merely fail: it would answer about whatever the
+/// importing module happens to have written at the same byte offset.
+fn requires_of(decl: &deed_ast::FnDecl, resolutions: &Resolutions) -> Option<Rc<SurfaceRequires>> {
+    if decl.contract.requires.is_empty() {
+        return None;
+    }
+
+    let length = resolutions.builtin("length");
+    let params: Vec<Option<deed_resolve::DefId>> = decl
+        .sig
+        .params
+        .iter()
+        .map(|param| resolutions.resolution(param.name.span))
+        .collect();
+
+    let inside = |span: Span| {
+        decl.contract
+            .requires
+            .iter()
+            .any(|clause| span.start >= clause.span().start && span.end <= clause.span().end)
+    };
+
+    let mut names: Vec<(Span, ClauseName)> = resolutions
+        .names()
+        .filter(|(span, _)| inside(*span))
+        .filter_map(|(span, def)| {
+            if let Some(index) = params.iter().position(|param| *param == Some(def)) {
+                return Some((span, ClauseName::Param(index)));
+            }
+            (Some(def) == length).then_some((span, ClauseName::Length))
+        })
+        .collect();
+    // Sorted so that two runs of the compiler over the same file produce the
+    // same surface. The resolution table is a hash map and iterating it is not
+    // ordered.
+    names.sort_by_key(|(span, _)| *span);
+
+    Some(Rc::new(SurfaceRequires {
+        clauses: decl.contract.requires.clone(),
+        arity: decl.sig.params.len(),
+        names,
+    }))
+}
+
 /// Lowers one module's declarations into something other modules can read.
 pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surface {
     let Some(path) = module.name.as_ref().map(|name| name.to_string_path()) else {
@@ -489,6 +596,7 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
                             .map(|parameter| parameter.name.clone())
                             .collect(),
                         guarantee: Guarantee::of(declared).meet(promised),
+                        requires: requires_of(decl, resolutions),
                         declared: Declared {
                             file,
                             span: decl.sig.span,
