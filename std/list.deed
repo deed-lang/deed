@@ -204,6 +204,52 @@ fn prepend<T>(items: List<T>, front: T) -> List<T> {
     }
 }
 
+// The first that matches, or nothing. `any` only says whether; this hands the
+// element back. Stops on the first hit, which is the same reason `any` grew a
+// `while` rather than walking the rest of a finished answer.
+fn find<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Result<T, String>
+  uses
+    r,
+{
+    for item in items with answer = err("nothing matched") while match answer {
+        ok(value) => false,
+        err(why) => true,
+    } {
+        if matches(item) {
+            ok(item)
+        } else {
+            answer
+        }
+    }
+}
+
+// The first `upto` elements, in the order they were given. A walk that already
+// has enough stops asking for more, so a long list and a small prefix cost the
+// prefix rather than the list.
+//
+// Negative and oversize are both quiet: less than nothing is nothing, and more
+// than there is is everything. The same answers `repeat` gives about a count
+// that is not a length, and for the same reason — the call is usually
+// `take(xs, n)` where `n` came from arithmetic, not from a proof.
+fn take<T>(items: List<T>, upto: Int) -> List<T> {
+    for item in items with kept = [] while length(kept) < upto {
+        push(kept, item)
+    }
+}
+
+// Everything after the first `count` elements. The other half of `take`: the
+// two together rebuild the list they split, which is the property that keeps
+// either one honest.
+fn drop<T>(items: List<T>, count: Int) -> List<T> {
+    for item at index in items with kept = [] {
+        if index < count {
+            kept
+        } else {
+            push(kept, item)
+        }
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -281,4 +327,26 @@ test "reversed and prepend put things at the front" {
     assert reversed([1, 2, 3]) == [3, 2, 1]
     assert reversed([1]) == [1]
     assert reversed([]) == []
+}
+
+test "find hands back the first match, or says nothing matched" {
+    assert find([1, 2, 3], |n: Int| n > 1) == ok(2)
+    assert find([1, 2, 3], |n: Int| n > 9) == err("nothing matched")
+    assert find([], |n: Int| true) == err("nothing matched")
+    assert find(["a", "bb", "c"], |word: String| length(word) > 1) == ok("bb")
+}
+
+test "take keeps a prefix and drop keeps the rest" {
+    assert take([1, 2, 3], 2) == [1, 2]
+    assert take([1, 2, 3], 0) == []
+    assert take([1, 2, 3], 9) == [1, 2, 3]
+    assert take([], 3) == []
+    assert drop([1, 2, 3], 1) == [2, 3]
+    assert drop([1, 2, 3], 0) == [1, 2, 3]
+    assert drop([1, 2, 3], 9) == []
+    assert drop([], 1) == []
+    // The two halves of one list, without a join: take the front, drop the
+    // front, and each side is what the other is not.
+    assert take([1, 2, 3, 4], 2) == [1, 2]
+    assert drop([1, 2, 3, 4], 2) == [3, 4]
 }

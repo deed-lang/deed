@@ -168,7 +168,7 @@ It carries four more for taking a string apart and putting one back together:
 
 ```deed
 split("a,b,c", ",")      // ["a", "b", "c"]
-split("gün", "")         // ["g", "ü", "n"]
+split("gÃ¼n", "")         // ["g", "Ã¼", "n"]
 join(["a", "b"], ",")    // "a,b"
 to_string(0 - 12)        // "-12"
 to_int("41")             // ok(41)
@@ -233,8 +233,8 @@ written in the language is written in the language. What they were waiting for w
 to live.
 
 That is also where the list library is. `std/list` has `map`, `map_at`, `filter`, `filter_at`,
-`fold`, `fold_at`, `any`, `all`, `count_where`, `filtered_with`, `first`, `last`, `reversed`
-and `prepend`. It was written long before there was anywhere to put it and sat under
+`fold`, `fold_at`, `any`, `all`, `count_where`, `filtered_with`, `first`, `last`, `reversed`,
+`prepend`, `find`, `take` and `drop`. It was written long before there was anywhere to put it and sat under
 `examples/`, where its name said it lived in this repository and a program elsewhere had to
 copy it.
 
