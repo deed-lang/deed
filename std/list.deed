@@ -69,6 +69,25 @@ fn filter<T, uses r>(items: List<T>, keep: Fn(T) uses r -> Bool) -> List<T>
     }
 }
 
+// The same, and the callback is told where the element was.
+//
+// `map_at` is the first of these. Filtering by position is the second shape
+// somebody reaches for once they have one, and it is the same four lines with
+// a keep instead of a step. Written here rather than waiting for a third walk
+// to grow its own indexed form.
+fn filter_at<T, uses r>(items: List<T>, keep: Fn(Int, T) uses r -> Bool) -> List<T>
+  uses
+    r,
+{
+    for item at index in items with kept = [] {
+        if keep(index, item) {
+            push(kept, item)
+        } else {
+            kept
+        }
+    }
+}
+
 // The general one, and the one `for` already is. Written out anyway, because
 // a library that has `map` and `filter` and not `fold` is a library that
 // stops working the moment somebody wants a sum.
@@ -199,6 +218,13 @@ test "filter keeps the order it was given, and can keep none of it" {
     assert filter([1, 2, 3], |n: Int| n > 9) == []
     assert count_where([3, 1, 2], |n: Int| n > 1) == 2
     assert count_where([1, 2, 3], |n: Int| n > 9) == 0
+}
+
+test "filter_at keeps by position and by value" {
+    assert filter_at([10, 20, 30, 40], |index: Int, n: Int| index < 2) == [10, 20]
+    assert filter_at([10, 20, 30, 40], |index: Int, n: Int| n > 25) == [30, 40]
+    assert filter_at([10, 20, 30], |index: Int, n: Int| index == n / 10 - 1) == [10, 20, 30]
+    assert filter_at([], |index: Int, n: Int| true) == []
 }
 
 test "fold answers with what it started from when the walk does nothing" {

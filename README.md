@@ -70,7 +70,7 @@ examples/transfer.deed
 That number used to be 102. Seven of those tests are in `std/table` now, because the table
 library stopped living under `examples/` and a module that ships with the compiler is context
 rather than subject, so the corpus does not run its tests any more. Nothing was deleted: the
-modules that ship carry twenty tests of their own, and
+modules that ship carry twenty-one tests of their own, and
 `crates/deed-driver/tests/shipped.rs` runs every one of them on every commit.
 
 ```
@@ -537,8 +537,8 @@ at the type it was applied to, and so does a pattern binder, which is the part a
 declared with.
 
 `std/list` and `using_list.deed` are the point of the three changes above. `std/list` is a
-list library written in Deed: `map`, `map_at`, `filter`, `fold`, `any`, `all`, `count_where`,
-`filtered_with`, `first`, `last`, `reversed` and `prepend`, none of them known to the
+list library written in Deed: `map`, `map_at`, `filter`, `filter_at`, `fold`, `any`, `all`,
+`count_where`, `filtered_with`, `first`, `last`, `reversed` and `prepend`, none of them known to the
 compiler, no builtin, no special case, no name in the prelude. It is the first thing in this
 repository anybody else could have written.
 
