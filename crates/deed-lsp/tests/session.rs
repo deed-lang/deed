@@ -2176,6 +2176,37 @@ fn document_highlight_on_a_use_path_lights_the_path() {
     );
 }
 
+#[test]
+fn document_highlight_lights_every_use_of_the_same_path() {
+    // Same module path twice in one file. The single-use test above would
+    // still pass if the walk only returned the path under the cursor.
+    let text = "module p\n\n\
+         use scratch/one.{double}\n\
+         use scratch/one.{halve}\n\n\
+         fn f() -> Int {\n\
+         \x20   1\n\
+         }\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, text),
+        // First path, line 2.
+        at(2, "textDocument/documentHighlight", URI, 2, 4),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("highlight reply");
+    let highlights = reply
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("{reply:?}"));
+    let lines: Vec<i64> = highlights
+        .iter()
+        .filter_map(|h| h.at(&["range", "start", "line"]).and_then(Json::as_i64))
+        .collect();
+    assert_eq!(lines, vec![2, 3], "{reply:?}");
+}
+
 // -- folding range -----------------------------------------------------------
 
 fn folding_range(id: i64, uri: &str) -> String {
