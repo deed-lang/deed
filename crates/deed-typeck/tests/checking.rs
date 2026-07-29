@@ -623,8 +623,15 @@ fn a_handler_that_leaves_an_operation_out_is_an_error() {
         vec![codes::HANDLER_MISSING_OPERATION]
     );
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("does not implement `value`"), "{text}");
+    assert!(
+        text.contains("`InMemory` does not implement `value`"),
+        "{text}"
+    );
     assert!(text.contains("one operation still to write"), "{text}");
+    assert!(
+        text.contains("a `with` block discharges the effect"),
+        "{text}"
+    );
     let diagnostic = &checked.diagnostics[0];
     assert_eq!(diagnostic.secondary.len(), 1);
     assert_eq!(diagnostic.secondary[0].message, "`Counter` declares them");
