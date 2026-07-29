@@ -1387,6 +1387,33 @@ fn an_imported_type_is_checked_against_what_it_declared() {
 }
 
 #[test]
+fn a_mismatch_on_an_imported_field_points_at_the_other_file() {
+    // The surface carries each field's span and file. Without that, a literal
+    // of an imported record could only underline the bad value: the declaration
+    // lived in another module and the secondary had nowhere honest to go.
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Point}\n\nfn f() -> Point {\n    Point { x: true, y: 1 }\n}\n",
+        &universe_of(&["module other\n\nrecord Point {\n    x: Int,\n    y: Int,\n}\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(
+        diagnostic.secondary.len(),
+        1,
+        "expected one secondary, got {:?}",
+        diagnostic.secondary
+    );
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the field it is assigned to"
+    );
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the field was declared in another module, so the label has to carry that file"
+    );
+}
+
+#[test]
 fn an_imported_generic_type_takes_the_arguments_it_declared() {
     let (_, checked) = check_source_in(
         "module a\n\nuse other.{Box}\n\nfn f(x: Box<Int>) -> Int { 0 }\n",
