@@ -1298,10 +1298,15 @@ fn a_variant_literal_has_the_type_of_its_choice() {
 
 #[test]
 fn a_variant_literal_checks_its_fields() {
-    let (_, checked) = check_source(
+    let (sources, checked) = check_source(
         "module a\n\nchoice E { Full { n: Int } }\n\nfn f() -> E { Full { n: true } }\n",
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("found `Bool`") || text.contains("expected `Int`"),
+        "{text}"
+    );
 }
 
 // -- matches ---------------------------------------------------------------
@@ -1562,7 +1567,12 @@ fn calling_something_that_is_not_a_function_is_reported() {
 fn a_body_must_produce_the_declared_return_type() {
     let (sources, checked) = check_source("module a\n\nfn f() -> Int { true }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    assert!(rendered(&sources, &checked.diagnostics).contains("the declared return type"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("the declared return type"), "{text}");
+    assert!(
+        text.contains("expected `Int`, found `Bool`") || text.contains("found `Bool`"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1583,9 +1593,14 @@ fn an_if_without_an_else_must_produce_nothing() {
 
 #[test]
 fn both_branches_of_an_if_must_agree() {
-    let (_, checked) =
+    let (sources, checked) =
         check_source("module a\n\nfn f(b: Bool) -> Int {\n  if b { 1 } else { true }\n}\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("expected `Int`, found `Bool`") || text.contains("found `Bool`"),
+        "{text}"
+    );
 }
 
 // -- contracts -------------------------------------------------------------
