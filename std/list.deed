@@ -310,6 +310,15 @@ fn zip<A, B>(left: List<A>, right: List<B>) -> List<Pair<A, B>> {
     }
 }
 
+// Each element paired with where it was. `map_at` already hands the index into
+// a callback; this is the same walk that keeps the pair rather than calling
+// out. Useful when the next step wants a list of pairs rather than a callback.
+fn enumerate<T>(items: List<T>) -> List<Pair<Int, T>> {
+    for item at index in items with out = [] {
+        push(out, Pair { left: index, right: item })
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -441,4 +450,14 @@ test "zip stops when either list runs out" {
     assert zip([1], ["a", "b", "c"]) == [Pair { left: 1, right: "a" }]
     assert zip([], ["a"]) == []
     assert zip([1], []) == []
+}
+
+test "enumerate pairs each element with its index" {
+    assert enumerate([10, 20, 30]) == [
+        Pair { left: 0, right: 10 },
+        Pair { left: 1, right: 20 },
+        Pair { left: 2, right: 30 },
+    ]
+    assert enumerate(["a"]) == [Pair { left: 0, right: "a" }]
+    assert enumerate([]) == []
 }
