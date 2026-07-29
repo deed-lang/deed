@@ -1791,6 +1791,52 @@ fn type_definition_of_a_qualified_imported_variant_is_its_choice() {
     );
 }
 
+#[test]
+fn type_definition_of_an_imported_effect_operation_is_its_effect() {
+    // Same parent-is-import walk as Color.Rgb, for Log.note. Without this the
+    // EffectOp arm only stays held on local effects.
+    let log = "module scratch/log\n\n\
+         effect Log {\n\
+         \x20   fn note(line: String) -> ()\n\
+         }\n";
+    let body = "module scratch/app\n\n\
+         use scratch/log.{Log}\n\n\
+         fn f() -> ()\n\
+         \x20 uses\n\
+         \x20   Log.note,\n\
+         {\n\
+         \x20   Log.note(\"hi\")\n\
+         }\n";
+    let scratch = Scratch::new("typedef-imported-effect");
+    let log_uri = scratch.write("log.deed", log);
+    let app_uri = scratch.write("app.deed", body);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&app_uri, body),
+        // The `note` in `Log.note("hi")`.
+        at(2, "textDocument/typeDefinition", &app_uri, 8, 9),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("typeDefinition reply");
+    let location = reply.at(&["result"]).expect("a location");
+    assert_eq!(
+        location.at(&["uri"]).and_then(Json::as_str),
+        Some(log_uri.as_str()),
+        "{location:?}"
+    );
+    // `effect Log` is on line 2 of log.deed.
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{location:?}"
+    );
+}
+
 // -- go to implementation ----------------------------------------------------
 
 #[test]
