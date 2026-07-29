@@ -1492,10 +1492,12 @@ fn alternatives_work_across_a_module_boundary() {
 
 #[test]
 fn all_arms_must_agree() {
-    let (_, checked) = check_source(
+    let (sources, checked) = check_source(
         "module a\n\nchoice E { A, B }\n\nfn f(e: E) -> Int {\n  match e {\n    A => 1,\n    B => true,\n  }\n}\n",
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("found `Bool`") || text.contains("expected `Int`"), "{text}");
 }
 
 #[test]
