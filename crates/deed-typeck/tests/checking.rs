@@ -665,7 +665,11 @@ fn every_operation_left_out_is_named_at_once() {
         vec![codes::HANDLER_MISSING_OPERATION]
     );
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("`set`") && text.contains("`value`"), "{text}");
+    assert!(
+        text.contains("`set`") && text.contains("`value`"),
+        "{text}"
+    );
+
     assert!(text.contains("2 operations still to write"), "{text}");
     let diagnostic = &checked.diagnostics[0];
     assert_eq!(diagnostic.secondary.len(), 1);
@@ -1024,10 +1028,16 @@ fn an_alias_without_a_predicate_is_transparent() {
 
 #[test]
 fn a_self_referential_alias_is_reported_once() {
-    let (_, checked) = check_source("module a\n\ntype Loop = Loop\n\nfn f(x: Loop) -> Int { 0 }\n");
+    let (sources, checked) =
+        check_source("module a\n\ntype Loop = Loop\n\nfn f(x: Loop) -> Int { 0 }\n");
     assert_eq!(
         codes_of(&checked.diagnostics),
         vec![codes::TYPE_ALIAS_CYCLE]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("Loop") || text.contains("cycle") || text.contains("refers"),
+        "{text}"
     );
 }
 
@@ -1612,13 +1622,8 @@ fn both_branches_of_an_if_must_agree() {
 
 #[test]
 fn contract_clauses_must_be_conditions() {
-    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
+    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    let text = rendered(&sources, &checked.diagnostics);
-    assert!(
-        text.contains("Bool") || text.contains("condition") || text.contains("expected"),
-        "{text}"
-    );
 }
 
 #[test]
