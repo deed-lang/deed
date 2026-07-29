@@ -306,10 +306,14 @@ fn a_record_is_not_ordered() {
 
 #[test]
 fn a_choice_is_not_ordered_either() {
-    let (_, checked) = check_source(
+    // The record case already pins the type name. A choice used to stop at the
+    // code, so a rewrite that kept NOT_ORDERED and dropped the name would pass.
+    let (sources, checked) = check_source(
         "module a\n\nchoice Tone { Plain, Loud }\n\nfn f(a: Tone, b: Tone) -> Bool { a >= b }\n",
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_ORDERED]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("there is none on `Tone`"), "{text}");
 }
 
 /// The case that decides whether this language wants a bound.
