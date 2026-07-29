@@ -179,4 +179,29 @@ mod tests {
         assert_eq!(file.line_text(2), "second");
         assert_eq!(file.line_text(99), "");
     }
+
+    #[test]
+    fn the_last_line_is_still_a_line() {
+        // `line > line_count` rejects past-the-end. `>=` would also reject the
+        // final line itself. A file with no trailing newline still has that
+        // last line, and renderers ask for it by number.
+        let (map, id) = map("only");
+        let file = map.file(id);
+        assert_eq!(file.line_count(), 1);
+        assert_eq!(file.line_text(1), "only");
+        assert_eq!(file.line_text(2), "");
+    }
+
+    #[test]
+    fn file_ids_are_the_order_files_were_added() {
+        let mut map = SourceMap::new();
+        let first = map.add("a.deed", "");
+        let second = map.add("b.deed", "");
+        assert_eq!(first.index(), 0);
+        assert_eq!(second.index(), 1);
+        // The id is what `file` looks up by, so swapping either number hands
+        // back the other source.
+        assert_eq!(map.file(first).name(), "a.deed");
+        assert_eq!(map.file(second).name(), "b.deed");
+    }
 }
