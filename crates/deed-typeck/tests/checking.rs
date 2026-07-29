@@ -1362,8 +1362,11 @@ fn the_wrong_number_of_arguments_points_at_the_declaration() {
 
 #[test]
 fn calling_something_that_is_not_a_function_is_reported() {
-    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int { n(1) }\n");
+    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int { n(1) }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_CALLABLE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("`Int` is not a function"), "{text}");
+    assert!(text.contains("not callable"), "{text}");
 }
 
 #[test]
