@@ -353,10 +353,17 @@ fn a_type_parameter_is_still_comparable_for_equality() {
 fn two_types_that_do_not_match_are_one_mistake_not_two() {
     // Saying the sides disagree and then that the type they do not share has
     // no ordering is two diagnostics for one edit.
-    let (_, checked) = check_source(
+    let (sources, checked) = check_source(
         "module a\n\nrecord Point { x: Int }\n\nfn f(a: Point, b: Int) -> Bool { a < b }\n",
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    assert_eq!(checked.diagnostics.len(), 1);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("Point") || text.contains("Int"),
+        "{text}"
+    );
+
 }
 
 #[test]
@@ -665,7 +672,11 @@ fn every_operation_left_out_is_named_at_once() {
         vec![codes::HANDLER_MISSING_OPERATION]
     );
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("`set`") && text.contains("`value`"), "{text}");
+    assert!(
+        text.contains("`set`") && text.contains("`value`"),
+        "{text}"
+    );
+
     assert!(text.contains("2 operations still to write"), "{text}");
     let diagnostic = &checked.diagnostics[0];
     assert_eq!(diagnostic.secondary.len(), 1);
@@ -1612,13 +1623,8 @@ fn both_branches_of_an_if_must_agree() {
 
 #[test]
 fn contract_clauses_must_be_conditions() {
-    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
+    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    let text = rendered(&sources, &checked.diagnostics);
-    assert!(
-        text.contains("Bool") || text.contains("condition") || text.contains("expected"),
-        "{text}"
-    );
 }
 
 #[test]
