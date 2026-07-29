@@ -782,7 +782,7 @@ fn a_variant_from_another_module_can_be_built() {
         .types
         .at(at)
         .expect("the literal should have a type");
-    let _ = ty;
+    assert_eq!(checked.types.describe(ty), "`Tone` from `other`");
 }
 
 #[test]

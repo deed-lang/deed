@@ -82,6 +82,19 @@ jobs:
       - name: cargo mutants
         run: cargo mutants --in-diff pr.diff --no-shuffle
 
+      # `cargo mutants` exits 0 when it finds nothing to mutate, so a diff it
+      # does not understand looks exactly like a diff that survived it. This
+      # job reported success twice before anybody checked the number.
+      - name: something was mutated
+        run: |
+          tested=$(python3 -c "import json;print(json.load(open('mutants.out/outcomes.json'))['total_mutants'])")
+          echo "$tested mutants tested"
+          rust=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...HEAD -- '*.rs' | wc -l)
+          if [ "$rust" -gt 0 ] && [ "$tested" -eq 0 ]; then
+            echo "$rust Rust files changed and nothing was mutated, so this gate said nothing." >&2
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
