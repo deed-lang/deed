@@ -554,7 +554,11 @@ fn a_handler_operation_the_effect_does_not_have_is_an_error() {
         vec![codes::OPERATION_MISMATCH]
     );
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("does not declare an operation"), "{text}");
+    assert!(
+        text.contains("`Counter` does not declare an operation called `nonsense`"),
+        "{text}"
+    );
+    assert!(text.contains("not part of the effect"), "{text}");
     assert!(
         text.contains("the effect this handler implements"),
         "{text}"
