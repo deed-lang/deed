@@ -389,6 +389,87 @@ mod tests {
         assert!(!text.contains("| )\n"), "{text}");
     }
 
+    /// The line above `line`, so a test can say "there is a gap here" rather
+    /// than count spaces.
+    fn line_before<'a>(text: &'a str, line: &str) -> &'a str {
+        let lines: Vec<&str> = text.lines().collect();
+        let at = lines
+            .iter()
+            .position(|written| written.trim_start().starts_with(line))
+            .unwrap_or_else(|| panic!("{line:?} should be in:\n{text}"));
+        assert!(at > 0, "{line:?} is the first line, so nothing is above it");
+        lines[at - 1]
+    }
+
+    /// The blank gutter line between the code and what is said about it.
+    ///
+    /// `cargo mutants` found this one: with the separator gone a note runs
+    /// straight on from the caret line and nothing noticed. Both halves of
+    /// the condition get a test, because a note with no fix and a fix with no
+    /// note are both ordinary and either one alone leaves the other unheld.
+    #[test]
+    fn a_note_is_separated_from_the_code_it_is_about() {
+        let mut map = SourceMap::new();
+        let file = map.add("t.deed", "module a\nlet x = 1\n");
+        let d = Diagnostic::error("DEED9006", file, Span::new(13, 14), "example problem")
+            .with_primary_label("here")
+            .with_note("something worth saying");
+
+        let text = render_human(&map, &d);
+        assert_eq!(
+            line_before(&text, "= note:").trim(),
+            "|",
+            "the note should not run straight on from the caret:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_fix_with_no_note_is_separated_the_same_way() {
+        let mut map = SourceMap::new();
+        let file = map.add("t.deed", "module a\nlet x = 1\n");
+        let d = Diagnostic::error("DEED9007", file, Span::new(13, 14), "example problem")
+            .with_primary_label("here")
+            .with_fix(
+                "call it something else",
+                Span::new(13, 14),
+                "y",
+                Applicability::MachineApplicable,
+            );
+
+        let text = render_human(&map, &d);
+        assert!(!text.contains("= note:"), "{text}");
+        assert_eq!(
+            line_before(&text, "help:").trim(),
+            "|",
+            "the help should not run straight on from the caret:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_fix_that_only_deletes_offers_no_line_to_read() {
+        // The replacement is what a reader is shown, and an empty one is a
+        // gutter with nothing after it. Saying "here is what it would look
+        // like" and then showing a blank line is worse than saying nothing.
+        let mut map = SourceMap::new();
+        let file = map.add("t.deed", "module a\nlet x = 1\n");
+        let d = Diagnostic::error("DEED9008", file, Span::new(13, 14), "example problem")
+            .with_primary_label("here")
+            .with_fix(
+                "take it out",
+                Span::new(13, 14),
+                "",
+                Applicability::MachineApplicable,
+            );
+
+        let text = render_human(&map, &d);
+        assert!(text.contains("help: take it out"), "{text}");
+        assert_eq!(
+            text.lines().last(),
+            Some("help: take it out"),
+            "nothing should be offered after the help line:\n{text}"
+        );
+    }
+
     /// Two files, so that a wrong answer cannot come out looking right.
     fn two_files() -> (SourceMap, crate::source::FileId, crate::source::FileId) {
         let mut map = SourceMap::new();
