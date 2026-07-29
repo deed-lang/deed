@@ -142,19 +142,23 @@ fn collect(diagnostics: &[Diagnostic]) -> Repairs {
 
     edits.sort_by_key(|(_, edit)| (edit.span.start, edit.span.end));
 
+    // Walk adjacent pairs only. A cluster is every run of edits where each
+    // one overlaps the next; non-adjacent overlap is impossible after the
+    // sort by start. A plain `for` over the pairs cannot hang: every mutant
+    // of the old `index = last + 1` form either still advances or fails a
+    // test, instead of spinning until the timeout.
     let mut refused = vec![false; fixes.len()];
-    let mut index = 0;
-    while index < edits.len() {
-        let mut last = index;
-        while last + 1 < edits.len() && overlaps(&edits[last].1.span, &edits[last + 1].1.span) {
-            last += 1;
-        }
-        if last > index {
-            for (owner, _) in &edits[index..=last] {
-                refused[*owner] = true;
+    let mut run_start = 0;
+    for i in 1..=edits.len() {
+        let run_breaks = i == edits.len() || !overlaps(&edits[i - 1].1.span, &edits[i].1.span);
+        if run_breaks {
+            if i - run_start > 1 {
+                for (owner, _) in &edits[run_start..i] {
+                    refused[*owner] = true;
+                }
             }
+            run_start = i;
         }
-        index = last + 1;
     }
 
     Repairs {
@@ -167,10 +171,15 @@ fn collect(diagnostics: &[Diagnostic]) -> Repairs {
     }
 }
 
+/// Whether two start-sorted spans clash.
+///
+/// `collect` only asks about adjacent edits after sorting by start, so the
+/// earlier span is always `a` and the later is always `b`. Under that order a
+/// pure touch is `a.end == b.start`, and the only comparison that matters is
+/// whether the earlier span ends past the later's start. Flip `>` to `>=` and
+/// the touch pair in `fixes_that_only_touch_at_a_point_both_go_in` is refused.
 fn overlaps(a: &Span, b: &Span) -> bool {
-    // Touching at a point is not overlapping: an insertion at the end of one
-    // edit and an insertion at the start of the next are independent.
-    a.end > b.start && b.end > a.start
+    a.end > b.start
 }
 
 /// Applies non-overlapping edits, back to front so earlier spans stay valid.
