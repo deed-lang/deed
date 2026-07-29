@@ -565,6 +565,39 @@ fn an_imported_effect_is_counted_the_same_way() {
         vec![codes::HANDLER_MISSING_OPERATION]
     );
     assert!(rendered(&sources, &checked.diagnostics).contains("does not implement `balance`"));
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary[0].message, "`Ledger` declares them");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the effect is declared in another module"
+    );
+}
+
+#[test]
+fn an_extra_operation_on_an_imported_effect_points_at_the_other_file() {
+    let (_, checked) = check_source_in(
+        "module a\n\n\
+         use other.{Ledger}\n\n\
+         handler InMemory implements Ledger {\n\
+         \x20 state total: Int\n\n\
+         \x20 fn post(amount) -> () {\n    total = total + amount\n  }\n\n\
+         \x20 fn invent() -> () {}\n\
+         }\n",
+        &universe_of(&["module other\n\neffect Ledger {\n    fn post(amount: Int) -> ()\n}\n"]),
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::OPERATION_MISMATCH]
+    );
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the effect this handler implements"
+    );
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the effect is declared in another module"
+    );
 }
 
 #[test]
