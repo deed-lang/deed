@@ -1313,6 +1313,13 @@ fn the_wrong_number_of_arguments_points_at_the_declaration() {
         "{text}"
     );
     assert!(text.contains("declared here"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the call site"
+    );
 }
 
 #[test]
