@@ -908,7 +908,32 @@ fn a_literal_with_an_unknown_field_lists_the_real_ones() {
     let (sources, checked) =
         check_source("module a\n\nrecord R { a: Int }\n\nfn f() -> R { R { a: 1, z: 2 } }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::UNKNOWN_FIELD]);
-    assert!(rendered(&sources, &checked.diagnostics).contains("it has `a`"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("it has `a`"), "{text}");
+    assert!(text.contains("declared here"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+}
+
+#[test]
+fn an_unknown_field_on_an_imported_record_points_at_the_other_file() {
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Point}\n\nfn f() -> Point { Point { x: 1, y: 2, z: 3 } }\n",
+        &universe_of(&["module other\n\nrecord Point { x: Int, y: Int }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::UNKNOWN_FIELD]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the record lives in the other module"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the unknown name"
+    );
 }
 
 #[test]
