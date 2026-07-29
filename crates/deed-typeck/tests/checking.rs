@@ -1533,6 +1533,45 @@ fn an_imported_value_used_as_a_type_points_at_the_other_file() {
 }
 
 #[test]
+fn a_broken_precondition_on_an_imported_fn_points_at_the_other_file() {
+    // DEED4025 already walks Origin::Elsewhere for the clause secondary. Without
+    // a pin, a regression that drops the file and re-underlines the call site
+    // still has the right code and the right phrase.
+    let (_, checked) = check_source_in(
+        "module a\n\n\
+         use other.{halve}\n\n\
+         fn caller() -> Int { halve(0 - 5) }\n",
+        &universe_of(&[
+            "module other\n\n\
+             fn halve(n: Int) -> Int\n\
+             \x20 where\n\
+             \x20   n >= 0,\n\
+             {\n\
+             \x20 n\n\
+             }\n",
+        ]),
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::BROKEN_PRECONDITION]
+    );
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the clause it has to satisfy"
+    );
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the where clause lives in the other module"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the call site"
+    );
+}
+
+#[test]
 fn broken_input_does_not_panic_and_does_not_pile_on() {
     let mut sources = SourceMap::new();
     let file = sources.add(
