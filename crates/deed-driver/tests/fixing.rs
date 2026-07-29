@@ -6,7 +6,7 @@
 //! about when it acts.
 
 use deed_diagnostics::{Applicability, Diagnostic, SourceMap, Span, SuggestedEdit};
-use deed_driver::fix::{error_count, fix};
+use deed_driver::fix::{error_count, fix, render_all};
 
 fn diagnose(text: &str) -> Vec<Diagnostic> {
     let mut sources = SourceMap::new();
@@ -109,6 +109,25 @@ fn a_file_with_nothing_to_fix_is_left_alone() {
     let result = fix(source, diagnose);
     assert!(!result.changed());
     assert_eq!(result.source, source);
+}
+
+#[test]
+fn render_all_joins_every_diagnostic() {
+    // The helper exists so callers do not each write the join. Empty input is
+    // empty output; two diagnostics are two human renderings with a newline.
+    let mut sources = SourceMap::new();
+    let file = sources.add("t.deed", "module a\n");
+    let empty = render_all(&sources, &[]);
+    assert_eq!(empty, "");
+    let one = Diagnostic::error("DEED0000", file, Span::new(0, 6), "first");
+    let two = Diagnostic::error("DEED0000", file, Span::new(0, 6), "second");
+    let joined = render_all(&sources, &[one, two]);
+    assert!(joined.contains("first"), "{joined}");
+    assert!(joined.contains("second"), "{joined}");
+    assert!(
+        joined.contains('\n'),
+        "two diagnostics are separated: {joined}"
+    );
 }
 
 /// A function full of bindings written the way the last language wrote them.
@@ -500,9 +519,26 @@ fn overlapping_fixes_are_both_dropped() {
 }
 
 #[test]
+fn a_chain_of_overlapping_fixes_is_dropped_whole() {
+    // A overlaps B, B overlaps C, A does not touch C. The walk has to keep
+    // extending through the middle, or C (or A) sneaks in alone.
+    let source = "0123456789";
+    let result = fix(source, |_| {
+        vec![
+            with_fix(Span::new(0, 3), "A", Applicability::MachineApplicable),
+            with_fix(Span::new(2, 5), "B", Applicability::MachineApplicable),
+            with_fix(Span::new(4, 7), "C", Applicability::MachineApplicable),
+        ]
+    });
+    assert_eq!(result.source, source);
+    assert!(!result.changed());
+}
+
+#[test]
 fn fixes_that_only_touch_at_a_point_both_go_in() {
     // An insertion at the end of one edit and an insertion at the start of the
-    // next are independent, so touching is not overlapping.
+    // next are independent, so touching is not overlapping. Flip either `<`
+    // in `overlaps` to `<=` and this pair is refused as a clash.
     let source = "0123456789";
     let result = fix(source, |text| {
         if text != "0123456789" {
@@ -514,6 +550,7 @@ fn fixes_that_only_touch_at_a_point_both_go_in() {
         ]
     });
     assert_eq!(result.source, "AB6789");
+    assert_eq!(result.applied, 2);
 }
 
 /// A repair that wraps something is two edits and one answer. Both go in, and
@@ -573,6 +610,33 @@ fn a_span_outside_the_text_is_skipped_rather_than_applied() {
 }
 
 #[test]
+fn a_span_that_ends_before_it_starts_is_skipped() {
+    // `Span::new` refuses a reversed range, but `SuggestedEdit` carries a
+    // `Span` by value and the fields are public, so a buggy producer can still
+    // hand `apply` one. The guard is the last line of defence.
+    let source = "0123456789";
+    let result = fix(source, |text| {
+        if text != "0123456789" {
+            return Vec::new();
+        }
+        let mut sources = SourceMap::new();
+        let file = sources.add("made-up.deed", String::new());
+        let mut diagnostic = Diagnostic::error("DEED0000", file, Span::at(0), "made up");
+        // Bypass Span::new so the reversed range reaches apply.
+        diagnostic = diagnostic.with_edits(
+            "made up",
+            vec![SuggestedEdit {
+                span: Span { start: 7, end: 3 },
+                replacement: "x".to_string(),
+            }],
+            Applicability::MachineApplicable,
+        );
+        vec![diagnostic]
+    });
+    assert_eq!(result.source, source);
+}
+
+#[test]
 fn a_span_inside_a_character_is_skipped() {
     // Rewriting from a byte offset that is not a character boundary would
     // corrupt the file, and a panic here would take the whole run with it.
@@ -581,8 +645,26 @@ fn a_span_inside_a_character_is_skipped() {
         if text != "üüü" {
             return Vec::new();
         }
+        // Bad start only: end is on a boundary and inside the text.
         vec![with_fix(
-            Span::new(1, 3),
+            Span::new(1, 2),
+            "x",
+            Applicability::MachineApplicable,
+        )]
+    });
+    assert_eq!(result.source, source);
+}
+
+#[test]
+fn a_span_whose_end_is_inside_a_character_is_skipped() {
+    // Symmetric of the start-boundary case: end alone is enough to refuse.
+    let source = "üüü";
+    let result = fix(source, |text| {
+        if text != "üüü" {
+            return Vec::new();
+        }
+        vec![with_fix(
+            Span::new(0, 1),
             "x",
             Applicability::MachineApplicable,
         )]
