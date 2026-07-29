@@ -383,8 +383,36 @@ fn length_will_not_measure_a_number() {
     // Its own code rather than a plain mismatch, because `length` takes more
     // than one type now and "expected a String" would be the wrong half of
     // the story.
-    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int { length(n) }\n");
+    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int { length(n) }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_LIST]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`length` needs something with a length, and this is `Int`"),
+        "{text}"
+    );
+    assert!(text.contains("nothing to measure"), "{text}");
+    assert!(
+        text.contains("`length` measures a `String` or a `List`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_for_over_a_string_says_it_walks_a_list() {
+    let (sources, checked) = check_source(
+        "module a\n\nfn f(text: String) -> Int {\n  for c in text with n = 0 {\n    n + 1\n  }\n}\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_LIST]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`for` walks a list, and this is `String`"),
+        "{text}"
+    );
+    assert!(text.contains("not a list"), "{text}");
+    assert!(
+        text.contains("there is one thing to walk in this language"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1070,7 +1098,7 @@ fn a_value_is_not_something_a_literal_can_build_either() {
 /// so saying it is not a record would be answering the second question first.
 #[test]
 fn a_type_name_gets_the_message_about_being_a_type() {
-    let (_, checked) =
+    let (sources, checked) =
         check_source("module a\n\nfn f() -> Int {\n    let c = Int { x: 1 }\n    0\n}\n");
     assert!(
         !codes_of(&checked.diagnostics).contains(&codes::NOT_A_CONSTRUCTOR),
@@ -1082,6 +1110,18 @@ fn a_type_name_gets_the_message_about_being_a_type() {
         "{:?}",
         codes_of(&checked.diagnostics)
     );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("`Int` is a type, not a value"), "{text}");
+    assert!(text.contains("`Int` cannot be used here"), "{text}");
+}
+
+#[test]
+fn naming_a_type_as_a_value_is_reported_with_its_wording() {
+    let (sources, checked) = check_source("module a\n\nfn f() -> Int { Int }\n");
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_VALUE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("`Int` is a type, not a value"), "{text}");
+    assert!(text.contains("`Int` cannot be used here"), "{text}");
 }
 
 #[test]
