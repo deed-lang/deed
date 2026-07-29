@@ -1331,7 +1331,20 @@ fn a_wildcard_arm_on_a_choice_is_rejected() {
         codes_of(&checked.diagnostics),
         vec![codes::CATCH_ALL_ON_CHOICE]
     );
-    assert!(rendered(&sources, &checked.diagnostics).contains("matches every variant of `E`"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("this arm matches every variant of `E`"),
+        "{text}"
+    );
+    assert!(text.contains("catches everything"), "{text}");
+    assert!(text.contains("in this match"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "in this match");
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the catch-all arm"
+    );
 }
 
 #[test]
@@ -1344,7 +1357,18 @@ fn a_bare_binding_arm_on_a_choice_is_rejected_too() {
         vec![codes::CATCH_ALL_ON_CHOICE]
     );
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("matches every variant of `E`"), "{text}");
+    assert!(
+        text.contains("this arm matches every variant of `E`"),
+        "{text}"
+    );
+    assert!(text.contains("catches everything"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "in this match");
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the bare binding"
+    );
 }
 
 #[test]
