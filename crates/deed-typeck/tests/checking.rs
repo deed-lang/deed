@@ -383,8 +383,36 @@ fn length_will_not_measure_a_number() {
     // Its own code rather than a plain mismatch, because `length` takes more
     // than one type now and "expected a String" would be the wrong half of
     // the story.
-    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int { length(n) }\n");
+    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int { length(n) }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_LIST]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`length` needs something with a length, and this is `Int`"),
+        "{text}"
+    );
+    assert!(text.contains("nothing to measure"), "{text}");
+    assert!(
+        text.contains("`length` measures a `String` or a `List`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_for_over_a_string_says_it_walks_a_list() {
+    let (sources, checked) = check_source(
+        "module a\n\nfn f(text: String) -> Int {\n  for c in text with n = 0 {\n    n + 1\n  }\n}\n",
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_LIST]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`for` walks a list, and this is `String`"),
+        "{text}"
+    );
+    assert!(text.contains("not a list"), "{text}");
+    assert!(
+        text.contains("there is one thing to walk in this language"),
+        "{text}"
+    );
 }
 
 #[test]
