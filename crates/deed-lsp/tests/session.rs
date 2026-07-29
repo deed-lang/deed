@@ -1949,6 +1949,36 @@ fn document_highlight_stays_in_this_file() {
     let _ = two;
 }
 
+#[test]
+fn document_highlight_on_a_use_path_lights_the_path() {
+    // A path is not a resolved name, so the ordinary walk used to answer
+    // nothing and the path went dark under the cursor. Hover and go to
+    // definition already know about it; the highlight should too.
+    let text = "module p\n\nuse scratch/one.{double}\n\nfn f() -> Int {\n    1\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, text),
+        // line 2: `use scratch/one.{double}` — column 4 is on the path.
+        at(2, "textDocument/documentHighlight", URI, 2, 4),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("highlight reply");
+    let highlights = reply
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("{reply:?}"));
+    assert_eq!(highlights.len(), 1, "{reply:?}");
+    assert_eq!(
+        highlights[0]
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{reply:?}"
+    );
+}
+
 // -- folding range -----------------------------------------------------------
 
 fn folding_range(id: i64, uri: &str) -> String {
