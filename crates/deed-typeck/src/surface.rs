@@ -100,9 +100,12 @@ pub enum SurfaceItem {
     Variant {
         choice: Rc<str>,
         fields: Option<Vec<(String, Ty)>>,
+        /// Where each field is written, in the same order.
+        field_spans: Option<Vec<Span>>,
         /// The type parameters of the choice, not of the variant. A variant
         /// has none of its own.
         generics: Vec<String>,
+        declared: Declared,
     },
     /// A refinement, opaque from outside. See the note at the top of the file.
     Refinement { base: Ty },
@@ -120,7 +123,12 @@ pub enum SurfaceItem {
     /// The state crosses because installing a handler from another module is
     /// still writing a literal, and a literal nobody checks is a literal that
     /// can put a `String` where an `Int` was declared.
-    Handler { state: Vec<(String, Ty)> },
+    Handler {
+        state: Vec<(String, Ty)>,
+        /// Where each state field is written, in the same order.
+        state_spans: Vec<Span>,
+        declared: Declared,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -277,11 +285,15 @@ fn expand_item(item: &SurfaceItem, aliases: &BTreeMap<(&str, &str), &Ty>) -> Sur
         SurfaceItem::Variant {
             choice,
             fields,
+            field_spans,
             generics,
+            declared,
         } => SurfaceItem::Variant {
             choice: Rc::clone(choice),
             fields: fields.as_ref().map(named),
+            field_spans: field_spans.clone(),
             generics: generics.clone(),
+            declared: *declared,
         },
         SurfaceItem::Refinement { base } => SurfaceItem::Refinement { base: one(base) },
         SurfaceItem::Alias { target, generics } => SurfaceItem::Alias {
@@ -296,8 +308,14 @@ fn expand_item(item: &SurfaceItem, aliases: &BTreeMap<(&str, &str), &Ty>) -> Sur
                 })
                 .collect(),
         },
-        SurfaceItem::Handler { state } => SurfaceItem::Handler {
+        SurfaceItem::Handler {
+            state,
+            state_spans,
+            declared,
+        } => SurfaceItem::Handler {
             state: named(state),
+            state_spans: state_spans.clone(),
+            declared: *declared,
         },
     }
 }
@@ -504,7 +522,15 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
                         SurfaceItem::Variant {
                             choice: Rc::clone(&choice),
                             fields: fields.clone(),
+                            field_spans: variant
+                                .fields
+                                .as_ref()
+                                .map(|f| f.iter().map(|field| field.span).collect()),
                             generics: named(&decl.generics),
+                            declared: Declared {
+                                file,
+                                span: variant.name.span,
+                            },
                         },
                     );
                     variants.push(SurfaceVariant {
@@ -563,6 +589,11 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
                     decl.name.name.clone(),
                     SurfaceItem::Handler {
                         state: lowerer.fields(&decl.state),
+                        state_spans: decl.state.iter().map(|field| field.span).collect(),
+                        declared: Declared {
+                            file,
+                            span: decl.name.span,
+                        },
                     },
                 );
             }
