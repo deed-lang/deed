@@ -378,6 +378,18 @@ fn unzip<A, B>(items: List<Pair<A, B>>) -> Sides<A, B> {
     }
 }
 
+// Map each element to a list and flatten one level. `map` then `flatten`,
+// written once so a callback that wants to expand or drop does not need two
+// walks.
+fn flat_map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> List<B>) -> List<B>
+  uses
+    r,
+{
+    for item in items with out = [] {
+        concat(out, step(item))
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -555,4 +567,18 @@ test "unzip splits pairs into two lists" {
     let one = unzip([Pair { left: 9, right: true }])
     assert one.left == [9]
     assert one.right == [true]
+}
+
+test "flat_map expands each element into a list" {
+    assert flat_map([1, 2, 3], |n: Int| [n, n]) == [1, 1, 2, 2, 3, 3]
+    assert flat_map(
+        [1, 2, 3],
+        |n: Int| if n > 1 {
+            [n]
+        } else {
+            []
+        },
+    ) == [2, 3]
+    assert flat_map([], |n: Int| [n]) == []
+    assert flat_map(["a", "bb"], |word: String| [word, word]) == ["a", "a", "bb", "bb"]
 }
