@@ -1279,16 +1279,33 @@ impl<'a> Checker<'a> {
                     SurfaceItem::Variant { .. } => "a variant",
                     _ => "not a type",
                 };
-                self.emit(
-                    Diagnostic::error(
-                        codes::NOT_A_TYPE,
-                        self.file,
-                        name.span,
-                        format!("`{}` is {what}, not a type", name.name),
-                    )
-                    .with_primary_label("not a type")
-                    .with_secondary(name.span, format!("declared in `{module}`")),
-                );
+                // Point at the real declaration when the surface carries one.
+                // The old secondary used the use-site span and said "declared
+                // in `module`", which underlined the mistake twice and never
+                // the place the name was written.
+                let declared = match other {
+                    SurfaceItem::Function { declared, .. }
+                    | SurfaceItem::Handler { declared, .. }
+                    | SurfaceItem::Variant { declared, .. }
+                    | SurfaceItem::Effect { declared, .. } => Some(*declared),
+                    _ => None,
+                };
+                let mut diagnostic = Diagnostic::error(
+                    codes::NOT_A_TYPE,
+                    self.file,
+                    name.span,
+                    format!("`{}` is {what}, not a type", name.name),
+                )
+                .with_primary_label("not a type");
+                diagnostic = match declared {
+                    Some(at) => diagnostic.with_secondary_in(
+                        at.file,
+                        at.span,
+                        format!("declared in `{module}`"),
+                    ),
+                    None => diagnostic.with_secondary(name.span, format!("declared in `{module}`")),
+                };
+                self.emit(diagnostic);
                 Ty::Unknown
             }
             // The module was not among the files being compiled, which the
@@ -2070,7 +2087,8 @@ impl<'a> Checker<'a> {
     fn imported_operation(&self, effect: DefId, name: &str) -> Option<(Vec<Ty>, Ty)> {
         let module = self.resolutions.import_module(effect)?;
         let effect_name = &self.resolutions.def(effect).name;
-        let Some(SurfaceItem::Effect { operations }) = self.world.get(module, effect_name) else {
+        let Some(SurfaceItem::Effect { operations, .. }) = self.world.get(module, effect_name)
+        else {
             return None;
         };
         operations.get(name).cloned()
@@ -2161,7 +2179,8 @@ impl<'a> Checker<'a> {
             return Vec::new();
         };
         let effect_name = &self.resolutions.def(effect).name;
-        let Some(SurfaceItem::Effect { operations }) = self.world.get(module, effect_name) else {
+        let Some(SurfaceItem::Effect { operations, .. }) = self.world.get(module, effect_name)
+        else {
             return Vec::new();
         };
         operations.keys().cloned().collect()

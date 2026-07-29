@@ -1414,6 +1414,47 @@ fn a_mismatch_on_an_imported_field_points_at_the_other_file() {
 }
 
 #[test]
+fn a_mismatch_on_an_imported_variant_field_points_at_the_other_file() {
+    // Same surface path as a record, different arm of `imported_literal`.
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Color, Rgb}\n\nfn f() -> Color {\n    Rgb { r: true, g: 0, b: 0 }\n}\n",
+        &universe_of(&["module other\n\nchoice Color {\n    Rgb { r: Int, g: Int, b: Int },\n}\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the field it is assigned to"
+    );
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "variant fields cross the boundary with a file too"
+    );
+}
+
+#[test]
+fn a_mismatch_on_an_imported_handler_state_points_at_the_other_file() {
+    // Handler state is the third kind of surface that carries field spans.
+    // Installing one is still writing a literal.
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Quiet, Log}\n\nfn f() -> () {\n    with Quiet { n: true } {\n        ()\n    }\n}\n",
+        &universe_of(&[
+            "module other\n\neffect Log {\n    fn note(line: String) -> ()\n}\n\nhandler Quiet implements Log {\n    state n: Int\n\n    fn note(line: String) -> () {}\n}\n",
+        ]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the field it is assigned to"
+    );
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "handler state crosses the boundary with a file too"
+    );
+}
+
+#[test]
 fn an_imported_generic_type_takes_the_arguments_it_declared() {
     let (_, checked) = check_source_in(
         "module a\n\nuse other.{Box}\n\nfn f(x: Box<Int>) -> Int { 0 }\n",
@@ -1433,6 +1474,29 @@ fn a_value_used_as_a_type_is_reported() {
     let (_, checked) =
         check_source("module a\n\nfn thing() -> Int { 0 }\n\nfn f(x: thing) -> Int { 0 }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_TYPE]);
+}
+
+#[test]
+fn an_imported_value_used_as_a_type_points_at_the_other_file() {
+    // The secondary used to underline the same use-site span again and only
+    // say which module. The declaration lives in the other file; that is what
+    // "declared in `other`" has to mean.
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{thing}\n\nfn f(x: thing) -> Int { 0 }\n",
+        &universe_of(&["module other\n\nfn thing() -> Int { 0 }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_TYPE]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared in `other`");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the declaration is in another module"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the use site"
+    );
 }
 
 #[test]
