@@ -267,13 +267,11 @@ fn calls_refinements_and_ordering_are_read() {
         .says("not a Result")
         .says("unwraps the success case");
 
-    message(
-        "module a\n\nrecord Point { x: Int }\n\nfn f(a: Point, b: Point) -> Bool { a < b }\n",
-    )
-    .under(codes::NOT_ORDERED)
-    .says("`<` needs an order, and there is none on `Point`")
-    .says("cannot be compared with `<`")
-    .says("`Int` and `String` are ordered");
+    message("module a\n\nrecord Point { x: Int }\n\nfn f(a: Point, b: Point) -> Bool { a < b }\n")
+        .under(codes::NOT_ORDERED)
+        .says("`<` needs an order, and there is none on `Point`")
+        .says("cannot be compared with `<`")
+        .says("`Int` and `String` are ordered");
 }
 
 #[test]
@@ -490,12 +488,10 @@ fn lists_discards_and_calls_are_read() {
     .says("`count` takes 0 arguments, but 1 was given")
     .says("wrong number of arguments");
 
-    message(
-        "module a\n\nfn f() -> Int {\n  let add = |a: Int, b: Int| { a + b }\n  add(1)\n}\n",
-    )
-    .under(codes::WRONG_ARITY)
-    .says("this takes 2 arguments, but 1 were given")
-    .says("wrong number of arguments");
+    message("module a\n\nfn f() -> Int {\n  let add = |a: Int, b: Int| { a + b }\n  add(1)\n}\n")
+        .under(codes::WRONG_ARITY)
+        .says("this takes 2 arguments, but 1 were given")
+        .says("wrong number of arguments");
 
     message("module a\n\nfn take(n: Int, m: Int) -> Int { n }\n\nfn f() -> Int { take(1) }\n")
         .under(codes::WRONG_ARITY)
