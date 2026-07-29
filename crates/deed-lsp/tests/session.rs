@@ -1705,6 +1705,65 @@ fn type_definition_of_an_effect_operation_is_its_effect() {
     );
 }
 
+// -- go to implementation ----------------------------------------------------
+
+#[test]
+fn implementation_of_an_effect_is_its_handlers() {
+    // Go to definition on `Log` lands on the effect. Implementation lands on
+    // every handler that writes `implements Log`.
+    let text = "module a\n\n\
+         effect Log {\n\
+         \x20   fn note(line: String) -> ()\n\
+         }\n\n\
+         handler Quiet implements Log {\n\
+         \x20   fn note(line: String) -> () {}\n\
+         }\n\n\
+         handler Loud implements Log {\n\
+         \x20   fn note(line: String) -> () {}\n\
+         }\n\n\
+         fn f() -> () {\n\
+         \x20   ()\n\
+         }\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, text),
+        // The effect name on line 2.
+        at(2, "textDocument/implementation", URI, 2, 7),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("implementation reply");
+    let locations = reply
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("{reply:?}"));
+    let lines: Vec<i64> = locations
+        .iter()
+        .filter_map(|loc| loc.at(&["range", "start", "line"]).and_then(Json::as_i64))
+        .collect();
+    // Handler names sit on the `handler Quiet` / `handler Loud` lines.
+    assert_eq!(lines, vec![6, 10], "{reply:?}");
+}
+
+#[test]
+fn implementation_of_a_function_is_empty() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, "module a\n\nfn f() -> Int {\n    1\n}\n"),
+        at(2, "textDocument/implementation", URI, 2, 3),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("implementation reply");
+    let locations = reply
+        .at(&["result"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("{reply:?}"));
+    assert!(locations.is_empty(), "{reply:?}");
+}
+
 // -- the library that ships inside the compiler ------------------------------
 
 /// The folder of examples in this repository.
