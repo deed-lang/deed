@@ -476,34 +476,83 @@ impl Server {
     /// boundary to do that, because a `DefId` is an index into one module's
     /// table and means nothing outside it. What crosses is what already
     /// crosses everywhere else in this compiler: the module path and the name.
+    ///
+    /// A cursor on the path itself (`scratch/one` in `use scratch/one.{double}`)
+    /// is the same question with no name on it. [`Self::document_link`] answers
+    /// that for a click on the underline; go to definition is what most editors
+    /// fire on Ctrl-click, so the path has to answer here too. A shipped module
+    /// still has no file to open.
     fn definition(&self, message: &Json) -> Json {
         let Some((document, offset, checked)) = self.locate(message) else {
             return Json::Null;
         };
 
-        let Some((_, def)) = narrowest_name(&checked, offset) else {
-            return Json::Null;
-        };
+        if let Some((_, def)) = narrowest_name(&checked, offset) {
+            if checked.resolutions.def(def).kind == DefKind::Import
+                && let Some(location) = self.imported_definition(&checked, def)
+            {
+                return location;
+            }
 
-        if checked.resolutions.def(def).kind == DefKind::Import
-            && let Some(location) = self.imported_definition(&checked, def)
-        {
-            return location;
+            let declared = checked.resolutions.def(def).span;
+            // Builtins are declared nowhere. There is no file to open and no line
+            // to jump to, and inventing one would land the cursor on whatever
+            // happens to be at the top of the file.
+            if declared.is_empty() {
+                return Json::Null;
+            }
+
+            let uri = text_document_uri(message).unwrap_or_default();
+            return Json::object(vec![
+                ("uri", Json::string(uri)),
+                ("range", self.range(document, declared)),
+            ]);
         }
 
-        let declared = checked.resolutions.def(def).span;
-        // Builtins are declared nowhere. There is no file to open and no line
-        // to jump to, and inventing one would land the cursor on whatever
-        // happens to be at the top of the file.
-        if declared.is_empty() {
-            return Json::Null;
-        }
+        // No resolved name under the cursor. The path of a `use` is not a
+        // name in the resolution table (it names a module, not a definition),
+        // so the walk above never sees it. Open the file that module is.
+        self.definition_of_use_path(&checked, offset)
+            .unwrap_or(Json::Null)
+    }
 
-        let uri = text_document_uri(message).unwrap_or_default();
-        Json::object(vec![
+    /// The file a `use` path names, when the cursor is on that path.
+    ///
+    /// `None` when the offset is not on a path, the module is not in the
+    /// workspace, or the module ships inside the compiler (no URI). Matching
+    /// [`Self::document_link`]: same target, same silence for shipped modules.
+    fn definition_of_use_path(&self, checked: &Checked, offset: u32) -> Option<Json> {
+        let import = checked
+            .module
+            .uses
+            .iter()
+            .find(|import| import.path.span.contains(offset))?;
+        let path = import.path.to_string_path();
+        let (sources, entries) = self.check_workspace();
+        let entry = entries.iter().find(|entry| {
+            entry
+                .checked
+                .module
+                .name
+                .as_ref()
+                .is_some_and(|name| name.to_string_path() == path)
+        })?;
+        let uri = entry.uri.as_ref()?;
+        // Land on the module line when there is one, otherwise the top of the
+        // file. Opening the file is the point; the exact range is a courtesy.
+        let target = entry
+            .checked
+            .module
+            .name
+            .as_ref()
+            .map(|name| name.span)
+            .filter(|span| !span.is_empty())
+            .unwrap_or_else(|| Span::at(0));
+        let text = sources.file(entry.checked.file).text();
+        Some(Json::object(vec![
             ("uri", Json::string(uri)),
-            ("range", self.range(document, declared)),
-        ])
+            ("range", range_in(text, target)),
+        ]))
     }
 
     /// Where an imported name was declared, in the file that declares it.

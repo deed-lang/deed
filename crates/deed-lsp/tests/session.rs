@@ -1516,6 +1516,60 @@ fn an_import_with_nothing_behind_it_leads_to_the_use_line() {
     );
 }
 
+#[test]
+fn a_use_path_is_a_definition_of_the_module_it_names() {
+    // Ctrl-click on `scratch/one` in `use scratch/one.{double}`. documentLink
+    // already underlines the path; go to definition is what most editors fire
+    // on that click, and it used to answer null because the path is not a
+    // resolved name.
+    let scratch = Scratch::new("definition-use-path");
+    let one = scratch.write("one.deed", EXPORTER);
+    let two = scratch.write("two.deed", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, IMPORTER),
+        // line 2 is `use scratch/one.{double}`; column 4 is the `s` of the path.
+        at(2, "textDocument/definition", &two, 2, 4),
+    ]);
+
+    let location = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("definition reply")
+        .at(&["result"])
+        .expect("a location");
+    assert_eq!(
+        location.at(&["uri"]).and_then(Json::as_str),
+        Some(one.as_str()),
+        "{location:?}"
+    );
+    // The module line of `one.deed`.
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(0),
+        "{location:?}"
+    );
+}
+
+#[test]
+fn a_use_of_a_shipped_module_is_not_a_definition() {
+    // Same silence as documentLink: there is no file behind `std/list`.
+    let text = "module p\n\nuse std/list.{map}\n\nfn f() -> Int {\n    1\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, text),
+        at(2, "textDocument/definition", URI, 2, 4),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("definition reply");
+    assert_eq!(reply.at(&["result"]), Some(&Json::Null), "{reply:?}");
+}
+
 // -- the library that ships inside the compiler ------------------------------
 
 /// The folder of examples in this repository.
