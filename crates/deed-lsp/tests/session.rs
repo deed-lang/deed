@@ -1670,6 +1670,41 @@ fn type_definition_of_an_ordinary_name_is_null() {
     assert_eq!(reply.at(&["result"]), Some(&Json::Null), "{reply:?}");
 }
 
+#[test]
+fn type_definition_of_an_effect_operation_is_its_effect() {
+    // Same parent walk as a variant. Without this test the EffectOp arm of
+    // type_definition can go dead and only the choice path stays held.
+    let text = "module a\n\n\
+         effect Log {\n\
+         \x20   fn note(line: String) -> ()\n\
+         }\n\n\
+         fn f() -> ()\n\
+         \x20 uses\n\
+         \x20   Log.note,\n\
+         {\n\
+         \x20   Log.note(\"hi\")\n\
+         }\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, text),
+        // The `note` in `Log.note("hi")`.
+        at(2, "textDocument/typeDefinition", URI, 10, 9),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("typeDefinition reply");
+    let location = reply.at(&["result"]).expect("a location");
+    // The effect name on line 2.
+    assert_eq!(
+        location
+            .at(&["range", "start", "line"])
+            .and_then(Json::as_i64),
+        Some(2),
+        "{location:?}"
+    );
+}
+
 // -- the library that ships inside the compiler ------------------------------
 
 /// The folder of examples in this repository.
