@@ -2088,6 +2088,54 @@ fn a_single_comment_line_produces_no_fold() {
     );
 }
 
+/// The comment ranges in a file, as `(startLine, endLine)`.
+fn comment_folds_in(source: &str) -> Vec<(i64, i64)> {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        folding_range(2, URI),
+    ]);
+    folds(&sent[2])
+        .iter()
+        .filter(|range| range.at(&["kind"]).and_then(Json::as_str) == Some("comment"))
+        .filter_map(|range| {
+            Some((
+                range.at(&["startLine"]).and_then(Json::as_i64)?,
+                range.at(&["endLine"]).and_then(Json::as_i64)?,
+            ))
+        })
+        .collect()
+}
+
+/// A run that ends because the next comment is a block one still folds.
+///
+/// A `/* */` is a comment too, so a run of `//` lines that meets one has
+/// ended rather than been interrupted, and what it collected up to there is
+/// still two lines a reader may want out of the way.
+#[test]
+fn a_block_comment_ends_a_run_without_taking_it_with_it() {
+    let source = "// first\n// second\n/* and a block */\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    assert_eq!(comment_folds_in(source), vec![(0, 1)]);
+}
+
+/// And a run of one that ends the same way is still a run of one.
+#[test]
+fn a_single_comment_line_before_a_block_comment_produces_no_fold() {
+    let source = "// just one\n/* and a block */\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    assert_eq!(comment_folds_in(source), Vec::new());
+}
+
+/// A run that ends because the next comment line is not the next line.
+///
+/// The blank line closes the first run in the middle of the walk rather than
+/// at the end of it, which is a different place in the code and was a
+/// different answer for as long as nothing asked.
+#[test]
+fn a_run_that_ends_at_a_gap_folds_before_the_next_one_starts() {
+    let source = "// first\n// second\n\n// apart\nmodule a\n\nfn f() -> Int {\n    1\n}\n";
+    assert_eq!(comment_folds_in(source), vec![(0, 1)]);
+}
+
 #[test]
 fn a_file_that_does_not_check_still_folds() {
     // Folding reads the parse tree, not the checker, so a bad type is no obstacle.
