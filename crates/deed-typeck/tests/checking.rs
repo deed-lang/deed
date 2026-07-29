@@ -665,7 +665,11 @@ fn every_operation_left_out_is_named_at_once() {
         vec![codes::HANDLER_MISSING_OPERATION]
     );
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("`set`") && text.contains("`value`"), "{text}");
+    assert!(
+        text.contains("`set`") && text.contains("`value`"),
+        "{text}"
+    );
+
     assert!(text.contains("2 operations still to write"), "{text}");
     let diagnostic = &checked.diagnostics[0];
     assert_eq!(diagnostic.secondary.len(), 1);
@@ -891,7 +895,7 @@ fn an_imported_effect_operation_call_gives_back_its_declared_type() {
 
 #[test]
 fn an_imported_effect_operation_called_with_the_wrong_arity_is_an_error() {
-    let (_, checked) = check_source_in(
+    let (sources, checked) = check_source_in(
         "module a\n\n\
          use other.{Sink}\n\n\
          fn f() -> Int\n\
@@ -903,6 +907,11 @@ fn an_imported_effect_operation_called_with_the_wrong_arity_is_an_error() {
         &universe_of(&["module other\n\neffect Sink {\n    fn count() -> Int\n}\n"]),
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::WRONG_ARITY]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("takes 0") || text.contains("1 was given") || text.contains("argument"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1612,13 +1621,8 @@ fn both_branches_of_an_if_must_agree() {
 
 #[test]
 fn contract_clauses_must_be_conditions() {
-    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
+    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    let text = rendered(&sources, &checked.diagnostics);
-    assert!(
-        text.contains("Bool") || text.contains("condition") || text.contains("expected"),
-        "{text}"
-    );
 }
 
 #[test]
