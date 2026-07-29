@@ -462,6 +462,65 @@ fn a_handler_operation_is_checked_against_those_types() {
 }
 
 #[test]
+fn a_closure_over_handler_state_is_reported_with_its_wording() {
+    let (sources, checked) = check_source(
+        "module a\n\n\
+         effect Give {\n\
+         \x20 fn getter() -> Fn() -> Int\n\
+         }\n\n\
+         handler A implements Give {\n\
+         \x20 state n: Int\n\n\
+         \x20 fn getter() -> Fn() -> Int { || { n } }\n\
+         }\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::CLOSURE_OVER_STATE]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`n` is handler state, and this closure can outlive the handler"),
+        "{text}"
+    );
+    assert!(text.contains("read inside a closure"), "{text}");
+    assert!(text.contains("the handler state it names"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the handler state it names"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the closed-over name"
+    );
+}
+
+#[test]
+fn assigning_to_a_parameter_is_reported_with_its_wording() {
+    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int {\n  n = 1\n  n\n}\n");
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_ASSIGNABLE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`n` is a parameter, not handler state"),
+        "{text}"
+    );
+    assert!(text.contains("cannot be assigned to"), "{text}");
+    assert!(text.contains("declared here"), "{text}");
+    assert!(
+        text.contains("handler state is the only mutable thing in Deed"),
+        "{text}"
+    );
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the assignment"
+    );
+}
+
+#[test]
 fn a_refined_state_field_is_an_obligation_like_any_other() {
     // This is the one that could not be written before. The parameter had no
     // type, unknown absorbs, and assigning it to a refined state field raised
