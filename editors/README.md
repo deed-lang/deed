@@ -79,7 +79,7 @@ against one, and go to definition and rename do not lead into one, because
 there is no file behind it to open or to change.
 
 It publishes diagnostics on open and on change, and answers hover, inlay hint,
-go to definition, references, document highlight, rename, formatting, code actions,
+go to definition, type definition, references, document highlight, rename, formatting, code actions,
 document symbol, folding range, selection range, document link, completion, signature help and workspace symbol.
 
 A hover carries the part of a signature a diagnostic never gets to. On a

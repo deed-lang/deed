@@ -145,6 +145,7 @@ impl Server {
             "textDocument/hover" => result(id, self.hover(message)),
             "textDocument/inlayHint" => result(id, self.inlay_hint(message)),
             "textDocument/definition" => result(id, self.definition(message)),
+            "textDocument/typeDefinition" => result(id, self.type_definition(message)),
             "textDocument/references" => result(id, self.references(message)),
             "textDocument/documentHighlight" => result(id, self.document_highlight(message)),
             "textDocument/prepareRename" => result(id, self.prepare_rename(message)),
@@ -556,6 +557,41 @@ impl Server {
         // so the walk above never sees it. Open the file that module is.
         self.definition_of_use_path(&checked, offset)
             .unwrap_or(Json::Null)
+    }
+
+    /// Where the type of the name under the cursor was declared.
+    ///
+    /// Go to definition on a variant lands on the variant. This lands on the
+    /// choice that owns it. Same for an effect operation and its effect. Those
+    /// are the two kinds the resolver already threads a parent through; nothing
+    /// else in this language has a type declaration separate from its name.
+    ///
+    /// `null` when the name has no parent type, which is most names and is not
+    /// an error.
+    fn type_definition(&self, message: &Json) -> Json {
+        let Some((document, offset, checked)) = self.locate(message) else {
+            return Json::Null;
+        };
+        let Some((_, def)) = narrowest_name(&checked, offset) else {
+            return Json::Null;
+        };
+        let data = checked.resolutions.def(def);
+        let parent = match data.kind {
+            DefKind::Variant | DefKind::EffectOp => data.parent,
+            _ => None,
+        };
+        let Some(parent) = parent else {
+            return Json::Null;
+        };
+        let declared = checked.resolutions.def(parent).span;
+        if declared.is_empty() {
+            return Json::Null;
+        }
+        let uri = text_document_uri(message).unwrap_or_default();
+        Json::object(vec![
+            ("uri", Json::string(uri)),
+            ("range", self.range(document, declared)),
+        ])
     }
 
     /// The file a `use` path names, when the cursor is on that path.
@@ -2511,6 +2547,7 @@ fn initialize_result() -> Json {
             ("hoverProvider", Json::Bool(true)),
             ("inlayHintProvider", Json::Bool(true)),
             ("definitionProvider", Json::Bool(true)),
+            ("typeDefinitionProvider", Json::Bool(true)),
             ("referencesProvider", Json::Bool(true)),
             ("documentHighlightProvider", Json::Bool(true)),
             // `prepareProvider` is what lets an editor grey the command out
