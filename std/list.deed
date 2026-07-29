@@ -100,6 +100,20 @@ fn fold<T, S, uses r>(items: List<T>, start: S, step: Fn(S, T) uses r -> S) -> S
     }
 }
 
+// The same, and the callback is told where the element was.
+//
+// `map_at` and `filter_at` cover turning and keeping. Folding with a position
+// is the third shape: a running total that depends on index, without inventing
+// a second accumulator just to count.
+fn fold_at<T, S, uses r>(items: List<T>, start: S, step: Fn(S, Int, T) uses r -> S) -> S
+  uses
+    r,
+{
+    for item at index in items with total = start {
+        step(total, index, item)
+    }
+}
+
 // The two that wanted to stop. `while` is read before each turn with the
 // accumulator in scope, so these say what they mean in the head of the loop
 // instead of carrying a branch through the body whose only job is to notice
@@ -231,6 +245,12 @@ test "fold answers with what it started from when the walk does nothing" {
     assert fold([1, 2, 3], 0, |sum: Int, n: Int| sum + n) == 6
     assert fold(["a", "b"], "", |joined: String, word: String| joined + word) == "ab"
     assert fold([], 7, |sum: Int, n: Int| sum + n) == 7
+}
+
+test "fold_at hands the index into the step" {
+    assert fold_at([10, 20, 30], 0, |sum: Int, index: Int, n: Int| sum + index) == 3
+    assert fold_at([10, 20, 30], 0, |sum: Int, index: Int, n: Int| sum + n) == 60
+    assert fold_at([], 7, |sum: Int, index: Int, n: Int| sum + index + n) == 7
 }
 
 // The pair that is true of an empty list and reads like a mistake until it is

@@ -233,9 +233,10 @@ written in the language is written in the language. What they were waiting for w
 to live.
 
 That is also where the list library is. `std/list` has `map`, `map_at`, `filter`, `filter_at`,
-`fold`, `any`, `all`, `count_where`, `filtered_with`, `first`, `last`, `reversed` and
-`prepend`. It was written long before there was anywhere to put it and sat under `examples/`,
-where its name said it lived in this repository and a program elsewhere had to copy it.
+`fold`, `fold_at`, `any`, `all`, `count_where`, `filtered_with`, `first`, `last`, `reversed`
+and `prepend`. It was written long before there was anywhere to put it and sat under
+`examples/`, where its name said it lived in this repository and a program elsewhere had to
+copy it.
 
 The keyed collection is there too. `std/table` has `holds`, `get`, `set`, `or_else`, `keys`,
 `values` and `size`, built out of a generic record and a `for`, and it is the answer to what
@@ -1434,10 +1435,10 @@ using an effect to get around not having a loop.
   thing the language can now express, and whether the prelude should carry one is the
   question.
 - Position is not something a callback can be handed by a library that does not already have
-  it. A `for` says where it is now, so `std/list` can write `map_at` and `filter_at` and
-  anything else it wants out of that. What is still unanswered is whether an indexed form of
-  every walk belongs in that library at all, since one of each doubles it and so far only
-  those two have been wanted.
+  it. A `for` says where it is now, so `std/list` can write `map_at`, `filter_at` and
+  `fold_at` and anything else it wants out of that. What is still unanswered is whether an
+  indexed form of every walk belongs in that library at all, since one of each doubles it and
+  so far only those three have been wanted.
 - Whether there should be traits at all. Answered for now: no, and this is the reasoning
   rather than a shrug. The question was measured against the code instead of argued, and the
   motivation people expect to find here was absorbed years ago by three decisions made for
