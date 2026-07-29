@@ -1098,7 +1098,7 @@ fn a_value_is_not_something_a_literal_can_build_either() {
 /// so saying it is not a record would be answering the second question first.
 #[test]
 fn a_type_name_gets_the_message_about_being_a_type() {
-    let (_, checked) =
+    let (sources, checked) =
         check_source("module a\n\nfn f() -> Int {\n    let c = Int { x: 1 }\n    0\n}\n");
     assert!(
         !codes_of(&checked.diagnostics).contains(&codes::NOT_A_CONSTRUCTOR),
@@ -1110,6 +1110,18 @@ fn a_type_name_gets_the_message_about_being_a_type() {
         "{:?}",
         codes_of(&checked.diagnostics)
     );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("`Int` is a type, not a value"), "{text}");
+    assert!(text.contains("`Int` cannot be used here"), "{text}");
+}
+
+#[test]
+fn naming_a_type_as_a_value_is_reported_with_its_wording() {
+    let (sources, checked) = check_source("module a\n\nfn f() -> Int { Int }\n");
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_A_VALUE]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("`Int` is a type, not a value"), "{text}");
+    assert!(text.contains("`Int` cannot be used here"), "{text}");
 }
 
 #[test]
@@ -1228,13 +1240,32 @@ fn a_wildcard_arm_on_a_choice_is_rejected() {
 
 #[test]
 fn a_bare_binding_arm_on_a_choice_is_rejected_too() {
-    let (_, checked) = check_source(
+    let (sources, checked) = check_source(
         "module a\n\nchoice E { A, B }\n\nfn f(e: E) -> Int {\n  match e {\n    A => 1,\n    other => 2,\n  }\n}\n",
     );
     assert_eq!(
         codes_of(&checked.diagnostics),
         vec![codes::CATCH_ALL_ON_CHOICE]
     );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("matches every variant of `E`"), "{text}");
+}
+
+#[test]
+fn matching_ok_on_an_int_is_a_pattern_mismatch() {
+    let (sources, checked) = check_source(
+        "module a\n\nfn f(n: Int) -> Int {\n  match n {\n    ok(x) => x,\n    _ => 0,\n  }\n}\n",
+    );
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        vec![codes::PATTERN_MISMATCH]
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("`ok(...)` matches a `Result`, and this is `Int`"),
+        "{text}"
+    );
+    assert!(text.contains("cannot match"), "{text}");
 }
 
 #[test]
