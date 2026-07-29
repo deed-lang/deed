@@ -1593,9 +1593,14 @@ fn an_if_without_an_else_must_produce_nothing() {
 
 #[test]
 fn both_branches_of_an_if_must_agree() {
-    let (_, checked) =
+    let (sources, checked) =
         check_source("module a\n\nfn f(b: Bool) -> Int {\n  if b { 1 } else { true }\n}\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("expected `Int`, found `Bool`") || text.contains("found `Bool`"),
+        "{text}"
+    );
 }
 
 // -- contracts -------------------------------------------------------------
