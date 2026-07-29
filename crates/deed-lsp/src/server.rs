@@ -146,6 +146,7 @@ impl Server {
             "textDocument/inlayHint" => result(id, self.inlay_hint(message)),
             "textDocument/definition" => result(id, self.definition(message)),
             "textDocument/typeDefinition" => result(id, self.type_definition(message)),
+            "textDocument/implementation" => result(id, self.implementation(message)),
             "textDocument/references" => result(id, self.references(message)),
             "textDocument/documentHighlight" => result(id, self.document_highlight(message)),
             "textDocument/prepareRename" => result(id, self.prepare_rename(message)),
@@ -592,6 +593,50 @@ impl Server {
             ("uri", Json::string(uri)),
             ("range", self.range(document, declared)),
         ])
+    }
+
+    /// Handlers that implement the effect under the cursor.
+    ///
+    /// Go to definition on an effect lands on the effect. This lands on every
+    /// handler that claims it, which is the question "where is this done".
+    /// A handler is found by walking the parse tree of each workspace file and
+    /// matching the name after `implements`; the resolver does not thread that
+    /// edge the other way.
+    ///
+    /// Asked of a name that is not an effect, the answer is empty: no handler
+    /// writes `implements f` for a function `f`. An empty array rather than
+    /// `null`, because "none" is an honest answer and `null` looks like a
+    /// protocol failure.
+    fn implementation(&self, message: &Json) -> Json {
+        let Some((_, offset, checked)) = self.locate(message) else {
+            return Json::Array(Vec::new());
+        };
+        let Some((_, def)) = narrowest_name(&checked, offset) else {
+            return Json::Array(Vec::new());
+        };
+        let effect_name = checked.resolutions.def(def).name.clone();
+
+        let (sources, entries) = self.check_workspace();
+        let mut locations = Vec::new();
+        for entry in &entries {
+            let Some(uri) = &entry.uri else {
+                continue;
+            };
+            for item in &entry.checked.module.items {
+                let Item::Handler(handler) = item else {
+                    continue;
+                };
+                if handler.effect.name != effect_name {
+                    continue;
+                }
+                let text = sources.file(entry.checked.file).text();
+                locations.push(Json::object(vec![
+                    ("uri", Json::string(uri)),
+                    ("range", range_in(text, handler.name.span)),
+                ]));
+            }
+        }
+        Json::Array(locations)
     }
 
     /// The file a `use` path names, when the cursor is on that path.
@@ -2584,6 +2629,7 @@ fn initialize_result() -> Json {
             ("inlayHintProvider", Json::Bool(true)),
             ("definitionProvider", Json::Bool(true)),
             ("typeDefinitionProvider", Json::Bool(true)),
+            ("implementationProvider", Json::Bool(true)),
             ("referencesProvider", Json::Bool(true)),
             ("documentHighlightProvider", Json::Bool(true)),
             // `prepareProvider` is what lets an editor grey the command out
