@@ -1,0 +1,10 @@
+# Eight megabytes, which is what the main thread gets on Linux.
+#
+# Without it the tests that check the interpreter's recursion bound overflow
+# the native stack before the bound is reached, and on Windows they did so
+# every time. The bound is a number of interpreter frames and a frame costs
+# more stack on some platforms than others, so the interpreter refusing before
+# the machine does, which is what those tests are about, cannot be left to
+# whatever stack the platform happened to pick.
+[env]
+RUST_MIN_STACK = "8388608"

@@ -86,6 +86,8 @@ pub const PRELUDE: &[&str] = &[
     "split",
     "join",
     "trim",
+    "upper",
+    "lower",
     "to_string",
     "to_int",
     "System",

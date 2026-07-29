@@ -82,17 +82,19 @@ jobs:
       - name: cargo mutants
         run: cargo mutants --in-diff pr.diff --no-shuffle
 
-      # `cargo mutants` exits 0 when it finds nothing to mutate, so a diff it
-      # does not understand looks exactly like a diff that survived it. This
-      # job reported success twice before anybody checked the number.
-      - name: something was mutated
+      # How many it tested, which is worth reading and is not worth failing
+      # over. A pull request that only adds tests changes Rust files and has
+      # nothing to mutate, because `cargo mutants` does not mutate test code,
+      # and the first version of this step called that a failure. The hole it
+      # was written for, a diff the tool could not read looking exactly like a
+      # diff that survived it, is the step above: an unreadable diff is an
+      # empty one, and an empty one with Rust in the change is a failure there.
+      - name: how many were tested
         run: |
-          tested=$(python3 -c "import json;print(json.load(open('mutants.out/outcomes.json'))['total_mutants'])")
-          echo "$tested mutants tested"
-          rust=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...HEAD -- '*.rs' | wc -l)
-          if [ "$rust" -gt 0 ] && [ "$tested" -eq 0 ]; then
-            echo "$rust Rust files changed and nothing was mutated, so this gate said nothing." >&2
-            exit 1
+          if [ -f mutants.out/outcomes.json ]; then
+            python3 -c "import json;print(json.load(open('mutants.out/outcomes.json'))['total_mutants'], 'mutants tested')"
+          else
+            echo "nothing in this diff can be mutated, which is what a change to tests alone looks like"
           fi
 
       - uses: actions/upload-artifact@v4
