@@ -170,6 +170,7 @@ pub enum SurfaceItem {
     Alias { target: Ty, generics: Vec<String> },
     Effect {
         operations: BTreeMap<String, (Vec<Ty>, Ty)>,
+        declared: Declared,
     },
     /// A handler, and the state a `with` block has to initialise.
     ///
@@ -355,13 +356,17 @@ fn expand_item(item: &SurfaceItem, aliases: &BTreeMap<(&str, &str), &Ty>) -> Sur
             target: one(target),
             generics: generics.clone(),
         },
-        SurfaceItem::Effect { operations } => SurfaceItem::Effect {
+        SurfaceItem::Effect {
+            operations,
+            declared,
+        } => SurfaceItem::Effect {
             operations: operations
                 .iter()
                 .map(|(name, (params, ret))| {
                     (name.clone(), (params.iter().map(one).collect(), one(ret)))
                 })
                 .collect(),
+            declared: *declared,
         },
         SurfaceItem::Handler {
             state,
@@ -690,7 +695,16 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
                         ),
                     );
                 }
-                items.insert(decl.name.name.clone(), SurfaceItem::Effect { operations });
+                items.insert(
+                    decl.name.name.clone(),
+                    SurfaceItem::Effect {
+                        operations,
+                        declared: Declared {
+                            file,
+                            span: decl.name.span,
+                        },
+                    },
+                );
             }
             Item::Handler(decl) => {
                 items.insert(
