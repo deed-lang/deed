@@ -1506,7 +1506,10 @@ fn all_arms_must_agree() {
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("found `Bool`") || text.contains("expected `Int`"), "{text}");
+    assert!(
+        text.contains("found `Bool`") || text.contains("expected `Int`"),
+        "{text}"
+    );
 }
 
 #[test]
