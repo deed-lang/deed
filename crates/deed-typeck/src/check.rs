@@ -4001,16 +4001,28 @@ impl<'a> Checker<'a> {
                 None => {
                     let available: Vec<&str> =
                         declared.iter().map(|field| field.name.as_str()).collect();
-                    self.emit(
-                        Diagnostic::error(
-                            codes::UNKNOWN_FIELD,
-                            self.file,
-                            init.name.span,
-                            format!("`{what}` has no field `{}`", init.name.name),
-                        )
-                        .with_primary_label("no such field")
-                        .with_note(format!("it has {}", list(&available))),
-                    );
+                    let mut diagnostic = Diagnostic::error(
+                        codes::UNKNOWN_FIELD,
+                        self.file,
+                        init.name.span,
+                        format!("`{what}` has no field `{}`", init.name.name),
+                    )
+                    .with_primary_label("no such field")
+                    .with_note(format!("it has {}", list(&available)));
+                    // Same pin MISSING_FIELDS already has: the declaration is
+                    // where the real fields live, and a wrong name is the other
+                    // half of the same question.
+                    if let Some((file, at)) = declared_here {
+                        if !at.is_empty() {
+                            diagnostic = match file {
+                                Some(other) => {
+                                    diagnostic.with_secondary_in(other, at, "declared here")
+                                }
+                                None => diagnostic.with_secondary(at, "declared here"),
+                            };
+                        }
+                    }
+                    self.emit(diagnostic);
                     if let Some(value) = &init.value {
                         self.infer(value);
                     }
