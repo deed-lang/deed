@@ -8,7 +8,9 @@
 //! run its tests, which is right for the program and would leave the library
 //! itself checked by nobody. That second one is asked module by module rather
 //! than in total, because a total says yes for as long as any one of them
-//! still has a test in it.
+//! still has a test in it, and it is asked as "wrote one and ran it" rather
+//! than "ran what it wrote", because a module that wrote none satisfies the
+//! second reading and `std/list` did.
 
 use std::path::{Path, PathBuf};
 
@@ -151,6 +153,18 @@ fn the_shipped_modules_pass_their_own_tests() {
             ran,
             declared,
             "{} writes {declared} test(s) and {ran} of them ran",
+            sources.file(checked.file).name()
+        );
+
+        // And that it wrote one at all. Asking whether a module's tests ran is
+        // free for a module with none, which is not a hypothetical: `std/list`
+        // shipped without a test of its own and what stood behind it was
+        // `examples/using_list.deed`, a program about using the library. That
+        // file is the corpus rather than the library, and a program that
+        // imports `std/list` from outside this repository does not get it.
+        assert!(
+            declared > 0,
+            "{} ships without a test of its own, so nothing here answers for it",
             sources.file(checked.file).name()
         );
         passed += ran;
