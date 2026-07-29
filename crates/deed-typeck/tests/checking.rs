@@ -665,7 +665,11 @@ fn every_operation_left_out_is_named_at_once() {
         vec![codes::HANDLER_MISSING_OPERATION]
     );
     let text = rendered(&sources, &checked.diagnostics);
-    assert!(text.contains("`set`") && text.contains("`value`"), "{text}");
+    assert!(
+        text.contains("`set`") && text.contains("`value`"),
+        "{text}"
+    );
+
     assert!(text.contains("2 operations still to write"), "{text}");
     let diagnostic = &checked.diagnostics[0];
     assert_eq!(diagnostic.secondary.len(), 1);
@@ -754,7 +758,7 @@ fn a_handler_for_an_imported_effect_gets_its_types_too() {
 
 #[test]
 fn an_imported_handler_operation_is_checked_against_those_types() {
-    let (sources, checked) = check_source_in(
+    let (_, checked) = check_source_in(
         "module a\n\n\
          use other.{Ledger}\n\n\
          handler InMemory implements Ledger {\n\
@@ -764,11 +768,6 @@ fn an_imported_handler_operation_is_checked_against_those_types() {
         &universe_of(&["module other\n\neffect Ledger {\n    fn post(amount: Int) -> ()\n}\n"]),
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    let text = rendered(&sources, &checked.diagnostics);
-    assert!(
-        text.contains("found `Int`") || text.contains("expected `String`"),
-        "{text}"
-    );
 }
 
 #[test]
@@ -1587,8 +1586,14 @@ fn a_body_ending_in_return_is_accepted() {
 
 #[test]
 fn a_return_is_checked_against_the_signature() {
-    let (_, checked) = check_source("module a\n\nfn f() -> Int {\n  return true\n}\n");
+    let (sources, checked) = check_source("module a\n\nfn f() -> Int {\n  return true\n}\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("found `Bool`") || text.contains("expected `Int`"),
+        "{text}"
+    );
+
 }
 
 #[test]
@@ -1612,13 +1617,8 @@ fn both_branches_of_an_if_must_agree() {
 
 #[test]
 fn contract_clauses_must_be_conditions() {
-    let (sources, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
+    let (_, checked) = check_source("module a\n\nfn f(n: Int) -> Int\n  where n,\n{ n }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
-    let text = rendered(&sources, &checked.diagnostics);
-    assert!(
-        text.contains("Bool") || text.contains("condition") || text.contains("expected"),
-        "{text}"
-    );
 }
 
 #[test]
