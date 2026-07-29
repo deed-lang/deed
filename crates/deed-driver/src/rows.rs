@@ -60,7 +60,7 @@ pub(crate) fn attach_fixes(
         let span = Span::new(function.sig.span.end, function.body.span.start);
         if trivia
             .iter()
-            .any(|comment| comment.span.start >= span.start && comment.span.start < span.end)
+            .any(|comment| span.contains(comment.span.start))
         {
             continue;
         }
@@ -69,8 +69,7 @@ pub(crate) fn attach_fixes(
             matches!(
                 diagnostic.code,
                 codes::UNDECLARED_EFFECT | codes::UNUSED_EFFECT
-            ) && diagnostic.primary.span.start >= function.span.start
-                && diagnostic.primary.span.start < function.span.end
+            ) && function.span.contains(diagnostic.primary.span.start)
         }) else {
             continue;
         };

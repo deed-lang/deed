@@ -48,9 +48,10 @@ pub(crate) fn attach_fixes(
 
     let start = line_start(source, first.span.start);
     let mut end = line_end(source, last.span.end);
+    let block = Span::new(start, end);
     if trivia
         .iter()
-        .any(|comment| comment.span.start >= start && comment.span.start < end)
+        .any(|comment| block.contains(comment.span.start))
     {
         return;
     }
