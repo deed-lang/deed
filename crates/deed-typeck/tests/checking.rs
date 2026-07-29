@@ -1541,15 +1541,13 @@ fn a_broken_precondition_on_an_imported_fn_points_at_the_other_file() {
         "module a\n\n\
          use other.{halve}\n\n\
          fn caller() -> Int { halve(0 - 5) }\n",
-        &universe_of(&[
-            "module other\n\n\
+        &universe_of(&["module other\n\n\
              fn halve(n: Int) -> Int\n\
              \x20 where\n\
              \x20   n >= 0,\n\
              {\n\
              \x20 n\n\
-             }\n",
-        ]),
+             }\n"]),
     );
     assert_eq!(
         codes_of(&checked.diagnostics),
