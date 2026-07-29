@@ -116,13 +116,13 @@ test "a table remembers what was put in it" {
     let t = set(set([], "a", 1), "b", 2)
     assert get(t, "a") == ok(1)
     assert get(t, "b") == ok(2)
-    assert length(t) == 2
+    assert size(t) == 2
 }
 
 test "setting a key that is there replaces it rather than adding a second" {
     let t = set(set([], "a", 1), "a", 9)
     assert get(t, "a") == ok(9)
-    assert length(t) == 1
+    assert size(t) == 1
 }
 
 test "a key that was never set is missing rather than a crash" {
@@ -137,7 +137,7 @@ test "a fallback turns the two cases of counting into one" {
     let once = set(empty, "e", or_else(empty, "e", 0) + 1)
     let twice = set(once, "e", or_else(once, "e", 0) + 1)
     assert get(twice, "e") == ok(2)
-    assert length(twice) == 1
+    assert size(twice) == 1
 }
 
 test "the keys and the values come back in the order they went in" {
@@ -156,4 +156,6 @@ test "an empty table has nothing and says so" {
     let empty = []
     assert holds(empty, "a") == false
     assert keys(empty) == []
+    assert values(empty) == []
+    assert size(empty) == 0
 }
