@@ -466,7 +466,22 @@ fn a_handler_operation_the_effect_does_not_have_is_an_error() {
         codes_of(&checked.diagnostics),
         vec![codes::OPERATION_MISMATCH]
     );
-    assert!(rendered(&sources, &checked.diagnostics).contains("does not declare an operation"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("does not declare an operation"), "{text}");
+    assert!(
+        text.contains("the effect this handler implements"),
+        "{text}"
+    );
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the effect this handler implements"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the stray operation"
+    );
 }
 
 #[test]
@@ -486,8 +501,20 @@ fn a_handler_operation_with_the_wrong_arity_is_an_error() {
         codes_of(&checked.diagnostics),
         vec![codes::OPERATION_MISMATCH]
     );
+    let text = rendered(&sources, &checked.diagnostics);
     assert!(
-        rendered(&sources, &checked.diagnostics).contains("takes 1 argument, and this takes 2")
+        text.contains("takes 1 argument, and this takes 2"),
+        "{text}"
+    );
+    assert!(
+        text.contains("the effect this handler implements"),
+        "{text}"
+    );
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(
+        diagnostic.secondary[0].message,
+        "the effect this handler implements"
     );
 }
 
