@@ -666,6 +666,29 @@ fn a_handler_literal_missing_state_says_which() {
     ));
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::MISSING_FIELDS]);
     assert!(rendered(&sources, &checked.diagnostics).contains("limit"));
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+}
+
+#[test]
+fn a_missing_field_on_an_imported_record_points_at_the_other_file() {
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Point}\n\nfn f() -> Point { Point { x: 1 } }\n",
+        &universe_of(&["module other\n\nrecord Point { x: Int, y: Int }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::MISSING_FIELDS]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the record lives in the other module"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the literal"
+    );
 }
 
 #[test]
@@ -874,6 +897,10 @@ fn a_literal_missing_fields_lists_them() {
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::MISSING_FIELDS]);
     let text = rendered(&sources, &checked.diagnostics);
     assert!(text.contains("missing `b` and `c`"), "{text}");
+    assert!(text.contains("declared here"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
 }
 
 #[test]

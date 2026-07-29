@@ -3733,7 +3733,15 @@ impl<'a> Checker<'a> {
                         let declared = declared.clone();
                         let name = self.types.name_of(def).to_string();
                         let arity = self.nominal_generics.get(&def).map_or(0, Vec::len);
-                        let args = self.check_literal_fields(&declared, fields, span, &name, arity);
+                        let declared_here = self.resolutions.def(def).span;
+                        let args = self.check_literal_fields(
+                            &declared,
+                            fields,
+                            span,
+                            &name,
+                            arity,
+                            Some((None, declared_here)),
+                        );
                         return Ty::Named { def, args };
                     }
                 }
@@ -3759,6 +3767,7 @@ impl<'a> Checker<'a> {
                             span,
                             &name,
                             arity,
+                            Some((None, variant.span)),
                         );
                     }
                     return match parent {
@@ -3774,7 +3783,15 @@ impl<'a> Checker<'a> {
                     if let Some(Nominal::Handler { state }) = self.types.nominal(def) {
                         let state = state.clone();
                         let name = self.types.name_of(def).to_string();
-                        self.check_literal_fields(&state, fields, span, &name, 0);
+                        let declared_here = self.resolutions.def(def).span;
+                        self.check_literal_fields(
+                            &state,
+                            fields,
+                            span,
+                            &name,
+                            0,
+                            Some((None, declared_here)),
+                        );
                         return Ty::Named {
                             def,
                             args: Vec::new(),
@@ -3852,7 +3869,14 @@ impl<'a> Checker<'a> {
             } => {
                 let arity = generics.len();
                 let declared = external_fields(declared, Some((field_spans, at.file)));
-                let args = self.check_literal_fields(&declared, fields, span, &name, arity);
+                let args = self.check_literal_fields(
+                    &declared,
+                    fields,
+                    span,
+                    &name,
+                    arity,
+                    Some((Some(at.file), at.span)),
+                );
                 Some(Ty::External {
                     module,
                     name: Rc::from(name.as_str()),
@@ -3877,7 +3901,14 @@ impl<'a> Checker<'a> {
                         )
                     })
                     .unwrap_or_default();
-                let args = self.check_literal_fields(&declared, fields, span, &name, arity);
+                let args = self.check_literal_fields(
+                    &declared,
+                    fields,
+                    span,
+                    &name,
+                    arity,
+                    Some((Some(at.file), at.span)),
+                );
                 Some(Ty::External {
                     module,
                     name: choice,
@@ -3890,7 +3921,14 @@ impl<'a> Checker<'a> {
                 declared: at,
             } => {
                 let declared = external_fields(state, Some((state_spans, at.file)));
-                self.check_literal_fields(&declared, fields, span, &name, 0);
+                self.check_literal_fields(
+                    &declared,
+                    fields,
+                    span,
+                    &name,
+                    0,
+                    Some((Some(at.file), at.span)),
+                );
                 Some(Ty::External {
                     module,
                     name: Rc::from(name.as_str()),
@@ -3923,6 +3961,7 @@ impl<'a> Checker<'a> {
         span: Span,
         what: &str,
         arity: usize,
+        declared_here: Option<(Option<FileId>, Span)>,
     ) -> Vec<Ty> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut given: Vec<(FieldTy, Ty, &FieldInit, Span)> = Vec::new();
@@ -3998,18 +4037,25 @@ impl<'a> Checker<'a> {
             .collect();
 
         if !missing.is_empty() {
-            self.emit(
-                Diagnostic::error(
-                    codes::MISSING_FIELDS,
-                    self.file,
-                    span,
-                    format!("`{what}` is missing {}", list(&missing)),
-                )
-                .with_primary_label("incomplete literal")
-                .with_note(
-                    "every field has to be given, because a partially built value is not a value",
-                ),
+            let mut diagnostic = Diagnostic::error(
+                codes::MISSING_FIELDS,
+                self.file,
+                span,
+                format!("`{what}` is missing {}", list(&missing)),
+            )
+            .with_primary_label("incomplete literal")
+            .with_note(
+                "every field has to be given, because a partially built value is not a value",
             );
+            if let Some((file, at)) = declared_here {
+                if !at.is_empty() {
+                    diagnostic = match file {
+                        Some(other) => diagnostic.with_secondary_in(other, at, "declared here"),
+                        None => diagnostic.with_secondary(at, "declared here"),
+                    };
+                }
+            }
+            self.emit(diagnostic);
         }
 
         (0..arity)
