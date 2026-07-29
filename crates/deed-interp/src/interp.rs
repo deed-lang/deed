@@ -1491,6 +1491,15 @@ impl<'a> Interp<'a> {
                     ("trim", Some(Value::Str(text))) => {
                         Ok(Value::str(text.trim_matches(WHITESPACE)))
                     }
+                    // The twenty-six letters and nothing else, for the reason
+                    // `trim` gives above: deciding what an uppercase letter is
+                    // in general needs a table, and a name this short may not
+                    // depend on one a reader cannot see. Every other character
+                    // comes back as it went in, so text in a script with no
+                    // case survives rather than being mangled by a rule that
+                    // was not written for it.
+                    ("upper", Some(Value::Str(text))) => Ok(Value::str(text.to_ascii_uppercase())),
+                    ("lower", Some(Value::Str(text))) => Ok(Value::str(text.to_ascii_lowercase())),
                     // Text that is not a number is not a mistake in the
                     // caller: it usually came from a file or an argument, and
                     // deciding what to do about it is the caller's job.

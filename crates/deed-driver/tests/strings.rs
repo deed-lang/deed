@@ -249,3 +249,72 @@ fn what_trim_is_not_for() {
          \x20 assert join(split(\"a-b-c\", \"-\"), \"+\") == \"a+b+c\"",
     );
 }
+
+// -- case ------------------------------------------------------------------
+
+#[test]
+fn upper_and_lower_take_text_and_give_text() {
+    check_ok("module a\n\nfn f(text: String) -> String { upper(text) }\n");
+    check_ok("module a\n\nfn f(text: String) -> String { lower(text) }\n");
+
+    let (_, checked) = check("module a\n\nfn f(n: Int) -> String { upper(n) }\n");
+    assert_eq!(
+        codes_of(&checked.diagnostics),
+        [deed_typeck::codes::TYPE_MISMATCH]
+    );
+}
+
+#[test]
+fn case_is_the_twenty_six_letters_and_nothing_else() {
+    // The same bargain `trim` makes about whitespace. Deciding what an
+    // uppercase letter is in general needs a table, and a name this short may
+    // not depend on one a reader of the signature cannot see.
+    expect_pass(
+        "\x20 assert upper(\"deed lang 1\") == \"DEED LANG 1\"\n\
+         \x20 assert lower(\"DEED Lang 1\") == \"deed lang 1\"",
+    );
+}
+
+#[test]
+fn a_character_outside_the_alphabet_comes_back_as_it_went_in() {
+    // Text in a script with no case survives rather than being mangled by a
+    // rule that was not written for it, and a digit is not a letter.
+    expect_pass(
+        "\x20 assert upper(\"\u{fc}n\u{ef}code\") == \"\u{fc}N\u{ef}CODE\"\n\
+         \x20 assert lower(\"\u{dc}N\u{cf}CODE\") == \"\u{dc}n\u{cf}code\"\n\
+         \x20 assert upper(\"1-2 3\") == \"1-2 3\"",
+    );
+}
+
+#[test]
+fn case_of_nothing_is_nothing() {
+    // The empty string is the one input every text operation here has to
+    // answer for, and it is the one that used to fall off the end.
+    expect_pass(
+        "\x20 assert upper(\"\") == \"\"\n\
+         \x20 assert lower(\"\") == \"\"",
+    );
+}
+
+#[test]
+fn case_cannot_be_written_in_the_language() {
+    // Why these two are in the prelude at all, which is the test every name
+    // there has to pass. A program can reach the characters of a string with
+    // `split(s, "")`, and there is nothing that turns one of them into a
+    // number: `to_int` speaks about text that spells a number, so it covers
+    // the ten digits and no letter.
+    let (sources, checked) = check(
+        "module a\n\nfn code_of(letter: String) -> Result<Int, String> {\n    to_int(letter)\n}\n\n\
+         test \"a letter is not a number\" {\n    assert code_of(\"a\") == err(\"`a` is not a number\")\n}\n",
+    );
+    assert!(
+        checked.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+    let (_, outcomes) = run(
+        "module a\n\ntest \"a letter is not a number\" {\n\x20   assert to_int(\"a\") == err(\"`a` is not a number\")\n}\n",
+    );
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].failure.is_none());
+}
