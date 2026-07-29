@@ -1281,3 +1281,161 @@ fn a_module_that_ships_with_nothing_is_still_unknown() {
         stdout(&output)
     );
 }
+
+// -- every sentence, read --------------------------------------------------
+//
+// A sentence that nothing holds can be reworded into nonsense, or deleted, and
+// the build stays green. One test per distinct sentence, asserting the words a
+// person reads rather than only that something failed. The stream matters too:
+// errors belong on stderr and results belong on stdout.
+//
+// Two sentences printed by `main.rs` cannot be reached from the command line
+// today and so have no test below:
+//
+// - "<name>: still changing after several rounds, run `deed fix` again" (stdout)
+//   requires a fix that oscillates. The driver comment says "nothing in the
+//   compiler does this today", so no test input can trigger it.
+//
+// - "error: <name>: fixing made it worse, so nothing was written. This is a
+//   compiler bug, please report it." (stderr) requires a fix that increases the
+//   error count. No such fix exists in the compiler today.
+
+/// "error: no `.deed` files found"
+#[test]
+fn no_deed_files_says_the_full_sentence() {
+    let scratch = Scratch::new("sentence-no-deed");
+    scratch.write("readme.txt", "nothing here");
+
+    let output = run(&["check", scratch.path().to_str().unwrap()]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("error: no `.deed` files found"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "");
+}
+
+/// "error: no `main` found, so there is nothing to run"
+///
+/// "so there is nothing to run" is the part most likely to be trimmed away
+/// on a refactor: it is the reason, not just the diagnosis.
+#[test]
+fn no_main_says_the_full_sentence() {
+    let scratch = Scratch::new("sentence-no-main");
+    let file = scratch.write("quiet.deed", "module a\n\nfn f() -> Int { 0 }\n");
+
+    let output = run(&["run", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("no `main` found, so there is nothing to run"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "");
+}
+
+/// "error: more than one `main`, in <a> and <b>"
+///
+/// Both filenames are the point. An assertion that stops at "more than one"
+/// would let the names disappear without anyone noticing.
+#[test]
+fn two_mains_names_both_files_in_the_sentence() {
+    let scratch = Scratch::new("sentence-two-mains");
+    scratch.write(
+        "alpha.deed",
+        "module alpha\n\nfn main(sys: System) -> Int { 0 }\n",
+    );
+    scratch.write(
+        "beta.deed",
+        "module beta\n\nfn main(sys: System) -> Int { 0 }\n",
+    );
+
+    let output = run(&["run", scratch.path().to_str().unwrap()]);
+    assert_eq!(code(&output), 2);
+    let text = stderr(&output);
+    assert!(text.contains("more than one `main`, in"), "{text}");
+    assert!(text.contains("alpha.deed"), "{text}");
+    assert!(text.contains("beta.deed"), "{text}");
+    assert_eq!(stdout(&output), "");
+}
+
+/// "error: <path>: <io error>"
+///
+/// The path is in the sentence so the reader knows which file caused the
+/// problem. A test that only checks the exit code or "error:" would let
+/// the path disappear.
+#[test]
+fn a_path_io_error_names_the_path() {
+    let output = run(&["check", "not-a-real-path.deed"]);
+    assert_eq!(code(&output), 2);
+    let text = stderr(&output);
+    assert!(text.starts_with("error: "), "{text}");
+    assert!(text.contains("not-a-real-path.deed"), "{text}");
+    assert_eq!(stdout(&output), "");
+}
+
+/// "deed <version>" goes to stdout, not stderr.
+///
+/// Version is a result, not an error, so it belongs on stdout where a
+/// script can capture it.
+#[test]
+fn version_is_on_stdout_not_stderr() {
+    let output = run(&["--version"]);
+    assert_eq!(code(&output), 0);
+    assert!(stdout(&output).starts_with("deed "), "{}", stdout(&output));
+    assert_eq!(stderr(&output), "");
+}
+
+/// "no tests found" goes to stdout, not stderr.
+///
+/// Test results are on stdout so they can be piped. Mixing them with stderr
+/// would break any pipeline that captures only one stream.
+#[test]
+fn no_tests_found_is_on_stdout() {
+    let scratch = Scratch::new("sentence-no-tests");
+    let file = scratch.write("quiet.deed", "module a\n\nfn f() -> Int { 0 }\n");
+
+    let output = run(&["test", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0);
+    assert!(
+        stdout(&output).contains("no tests found"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(stderr(&output), "");
+}
+
+/// `deed fmt` on a file that does not parse writes the diagnostic to stdout.
+///
+/// The stream is stdout because `fmt` output goes there (the list of
+/// rewritten files, and the diagnostics for files it could not rewrite).
+/// Stderr is empty so a caller piping stdout sees the full picture.
+#[test]
+fn fmt_diagnostic_for_broken_file_is_on_stdout() {
+    let scratch = Scratch::new("sentence-fmt-broken");
+    let file = scratch.write("broken.deed", "module a\n\nfn f( -> Int {\n");
+
+    let output = run(&["fmt", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    assert!(stdout(&output).contains("DEED"), "{}", stdout(&output));
+    assert_eq!(stderr(&output), "");
+}
+
+/// "<path>: N fix[es]" goes to stdout, not stderr.
+///
+/// Fix results are on stdout so a script can distinguish them from errors.
+/// "1 fix" rather than "1 fixes" checks the singular-plural branch too.
+#[test]
+fn fix_count_is_on_stdout() {
+    let scratch = Scratch::new("sentence-fix-count");
+    let file = scratch.write(
+        "typo.deed",
+        "module a\n\nfn balance() -> Int { 0 }\n\nfn f() -> Int { balanse() }\n",
+    );
+
+    let output = run(&["fix", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("1 fix"), "{}", stdout(&output));
+    assert_eq!(stderr(&output), "");
+}
