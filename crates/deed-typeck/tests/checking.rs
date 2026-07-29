@@ -738,6 +738,29 @@ fn an_imported_effect_operation_called_with_the_wrong_arity_is_an_error() {
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::WRONG_ARITY]);
 }
 
+#[test]
+fn a_wrong_arity_call_to_an_imported_fn_points_at_the_other_file() {
+    // WRONG_ARITY already puts "declared here" on signature.file when the
+    // callee crossed a module boundary. Pin the file so a regression that only
+    // keeps the phrase still fails.
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{add}\n\nfn f() -> Int { add(1) }\n",
+        &universe_of(&["module other\n\nfn add(a: Int, b: Int) -> Int { a + b }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::WRONG_ARITY]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the signature lives in the other module"
+    );
+    assert_ne!(
+        diagnostic.secondary[0].span, diagnostic.primary.span,
+        "the secondary must not re-underline the call site"
+    );
+}
+
 // -- refinements -----------------------------------------------------------
 
 #[test]
