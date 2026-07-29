@@ -241,6 +241,16 @@ impl Server {
                 .min_by_key(|span| (span.end - span.start, span.start));
         }
 
+        // A `use` path is not a resolved name and has no type. Go to definition
+        // and documentLink already open the file; hover should still say what
+        // module it is and whether this workspace can open it.
+        if range.is_none() {
+            if let Some((path_span, about)) = self.hover_use_path(&checked, offset) {
+                lines.push(about);
+                range = Some(path_span);
+            }
+        }
+
         let Some(range) = range else {
             // Nothing known about this position is not an error, and an editor
             // shows an empty tooltip rather than nothing when told so.
@@ -257,6 +267,38 @@ impl Server {
             ),
             ("range", self.range(document, range)),
         ])
+    }
+
+    /// What to say about a `use` path under the cursor.
+    ///
+    /// The path names a module, not a definition, so the ordinary name and type
+    /// walks miss it. Three answers, matching go to definition and documentLink:
+    /// a file in this workspace, a module that ships inside the compiler, or
+    /// nothing known (already an error on the line).
+    fn hover_use_path(&self, checked: &Checked, offset: u32) -> Option<(Span, String)> {
+        let import = checked
+            .module
+            .uses
+            .iter()
+            .find(|import| import.path.span.contains(offset))?;
+        let path = import.path.to_string_path();
+        let (_, entries) = self.check_workspace();
+        let entry = entries.iter().find(|entry| {
+            entry
+                .checked
+                .module
+                .name
+                .as_ref()
+                .is_some_and(|name| name.to_string_path() == path)
+        });
+        let about = match entry {
+            Some(entry) if entry.uri.is_some() => {
+                format!("`{path}`, a module in this workspace")
+            }
+            Some(_) => format!("`{path}`, a module that ships with the compiler"),
+            None => format!("`{path}`, a module"),
+        };
+        Some((import.path.span, about))
     }
 
     /// The tier of every obligation in view, written where it was settled.

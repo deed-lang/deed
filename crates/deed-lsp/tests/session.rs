@@ -636,6 +636,50 @@ fn hovering_over_nothing_is_null_rather_than_an_empty_tooltip() {
     assert!(sent[2].at(&["result"]).is_some_and(Json::is_null));
 }
 
+#[test]
+fn hovering_a_use_path_names_the_module() {
+    // Go to definition and documentLink open the file. Hover on the path used
+    // to be null because a path is not a resolved name and has no type.
+    let scratch = Scratch::new("hover-use-path");
+    scratch.write("one.deed", EXPORTER);
+    let two = scratch.write("two.deed", IMPORTER);
+
+    let sent = session(&[
+        initialize_in(1, &scratch),
+        did_open(&two, IMPORTER),
+        // line 2: `use scratch/one.{double}` — column 4 is on the path.
+        at(2, "textDocument/hover", &two, 2, 4),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("hover reply");
+    let text = hover_text(reply);
+    assert!(
+        text.contains("`scratch/one`, a module in this workspace"),
+        "{text}"
+    );
+}
+
+#[test]
+fn hovering_a_shipped_use_path_says_it_ships() {
+    let text = "module p\n\nuse std/list.{map}\n\nfn f() -> Int {\n    1\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, text),
+        at(2, "textDocument/hover", URI, 2, 4),
+    ]);
+    let reply = sent
+        .iter()
+        .find(|m| m.at(&["id"]).and_then(Json::as_i64) == Some(2))
+        .expect("hover reply");
+    let shown = hover_text(reply);
+    assert!(
+        shown.contains("`std/list`, a module that ships with the compiler"),
+        "{shown}"
+    );
+}
+
 // -- the tier, where the reader is ------------------------------------------
 
 /// One file carrying one obligation of each kind, and one contract of each
