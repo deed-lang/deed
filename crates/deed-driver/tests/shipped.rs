@@ -15,9 +15,10 @@
 use std::path::{Path, PathBuf};
 
 use deed_ast::Item;
-use deed_diagnostics::SourceMap;
+use deed_diagnostics::{SourceMap, Span};
 use deed_driver::{check_all, shipped_modules, shipped_source};
 use deed_interp::{Program, run_tests};
+use deed_resolve::{DefId, DefKind};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -173,5 +174,69 @@ fn the_shipped_modules_pass_their_own_tests() {
     assert!(
         passed > 0,
         "the shipped modules ran no tests, so this proves nothing about them"
+    );
+}
+
+/// Every function a shipped module declares is named by one of its own tests.
+///
+/// A module that carries tests is not the same as a module whose promises are
+/// written down. `std/table` carried seven and none of them said `size`; the
+/// list library called `prepend` from `reversed` and from nowhere a test
+/// could see. Nothing here has a private half, so every `fn` in one of these
+/// files is part of what the compiler hands to a program that imports it, and
+/// a function nothing tests is a promise nobody made.
+///
+/// Named rather than reached. A helper called by a function a test calls does
+/// run, but what runs it is another claim in the same file, and the point of
+/// asking is that each name in the surface says for itself what it answers.
+#[test]
+fn every_function_a_shipped_module_declares_is_named_by_one_of_its_tests() {
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+    for module in shipped_modules() {
+        let text = shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
+    }
+
+    let mut asked = 0;
+    for checked in check_all(&sources, &ids) {
+        let tests: Vec<Span> = checked
+            .module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Test(test) => Some(test.span),
+                _ => None,
+            })
+            .collect();
+
+        // Where each name in this file is mentioned, off the resolver rather
+        // than off the text, so that a function whose name is a word inside a
+        // string or a comment is not counted as tested by it.
+        let mentioned: Vec<(Span, DefId)> = checked.resolutions.names().collect();
+
+        for (def, data) in checked.resolutions.defs() {
+            if data.kind != DefKind::Function {
+                continue;
+            }
+            let named = mentioned.iter().any(|(span, mention)| {
+                *mention == def
+                    && tests
+                        .iter()
+                        .any(|test| span.start >= test.start && span.end <= test.end)
+            });
+            assert!(
+                named,
+                "`{}` in {} is not named by any test in that file, so nothing in the library says what it answers",
+                data.name,
+                sources.file(checked.file).name()
+            );
+            asked += 1;
+        }
+    }
+
+    assert!(
+        asked > 0,
+        "no shipped module declares a function, so this asked nothing"
     );
 }
