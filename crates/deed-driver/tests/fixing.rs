@@ -166,6 +166,27 @@ const EFFECTS: &str = "module a\n\n\
      \x20   fn ring() -> ()\n\
      }\n\n";
 
+/// What each diagnostic offers, as `(what it calls the repair, what it writes)`.
+///
+/// Read before anything is applied. `fix` runs until the file stops changing,
+/// so a repair attached to the wrong diagnostic still comes out right on the
+/// second round and the file cannot tell anybody which round it took.
+fn repairs(source: &str) -> Vec<(String, String)> {
+    diagnose(source)
+        .into_iter()
+        .filter_map(|diagnostic| {
+            let fix = diagnostic.fix?;
+            let written = fix
+                .edits
+                .iter()
+                .map(|edit| edit.replacement.clone())
+                .collect::<Vec<_>>()
+                .join("");
+            Some((fix.message, written))
+        })
+        .collect()
+}
+
 #[test]
 fn a_row_that_is_too_narrow_is_written_out() {
     let source = format!(
@@ -201,6 +222,11 @@ fn a_row_that_is_too_wide_loses_what_it_does_not_use() {
     assert!(result.contains("fn quiet() -> Int {\n"), "{result}");
     assert!(!result.contains("uses"), "{result}");
     assert!(diagnose(&result).is_empty(), "{result}");
+
+    // A repair that takes the clause away rather than rewriting it says so.
+    let offered = repairs(&source);
+    assert_eq!(offered.len(), 1, "{offered:?}");
+    assert_eq!(offered[0].0, "remove the `uses` clause");
 }
 
 #[test]
@@ -226,6 +252,38 @@ fn a_row_that_is_wrong_in_both_directions_is_one_repair() {
         "{}",
         result.source
     );
+    assert!(diagnose(&result.source).is_empty(), "{}", result.source);
+}
+
+/// Two functions, two rows, and each repair is offered on its own complaint.
+///
+/// The repair is written per function and attached to the diagnostic that
+/// belongs to it. Attaching it to whichever diagnostic carries the right code
+/// would put the second function's row on the first function's complaint and
+/// leave the second carrying nothing. `fix` would still come out right, on the
+/// round after, which is why this reads the offers rather than the file.
+#[test]
+fn two_functions_each_get_the_row_they_perform() {
+    let source = format!(
+        "{EFFECTS}fn talks() -> Int {{\n\
+         \x20   Log.note(\"hi\")\n\
+         \x20   1\n\
+         }}\n\n\
+         fn rings() -> Int {{\n\
+         \x20   Bell.ring()\n\
+         \x20   2\n\
+         }}\n"
+    );
+
+    let offered = repairs(&source);
+    assert_eq!(offered.len(), 2, "{offered:?}");
+    assert_eq!(offered[0].0, "declare `Log.note`");
+    assert!(offered[0].1.contains("Log.note"), "{offered:?}");
+    assert_eq!(offered[1].0, "declare `Bell.ring`");
+    assert!(offered[1].1.contains("Bell.ring"), "{offered:?}");
+
+    let result = fix(&source, diagnose);
+    assert_eq!(result.applied, 2);
     assert!(diagnose(&result.source).is_empty(), "{}", result.source);
 }
 
@@ -379,10 +437,39 @@ fn a_comment_above_the_imports_is_not_in_the_way() {
     );
 }
 
+/// And neither is one on the line straight after it.
+///
+/// The block ends just past the newline that ends the last import, which is
+/// exactly where a comment on the next line starts. Reading that edge as
+/// inside the block would decline the repair on a comment the rewrite never
+/// touches.
+#[test]
+fn a_comment_directly_below_the_imports_is_not_in_the_way() {
+    let source = "module a\n\nuse dep.{used, spare}\n// and what it does with them\n\nfn f() -> Int {\n    used()\n}\n";
+    let result = fixed_with(source, DEP);
+    assert_eq!(
+        result,
+        "module a\n\nuse dep.{used}\n// and what it does with them\n\nfn f() -> Int {\n    used()\n}\n"
+    );
+}
+
 #[test]
 fn an_import_that_is_used_is_left_where_it_is() {
     let source = "module a\n\nuse dep.{used}\n\nfn f() -> Int {\n    used()\n}\n";
     assert_eq!(fixed_with(source, DEP), source);
+}
+
+/// The line the block ends on is the whole line, not the last thing on it.
+///
+/// `deed fix` is handed files people typed rather than files the formatter
+/// wrote, so the newline is not always the next character after the import.
+/// Measuring to the end of the text instead of to the end of the line leaves
+/// the trailing spaces behind and takes the wrong bytes with them.
+#[test]
+fn trailing_space_after_an_import_goes_with_the_line() {
+    let source = "module a\n\nuse dep.{spare}   \n\nfn f() -> Int {\n    1\n}\n";
+    let result = fixed_with(source, DEP);
+    assert_eq!(result, "module a\n\nfn f() -> Int {\n    1\n}\n");
 }
 
 // -- what it declines to do ------------------------------------------------
