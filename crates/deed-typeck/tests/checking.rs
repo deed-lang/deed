@@ -967,6 +967,38 @@ fn a_function_is_not_something_a_literal_can_build() {
         "{text}"
     );
     assert!(text.contains("cannot be built with a literal"), "{text}");
+    assert!(text.contains("declared here"), "{text}");
+    let diagnostic = checked
+        .diagnostics
+        .iter()
+        .find(|d| d.code == codes::NOT_A_CONSTRUCTOR)
+        .expect("NOT_A_CONSTRUCTOR");
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+}
+
+#[test]
+fn an_imported_function_is_not_something_a_literal_can_build() {
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{g}\n\nfn f() -> Int {\n    let a = g { x: 1 }\n    0\n}\n",
+        &universe_of(&["module other\n\nfn g() -> Int { 0 }\n"]),
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&codes::NOT_A_CONSTRUCTOR),
+        "{:?}",
+        codes_of(&checked.diagnostics)
+    );
+    let diagnostic = checked
+        .diagnostics
+        .iter()
+        .find(|d| d.code == codes::NOT_A_CONSTRUCTOR)
+        .expect("NOT_A_CONSTRUCTOR");
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the function lives in the other module"
+    );
 }
 
 /// The same for an ordinary value, which is the shape somebody reaches for

@@ -3833,15 +3833,48 @@ impl<'a> Checker<'a> {
         let path_ty = self.infer(path);
         if !path_ty.absorbs() {
             let described = self.types.describe(&path_ty);
-            self.emit(
-                Diagnostic::error(
-                    codes::NOT_A_CONSTRUCTOR,
-                    self.file,
-                    path.span(),
-                    format!("{described} is not a record or a variant"),
-                )
-                .with_primary_label("cannot be built with a literal"),
-            );
+            let mut diagnostic = Diagnostic::error(
+                codes::NOT_A_CONSTRUCTOR,
+                self.file,
+                path.span(),
+                format!("{described} is not a record or a variant"),
+            )
+            .with_primary_label("cannot be built with a literal");
+            // A named head that is the wrong kind of declaration: point at it.
+            // Values without a declaration (parameters, locals) stay primary-only.
+            if let Some(def) = ctor {
+                let at = self.resolutions.def(def).span;
+                if !at.is_empty() {
+                    diagnostic = match self.resolutions.def(def).kind {
+                        DefKind::Import => {
+                            // Prefer the other file when the import is a real
+                            // export; fall back to the use-site name if not.
+                            match self.resolutions.import_module(def) {
+                                Some(module) => {
+                                    let name = self.resolutions.def(def).name.clone();
+                                    match self.world.get(module, &name) {
+                                        Some(
+                                            SurfaceItem::Function { declared, .. }
+                                            | SurfaceItem::Handler { declared, .. }
+                                            | SurfaceItem::Effect { declared, .. }
+                                            | SurfaceItem::Variant { declared, .. }
+                                            | SurfaceItem::Record { declared, .. },
+                                        ) => diagnostic.with_secondary_in(
+                                            declared.file,
+                                            declared.span,
+                                            "declared here",
+                                        ),
+                                        _ => diagnostic.with_secondary(at, "declared here"),
+                                    }
+                                }
+                                None => diagnostic.with_secondary(at, "declared here"),
+                            }
+                        }
+                        _ => diagnostic.with_secondary(at, "declared here"),
+                    };
+                }
+            }
+            self.emit(diagnostic);
         }
         for field in fields {
             match &field.value {
