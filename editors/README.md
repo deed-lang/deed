@@ -78,8 +78,8 @@ the command line. They are context rather than files: nothing is reported
 against one, and go to definition and rename do not lead into one, because
 there is no file behind it to open or to change.
 
-It publishes diagnostics on open and on change, and answers hover, go to
-definition, references, rename, formatting, code actions, document symbol,
+It publishes diagnostics on open and on change, and answers hover, inlay hint,
+go to definition, references, rename, formatting, code actions, document symbol,
 completion, signature help and workspace symbol.
 
 A hover carries the part of a signature a diagnostic never gets to. On a
@@ -92,6 +92,13 @@ discharged contract from a question nobody asked. The contract comes from the
 file being hovered, so a name imported from another module answers with its
 type and not its contract, and go to definition is one keypress away from the
 rest.
+
+The inlay hints are the same tiers, said without being asked. A hover answers
+about one position and a screen of code has many, so finding out how much of
+what you are looking at was proven meant hovering each call in turn. Every
+obligation in the range the editor asks about gets its tier written at the end
+of what it covers, and two that end in the same place and landed in the same
+tier are one hint rather than two.
 
 Full sync only. The server asks for whole documents rather than incremental
 changes, because a sync that can drift out of step with the file is an
