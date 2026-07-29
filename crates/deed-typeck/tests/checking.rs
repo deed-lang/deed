@@ -1298,10 +1298,15 @@ fn a_variant_literal_has_the_type_of_its_choice() {
 
 #[test]
 fn a_variant_literal_checks_its_fields() {
-    let (_, checked) = check_source(
+    let (sources, checked) = check_source(
         "module a\n\nchoice E { Full { n: Int } }\n\nfn f() -> E { Full { n: true } }\n",
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("found `Bool`") || text.contains("expected `Int`"),
+        "{text}"
+    );
 }
 
 // -- matches ---------------------------------------------------------------
