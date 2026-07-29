@@ -1282,7 +1282,13 @@ fn a_match_missing_variants_names_them() {
         codes_of(&checked.diagnostics),
         vec![codes::NON_EXHAUSTIVE_MATCH]
     );
-    assert!(rendered(&sources, &checked.diagnostics).contains("cover `B` and `C`"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("this match does not cover `B` and `C`"),
+        "{text}"
+    );
+    assert!(text.contains("not exhaustive"), "{text}");
+    assert!(text.contains("every variant of `E` needs an arm"), "{text}");
 }
 
 #[test]
@@ -1367,7 +1373,9 @@ fn naming_several_does_not_make_a_match_complete() {
         codes_of(&checked.diagnostics),
         vec![codes::NON_EXHAUSTIVE_MATCH]
     );
-    assert!(rendered(&sources, &checked.diagnostics).contains("cover `C`"));
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("this match does not cover `C`"), "{text}");
+    assert!(text.contains("not exhaustive"), "{text}");
 }
 
 #[test]
