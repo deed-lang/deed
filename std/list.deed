@@ -319,6 +319,23 @@ fn enumerate<T>(items: List<T>) -> List<Pair<Int, T>> {
     }
 }
 
+// Overlapping slices of `size` consecutive elements, in order. A size that is
+// not positive, or longer than the list, is an empty answer rather than an
+// error: the call is usually `windows(xs, n)` where `n` came from arithmetic.
+fn windows<T>(items: List<T>, size: Int) -> List<List<T>> {
+    if size <= 0 {
+        []
+    } else {
+        for item at index in items with out = [] {
+            if index + size <= length(items) {
+                push(out, take(drop(items, index), size))
+            } else {
+                out
+            }
+        }
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -460,4 +477,12 @@ test "enumerate pairs each element with its index" {
     ]
     assert enumerate(["a"]) == [Pair { left: 0, right: "a" }]
     assert enumerate([]) == []
+}
+
+test "windows walks overlapping slices" {
+    assert windows([1, 2, 3, 4], 2) == [[1, 2], [2, 3], [3, 4]]
+    assert windows([1, 2, 3], 3) == [[1, 2, 3]]
+    assert windows([1, 2], 3) == []
+    assert windows([1, 2, 3], 0) == []
+    assert windows([], 1) == []
 }
