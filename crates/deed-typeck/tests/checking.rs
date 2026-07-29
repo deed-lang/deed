@@ -754,7 +754,7 @@ fn a_handler_for_an_imported_effect_gets_its_types_too() {
 
 #[test]
 fn an_imported_handler_operation_is_checked_against_those_types() {
-    let (_, checked) = check_source_in(
+    let (sources, checked) = check_source_in(
         "module a\n\n\
          use other.{Ledger}\n\n\
          handler InMemory implements Ledger {\n\
@@ -764,6 +764,11 @@ fn an_imported_handler_operation_is_checked_against_those_types() {
         &universe_of(&["module other\n\neffect Ledger {\n    fn post(amount: Int) -> ()\n}\n"]),
     );
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::TYPE_MISMATCH]);
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("found `Int`") || text.contains("expected `String`"),
+        "{text}"
+    );
 }
 
 #[test]
