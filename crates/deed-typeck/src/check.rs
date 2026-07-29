@@ -1103,7 +1103,14 @@ impl<'a> Checker<'a> {
                     DefKind::Import => return self.imported_ty(def, name, &lowered_args, *span),
                     DefKind::Record | DefKind::Choice => {
                         let arity = self.nominal_generics.get(&def).map_or(0, Vec::len);
-                        if !self.check_type_arity(&name.name, arity, lowered_args.len(), *span) {
+                        let declared_here = self.resolutions.def(def).span;
+                        if !self.check_type_arity(
+                            &name.name,
+                            arity,
+                            lowered_args.len(),
+                            *span,
+                            Some((None, declared_here)),
+                        ) {
                             return Ty::Unknown;
                         }
                         return Ty::Named {
@@ -1118,7 +1125,14 @@ impl<'a> Checker<'a> {
                         // afterwards, which is what makes it a name for a type
                         // rather than a type.
                         let arity = self.nominal_generics.get(&def).map_or(0, Vec::len);
-                        if !self.check_type_arity(&name.name, arity, lowered_args.len(), *span) {
+                        let declared_here = self.resolutions.def(def).span;
+                        if !self.check_type_arity(
+                            &name.name,
+                            arity,
+                            lowered_args.len(),
+                            *span,
+                            Some((None, declared_here)),
+                        ) {
                             return Ty::Unknown;
                         }
                         let target = self.alias_ty(def);
@@ -1193,7 +1207,14 @@ impl<'a> Checker<'a> {
     /// `Pair` written with no arguments is as much a hole in one as a
     /// parameter with no type is, and filling it in with unknowns would make
     /// every use of it agree with everything.
-    fn check_type_arity(&mut self, name: &str, wanted: usize, given: usize, span: Span) -> bool {
+    fn check_type_arity(
+        &mut self,
+        name: &str,
+        wanted: usize,
+        given: usize,
+        span: Span,
+        declared_here: Option<(Option<FileId>, Span)>,
+    ) -> bool {
         if wanted == given {
             return true;
         }
@@ -1206,21 +1227,30 @@ impl<'a> Checker<'a> {
                 if wanted == 1 { "" } else { "s" }
             )
         };
-        self.emit(
-            Diagnostic::error(
-                codes::NOT_GENERIC,
-                self.file,
-                span,
-                format!(
-                    "{written}, and {given} {} given",
-                    if given == 1 { "was" } else { "were" }
-                ),
-            )
-            .with_primary_label("wrong number of type arguments")
-            .with_note(
-                "a type argument is written out rather than left to be worked out, because a type is a signature's business and a signature is complete",
+        let mut diagnostic = Diagnostic::error(
+            codes::NOT_GENERIC,
+            self.file,
+            span,
+            format!(
+                "{written}, and {given} {} given",
+                if given == 1 { "was" } else { "were" }
             ),
+        )
+        .with_primary_label("wrong number of type arguments")
+        .with_note(
+            "a type argument is written out rather than left to be worked out, because a type is a signature's business and a signature is complete",
         );
+        // The arity lives on the declaration. Without this pin the reader is
+        // left counting angle brackets against a name that is already known.
+        if let Some((file, at)) = declared_here {
+            if !at.is_empty() {
+                diagnostic = match file {
+                    Some(other) => diagnostic.with_secondary_in(other, at, "declared here"),
+                    None => diagnostic.with_secondary(at, "declared here"),
+                };
+            }
+        }
+        self.emit(diagnostic);
         false
     }
 
@@ -1253,9 +1283,10 @@ impl<'a> Checker<'a> {
             // takes nothing of its own beyond the parameters it wrote down. A
             // parameter on a refinement is a different question about what a
             // predicate may say, and `DEED4028` refuses it at the declaration.
+            // The surface does not carry a declaration span for aliases yet.
             Some(SurfaceItem::Alias { target, .. }) => {
                 let target = target.clone();
-                if !self.check_type_arity(&name.name, arity, args.len(), span) {
+                if !self.check_type_arity(&name.name, arity, args.len(), span, None) {
                     return Ty::Unknown;
                 }
                 if args.is_empty() {
@@ -1264,12 +1295,16 @@ impl<'a> Checker<'a> {
                 let bindings: HashMap<usize, Ty> = args.iter().cloned().enumerate().collect();
                 target.substitute(&bindings)
             }
-            Some(
-                SurfaceItem::Record { .. }
-                | SurfaceItem::Choice { .. }
-                | SurfaceItem::Refinement { .. },
-            ) => {
-                if !self.check_type_arity(&name.name, arity, args.len(), span) {
+            Some(SurfaceItem::Record { declared, .. }) => {
+                let pin = Some((Some(declared.file), declared.span));
+                if !self.check_type_arity(&name.name, arity, args.len(), span, pin) {
+                    return Ty::Unknown;
+                }
+                external
+            }
+            Some(SurfaceItem::Choice { .. } | SurfaceItem::Refinement { .. }) => {
+                // Choice and refinement surfaces do not carry Declared today.
+                if !self.check_type_arity(&name.name, arity, args.len(), span, None) {
                     return Ty::Unknown;
                 }
                 external

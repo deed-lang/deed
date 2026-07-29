@@ -1531,9 +1531,30 @@ fn a_type_declared_with_no_parameters_takes_none() {
     let (sources, checked) =
         check_source("module a\n\nrecord R { n: Int }\n\nfn f(x: R<Int>) -> Int { 0 }\n");
     assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_GENERIC]);
+    let text = rendered(&sources, &checked.diagnostics);
     assert!(
-        rendered(&sources, &checked.diagnostics)
-            .contains("`R` takes no type arguments, and 1 was given")
+        text.contains("`R` takes no type arguments, and 1 was given"),
+        "{text}"
+    );
+    assert!(text.contains("declared here"), "{text}");
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+}
+
+#[test]
+fn a_wrong_arity_on_an_imported_record_points_at_the_other_file() {
+    let (_, checked) = check_source_in(
+        "module a\n\nuse other.{Thing}\n\nfn f(x: Thing<Int>) -> Int { 0 }\n",
+        &universe_of(&["module other\n\nrecord Thing { n: Int }\n"]),
+    );
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::NOT_GENERIC]);
+    let diagnostic = &checked.diagnostics[0];
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].message, "declared here");
+    assert!(
+        diagnostic.secondary[0].file.is_some(),
+        "the record lives in the other module"
     );
 }
 
