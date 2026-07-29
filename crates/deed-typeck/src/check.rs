@@ -1834,6 +1834,22 @@ impl<'a> Checker<'a> {
                         diagnostic.with_secondary(predicate, "the predicate it has to satisfy");
                 }
 
+                // What gets through. "cannot prove" covers two situations that
+                // read the same and are not the same: nothing is known about
+                // the value, and enough is known to name a value that fails.
+                // A converter guarded by `n >= 0` for a `value > 0` refinement
+                // is the second, and that is a mistake rather than a limit of
+                // the checker, so the number it lets past is worth saying.
+                if let Some(witness) = predicate
+                    .map(facts::range_admitted_by)
+                    .zip(subject.map(|subject| subject.range))
+                    .and_then(|(admitted, known)| escapes(known, admitted))
+                {
+                    diagnostic = diagnostic.with_note(format!(
+                        "when this is {witness} it does not satisfy `{name}`, and what is known about it here does not rule that out"
+                    ));
+                }
+
                 // A proof that failed because the arithmetic has no answer
                 // looks exactly like weak reasoning, and it is not the same
                 // thing at all. `n + 1` where `n` is positive is not provably
@@ -4689,6 +4705,36 @@ fn promised_by(ensures: &[Ensures], sig: &deed_ast::FnSig) -> Guarantee {
         })
 }
 
+/// A value the checker knows is possible and the refinement turns down.
+///
+/// `None` when there is nothing to say: when everything known is admitted, so
+/// the proof failed for some other reason, and when nothing is known at all,
+/// where any number would be an invention rather than a finding. The witness
+/// is taken from the end of the known range that sticks out, so it is the
+/// nearest miss rather than an extreme.
+fn escapes(known: Range, admitted: Range) -> Option<i64> {
+    let (
+        Range::Bounded { low, high },
+        Range::Bounded {
+            low: ok,
+            high: hi_ok,
+        },
+    ) = (known, admitted)
+    else {
+        return None;
+    };
+    if known.is_any() || admitted.is_any() {
+        return None;
+    }
+    if low < ok {
+        return Some(ok.checked_sub(1).unwrap_or(low).max(low));
+    }
+    if high > hi_ok {
+        return Some(hi_ok.checked_add(1).unwrap_or(high).min(high));
+    }
+    None
+}
+
 /// Fields from another module's surface, as the checker's own field type.
 ///
 /// `written` is where they are declared, for the kinds of surface that carry
@@ -4729,7 +4775,8 @@ fn list(items: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::list;
+    use super::{escapes, list};
+    use crate::facts::Range;
 
     #[test]
     fn lists_read_like_english() {
@@ -4737,5 +4784,47 @@ mod tests {
         assert_eq!(list(&["a"]), "`a`");
         assert_eq!(list(&["a", "b"]), "`a` and `b`");
         assert_eq!(list(&["a", "b", "c"]), "`a`, `b` and `c`");
+    }
+
+    /// The witness a `Guarded` refinement names, and when there is not one.
+    ///
+    /// The boundaries are the whole content: a range that reaches exactly as
+    /// far as the predicate allows has nothing sticking out, and one that
+    /// reaches one further has exactly one number to report. Reading `<` as
+    /// `<=` would invent a number for the first, which is a diagnostic telling
+    /// somebody they have a bug they do not have.
+    #[test]
+    fn a_range_that_fits_inside_the_predicate_escapes_nothing() {
+        assert_eq!(escapes(Range::between(1, 10), Range::between(1, 10)), None);
+        assert_eq!(escapes(Range::between(2, 9), Range::between(1, 10)), None);
+        assert_eq!(escapes(Range::exactly(1), Range::between(1, 10)), None);
+    }
+
+    #[test]
+    fn a_range_reaching_past_the_predicate_names_the_nearest_miss() {
+        // `n >= 0` against `value > 0`, which is the converter the design
+        // document names: the number that gets through is zero, not the
+        // smallest integer there is.
+        assert_eq!(
+            escapes(Range::between(0, i64::MAX), Range::between(1, i64::MAX)),
+            Some(0)
+        );
+        assert_eq!(
+            escapes(Range::between(-50, 5), Range::between(1, 10)),
+            Some(0)
+        );
+        // And from the other end.
+        assert_eq!(
+            escapes(Range::between(1, 11), Range::between(1, 10)),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn nothing_known_and_nothing_required_name_no_number() {
+        // Any number here would be an invention rather than a finding.
+        assert_eq!(escapes(Range::ANY, Range::between(1, 10)), None);
+        assert_eq!(escapes(Range::between(1, 10), Range::ANY), None);
+        assert_eq!(escapes(Range::Empty, Range::between(1, 10)), None);
     }
 }

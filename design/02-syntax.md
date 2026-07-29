@@ -1358,9 +1358,12 @@ using an effect to get around not having a loop.
   ordinary code, and the `ok` is Proven because the guard above it says what the predicate
   wants. What a built-in form would buy is the predicate living in one place instead of being
   restated at every converter, and the restatement being weaker than the predicate is the
-  mistake it would rule out. Today a converter guarded by `n >= 0` for a `value > 0` refinement
-  is accepted with a runtime check rather than refused, which is honest and is not the same as
-  catching it.
+  mistake it would rule out. A converter guarded by `n >= 0` for a `value > 0` refinement is
+  still accepted with a runtime check rather than refused, because a runtime check is what
+  `Guarded` means and refusing it would refuse every honest conversion the checker cannot
+  follow. What it no longer does is read the same as a conversion nothing is known about:
+  `DEED4008` names the number the guard lets past, so "cannot prove" and "here is your bug"
+  are told apart at the point somebody is deciding which one they have.
 - Banning shadowing outright may turn out to be more annoying than it is worth. It is easy
   to relax later and hard to tighten, which is the only reason it starts strict.
 - Capitalisation carrying meaning in patterns is a wart, even though it earns its place.
