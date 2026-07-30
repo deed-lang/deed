@@ -52,6 +52,18 @@ fn programs() -> Vec<Agreed> {
             expect: 10,
         },
         Agreed {
+            name: "a plain return",
+            source: "module a\n\nfn answer() -> Int {\n    return 12\n}\n\ntest \"return ends the function\" {\n    assert answer() == 12\n}\n",
+            call: "answer",
+            expect: 12,
+        },
+        Agreed {
+            name: "a return inside an if",
+            source: "module a\n\nfn absolute(n: Int) -> Int {\n    if n >= 0 {\n        return n\n    }\n    0 - n\n}\n\nfn answer() -> Int { absolute(5) + absolute(2 - 7) }\n\ntest \"one branch can return early\" {\n    assert answer() == 10\n}\n",
+            call: "answer",
+            expect: 10,
+        },
+        Agreed {
             name: "the other branch",
             source: "module a\n\nfn answer() -> Int {\n    if 1 > 2 {\n        10\n    } else {\n        20\n    }\n}\n\ntest \"it takes the other one\" {\n    assert answer() == 20\n}\n",
             call: "answer",
@@ -163,10 +175,22 @@ fn programs() -> Vec<Agreed> {
             expect: 2,
         },
         Agreed {
+            name: "a return inside a match arm",
+            source: "module a\n\nchoice Step {\n    Keep,\n    Stop,\n}\n\nfn score(step: Step) -> Int {\n    match step {\n        Stop => {\n            return 9\n            0\n        },\n        Keep => 1,\n    }\n}\n\nfn answer() -> Int { score(Stop) + score(Keep) }\n\ntest \"a match arm can return from the function\" {\n    assert answer() == 10\n}\n",
+            call: "answer",
+            expect: 10,
+        },
+        Agreed {
             name: "a walk that adds up",
             source: "module a\n\nfn answer() -> Int {\n    for n in [1, 2, 3, 4] with sum = 0 {\n        sum + n\n    }\n}\n\ntest \"a fold reaches the end\" {\n    assert answer() == 10\n}\n",
             call: "answer",
             expect: 10,
+        },
+        Agreed {
+            name: "a return inside a walk",
+            source: "module a\n\nfn answer() -> Int {\n    for n in [1, 2, 3, 4] with sum = 0 {\n        if n == 3 {\n            return sum\n        }\n        sum + n\n    }\n}\n\ntest \"a walk can return from its enclosing function\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
         },
         Agreed {
             name: "a walk over nothing",
@@ -249,6 +273,12 @@ fn programs() -> Vec<Agreed> {
             source: "module a\n\neffect Counter {\n    fn value() -> Int\n    fn bump(by: Int) -> ()\n}\n\nhandler InMemory implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n\n    fn bump(by) -> () {\n        count = count + by\n    }\n}\n\nfn answer() -> Int {\n    with InMemory { count: 0 } {\n        Counter.bump(2)\n        Counter.bump(3)\n        Counter.value()\n    }\n}\n\ntest \"state carries between operations\" {\n    assert answer() == 5\n}\n",
             call: "answer",
             expect: 5,
+        },
+        Agreed {
+            name: "a return inside a handler operation",
+            source: "module a\n\neffect Counter {\n    fn value() -> Int\n}\n\nhandler Fixed implements Counter {\n    state count: Int\n\n    fn value() -> Int {\n        return count\n    }\n}\n\nfn answer() -> Int {\n    with Fixed { count: 6 } {\n        Counter.value()\n    }\n}\n\ntest \"an operation can return early\" {\n    assert answer() == 6\n}\n",
+            call: "answer",
+            expect: 6,
         },
         // The frame is found at runtime rather than read off the call site,
         // and this is the program that needs it: `report` is compiled once
