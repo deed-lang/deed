@@ -94,3 +94,25 @@ fn every_diagnostic_code_has_a_page() {
         without_page.into_iter().collect::<Vec<_>>().join(", ")
     );
 }
+
+/// `all_pages` is a real listing, not a stand-in nothing reads: the test
+/// above only ever calls `page()`, which reads the same generated table by a
+/// different path, so a broken `all_pages` could return nothing and this
+/// crate would still look fully covered.
+#[test]
+fn all_pages_lists_one_page_per_declared_code() {
+    let declared = declared();
+    let pages = deed_explain::all_pages();
+    assert_eq!(
+        pages.len(),
+        declared.len(),
+        "all_pages() should return exactly one page per declared code"
+    );
+
+    for (_, code) in &declared {
+        assert!(
+            pages.iter().any(|p| p.code == code.as_str()),
+            "`{code}` is declared but all_pages() does not list it"
+        );
+    }
+}
