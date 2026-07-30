@@ -28,11 +28,32 @@
 /// Where the bump pointer lives.
 pub const BUMP: u32 = 0;
 
-/// Where allocation starts, leaving room for the bump pointer itself.
-pub const HEAP_START: u32 = 8;
+/// Where the innermost handler frame's address lives, or zero when no
+/// handler is installed.
+///
+/// The one piece of state a compiled program keeps that the source does not
+/// name. A frame is `[next][effect][state][code 0][code 1]...`: the frame
+/// under it, which effect it answers for, the address of its state, and a
+/// table index per operation. `with` links a frame in and unlinks it when
+/// the block ends, and performing walks from here down until the effect
+/// matches. See `design/05-backend.md`.
+pub const HANDLERS: u32 = 8;
+
+/// Where allocation starts, leaving room for the two words above.
+pub const HEAP_START: u32 = 16;
 
 /// The width of every field, element and tag.
 pub const WORD: u32 = 8;
+
+/// How many bytes a handler frame with this many operations takes.
+pub fn frame_size(operations: usize) -> u32 {
+    (3 + operations as u32) * WORD
+}
+
+/// Where an operation's code pointer sits inside a handler frame.
+pub fn operation_offset(operation: usize) -> u32 {
+    (3 + operation as u32) * WORD
+}
 
 /// How many bytes an aggregate of this shape takes.
 pub fn aggregate_size(tagged: bool, fields: usize) -> u32 {

@@ -72,15 +72,50 @@ be invoked twice, and nothing that resumes. `Expr::With` is a `truncate` back to
 depth it found, so a handler's lifetime is exactly its block.
 
 So a compiled `perform` is: walk the handler stack from the top, find the entry whose effect
-matches, and call the operation. The set of handlers a program declares is known when it is
-compiled, so which operation to call can be chosen by comparing the entry's handler against
-each of them rather than through an indirect call, and the module needs no function table.
-Handler state is a mutable cell, which is what the language already calls it and the only
-mutable thing it has.
+matches, and call the operation. Handler state is a mutable cell, which is what the language
+already calls it and the only mutable thing it has.
 
 What would change this: a `resume` in the language, or an operation that returns to
 somewhere other than where it was performed. Neither exists, and adding either would be a
 change to `design/03-effects.md` before it was a change here.
+
+## The handler stack is a linked list in memory, and the search is at runtime
+
+An earlier draft of the section above guessed that the handler could be picked at compile
+time, since a module declares all of them. That is wrong, and the program that shows it is
+three lines:
+
+```deed
+fn report() -> Int uses Counter.value { Counter.value() * 2 }
+
+fn answer() -> Int {
+    with Fixed { count: 4 } { report() }
+}
+```
+
+`report` is compiled once. Which handler answers its `perform` depends on who called it, and
+a second caller under a different `with` gets a different one. Nothing at the performing site
+says which. So it is a search, and it happens while the program runs.
+
+What it searches is one word of memory the source never names, holding the address of the
+innermost frame or zero. A frame is `[next][effect][state][code 0][code 1]...`: the frame
+under it, which effect it answers for, the address of its state, and a table index per
+operation in the order the effect declared them. `with` builds a frame, links it in, runs the
+body, and puts back what was there. Performing walks `next` until the effect matches, then
+calls through the table with the state first and the arguments after.
+
+Three things fall out of that rather than being arranged:
+
+Nesting decides which handler answers, because the search starts at the innermost frame. A
+handler stops answering when its block ends, because the block put back the frame under it.
+And an operation is reached the same way a closure body is, through the table the module
+already has, so handlers cost the backend no mechanism that closures had not already paid
+for.
+
+The one thing arranged on purpose is that a frame is never freed. That is what every
+allocation in this backend does, and the note in `crates/deed-codegen/src/layout.rs` about
+when that stops being acceptable applies here with a number attached: a `with` inside a walk
+allocates once per turn.
 
 ## Native object code is not the next thing, and there is a reason rather than a plan
 

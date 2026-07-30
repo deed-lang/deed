@@ -160,9 +160,10 @@ fn every_refusal_says_what_it_found() {
 /// The corpus is mostly beyond this backend, and that is written down rather
 /// than discovered.
 ///
-/// A floor rather than a target. What it catches is a change that quietly
-/// stops compiling things that used to compile, which is the direction a
-/// backend regresses in.
+/// A floor rather than a target, and named rather than counted: a list says
+/// which file stopped compiling, and a number only says that one did. What
+/// it catches is a change that quietly stops compiling things that used to,
+/// which is the direction a backend regresses in.
 #[test]
 fn the_backend_still_compiles_what_it_used_to() {
     let outcomes = walked();
@@ -172,8 +173,15 @@ fn the_backend_still_compiles_what_it_used_to() {
         .map(|one| one.name.as_str())
         .collect();
 
-    assert!(
-        !compiled.is_empty(),
-        "nothing in the corpus compiles any more; it used to be at least one file"
-    );
+    for name in [
+        "calendar.deed",
+        "diverge.deed",
+        "generics.deed",
+        "names.deed",
+    ] {
+        assert!(
+            compiled.contains(&name),
+            "`{name}` used to compile and does not any more; the corpus now compiles {compiled:?}"
+        );
+    }
 }
