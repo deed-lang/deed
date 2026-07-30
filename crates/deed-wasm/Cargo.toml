@@ -11,8 +11,10 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+deed-ast = { path = "../deed-ast" }
 deed-diagnostics = { path = "../deed-diagnostics" }
 deed-driver = { path = "../deed-driver" }
+deed-interp = { path = "../deed-interp" }
 
 [lints]
 workspace = true
