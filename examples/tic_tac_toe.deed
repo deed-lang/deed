@@ -1,0 +1,115 @@
+// Tic-tac-toe: a 9-cell board, a move, a winner check over the eight lines
+// that can win, and a text render. The board is a plain `List<String>`
+// rather than a record with nine fields, because every operation here
+// walks it by position and a record would need the same nine-way match
+// `placed` and `rendered` are written once to avoid.
+module examples/tic_tac_toe
+
+use std/list.{map, take, drop}
+
+fn empty_board() -> List<String> {
+    repeat("", 9)
+}
+
+fn placed(board: List<String>, index: Int, mark: String) -> List<String> {
+    for cell at position in board with out = [] {
+        push(
+            out,
+            if position == index {
+                mark
+            } else {
+                cell
+            },
+        )
+    }
+}
+
+fn cell_at(board: List<String>, index: Int) -> String {
+    match at(board, index) {
+        ok(mark) => mark,
+        err(_) => "",
+    }
+}
+
+record Line {
+    a: Int,
+    b: Int,
+    c: Int,
+}
+
+fn lines() -> List<Line> {
+    [
+        Line { a: 0, b: 1, c: 2 },
+        Line { a: 3, b: 4, c: 5 },
+        Line { a: 6, b: 7, c: 8 },
+        Line { a: 0, b: 3, c: 6 },
+        Line { a: 1, b: 4, c: 7 },
+        Line { a: 2, b: 5, c: 8 },
+        Line { a: 0, b: 4, c: 8 },
+        Line { a: 2, b: 4, c: 6 },
+    ]
+}
+
+fn winning_mark(board: List<String>, line: Line) -> String {
+    let mark = cell_at(board, line.a)
+    if mark != "" && mark == cell_at(board, line.b) && mark == cell_at(board, line.c) {
+        mark
+    } else {
+        ""
+    }
+}
+
+fn winner(board: List<String>) -> Result<String, String> {
+    let found = for line in lines() with mark = "" {
+        if mark != "" {
+            mark
+        } else {
+            winning_mark(board, line)
+        }
+    }
+    if found == "" {
+        err("no winner yet")
+    } else {
+        ok(found)
+    }
+}
+
+fn rendered(board: List<String>) -> String {
+    let symbols = map(
+        board,
+        |mark: String| if mark == "" {
+            "."
+        } else {
+            mark
+        },
+    )
+    join(
+        [
+            join(take(symbols, 3), ""),
+            join(drop(take(symbols, 6), 3), ""),
+            join(drop(symbols, 6), ""),
+        ],
+        "\n",
+    )
+}
+
+test "a fresh board is nine dots, three rows" {
+    assert rendered(empty_board()) == "...\n...\n..."
+}
+
+test "placing a mark only changes the one cell asked for" {
+    let board = placed(empty_board(), 4, "X")
+    assert cell_at(board, 4) == "X"
+    assert cell_at(board, 0) == ""
+    assert rendered(board) == "...\n.X.\n..."
+}
+
+test "a full row, column or diagonal wins, and an empty line does not" {
+    assert winner(empty_board()) == err("no winner yet")
+    let row = placed(placed(placed(empty_board(), 0, "X"), 1, "X"), 2, "X")
+    assert winner(row) == ok("X")
+    let diagonal = placed(placed(placed(empty_board(), 0, "O"), 4, "O"), 8, "O")
+    assert winner(diagonal) == ok("O")
+    let two_of_three = placed(placed(empty_board(), 0, "X"), 1, "X")
+    assert winner(two_of_three) == err("no winner yet")
+}

@@ -1,0 +1,52 @@
+// A small JSON-shaped value, encoded to text. No decoder: reading JSON back
+// needs a real tokenizer with string-escape handling and a wall this file
+// does not climb, unlike `examples/calculator.deed`'s space-separated
+// shortcut. Left for whoever wants that wall next.
+//
+// `encoded` recurses on nested `Items` through `map`, passing itself as a
+// value rather than calling itself by name, and `deed fix` says that needs
+// no `uses Diverge`: DEED5001 walks the direct call graph, and a function
+// handed to `map` is never called by name from inside itself, only inside
+// `map`'s own `for`. The recursion is real at runtime; the cycle the checker
+// looks for is not.
+module examples/json
+
+use std/list.{map}
+
+choice Value {
+    Null,
+    Boolean { value: Bool },
+    Number { value: Int },
+    Text { value: String },
+    Items { value: List<Value> },
+}
+
+fn encoded(json: Value) -> String {
+    match json {
+        Null => "null",
+        Boolean { value } => if value {
+            "true"
+        } else {
+            "false"
+        },
+        Number { value } => to_string(value),
+        Text { value } => "\"" + value + "\"",
+        Items { value } => "[" + join(map(value, encoded), ",") + "]",
+    }
+}
+
+test "the leaves encode the way JSON already spells them" {
+    assert encoded(Null) == "null"
+    assert encoded(Boolean { value: true }) == "true"
+    assert encoded(Boolean { value: false }) == "false"
+    assert encoded(Number { value: 0 - 3 }) == "-3"
+    assert encoded(Text { value: "hi" }) == "\"hi\""
+}
+
+test "a list of values encodes as a comma-separated array, nested or not" {
+    assert encoded(Items { value: [] }) == "[]"
+    assert encoded(Items { value: [Number { value: 1 }, Number { value: 2 }] }) == "[1,2]"
+    assert encoded(Items {
+        value: [Items { value: [Number { value: 1 }] }, Text { value: "x" }],
+    }) == "[[1],\"x\"]"
+}
