@@ -1,0 +1,66 @@
+// A tiny stack machine: push a number, or combine the top two with an
+// operator. Four instructions, and the interesting part is `applied`,
+// which is one function for all three binary operators because the
+// operator itself is the parameter, the same shape `logs.deed` uses to
+// take a walk's question as an argument.
+module examples/stack_machine
+
+use std/list.{take, drop, last}
+
+choice Instruction {
+    Push { value: Int },
+    Add,
+    Sub,
+    Mul,
+}
+
+fn applied(stack: List<Int>, op: Fn(Int, Int) -> Int) -> List<Int> {
+    let rest = take(stack, length(stack) - 2)
+    let top = drop(stack, length(stack) - 2)
+    match at(top, 0) {
+        ok(first) => match at(top, 1) {
+            ok(second) => push(rest, op(first, second)),
+            err(_) => stack,
+        },
+        err(_) => stack,
+    }
+}
+
+fn step(stack: List<Int>, instruction: Instruction) -> List<Int> {
+    match instruction {
+        Push { value } => push(stack, value),
+        Add => applied(stack, |a: Int, b: Int| a + b),
+        Sub => applied(stack, |a: Int, b: Int| a - b),
+        Mul => applied(stack, |a: Int, b: Int| a * b),
+    }
+}
+
+fn run(program: List<Instruction>) -> List<Int> {
+    for instruction in program with stack = [] {
+        step(stack, instruction)
+    }
+}
+
+fn result_of(program: List<Instruction>) -> Result<Int, String> {
+    last(run(program))
+}
+
+test "push builds the stack in order" {
+    assert run([Push { value: 1 }, Push { value: 2 }, Push { value: 3 }]) == [1, 2, 3]
+}
+
+test "each operator combines the top two and leaves the rest untouched" {
+    assert result_of([Push { value: 2 }, Push { value: 3 }, Add]) == ok(5)
+    assert result_of([Push { value: 5 }, Push { value: 3 }, Sub]) == ok(2)
+    assert result_of([Push { value: 4 }, Push { value: 3 }, Mul]) == ok(12)
+    assert run([Push { value: 1 }, Push { value: 2 }, Push { value: 3 }, Add]) == [1, 5]
+}
+
+test "an operator with nothing to combine leaves the stack alone" {
+    assert run([Add]) == []
+    assert run([Push { value: 1 }, Add]) == [1]
+}
+
+test "a short program with no instructions has no result" {
+    assert result_of([]) == err("index -1 is outside a list of 0")
+}

@@ -1,0 +1,87 @@
+// A small key-value store: `key=value` lines, saved and loaded through
+// `Io.save`/`Io.read` the way `journal.deed` and `todo.deed` already do.
+// The parsing and the table-building are pure and tested here; `main` is
+// the untested glue that hands them a real `Dir`, the same split every
+// other example with a `main` already uses.
+module examples/kv_store
+
+use std/table.{Table, set, get}
+
+use std/string.{index_of, slice}
+
+record Parsed {
+    key: String,
+    value: String,
+}
+
+fn parse_line(line: String) -> Parsed {
+    let equals = index_of(line, "=")
+    Parsed { key: slice(line, 0, equals), value: slice(line, equals + 1, length(line)) }
+}
+
+fn loaded(lines: List<String>) -> List<Parsed> {
+    for line in lines with parsed = [] {
+        if line == "" {
+            parsed
+        } else {
+            push(parsed, parse_line(line))
+        }
+    }
+}
+
+fn store(lines: List<String>) -> Table<String, String> {
+    for one in loaded(lines) with table = [] {
+        set(table, one.key, one.value)
+    }
+}
+
+fn line_of(key: String, value: String) -> String {
+    key + "=" + value
+}
+
+fn saved_text(table: Table<String, String>) -> String {
+    join(
+        for entry in table with lines = [] {
+            push(lines, line_of(entry.key, entry.value))
+        },
+        "\n",
+    )
+}
+
+fn main(sys: System) -> Int
+  uses
+    Io.save,
+    Io.read,
+{
+    let table = set(set([], "host", "localhost"), "port", "5432")
+    match Io.save(sys.files, "kv_store.txt", saved_text(table)) {
+        ok(_) => match Io.read(sys.files, "kv_store.txt") {
+            ok(text) => match get(store(split(text, "\n")), "host") {
+                ok(_) => 0,
+                err(_) => 1,
+            },
+            err(_) => 1,
+        },
+        err(_) => 1,
+    }
+}
+
+test "a line becomes a key and a value, and back" {
+    assert parse_line("host=localhost") == Parsed { key: "host", value: "localhost" }
+    assert line_of("host", "localhost") == "host=localhost"
+}
+
+test "loading skips blank lines and building the table keeps the last write" {
+    let lines = ["a=1", "", "b=2", "a=3"]
+    let table = store(lines)
+    assert get(table, "a") == ok("3")
+    assert get(table, "b") == ok("2")
+    assert get(table, "z") == err("no such key")
+}
+
+test "saving a table and loading it back reads the same values" {
+    let table = set(set([], "x", "1"), "y", "2")
+    let reloaded = store(split(saved_text(table), "\n"))
+    assert get(reloaded, "x") == ok("1")
+    assert get(reloaded, "y") == ok("2")
+}

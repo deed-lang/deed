@@ -64,7 +64,7 @@ examples/transfer.deed
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-102 passed, 0 failed
+118 passed, 0 failed
 ```
 
 That number used to be 102. Seven of those tests are in `std/table` now, because the table
@@ -268,7 +268,10 @@ The examples are [transfer.deed](examples/transfer.deed),
 [generics.deed](examples/generics.deed),
 [generic_types.deed](examples/generic_types.deed),
 [using_list.deed](examples/using_list.deed), [calculator.deed](examples/calculator.deed),
-[calendar.deed](examples/calendar.deed), [ranking.deed](examples/ranking.deed), and the three that see
+[calendar.deed](examples/calendar.deed), [ranking.deed](examples/ranking.deed),
+[kv_store.deed](examples/kv_store.deed), [json.deed](examples/json.deed),
+[stack_machine.deed](examples/stack_machine.deed), [tic_tac_toe.deed](examples/tic_tac_toe.deed),
+[markdown.deed](examples/markdown.deed), and the three that see
 each other: [names.deed](examples/names.deed), [sink.deed](examples/sink.deed) and
 [greeting.deed](examples/greeting.deed). All are checked by every pass on every commit,
 `hello.deed`, `config.deed`, `todo.deed`, `journal.deed` and `logs.deed` have a `main`, and

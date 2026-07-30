@@ -1,0 +1,46 @@
+// Markdown to plain text, three rules: a line starting `# ` becomes an
+// upper-cased heading, a line starting `- ` becomes an indented bullet, and
+// `**` markers are stripped wherever they appear. Nothing here needs a real
+// Markdown parser (no nesting, no inline links); one line in, one line out,
+// which is as far as `logs.deed`-style line-at-a-time text handling goes
+// before it would need one.
+module examples/markdown
+
+use std/string.{starts_with, slice, replace, to_upper}
+
+use std/list.{map}
+
+fn stripped_bold(line: String) -> String {
+    replace(line, "**", "")
+}
+
+fn rendered_line(raw: String) -> String {
+    let line = stripped_bold(raw)
+    if starts_with(line, "# ") {
+        to_upper(slice(line, 2, length(line)))
+    } else if starts_with(line, "- ") {
+        "  * " + slice(line, 2, length(line))
+    } else {
+        line
+    }
+}
+
+fn rendered(text: String) -> String {
+    join(map(split(text, "\n"), rendered_line), "\n")
+}
+
+test "a heading is upper-cased and loses its marker" {
+    assert rendered_line("# Title") == "TITLE"
+}
+
+test "a bullet is indented and re-marked, and bold markers disappear" {
+    assert rendered_line("- **important** note") == "  * important note"
+}
+
+test "an ordinary line passes through untouched" {
+    assert rendered_line("just text") == "just text"
+}
+
+test "a whole document renders line by line" {
+    assert rendered("# Notes\n- **first**\n- second\nplain") == "NOTES\n  * first\n  * second\nplain"
+}
