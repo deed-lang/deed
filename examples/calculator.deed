@@ -1,0 +1,179 @@
+// A small expression language, written in Deed: split into tokens, parse by
+// precedence, evaluate. Tokens are space separated on purpose, to keep
+// character-by-character lexing out of the way of the part this file is
+// actually about, which is precedence and associativity.
+//
+// `*` and `/` bind tighter than `+` and `-`, and a parenthesised group
+// overrides both. Subtraction and division are left-associative, so
+// `10 - 2 - 3` is `(10 - 2) - 3` and not `10 - (2 - 3)`: each level walks its
+// own operators in a loop rather than recursing on the right, which is the
+// shape that would have gotten associativity backwards.
+module examples/calculator
+
+use std/list.{map, filter, first, drop}
+
+choice Token {
+    Number { value: Int },
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Open,
+    Close,
+}
+
+fn token_of(word: String) -> Token {
+    if word == "+" {
+        Plus
+    } else if word == "-" {
+        Minus
+    } else if word == "*" {
+        Star
+    } else if word == "/" {
+        Slash
+    } else if word == "(" {
+        Open
+    } else if word == ")" {
+        Close
+    } else {
+        match to_int(word) {
+            ok(value) => Number { value },
+            err(_) => Number { value: 0 },
+        }
+    }
+}
+
+fn tokenize(text: String) -> List<Token> {
+    map(filter(split(text, " "), |word: String| word != ""), token_of)
+}
+
+// What parsing one level hands back: the value it built, and whatever
+// tokens it did not consume.
+record Parsed {
+    value: Int,
+    rest: List<Token>,
+}
+
+fn parse_primary(tokens: List<Token>) -> Parsed
+  uses
+    Diverge,
+{
+    match first(tokens) {
+        ok(token) => match token {
+            Open => {
+                let inside = parse_sum(drop(tokens, 1))
+                Parsed { value: inside.value, rest: drop(inside.rest, 1) }
+            },
+            Number { value } => Parsed { value, rest: drop(tokens, 1) },
+            Plus | Minus | Star | Slash | Close => Parsed { value: 0, rest: tokens },
+        },
+        err(_) => Parsed { value: 0, rest: tokens },
+    }
+}
+
+fn continues_product(rest: List<Token>) -> Bool {
+    match first(rest) {
+        ok(token) => match token {
+            Star => true,
+            Slash => true,
+            Number | Plus | Minus | Open | Close => false,
+        },
+        err(_) => false,
+    }
+}
+
+fn step_product(state: Parsed) -> Parsed
+  uses
+    Diverge,
+{
+    match first(state.rest) {
+        ok(token) => match token {
+            Star => {
+                let next = parse_primary(drop(state.rest, 1))
+                Parsed { value: state.value * next.value, rest: next.rest }
+            },
+            Slash => {
+                let next = parse_primary(drop(state.rest, 1))
+                Parsed { value: state.value / next.value, rest: next.rest }
+            },
+            Number | Plus | Minus | Open | Close => state,
+        },
+        err(_) => state,
+    }
+}
+
+// Loops rather than recursion on the right, so each `*` or `/` is folded in
+// left to right instead of grouping from the far end inward.
+fn parse_product(tokens: List<Token>) -> Parsed
+  uses
+    Diverge,
+{
+    let start = parse_primary(tokens)
+    for _turn in repeat(0, length(tokens)) with state = start while continues_product(state.rest) {
+        step_product(state)
+    }
+}
+
+fn continues_sum(rest: List<Token>) -> Bool {
+    match first(rest) {
+        ok(token) => match token {
+            Plus => true,
+            Minus => true,
+            Number | Star | Slash | Open | Close => false,
+        },
+        err(_) => false,
+    }
+}
+
+fn step_sum(state: Parsed) -> Parsed
+  uses
+    Diverge,
+{
+    match first(state.rest) {
+        ok(token) => match token {
+            Plus => {
+                let next = parse_product(drop(state.rest, 1))
+                Parsed { value: state.value + next.value, rest: next.rest }
+            },
+            Minus => {
+                let next = parse_product(drop(state.rest, 1))
+                Parsed { value: state.value - next.value, rest: next.rest }
+            },
+            Number | Star | Slash | Open | Close => state,
+        },
+        err(_) => state,
+    }
+}
+
+fn parse_sum(tokens: List<Token>) -> Parsed
+  uses
+    Diverge,
+{
+    let start = parse_product(tokens)
+    for _turn in repeat(0, length(tokens)) with state = start while continues_sum(state.rest) {
+        step_sum(state)
+    }
+}
+
+fn evaluate(text: String) -> Int
+  uses
+    Diverge,
+{
+    parse_sum(tokenize(text)).value
+}
+
+test "multiplication and division bind tighter than addition and subtraction" {
+    assert evaluate("3 + 4 * 2") == 11
+    assert evaluate("( 3 + 4 ) * 2") == 14
+    assert evaluate("2 + 8 / 4") == 4
+}
+
+test "subtraction and division are left-associative" {
+    assert evaluate("10 - 2 - 3") == 5
+    assert evaluate("8 / 4 / 2") == 1
+}
+
+test "parentheses nest" {
+    assert evaluate("( ( 1 + 2 ) * ( 3 + 4 ) )") == 21
+    assert evaluate("2 * ( 3 + ( 4 - 1 ) )") == 12
+}
