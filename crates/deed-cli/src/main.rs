@@ -632,12 +632,17 @@ fn report_obligations(
             tier,
             span,
             subject,
+            reason,
         } in &checked.obligations
         {
             let location = sources.file(checked.file).location(span.start);
+            let why = match reason {
+                Some(reason) => format!("  ({})", reason.text()),
+                None => String::new(),
+            };
             writeln!(
                 out,
-                "  {:<8} {name}:{}:{}  {subject}",
+                "  {:<8} {name}:{}:{}  {subject}{why}",
                 tier.name(),
                 location.line,
                 location.column
@@ -671,17 +676,23 @@ fn report_json(
                 tier,
                 span,
                 subject,
+                reason,
             } in &checked.obligations
             {
                 let location = file.location(span.start);
+                let reason = match reason {
+                    Some(reason) => format!("\"{}\"", reason.text()),
+                    None => "null".to_string(),
+                };
                 writeln!(
                     out,
-                    "{{\"kind\":\"obligation\",\"tier\":\"{}\",\"file\":\"{}\",\"line\":{},\"column\":{},\"subject\":\"{}\"}}",
+                    "{{\"kind\":\"obligation\",\"tier\":\"{}\",\"file\":\"{}\",\"line\":{},\"column\":{},\"subject\":\"{}\",\"reason\":{}}}",
                     tier.name(),
                     file.name(),
                     location.line,
                     location.column,
-                    subject
+                    subject,
+                    reason
                 )?;
             }
         }

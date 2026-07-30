@@ -231,7 +231,15 @@ impl Server {
             .filter(|report| report.span.contains(offset))
             .collect();
         for report in &covering {
-            lines.push(format!("`{}`, {}", report.subject, report.tier.name()));
+            match report.reason {
+                Some(reason) => lines.push(format!(
+                    "`{}`, {} ({})",
+                    report.subject,
+                    report.tier.name(),
+                    reason.text()
+                )),
+                None => lines.push(format!("`{}`, {}", report.subject, report.tier.name())),
+            }
         }
         // An `ensures` clause is not an expression and names nothing the
         // resolver kept, so a cursor on one has no range yet. The narrowest
@@ -341,16 +349,24 @@ impl Server {
         // the same place: a call whose precondition is proven and whose result
         // is a refinement leaves two, and two hints in one column would be
         // drawn as one word with no space in it.
-        let mut tiers: BTreeMap<u32, Vec<&'static str>> = BTreeMap::new();
+        //
+        // A trailing `?` says a reason is there without printing it: this hint
+        // sits at the end of the line it is about, and the whole sentence
+        // belongs to hover, which has room for it.
+        let mut tiers: BTreeMap<u32, Vec<String>> = BTreeMap::new();
         for report in &checked.obligations {
             if !touches(report.span, start, end) {
                 continue;
             }
+            let label = match report.reason {
+                Some(_) => format!("{}?", report.tier.name()),
+                None => report.tier.name().to_string(),
+            };
             let at = tiers.entry(report.span.end).or_default();
             // Two obligations that landed in the same tier at the same place
             // are one thing to say, not two.
-            if !at.contains(&report.tier.name()) {
-                at.push(report.tier.name());
+            if !at.contains(&label) {
+                at.push(label);
             }
         }
 
@@ -3026,8 +3042,13 @@ mod tests {
         // Including the proven one. A reader shown only what went wrong cannot
         // tell a discharged contract from a question nobody asked, which is
         // the rule `hover` and `deed check --obligations` already follow.
+        //
+        // The guarded one carries a `?`: `n` in `unsettled` has nothing
+        // narrowing it, so the precondition is Unknown rather than proven, and
+        // the hint says a reason exists without printing the sentence, which
+        // is hover's job.
         let hints = hints_over("file:///work/t.deed", TIERED);
-        assert_eq!(labels(&hints), vec!["proven", "guarded"]);
+        assert_eq!(labels(&hints), vec!["proven", "guarded?"]);
     }
 
     #[test]

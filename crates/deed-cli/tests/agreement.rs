@@ -341,8 +341,11 @@ const CONTRACTS: &str = "module one\n\n\
 
 /// Every obligation `deed check --obligations` reports about one file.
 ///
-/// Tier, one based line and column, and subject, in the order it prints them.
-fn obligations_from_the_command_line(path: &Path) -> Vec<(String, u32, u32, String)> {
+/// Tier, one based line and column, subject and reason (when there is one),
+/// in the order it prints them.
+fn obligations_from_the_command_line(
+    path: &Path,
+) -> Vec<(String, u32, u32, String, Option<String>)> {
     let output = Command::new(DEED)
         .args(["check", "--format", "json", "--obligations"])
         .arg(path)
@@ -375,11 +378,18 @@ fn obligations_from_the_command_line(path: &Path) -> Vec<(String, u32, u32, Stri
                 .and_then(Json::as_i64)
                 .unwrap_or_else(|| panic!("every obligation carries {name}")) as u32
         };
+        // Present for every obligation, but only ever a string when there is
+        // one to report: absent is not a shape this reads, null is.
+        let reason = message
+            .at(&["reason"])
+            .and_then(Json::as_str)
+            .map(str::to_string);
         reported.push((
             field("tier"),
             number("line"),
             number("column"),
             field("subject"),
+            reason,
         ));
     }
     reported
@@ -443,7 +453,7 @@ fn tiers_from_the_editor(
     uri: &str,
     line: u32,
     character: u32,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, Option<String>)> {
     let (sent, _) = server.handle(&Json::object(vec![
         ("jsonrpc", Json::string("2.0")),
         ("id", Json::number(2)),
@@ -484,14 +494,31 @@ fn tiers_from_the_editor(
         if rest.starts_with("a ") || rest.starts_with("an ") {
             continue;
         }
+        // A guarded obligation with a reason reads "guarded (nothing
+        // narrowed this name)"; the tier is the part before the reason.
+        let (tier, reason) = match rest.split_once(" (") {
+            Some((tier, remainder)) => (
+                tier,
+                Some(
+                    remainder
+                        .strip_suffix(')')
+                        .unwrap_or_else(|| {
+                            panic!("a reason should close its parenthesis, got {written:?}")
+                        })
+                        .to_string(),
+                ),
+            ),
+            None => (rest, None),
+        };
         assert!(
-            ["proven", "tested", "guarded"].contains(&rest),
+            ["proven", "tested", "guarded"].contains(&tier),
             "a hover wrote {written:?}, and an obligation goes by proven, \
              tested or guarded and by nothing else"
         );
         named.push((
-            rest.to_string(),
+            tier.to_string(),
             subject.trim_start_matches('`').to_string(),
+            reason,
         ));
     }
     named
@@ -508,9 +535,27 @@ fn the_tier_of_every_obligation_is_the_same_in_both_places() {
     assert_eq!(
         terminal,
         vec![
-            ("tested".to_string(), 9, 5, "halve ensures ok".to_string()),
-            ("guarded".to_string(), 15, 5, "Positive".to_string()),
-            ("proven".to_string(), 15, 5, "halve requires".to_string()),
+            (
+                "tested".to_string(),
+                9,
+                5,
+                "halve ensures ok".to_string(),
+                None
+            ),
+            (
+                "guarded".to_string(),
+                15,
+                5,
+                "Positive".to_string(),
+                Some("nothing narrowed this name".to_string())
+            ),
+            (
+                "proven".to_string(),
+                15,
+                5,
+                "halve requires".to_string(),
+                None
+            ),
         ],
         "`deed check --obligations` should report one obligation of each tier"
     );
@@ -518,9 +563,9 @@ fn the_tier_of_every_obligation_is_the_same_in_both_places() {
     let uri = file_uri(&one);
     let mut server = opened(&scratch.0, &one);
 
-    let mut editor: Vec<(String, String)> = Vec::new();
+    let mut editor: Vec<(String, String, Option<String>)> = Vec::new();
     let mut asked: Vec<(u32, u32)> = Vec::new();
-    for (_, line, column, _) in &terminal {
+    for (_, line, column, _, _) in &terminal {
         if asked.contains(&(*line, *column)) {
             continue;
         }
@@ -537,11 +582,12 @@ fn the_tier_of_every_obligation_is_the_same_in_both_places() {
 
     // Both directions. Everything the terminal reported is in a tooltip, and
     // nothing is in a tooltip that the terminal did not report: an editor that
-    // invents a tier is the failure this pairing exists to catch, and it would
-    // pass a check that only looked for what it was told to find.
-    let mut expected: Vec<(String, String)> = terminal
+    // invents a tier, or a reason, is the failure this pairing exists to
+    // catch, and it would pass a check that only looked for what it was told
+    // to find.
+    let mut expected: Vec<(String, String, Option<String>)> = terminal
         .iter()
-        .map(|(tier, _, _, subject)| (tier.clone(), subject.clone()))
+        .map(|(tier, _, _, subject, reason)| (tier.clone(), subject.clone(), reason.clone()))
         .collect();
     expected.sort();
     editor.sort();
