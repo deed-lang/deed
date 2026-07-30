@@ -1,0 +1,346 @@
+//! Running a WebAssembly module, so that what this backend emits can be
+//! checked against what the interpreter does with the same program.
+//!
+//! A compiler whose output nothing runs is a compiler nothing tests. Every
+//! runtime that could run it is a dependency, and this workspace has none, so
+//! this is a small one over exactly the instructions [`crate::compile`]
+//! emits. It is not a WebAssembly implementation: it does not validate, it
+//! does not implement the instructions nothing here produces, and it is not
+//! the thing a released `deed build` would ship. It is a test oracle that
+//! happens to run.
+
+use crate::wasm::{Ins, Module, ValType};
+
+/// A value on the stack.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Value {
+    I32(i32),
+    I64(i64),
+}
+
+impl Value {
+    pub fn as_i64(self) -> i64 {
+        match self {
+            Value::I32(value) => value as i64,
+            Value::I64(value) => value,
+        }
+    }
+
+    pub fn as_bool(self) -> bool {
+        self.as_i64() != 0
+    }
+
+    fn zero(ty: ValType) -> Value {
+        match ty {
+            ValType::I32 => Value::I32(0),
+            ValType::I64 => Value::I64(0),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Trap {
+    /// `unreachable`, which is what a contract failure compiles to today.
+    Unreachable,
+    DivideByZero,
+    /// Ran longer than the budget below allows.
+    TooLong,
+    /// Something this small runner does not implement, named rather than
+    /// silently skipped.
+    Unimplemented(String),
+}
+
+impl std::fmt::Display for Trap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Trap::Unreachable => write!(f, "the program stopped"),
+            Trap::DivideByZero => write!(f, "divided by zero"),
+            Trap::TooLong => write!(f, "ran too long"),
+            Trap::Unimplemented(what) => write!(f, "`{what}` is not implemented here"),
+        }
+    }
+}
+
+/// How many instructions one call may run before this gives up.
+///
+/// A budget rather than a timer: a test that fails when the machine is busy
+/// is a test people learn to rerun, which is the reasoning `design/01-principles.md`
+/// already applies to the scaling test.
+const BUDGET: u64 = 5_000_000;
+
+/// Calls an exported function.
+pub fn call(module: &Module, name: &str, args: &[Value]) -> Result<Option<Value>, Trap> {
+    let index = module
+        .exports
+        .iter()
+        .find(|(exported, _)| exported == name)
+        .map(|(_, index)| *index)
+        .ok_or_else(|| Trap::Unimplemented(format!("no export named {name}")))?;
+
+    let mut run = Run {
+        module,
+        fuel: BUDGET,
+    };
+    run.call(index, args)
+}
+
+struct Run<'a> {
+    module: &'a Module,
+    fuel: u64,
+}
+
+/// What a block ended with: fell off the end, or jumped out of one.
+enum Flow {
+    Normal,
+    /// Branch out of this many enclosing blocks, still counting down.
+    Break(u32),
+    Return,
+}
+
+impl Run<'_> {
+    fn call(&mut self, index: u32, args: &[Value]) -> Result<Option<Value>, Trap> {
+        let func = &self.module.funcs[index as usize];
+        let signature = &self.module.types[func.type_index as usize];
+
+        let mut locals: Vec<Value> = args.to_vec();
+        for ty in &func.locals {
+            locals.push(Value::zero(*ty));
+        }
+
+        let mut stack = Vec::new();
+        self.run(&func.body, &mut locals, &mut stack)?;
+
+        Ok(match signature.results.first() {
+            None => None,
+            Some(_) => stack.pop(),
+        })
+    }
+
+    fn run(
+        &mut self,
+        body: &[Ins],
+        locals: &mut Vec<Value>,
+        stack: &mut Vec<Value>,
+    ) -> Result<Flow, Trap> {
+        for instruction in body {
+            self.fuel = self.fuel.checked_sub(1).ok_or(Trap::TooLong)?;
+
+            match instruction {
+                Ins::Unreachable => return Err(Trap::Unreachable),
+                Ins::Nop | Ins::Drop => {
+                    if matches!(instruction, Ins::Drop) {
+                        stack.pop();
+                    }
+                }
+                Ins::Return => return Ok(Flow::Return),
+                Ins::Br(depth) => return Ok(Flow::Break(*depth)),
+                Ins::BrIf(depth) => {
+                    if pop(stack)?.as_bool() {
+                        return Ok(Flow::Break(*depth));
+                    }
+                }
+                Ins::Block { body, .. } | Ins::Loop { body, .. } => {
+                    let repeats = matches!(instruction, Ins::Loop { .. });
+                    loop {
+                        match self.run(body, locals, stack)? {
+                            Flow::Normal => break,
+                            Flow::Return => return Ok(Flow::Return),
+                            Flow::Break(0) if repeats => continue,
+                            Flow::Break(0) => break,
+                            Flow::Break(depth) => return Ok(Flow::Break(depth - 1)),
+                        }
+                    }
+                }
+                Ins::If {
+                    then, otherwise, ..
+                } => {
+                    let taken = if pop(stack)?.as_bool() {
+                        then
+                    } else {
+                        otherwise
+                    };
+                    match self.run(taken, locals, stack)? {
+                        Flow::Normal => {}
+                        Flow::Return => return Ok(Flow::Return),
+                        Flow::Break(0) => {}
+                        Flow::Break(depth) => return Ok(Flow::Break(depth - 1)),
+                    }
+                }
+                Ins::Call(index) => {
+                    let callee = &self.module.funcs[*index as usize];
+                    let signature = &self.module.types[callee.type_index as usize];
+                    let count = signature.params.len();
+                    let at = stack.len() - count;
+                    let args: Vec<Value> = stack.split_off(at);
+                    if let Some(result) = self.call(*index, &args)? {
+                        stack.push(result);
+                    }
+                }
+                Ins::LocalGet(index) => stack.push(locals[*index as usize]),
+                Ins::LocalSet(index) => {
+                    let value = pop(stack)?;
+                    locals[*index as usize] = value;
+                }
+                Ins::LocalTee(index) => {
+                    let value = *stack.last().ok_or(Trap::Unreachable)?;
+                    locals[*index as usize] = value;
+                }
+                Ins::I32Const(value) => stack.push(Value::I32(*value)),
+                Ins::I64Const(value) => stack.push(Value::I64(*value)),
+                Ins::I32Eqz => {
+                    let value = pop(stack)?.as_i64();
+                    stack.push(Value::I32(if value == 0 { 1 } else { 0 }));
+                }
+                Ins::I64Eqz => {
+                    let value = pop(stack)?.as_i64();
+                    stack.push(Value::I32(if value == 0 { 1 } else { 0 }));
+                }
+                Ins::I32WrapI64 => {
+                    let value = pop(stack)?.as_i64();
+                    stack.push(Value::I32(value as i32));
+                }
+                Ins::I64ExtendI32S => {
+                    let value = pop(stack)?.as_i64();
+                    stack.push(Value::I64(value));
+                }
+                other => self.arithmetic(other, stack)?,
+            }
+        }
+        Ok(Flow::Normal)
+    }
+
+    fn arithmetic(&mut self, instruction: &Ins, stack: &mut Vec<Value>) -> Result<(), Trap> {
+        let right = pop(stack)?.as_i64();
+        let left = pop(stack)?.as_i64();
+
+        let value = match instruction {
+            Ins::I32Add | Ins::I64Add => Value::I64(left.wrapping_add(right)),
+            Ins::I32Sub | Ins::I64Sub => Value::I64(left.wrapping_sub(right)),
+            Ins::I32Mul | Ins::I64Mul => Value::I64(left.wrapping_mul(right)),
+            Ins::I64DivS => {
+                if right == 0 {
+                    return Err(Trap::DivideByZero);
+                }
+                Value::I64(left.wrapping_div(right))
+            }
+            Ins::I64RemS => {
+                if right == 0 {
+                    return Err(Trap::DivideByZero);
+                }
+                Value::I64(left.wrapping_rem(right))
+            }
+            Ins::I32Eq | Ins::I64Eq => boolean(left == right),
+            Ins::I32Ne | Ins::I64Ne => boolean(left != right),
+            Ins::I32LtS | Ins::I64LtS => boolean(left < right),
+            Ins::I32LeS | Ins::I64LeS => boolean(left <= right),
+            Ins::I32GtS | Ins::I64GtS => boolean(left > right),
+            Ins::I32GeS | Ins::I64GeS => boolean(left >= right),
+            Ins::I32And => boolean(left != 0 && right != 0),
+            Ins::I32Or => boolean(left != 0 || right != 0),
+            other => return Err(Trap::Unimplemented(format!("{other:?}"))),
+        };
+
+        // An i32 operation on i64 operands only happens where the compiler
+        // put booleans in, and those stay in range, so the width is decided
+        // by what the instruction produces rather than by the operands.
+        stack.push(match instruction {
+            Ins::I32Add | Ins::I32Sub | Ins::I32Mul => Value::I32(value.as_i64() as i32),
+            _ => value,
+        });
+        Ok(())
+    }
+}
+
+fn boolean(value: bool) -> Value {
+    Value::I32(if value { 1 } else { 0 })
+}
+
+fn pop(stack: &mut Vec<Value>) -> Result<Value, Trap> {
+    stack.pop().ok_or(Trap::Unreachable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wasm::{Func, FuncType};
+
+    fn module_with(body: Vec<Ins>, params: Vec<ValType>, results: Vec<ValType>) -> Module {
+        let mut module = Module::new();
+        let type_index = module.intern_type(FuncType { params, results });
+        let func = module.add_func(Func {
+            type_index,
+            locals: Vec::new(),
+            body,
+        });
+        module.export("f", func);
+        module
+    }
+
+    #[test]
+    fn arithmetic_comes_back_with_an_answer() {
+        let module = module_with(
+            vec![Ins::LocalGet(0), Ins::LocalGet(1), Ins::I64Add],
+            vec![ValType::I64, ValType::I64],
+            vec![ValType::I64],
+        );
+        let answer = call(&module, "f", &[Value::I64(2), Value::I64(3)]).expect("this runs");
+        assert_eq!(answer, Some(Value::I64(5)));
+    }
+
+    #[test]
+    fn a_branch_picks_one_arm_and_not_the_other() {
+        let module = module_with(
+            vec![
+                Ins::LocalGet(0),
+                Ins::If {
+                    result: Some(ValType::I64),
+                    then: vec![Ins::I64Const(10)],
+                    otherwise: vec![Ins::I64Const(20)],
+                },
+            ],
+            vec![ValType::I32],
+            vec![ValType::I64],
+        );
+        assert_eq!(
+            call(&module, "f", &[Value::I32(1)]),
+            Ok(Some(Value::I64(10)))
+        );
+        assert_eq!(
+            call(&module, "f", &[Value::I32(0)]),
+            Ok(Some(Value::I64(20)))
+        );
+    }
+
+    #[test]
+    fn dividing_by_zero_says_so_rather_than_answering() {
+        let module = module_with(
+            vec![Ins::I64Const(1), Ins::I64Const(0), Ins::I64DivS],
+            vec![],
+            vec![ValType::I64],
+        );
+        assert_eq!(call(&module, "f", &[]), Err(Trap::DivideByZero));
+    }
+
+    /// A loop with no way out has to end the test rather than the machine.
+    #[test]
+    fn a_walk_that_never_ends_runs_out_of_budget() {
+        let module = module_with(
+            vec![Ins::Loop {
+                result: None,
+                body: vec![Ins::Br(0)],
+            }],
+            vec![],
+            vec![],
+        );
+        assert_eq!(call(&module, "f", &[]), Err(Trap::TooLong));
+    }
+
+    #[test]
+    fn an_export_nobody_declared_is_an_error_rather_than_a_panic() {
+        let module = module_with(vec![], vec![], vec![]);
+        assert!(matches!(
+            call(&module, "nonesuch", &[]),
+            Err(Trap::Unimplemented(_))
+        ));
+    }
+}

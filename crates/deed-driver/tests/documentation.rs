@@ -546,10 +546,12 @@ fn crate_mentions(name: &str, needles: &[&str]) -> bool {
 /// The two counts the answer about `Result` and `List` rests on.
 ///
 /// The whole argument for leaving them built in is that the type is named in
-/// one crate and the syntax over it is named in most of them, so if that stops
-/// being true the answer is wrong and nothing else would say so. This is the
-/// one claim in these documents where a refactor moving a match arm is exactly
-/// the event that should make somebody read the paragraph again.
+/// few crates and the syntax over it is named in most of them, so if that
+/// stops being true the answer is wrong and nothing else would say so. This
+/// is the one claim in these documents where a refactor moving a match arm is
+/// exactly the event that should make somebody read the paragraph again, and
+/// it has already happened once: the backend gave a list a second meaning,
+/// its layout, and the count went from one crate to three.
 #[test]
 fn what_holds_result_in_the_language_is_counted_where_it_is_claimed() {
     let all = crates();
@@ -558,10 +560,11 @@ fn what_holds_result_in_the_language_is_counted_where_it_is_claimed() {
         .iter()
         .filter(|name| crate_mentions(name, &["Ty::Result", "Ty::List"]))
         .collect();
-    assert_eq!(
-        types.len(),
-        1,
-        "the paragraph says the type is named in one crate, and it is named in {types:?}"
+    let syntax_doc = read("design/02-syntax.md");
+    let named = format!("named in {} crates", spelled(types.len()));
+    assert!(
+        syntax_doc.contains(&named),
+        "the type is named in {types:?}, so the paragraph should say {named:?}"
     );
 
     // `?` and the outcome an `ensures` clause is keyed by. Both are syntax
@@ -571,7 +574,6 @@ fn what_holds_result_in_the_language_is_counted_where_it_is_claimed() {
         .filter(|name| crate_mentions(name, &["Expr::Try", "Outcome::"]))
         .collect();
 
-    let syntax_doc = read("design/02-syntax.md");
     let claim = format!(
         "those are in {} of the {} crates",
         spelled(syntax.len()),

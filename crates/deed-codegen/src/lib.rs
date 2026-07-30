@@ -1,6 +1,21 @@
-//! Compiles `deed-mir` to a runnable form.
+//! Compiles [`deed_mir`] to WebAssembly, and runs what it produced.
 //!
-//! Empty for now. See `design/05-backend.md`. Which backend (Cranelift JIT,
-//! WASM, or a native object file) fills this in depends on issues #470 and
-//! #475's spikes; this crate exists so the workspace shape is settled ahead
-//! of that choice.
+//! See `design/05-backend.md`. WebAssembly rather than native object code
+//! first, for two reasons written up there: a module runs inside `deed`
+//! without asking the machine for a linker, and its import model says the
+//! same thing about a module and its host that a capability says about a
+//! function and its caller.
+//!
+//! Nothing here is a dependency. The encoder writes the binary format by
+//! hand and [`run`] is a small runner over the instructions [`compile`]
+//! emits, for the same reason `deed-lsp` writes its own JSON: this workspace
+//! has no dependencies, and the part of each format a compiler needs is
+//! small.
+
+pub mod compile;
+pub mod run;
+pub mod wasm;
+
+pub use compile::{Unsupported, compile};
+pub use run::{Trap, Value, call};
+pub use wasm::Module;
