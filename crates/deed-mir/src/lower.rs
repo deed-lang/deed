@@ -80,11 +80,16 @@ pub fn lower(
         layouts.insert(name, id);
     }
 
+    // Taken out while the fields are filled in, because a field's type may
+    // be a `Result`, and a `Result` is a layout nobody declared that has to
+    // be appended as it is met.
+    let mut shapes = std::mem::take(&mut program.layouts);
+
     for item in &module.items {
         match item {
             Item::Record(record) => {
                 let id = layouts[record.name.name.as_str()];
-                program.layouts[id.0].variants = vec![crate::Variant {
+                let variants = vec![crate::Variant {
                     name: record.name.name.to_string(),
                     fields: record
                         .fields
@@ -92,48 +97,47 @@ pub fn lower(
                         .map(|field| {
                             Ok(crate::Field {
                                 name: field.name.name.to_string(),
-                                ty: written(&field.ty, &layouts, &aliases, &HashMap::new())?,
+                                ty: written(
+                                    &field.ty,
+                                    &layouts,
+                                    &aliases,
+                                    &HashMap::new(),
+                                    &mut shapes,
+                                )?,
                             })
                         })
                         .collect::<Result<Vec<_>, Unlowered>>()?,
                 }];
+                shapes[id.0].variants = variants;
             }
             Item::Choice(choice) => {
                 let id = layouts[choice.name.name.as_str()];
-                program.layouts[id.0].variants = choice
-                    .variants
-                    .iter()
-                    .map(|variant| {
-                        Ok(crate::Variant {
-                            name: variant.name.name.to_string(),
-                            fields: variant
-                                .fields
-                                .as_ref()
-                                .map(|fields| {
-                                    fields
-                                        .iter()
-                                        .map(|field| {
-                                            Ok(crate::Field {
-                                                name: field.name.name.to_string(),
-                                                ty: written(
-                                                    &field.ty,
-                                                    &layouts,
-                                                    &aliases,
-                                                    &HashMap::new(),
-                                                )?,
-                                            })
-                                        })
-                                        .collect::<Result<Vec<_>, Unlowered>>()
-                                })
-                                .transpose()?
-                                .unwrap_or_default(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, Unlowered>>()?;
+                let mut variants = Vec::new();
+                for variant in &choice.variants {
+                    let mut fields = Vec::new();
+                    for field in variant.fields.iter().flatten() {
+                        fields.push(crate::Field {
+                            name: field.name.name.to_string(),
+                            ty: written(
+                                &field.ty,
+                                &layouts,
+                                &aliases,
+                                &HashMap::new(),
+                                &mut shapes,
+                            )?,
+                        });
+                    }
+                    variants.push(crate::Variant {
+                        name: variant.name.name.to_string(),
+                        fields,
+                    });
+                }
+                shapes[id.0].variants = variants;
             }
             _ => {}
         }
     }
+    program.layouts = shapes;
 
     let mut order: Vec<&ast::FnDecl> = Vec::new();
     for item in &module.items {
@@ -172,8 +176,9 @@ pub fn lower(
     // What each alias comes out as, worked out once now that the layouts it
     // may name are all built.
     let mut alias_types: HashMap<String, Ty> = HashMap::new();
+    let mut shapes = std::mem::take(&mut program.layouts);
     for (name, ty) in &aliases {
-        if let Ok(lowered) = written(ty, &layouts, &aliases, &HashMap::new()) {
+        if let Ok(lowered) = written(ty, &layouts, &aliases, &HashMap::new(), &mut shapes) {
             alias_types.insert(name.clone(), lowered);
         }
     }
@@ -191,24 +196,29 @@ pub fn lower(
             continue;
         }
         let name = declaration.sig.name.name.to_string();
-        let params = declaration
-            .sig
-            .params
-            .iter()
-            .map(|param| match &param.ty {
-                Some(ty) => written(ty, &layouts, &aliases, &HashMap::new()),
-                None => Err(unlowered("a parameter with no type", param.span)),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut params = Vec::new();
+        for param in &declaration.sig.params {
+            let Some(ty) = &param.ty else {
+                return Err(unlowered("a parameter with no type", param.span));
+            };
+            params.push(written(
+                ty,
+                &layouts,
+                &aliases,
+                &HashMap::new(),
+                &mut shapes,
+            )?);
+        }
         let ret = match &declaration.sig.ret {
             None => Ty::Unit,
-            Some(ty) => written(ty, &layouts, &aliases, &HashMap::new())?,
+            Some(ty) => written(ty, &layouts, &aliases, &HashMap::new(), &mut shapes)?,
         };
         let id = program.add_function(Function::new(name, params, ret));
         if let Some(def) = resolutions.resolution(declaration.sig.name.span) {
             by_def.insert(def, id);
         }
     }
+    program.layouts = shapes;
 
     let mut lifted: Vec<Function> = Vec::new();
     let mut declarations: HashMap<String, &ast::FnDecl> = HashMap::new();
@@ -278,6 +288,38 @@ pub fn lower(
     Ok(program)
 }
 
+/// The layout of a `Result`, built the first time one is named and found
+/// after that.
+///
+/// A choice with two variants, which is a shape the backend already knows.
+/// What makes it different from `Tone` or `CounterError` is that nobody
+/// writes it down, so there is no declaration to hang it on and it has to be
+/// synthesized. One per pair of types, since `Result<Int, String>` and
+/// `Result<String, String>` hold different things and a shared layout would
+/// read the wrong width out of memory.
+///
+/// Named for what it holds rather than numbered, so two calls asking for the
+/// same one find it and anybody reading the MIR can tell them apart.
+fn result_layout(shapes: &mut Vec<crate::Layout>, ok: Ty, err: Ty) -> crate::LayoutId {
+    let name = format!("Result<{ok:?}, {err:?}>");
+    if let Some(at) = shapes.iter().position(|shape| shape.name == name) {
+        return crate::LayoutId(at);
+    }
+
+    let variant = |name: &str, ty: Ty| crate::Variant {
+        name: name.to_string(),
+        fields: vec![crate::Field {
+            name: "value".to_string(),
+            ty,
+        }],
+    };
+    shapes.push(crate::Layout {
+        name,
+        variants: vec![variant("ok", ok), variant("err", err)],
+    });
+    crate::LayoutId(shapes.len() - 1)
+}
+
 /// The MIR type of a type somebody wrote down.
 ///
 /// A signature in this language is complete, so every type in one is written
@@ -289,6 +331,7 @@ fn written(
     layouts: &HashMap<String, crate::LayoutId>,
     aliases: &HashMap<String, &ast::Type>,
     bindings: &HashMap<String, Ty>,
+    shapes: &mut Vec<crate::Layout>,
 ) -> Result<Ty, Unlowered> {
     Ok(match ty {
         ast::Type::Unit(_) => Ty::Unit,
@@ -298,7 +341,14 @@ fn written(
             ("Int", 0) => Ty::Int,
             ("Bool", 0) => Ty::Bool,
             ("String", 0) => Ty::Str,
-            ("List", 1) => Ty::List(Box::new(written(&args[0], layouts, aliases, bindings)?)),
+            ("List", 1) => Ty::List(Box::new(written(
+                &args[0], layouts, aliases, bindings, shapes,
+            )?)),
+            ("Result", 2) => {
+                let ok = written(&args[0], layouts, aliases, bindings, shapes)?;
+                let err = written(&args[1], layouts, aliases, bindings, shapes)?;
+                Ty::Aggregate(result_layout(shapes, ok, err))
+            }
             // The four capabilities the language provides. All one type
             // here, because a handle is a handle: what a program may do with
             // one is decided by the effect row and by which host operation
@@ -312,7 +362,7 @@ fn written(
             (other, 0) => match layouts.get(other) {
                 Some(id) => Ty::Aggregate(*id),
                 None => match aliases.get(other) {
-                    Some(names) => written(names, layouts, aliases, bindings)?,
+                    Some(names) => written(names, layouts, aliases, bindings, shapes)?,
                     None => return Err(unlowered(&format!("the type `{other}`"), *span)),
                 },
             },
@@ -586,13 +636,25 @@ impl Lowering<'_> {
             .params
             .iter()
             .map(|param| match &param.ty {
-                Some(ty) => written(ty, self.layouts, &HashMap::new(), &bindings),
+                Some(ty) => written(
+                    ty,
+                    self.layouts,
+                    &HashMap::new(),
+                    &bindings,
+                    &mut self.shapes,
+                ),
                 None => Err(unlowered("a parameter with no type", param.span)),
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match &declaration.sig.ret {
             None => Ty::Unit,
-            Some(ty) => written(ty, self.layouts, &HashMap::new(), &bindings)?,
+            Some(ty) => written(
+                ty,
+                self.layouts,
+                &HashMap::new(),
+                &bindings,
+                &mut self.shapes,
+            )?,
         };
 
         // Registered before the body is lowered, so a generic function that
@@ -693,15 +755,16 @@ impl Lowering<'_> {
     /// or turned into a runtime check, so what is left to compile is the
     /// base type. A named type is a layout this pass already built, found by
     /// the name its definition carries.
-    fn ty_at(&self, span: Span) -> Result<Ty, Unlowered> {
+    fn ty_at(&mut self, span: Span) -> Result<Ty, Unlowered> {
         let ty = self
             .types
             .type_of(span)
-            .ok_or_else(|| unlowered("a value the checker recorded no type for", span))?;
-        self.convert(ty, span)
+            .ok_or_else(|| unlowered("a value the checker recorded no type for", span))?
+            .clone();
+        self.convert(&ty, span)
     }
 
-    fn convert(&self, ty: &CheckedTy, span: Span) -> Result<Ty, Unlowered> {
+    fn convert(&mut self, ty: &CheckedTy, span: Span) -> Result<Ty, Unlowered> {
         Ok(match ty {
             // A type parameter, standing for whatever this copy of the
             // function was lowered for. The checker carries it by position
@@ -716,6 +779,35 @@ impl Lowering<'_> {
                 Ty::List(Box::new(Ty::Unit))
             }
             CheckedTy::List(element) => Ty::List(Box::new(self.convert(element, span)?)),
+            // A choice with two variants that nobody wrote down. See
+            // [`result_layout`].
+            //
+            // One half may be unsettled, because `ok(4)` says what the
+            // value is and nothing about what the error would have been.
+            // The other half is in the signature, which in this language is
+            // always complete, so that is where it comes from. Guessing
+            // instead would be a program building one shape and reading
+            // another, which is what a typed IR exists to rule out.
+            CheckedTy::Result(ok, err) => {
+                let settled = |half: &CheckedTy| !matches!(half, CheckedTy::Unknown);
+                if settled(ok) && settled(err) {
+                    let ok = self.convert(ok, span)?;
+                    let err = self.convert(err, span)?;
+                    Ty::Aggregate(result_layout(&mut self.shapes, ok, err))
+                } else {
+                    match self.function.ret.clone() {
+                        Ty::Aggregate(id) if self.layout(id).name.starts_with("Result<") => {
+                            Ty::Aggregate(id)
+                        }
+                        _ => {
+                            return Err(unlowered(
+                                "a `Result` whose halves this cannot work out",
+                                span,
+                            ));
+                        }
+                    }
+                }
+            }
             CheckedTy::Named { def, args } if args.is_empty() => {
                 let name = &self.resolutions.def(*def).name;
                 match self.layouts.get(name.as_str()) {
@@ -731,6 +823,14 @@ impl Lowering<'_> {
             }
             other => lower_ty(other, span)?,
         })
+    }
+
+    /// Which `Result` layout an `ok` or an `err` is building.
+    fn result_at(&mut self, span: Span) -> Result<crate::LayoutId, Unlowered> {
+        match self.ty_at(span)? {
+            Ty::Aggregate(id) if self.layout(id).name.starts_with("Result<") => Ok(id),
+            _ => Err(unlowered("`ok` or `err` on something else", span)),
+        }
     }
 
     fn block(&mut self, block: &ast::Block) -> Result<Block, Unlowered> {
@@ -961,10 +1061,10 @@ impl Lowering<'_> {
                 // A local holding a function value is called through the
                 // value rather than by name, since which body it points at
                 // is not known here.
-                if let Some(local) = self.slots.get(&def) {
+                if let Some(local) = self.slots.get(&def).copied() {
                     let ret = self.ty_at(*span)?;
                     return Ok(Expr::CallIndirect {
-                        callee: Box::new(Expr::Local(*local)),
+                        callee: Box::new(Expr::Local(local)),
                         args: lowered,
                         ret: Box::new(ret),
                     });
@@ -996,6 +1096,28 @@ impl Lowering<'_> {
                             Some(first) => self.ty_at(first.span())?,
                             None => Ty::Unit,
                         };
+
+                        // `ok(x)` and `err(x)`, the only way to build a
+                        // `Result`. Which variant is which comes from the
+                        // layout rather than from a number written here, so
+                        // the two places that know the order are one place.
+                        if matches!(name.name.as_str(), "ok" | "err") {
+                            let layout = self.result_at(*span)?;
+                            let variant = self
+                                .layout(layout)
+                                .variants
+                                .iter()
+                                .position(|held| held.name == name.name.as_str())
+                                .ok_or_else(|| {
+                                    unlowered("`ok` or `err` on something else", name.span)
+                                })?;
+                            return Ok(Expr::Make {
+                                layout,
+                                variant,
+                                fields: lowered,
+                            });
+                        }
+
                         let which = match (name.name.as_str(), &subject) {
                             ("length", Ty::Str) => crate::runtime::STR_LEN,
                             ("length", Ty::List(_)) => crate::runtime::LIST_LEN,
@@ -1278,21 +1400,29 @@ impl Lowering<'_> {
             .get(handler.effect.name.as_str())
             .ok_or_else(|| unlowered("a handler for an effect not declared here", span))?;
 
+        let mut held = Vec::new();
+        for field in &handler.state {
+            let bindings = self.bindings.clone();
+            held.push(crate::Field {
+                name: field.name.name.to_string(),
+                ty: written(
+                    &field.ty,
+                    self.layouts,
+                    &HashMap::new(),
+                    &bindings,
+                    &mut self.shapes,
+                )?,
+            });
+        }
+
+        // After the fields, since one of them may be a `Result` and that
+        // appends a layout of its own.
         let shape = crate::LayoutId(self.shapes.len());
         self.shapes.push(crate::Layout {
             name: format!("state of {name}"),
             variants: vec![crate::Variant {
                 name: "state".to_string(),
-                fields: handler
-                    .state
-                    .iter()
-                    .map(|field| {
-                        Ok(crate::Field {
-                            name: field.name.name.to_string(),
-                            ty: written(&field.ty, self.layouts, &HashMap::new(), &self.bindings)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, Unlowered>>()?,
+                fields: held,
             }],
         });
 
@@ -1322,13 +1452,25 @@ impl Lowering<'_> {
             let mut params = vec![Ty::Aggregate(shape)];
             for param in &signature.params {
                 params.push(match &param.ty {
-                    Some(ty) => written(ty, self.layouts, &HashMap::new(), &self.bindings)?,
+                    Some(ty) => written(
+                        ty,
+                        self.layouts,
+                        &HashMap::new(),
+                        &self.bindings.clone(),
+                        &mut self.shapes,
+                    )?,
                     None => return Err(unlowered("an operation with no type", param.span)),
                 });
             }
             let ret = match &signature.ret {
                 None => Ty::Unit,
-                Some(ty) => written(ty, self.layouts, &HashMap::new(), &self.bindings)?,
+                Some(ty) => written(
+                    ty,
+                    self.layouts,
+                    &HashMap::new(),
+                    &self.bindings.clone(),
+                    &mut self.shapes,
+                )?,
             };
 
             self.lifted.push(Function::new(
@@ -1420,7 +1562,13 @@ impl Lowering<'_> {
         let mut lifted_params = vec![Ty::Aggregate(shape)];
         for param in params {
             lifted_params.push(match &param.ty {
-                Some(ty) => written(ty, self.layouts, &HashMap::new(), &self.bindings)?,
+                Some(ty) => written(
+                    ty,
+                    self.layouts,
+                    &HashMap::new(),
+                    &self.bindings.clone(),
+                    &mut self.shapes,
+                )?,
                 None => self.ty_at(param.span)?,
             });
         }
@@ -1631,6 +1779,37 @@ impl Lowering<'_> {
                         .position(|declared| declared.name == field.name.name.as_str())
                         .ok_or_else(|| unlowered("a field the variant does not have", *span))?;
                     bindings.push((index, &field.name));
+                }
+                (vec![at], bindings)
+            }
+            // `ok(text)` and `err(why)`. The parser already refuses anything
+            // but a plain binder inside one, so there is exactly one thing
+            // being named and it is the variant's only field.
+            ast::Pattern::Tuple {
+                path,
+                elements,
+                span,
+            } => {
+                let name = path
+                    .last()
+                    .ok_or_else(|| unlowered("an empty pattern", *span))?;
+                let at = held
+                    .variants
+                    .iter()
+                    .position(|variant| variant.name == name.name.as_str())
+                    .ok_or_else(|| unlowered("a pattern naming no variant", *span))?;
+
+                let mut bindings = Vec::new();
+                for (position, element) in elements.iter().enumerate() {
+                    match element {
+                        ast::Pattern::Wildcard(_) => {}
+                        ast::Pattern::Path { segments, .. } if segments.len() == 1 => {
+                            bindings.push((position, &segments[0]));
+                        }
+                        other => {
+                            return Err(unlowered("a pattern inside a pattern", other.span()));
+                        }
+                    }
                 }
                 (vec![at], bindings)
             }

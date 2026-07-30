@@ -246,6 +246,36 @@ fn an_installation_points_at_the_right_body_for_each_operation() {
     assert_eq!(named, vec!["InMemory.value", "InMemory.bump"]);
 }
 
+/// `Result` is a choice nobody wrote down, so the shape is built when a type
+/// names one and found the second time.
+#[test]
+fn each_pair_of_types_a_result_holds_gets_its_own_layout() {
+    let program = lowered(
+        "module a\n\nfn number() -> Result<Int, String> { ok(1) }\n\nfn again() -> Result<Int, String> { ok(2) }\n\nfn text() -> Result<String, String> { ok(\"x\") }\n",
+    )
+    .expect("this lowers");
+
+    let results: Vec<&str> = program
+        .layouts
+        .iter()
+        .map(|layout| layout.name.as_str())
+        .filter(|name| name.starts_with("Result<"))
+        .collect();
+
+    // Two pairs, two layouts. Two functions at the same pair share one.
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert_ne!(results[0], results[1]);
+
+    let held = program
+        .layouts
+        .iter()
+        .find(|layout| layout.name.starts_with("Result<"))
+        .expect("there is one");
+    assert!(held.is_tagged(), "a Result has to say which half it holds");
+    assert_eq!(held.variants[0].name, "ok");
+    assert_eq!(held.variants[1].name, "err");
+}
+
 /// What is not lowered yet is named rather than approximated.
 #[test]
 fn a_shape_that_is_not_lowered_says_which_one() {

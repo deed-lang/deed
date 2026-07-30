@@ -282,6 +282,29 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 1,
         },
+        // `Result`, which is a choice with two variants that nobody writes
+        // down. Every `Io` operation that can fail hands one back, so this
+        // is most of what stands between the backend and the corpus.
+        Agreed {
+            name: "a Result that holds a value",
+            source: "module a\n\nfn halve(n: Int) -> Result<Int, String> {\n    if n % 2 == 0 {\n        ok(n / 2)\n    } else {\n        err(\"odd\")\n    }\n}\n\nfn answer() -> Int {\n    match halve(10) {\n        ok(half) => half,\n        err(why) => 0 - 1,\n    }\n}\n\ntest \"an even number halves\" {\n    assert answer() == 5\n}\n",
+            call: "answer",
+            expect: 5,
+        },
+        Agreed {
+            name: "a Result that holds an error",
+            source: "module a\n\nfn halve(n: Int) -> Result<Int, String> {\n    if n % 2 == 0 {\n        ok(n / 2)\n    } else {\n        err(\"odd\")\n    }\n}\n\nfn answer() -> Int {\n    match halve(7) {\n        ok(half) => half,\n        err(why) => length(why),\n    }\n}\n\ntest \"an odd number does not\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        // Two element types, two layouts. One shared shape would read the
+        // wrong width out of memory for one of them.
+        Agreed {
+            name: "two Results holding different things",
+            source: "module a\n\nfn number() -> Result<Int, String> { ok(4) }\n\nfn text() -> Result<String, String> { ok(\"abc\") }\n\nfn answer() -> Int {\n    let first = match number() {\n        ok(n) => n,\n        err(why) => 0,\n    }\n    let second = match text() {\n        ok(s) => length(s),\n        err(why) => 0,\n    }\n    first + second\n}\n\ntest \"each Result keeps what it holds\" {\n    assert answer() == 7\n}\n",
+            call: "answer",
+            expect: 7,
+        },
     ]
 }
 

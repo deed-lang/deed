@@ -175,6 +175,9 @@ fn the_backend_still_compiles_what_it_used_to() {
 
     for name in [
         "calendar.deed",
+        // The capability example: a program that reads a file it was given
+        // access to and cannot read one it was not.
+        "config.deed",
         "diverge.deed",
         "generics.deed",
         // A program that writes a line, which the module asks its host for.
