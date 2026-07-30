@@ -33,7 +33,7 @@ use deed_interp::{DeclaredRows, Guard, Guards, RowItem};
 use deed_lexer::tokenize;
 use deed_parser::parse;
 use deed_resolve::{Resolutions, Universe};
-use deed_typeck::{Tier, Types, World};
+use deed_typeck::{Reason, Tier, Types, World};
 
 /// One obligation and how it was discharged.
 #[derive(Clone, Debug)]
@@ -43,6 +43,8 @@ pub struct ObligationReport {
     /// What had to hold, such as a refinement name or which outcome an
     /// `ensures` clause was about.
     pub subject: String,
+    /// Why this landed in `Guarded` rather than `Proven`, when it did.
+    pub reason: Option<Reason>,
 }
 
 /// How long each pass took, for one file.
@@ -387,6 +389,7 @@ fn check_parsed(
             tier: obligation.tier,
             span: obligation.span,
             subject: checked.types.name_of(obligation.refinement).to_string(),
+            reason: obligation.reason,
         })
         .collect();
 
@@ -398,6 +401,7 @@ fn check_parsed(
             tier: precondition.tier,
             span: precondition.span,
             subject: format!("{} requires", precondition.callee),
+            reason: precondition.reason,
         });
     }
 
@@ -422,6 +426,7 @@ fn check_parsed(
                         Outcome::Err => "err",
                     }
                 ),
+                reason: None,
             });
         }
     }

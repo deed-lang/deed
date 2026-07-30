@@ -879,8 +879,8 @@ impl<'a> Checker<'a> {
                 continue;
             }
 
-            let tier = match outcome {
-                Truth::Always => Tier::Proven,
+            let (tier, reason) = match outcome {
+                Truth::Always => (Tier::Proven, None),
                 Truth::Never => {
                     let diagnostic = Diagnostic::error(
                         codes::BROKEN_PRECONDITION,
@@ -902,15 +902,16 @@ impl<'a> Checker<'a> {
                     self.emit(diagnostic.with_note(
                         "a precondition failure is a mistake in the caller, so it is reported here rather than inside the function",
                     ));
-                    Tier::Guarded
+                    (Tier::Guarded, None)
                 }
-                Truth::Unknown(_) => Tier::Guarded,
+                Truth::Unknown(reason) => (Tier::Guarded, Some(reason)),
             };
 
             self.types.push_precondition(Precondition {
                 span,
                 tier,
                 callee: name.clone().unwrap_or_default(),
+                reason,
             });
         }
     }
@@ -1951,6 +1952,7 @@ impl<'a> Checker<'a> {
                 refinement,
                 tier: Tier::Proven,
                 inside_ok,
+                reason: None,
             }),
             // Inside an `assert refuses`, a value the checker can see will not
             // satisfy the refinement is the statement being right.
@@ -1969,7 +1971,7 @@ impl<'a> Checker<'a> {
                 }
                 self.emit(diagnostic);
             }
-            _ => {
+            Truth::Unknown(reason) => {
                 let mut diagnostic = Diagnostic::warning(
                     codes::UNPROVEN_REFINEMENT,
                     self.file,
@@ -1977,9 +1979,10 @@ impl<'a> Checker<'a> {
                     format!("cannot prove this satisfies `{name}`, so it becomes a runtime check"),
                 )
                 .with_primary_label("checked at runtime")
-                .with_note(
-                    "obligations are Proven, Tested or Guarded, and this one is Guarded; see design/02-syntax.md",
-                );
+                .with_note(format!(
+                    "obligations are Proven, Tested or Guarded, and this one is Guarded because {}; see design/02-syntax.md",
+                    reason.text()
+                ));
                 if let Some(predicate) = predicate_text {
                     diagnostic =
                         diagnostic.with_secondary(predicate, "the predicate it has to satisfy");
@@ -2020,6 +2023,7 @@ impl<'a> Checker<'a> {
                     refinement,
                     tier: Tier::Guarded,
                     inside_ok,
+                    reason: Some(reason),
                 });
             }
         }

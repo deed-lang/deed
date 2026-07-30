@@ -6,6 +6,8 @@ use std::rc::Rc;
 use deed_diagnostics::{FileId, Span};
 use deed_resolve::{DefId, RowEntry};
 
+use crate::facts::Reason;
+
 /// What a function value is allowed to perform.
 ///
 /// A row is part of a function type rather than something attached to it. Two
@@ -393,6 +395,8 @@ pub struct Obligation {
     /// value it is about is one level in. Without this the runtime check ran
     /// the predicate against the `Result`, which fails whatever is inside it.
     pub inside_ok: bool,
+    /// Why this landed in `Guarded` rather than `Proven`, when it did.
+    pub reason: Option<Reason>,
 }
 
 /// A `where` clause, answered for where the call was written.
@@ -409,6 +413,8 @@ pub struct Precondition {
     pub span: Span,
     pub callee: String,
     pub tier: Tier,
+    /// Why this landed in `Guarded` rather than `Proven`, when it did.
+    pub reason: Option<Reason>,
 }
 
 /// Everything the type checker worked out.
