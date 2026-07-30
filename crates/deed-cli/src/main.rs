@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use deed_diagnostics::{SourceMap, render_human, render_json};
+use deed_diagnostics::{SourceMap, render_human};
 use deed_driver::{Checked, ObligationReport};
 use deed_interp::{Program, PropertyConfig};
 use deed_typeck::Tier;
@@ -659,46 +659,11 @@ fn report_json(
     checks: &[Checked],
     obligations: bool,
 ) -> io::Result<()> {
-    for checked in checks {
-        for diagnostic in &checked.diagnostics {
-            writeln!(
-                out,
-                "{{\"kind\":\"diagnostic\",\"diagnostic\":{}}}",
-                render_json(sources, diagnostic)
-            )?;
-        }
-    }
-
-    if obligations {
-        for checked in checks {
-            let file = sources.file(checked.file);
-            for ObligationReport {
-                tier,
-                span,
-                subject,
-                reason,
-            } in &checked.obligations
-            {
-                let location = file.location(span.start);
-                let reason = match reason {
-                    Some(reason) => format!("\"{}\"", reason.text()),
-                    None => "null".to_string(),
-                };
-                writeln!(
-                    out,
-                    "{{\"kind\":\"obligation\",\"tier\":\"{}\",\"file\":\"{}\",\"line\":{},\"column\":{},\"subject\":\"{}\",\"reason\":{}}}",
-                    tier.name(),
-                    file.name(),
-                    location.line,
-                    location.column,
-                    subject,
-                    reason
-                )?;
-            }
-        }
-    }
-
-    Ok(())
+    write!(
+        out,
+        "{}",
+        deed_driver::json_report(sources, checks, obligations)
+    )
 }
 
 fn plural(count: usize, noun: &str) -> String {

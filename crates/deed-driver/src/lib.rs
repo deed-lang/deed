@@ -19,9 +19,11 @@
 
 pub mod fix;
 mod imports;
+mod report;
 mod rows;
 mod shipped;
 
+pub use report::json_report;
 pub use shipped::{shipped_for, shipped_modules, shipped_source, take_shipped};
 
 use std::time::{Duration, Instant};
