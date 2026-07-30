@@ -548,12 +548,27 @@ to be found by reading the pass that had the bug.
   entry is reported, which is right for `sys.*` and wrong for `Log.*`, and misses a bare
   capability entirely. Answering it means resolving names before computing exports, and
   exports being computable first is what keeps module order from mattering.
+  Measured: no starred entry (`uses X.*`) appears anywhere in `examples/` or `std/` today, so
+  this imprecision has no real case behind it yet. Decided to keep the order-independence
+  property rather than split exports into a pass that runs after resolution; revisit the day
+  a program actually writes `uses Log.*` across a module boundary.
 - Charging a closure's effects to the call site rather than to its author. Now that a
   closure's row can be written down where it crosses a boundary, the conservative rule is
   doing less work than it used to. Changing it changes the soundness argument above, which is
   worth its own change rather than a line in someone else's.
+  Looked at again: the only case where this changes anything is a closure written but never
+  called, and catching that needs escape analysis, a second inference pass for a case nobody
+  has written. Kept the current rule: a closure's effect is charged to whoever wrote it.
 - Can rows be inferred well enough that most functions carry none, and does that then
   undermine the review argument, which depends on the signature being complete?
+  Not attempted, leaning no: an omitted `uses` clause defaulting to "infer it" is the silent
+  effect P5 refuses everywhere else. Every function in the corpus already writes its own row,
+  so there is no evidence either way yet, only the principle this would cut against.
 - How do effects interact with data structures. Does a `Map` holding closures need a row?
+  Measured: nothing in `examples/` or `std/` stores a closure in a Table, list element or
+  record field; every closure in the corpus is passed as a plain parameter. `Types::
+  function_rows()` keys by where a closure was written, not by where a value carrying it
+  ends up, so a stored closure would need to carry its row through the value instead. No real
+  case forces this yet.
 - What does an effect row mean across a network boundary, where the callee is not compiled
   with you?
