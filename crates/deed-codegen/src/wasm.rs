@@ -285,10 +285,27 @@ pub struct Func {
     pub body: Vec<Ins>,
 }
 
+/// Something the module needs from whoever runs it.
+///
+/// A WebAssembly module cannot open a file, read a clock or write a line. It
+/// says what it wants and the host decides. That is not a limitation being
+/// worked around here, it is the same shape a `Dir` capability already has,
+/// and it is most of why this backend targets WASM.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Import {
+    /// Which namespace the host publishes it under.
+    pub module: String,
+    pub name: String,
+    pub type_index: u32,
+}
+
 /// A module under construction.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Module {
     pub types: Vec<FuncType>,
+    /// What the host has to supply, and what the function index space starts
+    /// with: an import is numbered before every function the module defines.
+    pub imports: Vec<Import>,
     pub funcs: Vec<Func>,
     /// Name and function index, for everything callable from outside.
     pub exports: Vec<(String, u32)>,
@@ -319,9 +336,36 @@ impl Module {
         (self.types.len() - 1) as u32
     }
 
+    /// Declares something the host has to supply, handing back the index it
+    /// is callable at.
+    ///
+    /// Interned, since two calls to the same operation are one import.
+    /// Imports have to be declared before any function is added, because
+    /// they are numbered first and adding one afterwards would move every
+    /// function already placed.
+    pub fn add_import(&mut self, module: &str, name: &str, type_index: u32) -> u32 {
+        assert!(
+            self.funcs.is_empty(),
+            "imports are numbered before defined functions, so they cannot be added after one"
+        );
+        if let Some(at) = self
+            .imports
+            .iter()
+            .position(|found| found.module == module && found.name == name)
+        {
+            return at as u32;
+        }
+        self.imports.push(Import {
+            module: module.to_string(),
+            name: name.to_string(),
+            type_index,
+        });
+        (self.imports.len() - 1) as u32
+    }
+
     pub fn add_func(&mut self, func: Func) -> u32 {
         self.funcs.push(func);
-        (self.funcs.len() - 1) as u32
+        (self.imports.len() + self.funcs.len() - 1) as u32
     }
 
     pub fn export(&mut self, name: impl Into<String>, func: u32) {
@@ -359,6 +403,20 @@ impl Module {
                 }
             }
             write_section(&mut out, 1, &section);
+        }
+
+        // The import section comes before the function section, and what it
+        // declares is numbered before what the function section does.
+        if !self.imports.is_empty() {
+            let mut section = Vec::new();
+            write_u32(&mut section, self.imports.len() as u32);
+            for import in &self.imports {
+                write_name(&mut section, &import.module);
+                write_name(&mut section, &import.name);
+                section.push(0x00);
+                write_u32(&mut section, import.type_index);
+            }
+            write_section(&mut out, 2, &section);
         }
 
         if !self.funcs.is_empty() {

@@ -53,6 +53,12 @@ pub enum Ty {
     Aggregate(LayoutId),
     /// An opaque capability handle. Nothing in compiled code may look inside
     /// one, which is the whole of what a capability is.
+    ///
+    /// Not boxed: a handle is a number the host gave out and the program
+    /// hands back, and it names nothing in the program's own memory. That is
+    /// what makes it opaque rather than merely undocumented. A compiled
+    /// program cannot forge one, because the only things it can do with a
+    /// capability are pass it on and hand it to the host.
     Capability,
     /// A function value: a code pointer and a captured environment.
     Closure,
@@ -65,10 +71,7 @@ impl Ty {
     /// A property of the type rather than of any one use of it, which is why
     /// it is answered here and not at each load and store.
     pub fn is_boxed(&self) -> bool {
-        matches!(
-            self,
-            Ty::Str | Ty::List(_) | Ty::Aggregate(_) | Ty::Capability | Ty::Closure
-        )
+        matches!(self, Ty::Str | Ty::List(_) | Ty::Aggregate(_) | Ty::Closure)
     }
 }
 
@@ -384,6 +387,27 @@ pub enum Expr {
     Perform {
         effect: EffectId,
         operation: usize,
+        args: Vec<Expr>,
+        ret: Box<Ty>,
+    },
+    /// A call to something the host supplies rather than the program.
+    ///
+    /// Everything a Deed program can do that is not arithmetic on its own
+    /// memory is one of these: reading a file, writing a line, asking the
+    /// clock, narrowing a capability. None of them are things a compiled
+    /// module can do by itself, and that is the point rather than a
+    /// limitation. The module says what it wants and whoever runs it
+    /// decides, which is the same shape the language's capabilities already
+    /// have.
+    ///
+    /// The name is `namespace.operation`, and it becomes a WebAssembly
+    /// import. A call still needs the capability, which is the first
+    /// argument: the effect row says what kind of thing is happening and the
+    /// handle says which resource it happens to, and neither is enough
+    /// alone. See `crates/deed-typeck/src/check.rs` for where that rule is
+    /// stated and `design/04-capabilities.md` for why.
+    Host {
+        name: String,
         args: Vec<Expr>,
         ret: Box<Ty>,
     },

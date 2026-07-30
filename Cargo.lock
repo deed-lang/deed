@@ -82,6 +82,7 @@ dependencies = [
  "deed-lexer",
  "deed-parser",
  "deed-resolve",
+ "deed-rt",
 ]
 
 [[package]]

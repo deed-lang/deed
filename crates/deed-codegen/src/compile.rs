@@ -13,7 +13,7 @@
 use deed_mir::{BinaryOp, Block, Expr, FuncId, Function, Local, Program, Stmt, Ty, UnaryOp};
 
 use crate::layout;
-use crate::wasm::{Func, FuncType, Ins, Module, ValType};
+use crate::wasm::{Func, FuncType, Import, Ins, Module, ValType};
 
 /// What a backend can say about a program it will not compile.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -58,20 +58,35 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
 
     // Signatures first, so a body can call anything regardless of where it
     // sits, and so a function's index here is its index in the program.
+    //
+    // Nothing is turned away by type any more. Every type this IR has now
+    // has a representation, including a capability, which is a handle the
+    // host gave out rather than anything the program can look inside. What
+    // is still refused is refused by `Builder::fail` where it is met, and
+    // the earlier refusals were the backend not having got somewhere yet
+    // rather than a rule.
     for function in &program.functions {
-        for ty in &function.params {
-            reject(function, ty)?;
-        }
-        reject(function, &function.ret)?;
         index_of_signature(&mut module, function);
     }
+
+    // Then everything the host has to supply, before any function is added,
+    // because an import is numbered ahead of every function the module
+    // defines. Adding one later would move every function already placed.
+    let wanted = host_calls(program);
+    for (name, signature) in &wanted {
+        let type_index = module.intern_type(signature.clone());
+        let (namespace, operation) = name.split_once('.').unwrap_or(("deed", name));
+        module.add_import(&format!("deed:{namespace}"), operation, type_index);
+    }
+    let shift = module.imports.len() as u32;
 
     let mut strings = Strings::new();
 
     for function in &program.functions {
         let type_index = index_of_signature(&mut module, function);
         let interned = module.types.clone();
-        let mut body = Builder::new(program, function, &mut strings, interned);
+        let imported = module.imports.clone();
+        let mut body = Builder::new(program, function, &mut strings, interned, imported, shift);
         body.block(&function.body)?;
         body.instructions.push(Ins::Return);
 
@@ -96,21 +111,127 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
     Ok(module)
 }
 
+/// Every host call the program makes, by name, with the signature it wants.
+///
+/// Collected up front rather than as bodies are compiled, because imports
+/// are numbered before defined functions and a body cannot add one without
+/// moving every function already placed.
+fn host_calls(program: &Program) -> Vec<(String, FuncType)> {
+    fn walk(expr: &Expr, found: &mut Vec<(String, FuncType)>) {
+        if let Expr::Host { name, args, ret } = expr
+            && !found.iter().any(|(seen, _)| seen == name)
+        {
+            found.push((
+                name.clone(),
+                FuncType {
+                    params: args
+                        .iter()
+                        .filter_map(|arg| static_ty(arg).and_then(|ty| val_type(&ty)))
+                        .collect(),
+                    results: val_type(ret).into_iter().collect(),
+                },
+            ));
+        }
+
+        match expr {
+            Expr::Unary { operand, .. } => walk(operand, found),
+            Expr::Binary { left, right, .. } => {
+                walk(left, found);
+                walk(right, found);
+            }
+            Expr::Call { args, .. }
+            | Expr::Make { fields: args, .. }
+            | Expr::List { items: args, .. }
+            | Expr::Runtime { args, .. }
+            | Expr::Perform { args, .. }
+            | Expr::Host { args, .. } => {
+                for arg in args {
+                    walk(arg, found);
+                }
+            }
+            Expr::CallIndirect { callee, args, .. } => {
+                walk(callee, found);
+                for arg in args {
+                    walk(arg, found);
+                }
+            }
+            Expr::Field { value, .. } | Expr::Discriminant { value, .. } => walk(value, found),
+            Expr::If {
+                condition,
+                then,
+                otherwise,
+                ..
+            } => {
+                walk(condition, found);
+                walk_block(then, found);
+                walk_block(otherwise, found);
+            }
+            Expr::Block(block) => walk_block(block, found),
+            Expr::ElementAt { list, index, .. } => {
+                walk(list, found);
+                walk(index, found);
+            }
+            Expr::Install { state, body, .. } => {
+                walk(state, found);
+                walk_block(body, found);
+            }
+            _ => {}
+        }
+    }
+
+    fn walk_block(block: &Block, found: &mut Vec<(String, FuncType)>) {
+        for stmt in &block.stmts {
+            walk_stmt(stmt, found);
+        }
+        walk(&block.value, found);
+    }
+
+    fn walk_stmt(stmt: &Stmt, found: &mut Vec<(String, FuncType)>) {
+        match stmt {
+            Stmt::Assign { value, .. } | Stmt::Discard(value) => walk(value, found),
+            Stmt::Fail { .. } => {}
+            Stmt::While { condition, body } => {
+                walk(condition, found);
+                for stmt in body {
+                    walk_stmt(stmt, found);
+                }
+            }
+            Stmt::SetField { object, value, .. } => {
+                walk(object, found);
+                walk(value, found);
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    for function in &program.functions {
+        walk_block(&function.body, &mut found);
+    }
+    found
+}
+
+/// What an expression produces, for the cases an import's signature needs,
+/// which are the ones that do not depend on the function being compiled.
+///
+/// A host call takes capabilities and literals. Anything else would be a
+/// program handing the host something out of its own memory, which nothing
+/// in the language can express.
+fn static_ty(expr: &Expr) -> Option<Ty> {
+    Some(match expr {
+        Expr::Unit => Ty::Unit,
+        Expr::Bool(_) => Ty::Bool,
+        Expr::Int(_) => Ty::Int,
+        Expr::Str(_) => Ty::Str,
+        Expr::Host { ret, .. } => (**ret).clone(),
+        Expr::Call { .. } | Expr::Local(_) | Expr::Field { .. } => Ty::Capability,
+        _ => return None,
+    })
+}
+
 fn index_of_signature(module: &mut Module, function: &Function) -> u32 {
     let params = function.params.iter().filter_map(val_type).collect();
     let results = val_type(&function.ret).into_iter().collect();
     module.intern_type(FuncType { params, results })
-}
-
-fn reject(function: &Function, ty: &Ty) -> Result<(), Unsupported> {
-    let what = match ty {
-        Ty::Capability => "a capability",
-        _ => return Ok(()),
-    };
-    Err(Unsupported {
-        function: function.name.clone(),
-        what: what.to_string(),
-    })
 }
 
 /// Every string literal in the program, placed in memory before anything
@@ -169,6 +290,15 @@ struct Builder<'a> {
     /// Every signature the module has interned, so an indirect call can name
     /// the one it goes through.
     signatures: Vec<FuncType>,
+    /// What the host supplies, in the order it is numbered.
+    imports: Vec<Import>,
+    /// How many imports come before the first defined function.
+    ///
+    /// A MIR `FuncId` is an index into the program's own functions, and a
+    /// WebAssembly function index counts imports first. This is the
+    /// difference, and it is applied in exactly two places: a direct call
+    /// and the table.
+    shift: u32,
 }
 
 impl<'a> Builder<'a> {
@@ -177,6 +307,8 @@ impl<'a> Builder<'a> {
         function: &'a Function,
         strings: &'a mut Strings,
         signatures: Vec<FuncType>,
+        imports: Vec<Import>,
+        shift: u32,
     ) -> Self {
         let mut slots = Vec::new();
         let mut next = 0;
@@ -204,7 +336,20 @@ impl<'a> Builder<'a> {
             slots,
             params: function.params.iter().filter_map(val_type).count(),
             signatures,
+            imports,
+            shift,
         }
+    }
+
+    /// Where the host call of this name is numbered.
+    fn import(&self, name: &str) -> Result<u32, Unsupported> {
+        let (namespace, operation) = name.split_once('.').unwrap_or(("deed", name));
+        let namespace = format!("deed:{namespace}");
+        self.imports
+            .iter()
+            .position(|found| found.module == namespace && found.name == operation)
+            .map(|at| at as u32)
+            .ok_or_else(|| self.fail(&format!("a call to `{name}`, which nothing imported")))
     }
 
     /// Which interned signature this is.
@@ -460,7 +605,8 @@ impl<'a> Builder<'a> {
                 for arg in args {
                     self.expr(arg)?;
                 }
-                self.instructions.push(Ins::Call(func.0 as u32));
+                self.instructions
+                    .push(Ins::Call(func.0 as u32 + self.shift));
             }
             Expr::CallIndirect { callee, args, ret } => {
                 // The environment goes first, then the arguments, then the
@@ -612,6 +758,13 @@ impl<'a> Builder<'a> {
                     .push(Ins::I64Load(layout::operation_offset(*operation)));
                 self.instructions.push(Ins::I32WrapI64);
                 self.instructions.push(Ins::CallIndirect(type_index));
+            }
+            Expr::Host { name, args, .. } => {
+                let index = self.import(name)?;
+                for arg in args {
+                    self.expr(arg)?;
+                }
+                self.instructions.push(Ins::Call(index));
             }
             Expr::Make {
                 layout: id,
@@ -804,6 +957,7 @@ impl<'a> Builder<'a> {
             Expr::ElementAt { element, .. } => (**element).clone(),
             Expr::Install { ty, .. } => (**ty).clone(),
             Expr::Perform { ret, .. } => (**ret).clone(),
+            Expr::Host { ret, .. } => (**ret).clone(),
         })
     }
 
@@ -865,16 +1019,79 @@ mod tests {
         assert_eq!(module.funcs[0].body[0], Ins::LocalGet(0));
     }
 
+    /// A capability compiles now, and what it compiles to is a number the
+    /// program cannot look inside.
+    ///
+    /// This used to be the refusal test, since a capability was the one type
+    /// with no representation. It is a handle the host gave out, so it has
+    /// the same representation as anything else that does not live in the
+    /// program's own memory, and what makes it opaque is that the only
+    /// things reachable through one are host calls.
     #[test]
-    fn what_is_not_compiled_yet_is_named_rather_than_approximated() {
-        let mut function = Function::new("reach", vec![Ty::Capability], Ty::Unit);
-        function.body = Block::of(Expr::Unit);
+    fn a_capability_is_a_handle_rather_than_something_to_look_inside() {
+        let mut function = Function::new("reach", vec![Ty::Capability], Ty::Capability);
+        function.body = Block::of(Expr::Local(Local(0)));
         let mut program = Program::new();
         program.add_function(function);
 
-        let refused = compile(&program).expect_err("a capability is not compiled yet");
-        assert_eq!(refused.function, "reach");
-        assert!(refused.to_string().contains("a capability"), "{refused}");
+        let module = compile(&program).expect("a handle is a number like any other");
+        assert_eq!(
+            module.types[0],
+            FuncType {
+                params: vec![ValType::I64],
+                results: vec![ValType::I64],
+            }
+        );
+        assert!(!Ty::Capability.is_boxed());
+    }
+
+    /// What a program cannot do by itself, it asks for by name.
+    #[test]
+    fn a_host_call_becomes_an_import_the_module_declares() {
+        let mut function = Function::new("greet", vec![Ty::Capability], Ty::Unit);
+        function.body = Block::of(Expr::Host {
+            name: "io.write".to_string(),
+            args: vec![Expr::Local(Local(0)), Expr::Str("hi".to_string())],
+            ret: Box::new(Ty::Unit),
+        });
+        let mut program = Program::new();
+        program.add_function(function);
+
+        let module = compile(&program).expect("a host call compiles");
+        assert_eq!(module.imports.len(), 1);
+        assert_eq!(module.imports[0].module, "deed:io");
+        assert_eq!(module.imports[0].name, "write");
+        assert_eq!(
+            module.types[module.imports[0].type_index as usize],
+            FuncType {
+                params: vec![ValType::I64, ValType::I64],
+                results: Vec::new(),
+            }
+        );
+
+        // The import is numbered first, so the one function the program
+        // declares is callable at 1 and exported there.
+        assert_eq!(module.exports, vec![("greet".to_string(), 1)]);
+    }
+
+    /// Two calls to one operation are one import.
+    #[test]
+    fn asking_for_the_same_thing_twice_declares_it_once() {
+        let write = |text: &str| Expr::Host {
+            name: "io.write".to_string(),
+            args: vec![Expr::Local(Local(0)), Expr::Str(text.to_string())],
+            ret: Box::new(Ty::Unit),
+        };
+        let mut function = Function::new("greet", vec![Ty::Capability], Ty::Unit);
+        function.body = Block {
+            stmts: vec![Stmt::Discard(write("hi")), Stmt::Discard(write("bye"))],
+            value: Expr::Unit,
+        };
+        let mut program = Program::new();
+        program.add_function(function);
+
+        let module = compile(&program).expect("this compiles");
+        assert_eq!(module.imports.len(), 1);
     }
 
     /// A literal is placed once however many times it is written, and the

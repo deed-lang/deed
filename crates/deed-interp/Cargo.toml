@@ -11,6 +11,7 @@ rust-version.workspace = true
 deed-ast = { path = "../deed-ast" }
 deed-diagnostics = { path = "../deed-diagnostics" }
 deed-resolve = { path = "../deed-resolve" }
+deed-rt = { path = "../deed-rt" }
 
 [dev-dependencies]
 deed-lexer = { path = "../deed-lexer" }

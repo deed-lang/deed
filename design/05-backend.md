@@ -117,6 +117,44 @@ allocation in this backend does, and the note in `crates/deed-codegen/src/layout
 when that stops being acceptable applies here with a number attached: a `with` inside a walk
 allocates once per turn.
 
+## A capability is a handle, and everything it reaches is an import
+
+A WebAssembly module cannot open a file, write a line or read a clock. It says what it wants
+from its host and the host decides. That reads like a limitation and is the opposite of one:
+it is the same shape `design/04-capabilities.md` already gives a `Dir`, and getting it from
+the target for free is most of why WASM was the right one.
+
+So a compiled program's **import section is its capability requirements**, written down
+where a host can read them before running anything. `Io.write` becomes `deed:io.write`.
+Narrowing `System` down to the console it carries becomes `deed:sys.console`, because
+narrowing is something only the host can do and a compiled program reaching into its own
+memory for it would be a program widening its own authority.
+
+A capability itself is a handle: a number the host gave out and the program hands back. It
+is not a pointer into the program's memory, so there is nothing inside one to look at, and
+the program cannot make one up. What a program may do with a handle is decided by the effect
+row, which the checker settled, and by which import it is passed to, which the host
+implements. Neither is a question about its representation, so all four capabilities are one
+type here.
+
+The capability is still the argument. `Io.write` takes the console it writes to and the
+compiled call keeps it, so holding the row is not a permission bit. That rule comes from
+`crates/deed-typeck/src/check.rs` and is checked against a compiled module in
+`crates/deed-driver/tests/host.rs`.
+
+`deed-rt` is the host half. `sandbox.rs` moved there from `deed-interp`, because the rules a
+`Dir` enforces have to be the same whether an interpreter or an embedder is enforcing them,
+and a rule living inside one of two hosts is a rule about one of them.
+
+What this repo does not have is a host. The runner in `deed-codegen` is a test oracle, and
+deciding what `Io.write` does would be a program taking authority nobody granted it. It stops
+and names the operation instead, which is also the most useful thing it could say about a
+module on its way to a real embedder.
+
+**What would change this:** a WASI target. `deed:io.read` and `wasi:filesystem` want the same
+things, and a program compiled against the names here would need a shim. That is a mapping
+rather than a redesign, and it is worth writing when somebody has a host to run it on.
+
 ## Native object code is not the next thing, and there is a reason rather than a plan
 
 The order at the top of this document was WASM first and native object output second, and

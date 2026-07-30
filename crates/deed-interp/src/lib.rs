@@ -52,8 +52,14 @@
 pub mod codes;
 pub mod interp;
 pub mod property;
-pub mod sandbox;
 pub mod value;
+
+/// Where a `Dir` capability's rules live now.
+///
+/// Re-exported rather than moved out of view, because the interpreter is
+/// not the only host a compiled program can have and the rules have to be
+/// the same for all of them. See `deed-rt`.
+pub use deed_rt::sandbox;
 
 pub use interp::{
     DeclaredRows, Guard, Guards, Program, RowItem, Run, TestOutcome, run_main, run_tests,
