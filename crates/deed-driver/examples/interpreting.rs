@@ -55,6 +55,8 @@ fn main() {
     println!();
     per_push();
     println!();
+    per_table();
+    println!();
     real_program();
     println!();
     notes();
@@ -338,6 +340,116 @@ test \"pushing\" {{
 
         println!(
             "{length:<10} {:<10} {:<10} {}",
+            millis(elapsed),
+            nanos(elapsed / PUSHES as u32),
+            if index == 0 {
+                String::new()
+            } else {
+                nanos(elapsed.saturating_sub(empty) / PUSHES as u32)
+            },
+        );
+    }
+}
+
+// -- what std/table costs -----------------------------------------------------
+
+/// `std/table`'s `or_else` (lookup) and `set` (insert), against a table with a
+/// given number of distinct keys.
+///
+/// #614: `std/table` is a list of entries, so `get`, `set` and `or_else` all
+/// walk it, and `examples/logs.deed` counts by key, which is one walk per
+/// line per distinct key. Nobody had measured what that costs, only argued
+/// it from the shape of the code, and one reading proves nothing: four sizes
+/// are what tell a slope from noise (#266 had to redo a measurement it took
+/// from a single difference).
+///
+/// Both probes ask for the worst case a lookup or an insert onto a table of
+/// that size can have. `or_else` looks up the *last* key `set` put in, so the
+/// walk that answers it crosses every entry before matching one, rather than
+/// stopping at the front for a table built by repeated `set`. `set` inserts a
+/// key that is not present at all, so `holds` walks the whole list before
+/// `push` copies it, which is `set`'s real cost on a key that was not already
+/// there: two full walks rather than one.
+fn per_table() {
+    let table = deed_driver::shipped_source("std/table")
+        .expect("a module that ships has a source")
+        .to_string();
+    let files = |bench: String| {
+        vec![
+            ("bench.deed", bench),
+            ("<shipped>/std/table.deed", table.clone()),
+        ]
+    };
+
+    println!("{PUSHES} lookups, against a table with this many distinct keys");
+    println!("keys       total      per lookup over an empty one");
+    println!("-----------------------------------------------------------");
+
+    let mut empty = Duration::ZERO;
+    for (index, size) in LENGTHS.into_iter().enumerate() {
+        let last = size.saturating_sub(1);
+        let source = format!(
+            "module bench
+
+use std/table.{{set, or_else}}
+
+test \"lookup\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
+    let turns = {PUSHES}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{ sum + or_else(base, \"{last}\", 0) }}
+    assert got == turns * {last}
+}}
+"
+        );
+        let elapsed = time(&files(source), 0);
+        if index == 0 {
+            empty = elapsed;
+        }
+
+        println!(
+            "{size:<10} {:<10} {:<10} {}",
+            millis(elapsed),
+            nanos(elapsed / PUSHES as u32),
+            if index == 0 {
+                String::new()
+            } else {
+                nanos(elapsed.saturating_sub(empty) / PUSHES as u32)
+            },
+        );
+    }
+
+    println!();
+    println!("{PUSHES} inserts of a key not already there, into a table this big");
+    println!("keys       total      per insert over an empty one");
+    println!("-----------------------------------------------------------");
+
+    let mut empty = Duration::ZERO;
+    for (index, size) in LENGTHS.into_iter().enumerate() {
+        let source = format!(
+            "module bench
+
+use std/table.{{set}}
+
+test \"inserting\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
+    let turns = {PUSHES}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{ sum + length(set(base, \"new\", 0)) }}
+    assert got == turns * {}
+}}
+",
+            size + 1
+        );
+        let elapsed = time(&files(source), 0);
+        if index == 0 {
+            empty = elapsed;
+        }
+
+        println!(
+            "{size:<10} {:<10} {:<10} {}",
             millis(elapsed),
             nanos(elapsed / PUSHES as u32),
             if index == 0 {
