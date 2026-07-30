@@ -194,6 +194,21 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 7,
         },
+        // A `where` the caller satisfies. The checker proves it where the
+        // call is written, so the compiled form has nothing left to check
+        // and still answers the same.
+        Agreed {
+            name: "a precondition the caller satisfies",
+            source: "module a\n\nfn halve(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n / 2\n}\n\nfn answer() -> Int { halve(10) }\n\ntest \"a proven precondition does not get in the way\" {\n    assert answer() == 5\n}\n",
+            call: "answer",
+            expect: 5,
+        },
+        Agreed {
+            name: "a refinement the checker proves",
+            source: "module a\n\ntype Positive = Int where value > 0\n\nfn one() -> Positive { 1 }\n\nfn answer() -> Int { one() + 41 }\n\ntest \"a proven refinement answers as itself\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
     ]
 }
 
@@ -271,6 +286,37 @@ fn the_agreement_covers_more_than_one_program() {
     assert!(
         programs().len() >= 10,
         "the agreement table should carry more than a couple of programs"
+    );
+}
+
+/// What a tier is worth at runtime, which is the whole of why the checker
+/// bothers.
+///
+/// Two functions with the same body and the same `where` clause. One is
+/// called with something the checker can prove satisfies it and the other
+/// with something it cannot, and only the second compiles to a check. This
+/// is the claim `design/05-backend.md` makes about proven obligations
+/// costing nothing, asked as a count of instructions rather than as a
+/// sentence.
+#[test]
+fn a_proven_precondition_compiles_to_nothing_and_a_guarded_one_does_not() {
+    let proven = "module a\n\nfn halve(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n / 2\n}\n";
+    let guarded = "module a\n\nfn halve(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n / 2\n}\n\nfn any(m: Int) -> Int { halve(m) }\n";
+
+    let sizes: Vec<usize> = [proven, guarded]
+        .iter()
+        .map(|source| {
+            let (_, one) = checked(source);
+            let lowered =
+                deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+            let module = compile(&lowered).expect("this compiles");
+            module.funcs[0].body.len()
+        })
+        .collect();
+
+    assert!(
+        sizes[0] < sizes[1],
+        "a call the checker could not prove should compile to more than one it could: {sizes:?}"
     );
 }
 
