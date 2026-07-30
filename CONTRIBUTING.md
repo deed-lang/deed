@@ -49,7 +49,64 @@ cargo test --doc --workspace
 
 [cargo-nextest](https://nexte.st/) rather than `cargo test` because this workspace has forty
 test binaries and nextest runs them at once. It cannot run doctests, which is why they are
-the second line rather than folded into the first.
+the second line rather than folded into the first. Nextest also runs with `--no-fail-fast`
+by default (`cargo test` does not): without it, the first failing test binary stops every
+one after it, and a pull request can look like it broke one thing when it broke several.
+
+This machine's own build constraint: there is no MSVC linker here, so every `cargo` command
+needs `[build] target = "x86_64-pc-windows-gnullvm"` set in `~/.cargo/config.toml` (llvm-mingw
+provides the linker). That is local to whoever is missing MSVC, not a repository setting;
+a machine with MSVC or on Linux/macOS needs none of it. `cargo check --target
+wasm32-unknown-unknown` additionally needs `rustup target add wasm32-unknown-unknown` once,
+for anything touching `deed-wasm`.
+
+## The ratchets
+
+This repository's tests are stricter than most, in ways nothing here will explain until CI
+rejects a pull request that looked reasonable. All of it is deliberate: a design document, a
+README transcript or a doc comment that nothing checks goes stale in hours, and every one of
+these exists because that happened here at least once. None of it is arbitrary, and knowing
+the list up front is cheaper than meeting it one CI run at a time.
+
+- **Adding a `.deed` file to `examples/`** can fail three separate ratchets at once: the
+  README's example list, the README's passing-test count, and the spelled-out file count in
+  [01-principles.md](design/01-principles.md) all read the corpus and compare. Update all
+  three in the same PR, or run the tests locally and fix whichever one names itself.
+- **Adding a diagnostic code without a test fails the build**, and names the code:
+  `every_diagnostic_code_is_named_by_a_test` (`crates/deed-driver/tests/codes.rs`) reads
+  every crate's `codes.rs` and every crate's `tests/`, and a testless code is a message
+  nobody has confirmed is reachable, correctly worded, or pointed at the right span.
+- **Adding a function to a shipped `std/` module fails unless one of that module's own
+  tests names it**, in `crates/deed-driver/tests/shipped.rs`: a module can carry more
+  functions than its tests ever call, and "wrote a test" is not the same claim as "wrote a
+  test that exercises this one".
+- **A number written in prose in a design document is probably checked** against something
+  the compiler can count: `crates/deed-driver/tests/documentation.rs` reads sentences like
+  "the prelude is twenty-two names" or "nine of the sixteen crates" back out of `design/*.md`
+  and `README.md` and compares them to a real count. A number nothing checks goes stale
+  first and is noticed last.
+- **Changing a keyword fails the grammar test in both directions.**
+  `crates/deed-parser/tests/grammar.rs` compares the compiler's own keyword and soft-keyword
+  lists against `editors/vscode`'s TextMate grammar, so a keyword can be missing a colour or
+  the grammar can invent one that colours something that is not actually a keyword.
+- **Formatting is not configurable and is checked, not suggested**: `cargo fmt --all --
+  --check` is part of CI, and `crates/deed-fmt/tests/repository.rs` additionally requires
+  every `.deed` file in this repository to already be in the formatter's own canonical form.
+
+What to run before pushing, in the order CI runs them:
+
+```
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --workspace
+cargo test --doc --workspace
+```
+
+A pull request also runs `cargo mutants --in-diff` against only the lines it touched (see
+"Tests" below); nothing to run locally for that beyond the tests above, since a mutant
+surviving means one of those tests should have caught it and did not.
+
+
 
 ## Tests
 
