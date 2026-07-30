@@ -39,14 +39,48 @@ bug in the backend, found by running both over the same corpus and comparing.
 
 ## Target
 
-Cranelift, not LLVM: pure Rust, no external toolchain to build the compiler itself, and fast
-enough to compile that a JIT path costs little more than starting the program would anyway.
+Cranelift was the plan and is not what happened. Its build scripts compile for the host
+target, this machine has no MSVC linker, and none of the ways around that survive contact
+with the second and larger objection: Cranelift is about sixty transitive crates, and this
+workspace has none at all. `deed-lsp` writes its own JSON and its own message framing for
+exactly that reason, and the part of the WebAssembly binary format a compiler needs is
+smaller than either: numbers, locals, calls, blocks, branches, and a linear memory.
 
-WASM first, native object code second. A WASM module runs inside `deed` through an embedded
-runtime, so `deed run --compiled` never needs anything the user's machine does not already
-have. Native AOT output (`deed build`) comes once the WASM-shaped design has proven itself,
-and it is the one place a system linker is required, which is written down as its own
-tradeoff rather than folded into the rest of the story.
+So the encoder is written by hand, in `crates/deed-codegen/src/wasm.rs`. What runs the
+result is a small runner over the instructions the compiler emits, which is a test oracle
+rather than a WebAssembly implementation, and says so.
+
+WASM first, native object code second. A WASM module runs inside `deed`, so `deed run
+--compiled` never needs anything the user's machine does not already have. Native AOT
+output (`deed build`) comes once the WASM-shaped design has proven itself, and it is the one
+place a system linker is required, which is written down as its own tradeoff rather than
+folded into the rest of the story.
+
+## Effect handlers are one-shot, and that decides the dispatch
+
+The question a backend has to answer before it compiles `with` and `perform` is whether an
+operation can resume more than once. If it can, dispatch needs real continuations and the
+whole shape of a compiled function changes. If it cannot, dispatch is a stack search and an
+ordinary call.
+
+It cannot, and the interpreter is where that is settled rather than argued. `deed-interp`'s
+`perform` finds the innermost installed handler for the effect with an `rposition` over a
+handler stack, looks up the operation the handler declares for it, and calls it the same way
+it calls any other function. What comes back is the operation's return value, going to the
+site that performed it, once. There is no continuation captured anywhere, nothing that can
+be invoked twice, and nothing that resumes. `Expr::With` is a `truncate` back to the stack
+depth it found, so a handler's lifetime is exactly its block.
+
+So a compiled `perform` is: walk the handler stack from the top, find the entry whose effect
+matches, and call the operation. The set of handlers a program declares is known when it is
+compiled, so which operation to call can be chosen by comparing the entry's handler against
+each of them rather than through an indirect call, and the module needs no function table.
+Handler state is a mutable cell, which is what the language already calls it and the only
+mutable thing it has.
+
+What would change this: a `resume` in the language, or an operation that returns to
+somewhere other than where it was performed. Neither exists, and adding either would be a
+change to `design/03-effects.md` before it was a change here.
 
 ## What would falsify this
 
