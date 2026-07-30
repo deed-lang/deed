@@ -224,7 +224,7 @@ fn build(
     checks: &[Checked],
     subject: usize,
 ) -> io::Result<bool> {
-    let mut wrote = 0;
+    let mut wrote = false;
 
     for (path, checked) in files.iter().zip(checks).take(subject) {
         let lowered = match deed_mir::lower(&checked.module, &checked.resolutions, &checked.types) {
@@ -245,10 +245,10 @@ fn build(
         let target = path.with_extension("wasm");
         std::fs::write(&target, module.encode())?;
         writeln!(out, "{}", target.display())?;
-        wrote += 1;
+        wrote = true;
     }
 
-    if wrote == 0 {
+    if !wrote {
         writeln!(out, "nothing was compiled")?;
         return Ok(false);
     }

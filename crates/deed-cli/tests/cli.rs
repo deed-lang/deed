@@ -1482,3 +1482,32 @@ fn build_says_what_it_could_not_compile() {
     );
     assert!(!scratch.path().join("hard.wasm").exists());
 }
+
+/// One file that compiles and one that does not, handed over together.
+///
+/// The half this pins is that a refusal does not take the build down with
+/// it: what could be compiled is written, what could not is named, and the
+/// answer is still a failure because something was asked for and not
+/// delivered.
+#[test]
+fn build_writes_what_it_can_and_names_what_it_cannot() {
+    let scratch = Scratch::new("build-mixed");
+    scratch.write("fine.deed", "module fine\n\nfn answer() -> Int { 1 }\n");
+    scratch.write(
+        "hard.deed",
+        "module hard\n\nfn greet(name: String) -> String { \"hi \" + name }\n",
+    );
+
+    let output = run(&["build", scratch.path().to_str().unwrap()]);
+    assert!(
+        scratch.path().join("fine.wasm").is_file(),
+        "{}",
+        stdout(&output)
+    );
+    assert!(!scratch.path().join("hard.wasm").exists());
+    assert!(
+        stdout(&output).contains("two strings"),
+        "{}",
+        stdout(&output)
+    );
+}
