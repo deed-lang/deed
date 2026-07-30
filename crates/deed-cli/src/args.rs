@@ -13,6 +13,7 @@ Usage:
   deed check [options] <path>...
   deed test  [options] <path>...
   deed run   [options] <path>... [-- <argument>...]
+  deed build [options] <path>...
   deed fmt   [--check] <path>...
   deed fix   [--check] <path>...
   deed lsp
@@ -33,6 +34,9 @@ Paths may be files or directories. A directory is searched for `.deed` files.
 `deed test` refuses to run anything that does not check.
 `deed run` calls `main`, handing it the one `System` capability there is.
 Everything after `--` goes to the program, which reads it with `Io.args`.
+`deed build` compiles to a WebAssembly module beside the file it was given. It
+compiles less of the language than `deed run` interprets, and says what it could
+not compile rather than guessing.
 `deed fmt` has no options for the output. There is one canonical form.
 `deed fix` applies the fixes that are certain and leaves the guesses alone.
 `deed lsp` speaks the language server protocol on stdin and stdout. It is for an
@@ -57,6 +61,8 @@ pub enum Mode {
     Run,
     Fmt,
     Fix,
+    /// Compile to a WebAssembly module rather than running it.
+    Build,
 }
 
 #[derive(Debug)]
@@ -114,9 +120,10 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "run" => Mode::Run,
         "fmt" => Mode::Fmt,
         "fix" => Mode::Fix,
+        "build" => Mode::Build,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `check`, `test`, `run`, `fmt`, `fix` and `lsp`"
+                "unknown command `{other}`, the choices are `check`, `test`, `run`, `build`, `fmt`, `fix` and `lsp`"
             ));
         }
     };
@@ -175,6 +182,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 Mode::Run => "run",
                 Mode::Fmt => "fmt",
                 Mode::Fix => "fix",
+                Mode::Build => "build",
             }
         ));
     }

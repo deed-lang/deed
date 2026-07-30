@@ -195,7 +195,64 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
     }
 
+    if args.mode == Mode::Build {
+        match build(&mut out, &files, &checks, subject) {
+            Ok(true) => {}
+            Ok(false) => return ExitCode::FAILURE,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::from(EXIT_USAGE);
+            }
+        }
+    }
+
     ExitCode::SUCCESS
+}
+
+/// Compiles each named file to a WebAssembly module beside it.
+///
+/// Only the files somebody named. A module that came in because an import
+/// wanted it is context, and compiling it would write a file nobody asked
+/// for next to somebody else's source.
+///
+/// What it cannot compile it says, by function and by what it found, and
+/// answers with a failure. The interpreter still runs all of it, which is
+/// what `design/05-backend.md` means by the interpreter staying.
+fn build(
+    out: &mut impl Write,
+    files: &[PathBuf],
+    checks: &[Checked],
+    subject: usize,
+) -> io::Result<bool> {
+    let mut wrote = 0;
+
+    for (path, checked) in files.iter().zip(checks).take(subject) {
+        let lowered = match deed_mir::lower(&checked.module, &checked.resolutions, &checked.types) {
+            Ok(lowered) => lowered,
+            Err(why) => {
+                writeln!(out, "{}: {why}", path.display())?;
+                continue;
+            }
+        };
+        let module = match deed_codegen::compile(&lowered) {
+            Ok(module) => module,
+            Err(why) => {
+                writeln!(out, "{}: {why}", path.display())?;
+                continue;
+            }
+        };
+
+        let target = path.with_extension("wasm");
+        std::fs::write(&target, module.encode())?;
+        writeln!(out, "{}", target.display())?;
+        wrote += 1;
+    }
+
+    if wrote == 0 {
+        writeln!(out, "nothing was compiled")?;
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 /// Rewrites files into canonical form, or reports which are not.
