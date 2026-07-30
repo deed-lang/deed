@@ -1540,7 +1540,15 @@ using an effect to get around not having a loop.
   `std/list`, a comparator instead of a bound) and a function that prints one (`describe`,
   an ordinary function a caller writes once). Neither was unwritable, both were exactly as
   uncomfortable as the passed-function answer always said they would be, so this still has
-  not found the bill a trait system would be bought against. The old form of this question,
-  whether a trait could be implemented outside the module that defines the type, is a
-  coherence problem worth having only after there is something to implement.
+  not found the bill a trait system would be bought against. `examples/tree.deed` measured
+  the one pressure the corpus had not tried yet: a keyed tree needs ordering, and
+  `examples/ranking.deed` only needed it once per sort call. A tree needs it once per
+  operation, and every operation on the same tree has to use the same comparator or the
+  tree is silently wrong. The type system can say the comparator has the right shape
+  (`Fn(K, K) -> Int`); it cannot say two calls got the same one. That is a real gap.
+  It is also tedious rather than impossible, which is where deed-lang/deed#246 put the
+  bar: the tree is writable, the comparators for `Int` and `String` are a handful of lines,
+  and a comparator over a record is one function the user writes once. The old form of this
+  question, whether a trait could be implemented outside the module that defines the type,
+  is a coherence problem worth having only after there is something to implement.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.

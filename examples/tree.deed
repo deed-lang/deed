@@ -1,0 +1,304 @@
+// A binary search tree, written in Deed.
+//
+// This file is the measurement deed-lang/deed#613 asked for: is a comparator
+// passed as a function value enough to build a keyed tree, and what can and
+// cannot the type system say about it?
+//
+// The comparator is `Fn(K, K) -> Int`. Negative means the first key is
+// smaller, zero means they are equal, positive means the first is larger.
+// That is the standard three-way comparison a BST needs, and it is the only
+// ordering information the tree ever asks for.
+//
+// The checklist from deed-lang/deed#613, answered here:
+//
+//   A comparator, passed: yes. Every operation below takes one, and the
+//   type checker enforces its shape.
+//
+//   What stops two calls using different ones: nothing. The type checker
+//   only knows both arguments satisfy `Fn(K, K) -> Int`. A tree built with
+//   one comparator and queried with another is silently wrong, with no type
+//   error and no runtime notice. This is the finding deed-lang/deed#246
+//   was measuring for.
+//
+//   Whether the corpus can write the comparators it needs: yes. `cmp_int`
+//   and `cmp_string` below are a handful of lines each. A comparator over a
+//   record has to be written by the user once for every key type.
+//
+//   Whether this is tedious or impossible: tedious. Every call to insert,
+//   get, holds or remove takes an extra parameter. The consistency guarantee
+//   a trait would have given is absent. Writing is possible; reading is
+//   louder. deed-lang/deed#246 put "unwritable" as the bar for reopening
+//   traits, and this did not reach it.
+//
+// What it does not try to be: a self-balancing tree. Insertion order decides
+// height, so a sorted sequence of inserts produces a list-shaped tree. That
+// is a limitation on performance, not on correctness, and adding rotations
+// here would not change any of the answers above.
+
+module examples/tree
+
+use std/list.{concat}
+
+choice Tree<K, V> {
+    Empty,
+    Node { key: K, value: V, left: Tree<K, V>, right: Tree<K, V> },
+}
+
+// This key and value, placed where the comparator says it belongs.
+//
+// If the key is already there the value is replaced. Insert is idempotent
+// for the same key: doing it twice with the same key and value is the same as
+// doing it once, and doing it twice with different values keeps the last one.
+fn insert<K, V>(tree: Tree<K, V>, key: K, value: V, cmp: Fn(K, K) -> Int) -> Tree<K, V>
+  uses
+    Diverge,
+{
+    match tree {
+        Empty => Node { key: key, value: value, left: Empty, right: Empty },
+        Node { key: k, value: v, left: l, right: r } => {
+            let order = cmp(key, k)
+            if order < 0 {
+                Node { key: k, value: v, left: insert(l, key, value, cmp), right: r }
+            } else if order > 0 {
+                Node { key: k, value: v, left: l, right: insert(r, key, value, cmp) }
+            } else {
+                Node { key: k, value: value, left: l, right: r }
+            }
+        },
+    }
+}
+
+// What is under this key, or an error if there is nothing.
+fn get<K, V>(tree: Tree<K, V>, key: K, cmp: Fn(K, K) -> Int) -> Result<V, String>
+  uses
+    Diverge,
+{
+    match tree {
+        Empty => err("no such key"),
+        Node { key: k, value: v, left: l, right: r } => {
+            let order = cmp(key, k)
+            if order < 0 {
+                get(l, key, cmp)
+            } else if order > 0 {
+                get(r, key, cmp)
+            } else {
+                ok(v)
+            }
+        },
+    }
+}
+
+// Whether this key is in the tree.
+fn holds<K, V>(tree: Tree<K, V>, key: K, cmp: Fn(K, K) -> Int) -> Bool
+  uses
+    Diverge,
+{
+    match get(tree, key, cmp) {
+        ok(_) => true,
+        err(_) => false,
+    }
+}
+
+// The number of entries.
+fn size<K, V>(tree: Tree<K, V>) -> Int
+  uses
+    Diverge,
+{
+    match tree {
+        Empty => 0,
+        Node { key: k, value: v, left: l, right: r } => 1 + size(l) + size(r),
+    }
+}
+
+// The node that holds the smallest key in this tree, used by remove.
+//
+// Returns Empty only when the input is already Empty. Every Node has a
+// leftmost descendant, which is this function's result for a non-empty tree.
+fn leftmost<K, V>(tree: Tree<K, V>) -> Tree<K, V>
+  uses
+    Diverge,
+{
+    match tree {
+        Empty => Empty,
+        Node { key: k, value: v, left: Empty, right: r } => tree,
+        Node { key: k, value: v, left: l, right: r } => leftmost(l),
+    }
+}
+
+// The same tree with its leftmost node removed.
+fn remove_leftmost<K, V>(tree: Tree<K, V>) -> Tree<K, V>
+  uses
+    Diverge,
+{
+    match tree {
+        Empty => Empty,
+        Node { key: k, value: v, left: Empty, right: r } => r,
+        Node { key: k, value: v, left: l, right: r } => {
+            Node { key: k, value: v, left: remove_leftmost(l), right: r }
+        },
+    }
+}
+
+// Without this key, whether or not it was there. Missing is quiet: the tree
+// after is the tree that does not hold the key, and asking twice is the same
+// as asking once.
+//
+// When removing a node with two children, the in-order successor (the
+// leftmost node of the right subtree) takes its place. This keeps the BST
+// property without needing the comparator.
+fn remove<K, V>(tree: Tree<K, V>, key: K, cmp: Fn(K, K) -> Int) -> Tree<K, V>
+  uses
+    Diverge,
+{
+    match tree {
+        Empty => Empty,
+        Node { key: k, value: v, left: l, right: r } => {
+            let order = cmp(key, k)
+            if order < 0 {
+                Node { key: k, value: v, left: remove(l, key, cmp), right: r }
+            } else if order > 0 {
+                Node { key: k, value: v, left: l, right: remove(r, key, cmp) }
+            } else {
+                match leftmost(r) {
+                    Empty => l,
+                    Node { key: mk, value: mv, left: ml, right: mr } => {
+                        Node { key: mk, value: mv, left: l, right: remove_leftmost(r) }
+                    },
+                }
+            }
+        },
+    }
+}
+
+// All keys, in the order the comparator puts them. In-order traversal of a
+// BST visits the left subtree, then the root, then the right subtree, which
+// produces a sorted list when the tree was built with a consistent comparator.
+fn keys<K, V>(tree: Tree<K, V>) -> List<K>
+  uses
+    Diverge,
+{
+    match tree {
+        Empty => [],
+        Node { key: k, value: v, left: l, right: r } => {
+            concat(concat(keys(l), [k]), keys(r))
+        },
+    }
+}
+
+// A comparator for integers. Negative when a < b, zero when a == b,
+// positive when a > b.
+fn cmp_int(a: Int, b: Int) -> Int {
+    if a < b {
+        0 - 1
+    } else if a == b {
+        0
+    } else {
+        1
+    }
+}
+
+// A comparator for strings, by the same three-way convention.
+fn cmp_string(a: String, b: String) -> Int {
+    if a < b {
+        0 - 1
+    } else if a == b {
+        0
+    } else {
+        1
+    }
+}
+
+test "an empty tree holds nothing" {
+    let t: Tree<Int, String> = Empty
+    assert get(t, 1, cmp_int) == err("no such key")
+    assert holds(t, 1, cmp_int) == false
+    assert size(t) == 0
+    assert keys(t) == []
+}
+
+test "an inserted key can be retrieved" {
+    let t = insert(Empty, 1, "one", cmp_int)
+    assert get(t, 1, cmp_int) == ok("one")
+    assert holds(t, 1, cmp_int) == true
+    assert get(t, 2, cmp_int) == err("no such key")
+    assert size(t) == 1
+}
+
+test "inserting a key that is there replaces the value" {
+    let t = insert(insert(Empty, 1, "one", cmp_int), 1, "ONE", cmp_int)
+    assert get(t, 1, cmp_int) == ok("ONE")
+    assert size(t) == 1
+}
+
+test "multiple keys go in and come back out" {
+    let t = insert(
+        insert(insert(Empty, 2, "two", cmp_int), 1, "one", cmp_int),
+        3,
+        "three",
+        cmp_int,
+    )
+    assert get(t, 1, cmp_int) == ok("one")
+    assert get(t, 2, cmp_int) == ok("two")
+    assert get(t, 3, cmp_int) == ok("three")
+    assert get(t, 4, cmp_int) == err("no such key")
+    assert size(t) == 3
+}
+
+test "keys come back in sorted order" {
+    let t = insert(
+        insert(insert(Empty, 2, "two", cmp_int), 1, "one", cmp_int),
+        3,
+        "three",
+        cmp_int,
+    )
+    assert keys(t) == [1, 2, 3]
+}
+
+test "remove drops a key and leaves the others alone" {
+    let t = insert(
+        insert(insert(Empty, 2, "two", cmp_int), 1, "one", cmp_int),
+        3,
+        "three",
+        cmp_int,
+    )
+    let without = remove(t, 2, cmp_int)
+    assert holds(without, 2, cmp_int) == false
+    assert holds(without, 1, cmp_int) == true
+    assert holds(without, 3, cmp_int) == true
+    assert size(without) == 2
+    assert keys(without) == [1, 3]
+}
+
+test "remove is quiet when the key is not there" {
+    let t = insert(Empty, 1, "one", cmp_int)
+    assert size(remove(t, 99, cmp_int)) == 1
+    assert remove(Empty, 1, cmp_int) == Empty
+}
+
+test "string keys work the same way" {
+    let t = insert(
+        insert(insert(Empty, "b", 2, cmp_string), "a", 1, cmp_string),
+        "c",
+        3,
+        cmp_string,
+    )
+    assert get(t, "a", cmp_string) == ok(1)
+    assert get(t, "b", cmp_string) == ok(2)
+    assert get(t, "c", cmp_string) == ok(3)
+    assert get(t, "d", cmp_string) == err("no such key")
+    assert keys(t) == ["a", "b", "c"]
+}
+
+test "a reversed comparator reverses the order" {
+    let desc = |a: Int, b: Int| cmp_int(b, a)
+    let t = insert(
+        insert(insert(Empty, 2, "two", desc), 1, "one", desc),
+        3,
+        "three",
+        desc,
+    )
+    assert get(t, 1, desc) == ok("one")
+    assert get(t, 2, desc) == ok("two")
+    assert get(t, 3, desc) == ok("three")
+    assert keys(t) == [3, 2, 1]
+}

@@ -9,9 +9,10 @@
 //
 // `List` is built in rather than declared, and it was once because there was
 // no way to declare a generic type. There is now: `examples/generic_types.deed`
-// declares `Pair` and `Option`, and `std/table` declares `Entry`. So the
-// shortcut it takes, comparing element types componentwise and letting an
-// unknown one absorb, is a choice rather than the only thing available.
+// declares `Pair` and `Option`, `std/table` declares `Entry`, and
+// `examples/tree.deed` declares `Tree`. So the shortcut it takes, comparing
+// element types componentwise and letting an unknown one absorb, is a choice
+// rather than the only thing available.
 //
 // It stayed a choice on purpose. Moving `List` out would move the type, which
 // lives in one crate, and leave behind the syntax over it, which does not:
