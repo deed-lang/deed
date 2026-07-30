@@ -66,19 +66,12 @@ pub enum Trap {
     /// most useful thing it could say about a module that is going to be
     /// handed to a real embedder.
     NeedsAHost(String),
-    /// A module that would not validate: an instruction was handed a value
-    /// of the wrong width.
-    ///
-    /// Not a trap a real engine raises, because a real engine would have
-    /// refused the module before running a byte of it. This runner does not
-    /// validate, so without the check it would happily run something no
-    /// engine would load, and the backend would have a bug nothing here
-    /// could see. That is not hypothetical: an `i32` stored through an
-    /// `i64.store` is what a missing sign extension looks like.
-    Mistyped(String),
     /// Something this small runner does not implement, named rather than
     /// silently skipped.
     Unimplemented(String),
+    /// The module would not validate, the way a real engine would refuse it
+    /// before running a byte: see [`crate::validate`].
+    Invalid(String),
 }
 
 impl std::fmt::Display for Trap {
@@ -92,8 +85,8 @@ impl std::fmt::Display for Trap {
             Trap::NeedsAHost(what) => {
                 write!(f, "`{what}` is the host's to answer, and this is not one")
             }
-            Trap::Mistyped(what) => write!(f, "{what}, which no engine would load"),
             Trap::Unimplemented(what) => write!(f, "`{what}` is not implemented here"),
+            Trap::Invalid(reason) => write!(f, "the module does not validate: {reason}"),
         }
     }
 }
@@ -106,7 +99,17 @@ impl std::fmt::Display for Trap {
 const BUDGET: u64 = 5_000_000;
 
 /// Calls an exported function.
+///
+/// Validates the whole module first, the way a real engine would refuse to
+/// load it rather than run it: a module only this permissive runner accepts
+/// is a module every other engine rejects, and that gap should be found
+/// here rather than by somebody outside this workspace (see
+/// [`crate::validate`], and #567 for the shape of the gap this closes).
 pub fn call(module: &Module, name: &str, args: &[Value]) -> Result<Option<Value>, Trap> {
+    if let Err(crate::validate::Invalid(reason)) = crate::validate::validate(module) {
+        return Err(Trap::Invalid(reason));
+    }
+
     let index = module
         .exports
         .iter()
@@ -326,19 +329,12 @@ impl Run<'_> {
                     let at = pop(stack)?.as_i64() as usize + *offset as usize;
                     stack.push(Value::I32(self.load(at)? as i32));
                 }
-                Ins::I64Store(offset) => {
+                Ins::I64Store(offset) | Ins::I32Store(offset) => {
+                    // The width itself is [`crate::validate`]'s job now: a
+                    // module that reaches here already validated, so
+                    // whatever is on the stack is the width the store
+                    // declared.
                     let value = pop(stack)?;
-                    if !matches!(value, Value::I64(_)) {
-                        return Err(Trap::Mistyped("an i64.store was handed an i32".to_string()));
-                    }
-                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
-                    self.store(at, value.as_i64())?;
-                }
-                Ins::I32Store(offset) => {
-                    let value = pop(stack)?;
-                    if !matches!(value, Value::I32(_)) {
-                        return Err(Trap::Mistyped("an i32.store was handed an i64".to_string()));
-                    }
                     let at = pop(stack)?.as_i64() as usize + *offset as usize;
                     self.store(at, value.as_i64())?;
                 }
@@ -499,12 +495,10 @@ mod tests {
         ));
     }
 
-    /// This does not validate modules, so the one thing it can usefully be
-    /// strict about is the width of what an instruction is handed.
-    ///
-    /// Being lenient here is not a shortcut, it is a hole: a store that took
-    /// whatever was on the stack would run a module no engine would load,
-    /// and the backend bug behind it would look like a passing test.
+    /// This runner does not validate on its own, but [`crate::call`] runs
+    /// [`crate::validate::validate`] first, so a store handed the wrong
+    /// width is refused before a byte of the module runs rather than
+    /// silently accepted the way this runner alone would take it.
     #[test]
     fn a_store_handed_the_wrong_width_says_so_rather_than_running() {
         let mut module = module_with(
@@ -514,7 +508,7 @@ mod tests {
         );
         module.memory_pages = Some(1);
         assert!(
-            matches!(call(&module, "f", &[]), Err(Trap::Mistyped(_))),
+            matches!(call(&module, "f", &[]), Err(Trap::Invalid(_))),
             "an i32 through an i64.store should be refused"
         );
 
