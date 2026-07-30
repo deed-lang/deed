@@ -106,9 +106,38 @@ jobs:
           path: ${{ env.asset }}
           if-no-files-found: error
 
+  # #594: a fourth artifact from the same commit and the same tag as the three
+  # platform binaries, so the playground never runs a compiler no tag has.
+  wasm:
+    name: wasm32-unknown-unknown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --profile wasm
+        run: cargo build --profile wasm --target wasm32-unknown-unknown -p deed-wasm --locked
+
+      - name: package
+        run: |
+          mkdir -p dist
+          name="deed-${GITHUB_REF_NAME}-wasm32-unknown-unknown"
+          cp target/wasm32-unknown-unknown/wasm/deed_wasm.wasm "dist/$name.wasm"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm32-unknown-unknown
+          path: dist/*.wasm
+          if-no-files-found: error
+
   publish:
     name: publish
-    needs: build
+    needs: [build, wasm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

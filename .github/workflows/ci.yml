@@ -102,3 +102,45 @@ jobs:
         with:
           name: mutants
           path: mutants.out
+
+  wasm-size:
+    name: wasm size budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      # #592: a ceiling asserted here rather than hoped for. Tuned for size
+      # (see `[profile.wasm]`, root Cargo.toml) because this is the artifact a
+      # page waits on before it can do anything, not the one `deed` itself
+      # ships as.
+      - name: cargo build --profile wasm
+        run: cargo build --profile wasm --target wasm32-unknown-unknown -p deed-wasm --locked
+
+      - name: the artifact is inside its budget
+        run: |
+          wasm=target/wasm32-unknown-unknown/wasm/deed_wasm.wasm
+          bytes=$(wc -c < "$wasm")
+          gzip=$(gzip -c "$wasm" | wc -c)
+          echo "uncompressed: $bytes bytes"
+          echo "gzip: $gzip bytes"
+          # Measured at 741996/245645 the day this ceiling was written
+          # (design/04-capabilities.md carries the same numbers). The margin
+          # is room to grow, not slack to stop counting: a ceiling that never
+          # gets close to being hit is a ceiling nobody has to explain moving.
+          ceiling_bytes=1500000
+          ceiling_gzip=550000
+          if [ "$bytes" -gt "$ceiling_bytes" ]; then
+            echo "the artifact is $bytes bytes, over the $ceiling_bytes byte ceiling" >&2
+            exit 1
+          fi
+          if [ "$gzip" -gt "$ceiling_gzip" ]; then
+            echo "the gzipped artifact is $gzip bytes, over the $ceiling_gzip byte ceiling" >&2
+            exit 1
+          fi
+

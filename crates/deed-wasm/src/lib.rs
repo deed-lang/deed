@@ -113,6 +113,18 @@ fn set_result(text: String) {
     RESULT.set((out, len));
 }
 
+/// Which released compiler built this module, at
+/// [`deed_result_ptr`]/[`deed_result_len`].
+///
+/// #594: the artifact carries its own version rather than trusting a
+/// filename, because a filename is a copy away from being wrong and this
+/// is not. A page pins a tag and compares this against it before trusting
+/// anything else the module says.
+#[unsafe(no_mangle)]
+pub extern "C" fn deed_version() {
+    set_result(env!("CARGO_PKG_VERSION").to_string());
+}
+
 /// Checks one file's worth of Deed source, resolving `use std/x` against the
 /// shipped library the way the CLI and the language server already do
 /// (#589), and returns the same JSON `deed check --format json` writes
@@ -355,6 +367,17 @@ mod tests {
             deed_free(out_ptr, out_len);
         }
         result
+    }
+
+    #[test]
+    fn the_version_export_matches_the_crate_that_built_it() {
+        deed_version();
+        let out_ptr = deed_result_ptr();
+        let out_len = deed_result_len();
+        // SAFETY: exactly what `deed_version` just set.
+        let text = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+        let version = String::from_utf8(text.to_vec()).expect("a version is UTF-8");
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
