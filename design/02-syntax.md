@@ -704,6 +704,53 @@ All three tiers exist. `Tested` covers pure functions whose parameters can be ge
 `deed test` runs a hundred generated inputs against the contract and shrinks any
 counterexample it finds. Everything else is `Guarded`, checked on every call.
 
+### Why the corpus's `Guarded` obligations are `Guarded`
+
+`Unknown` carries a [`Reason`](../crates/deed-typeck/src/facts.rs) rather than nothing: a
+name nothing narrowed, a `length` nothing established, a value nothing names, a clause that
+crossed a module boundary and arrived thinner, or a condition that is not a shape this checker
+reasons about at all. Once the reason existed the obvious next move was to count it, rather
+than argue from impression: `crates/deed-driver/tests/reasons.rs` walks `examples/` and the
+shipped `std/` library together and tallies every obligation by tier, and every `Guarded` one
+by reason.
+
+| Tier or reason | Count |
+| --- | --- |
+| Proven | 68 |
+| Tested | 8 |
+| Guarded, nothing narrowed this name | 2 |
+| Guarded, nothing established this length | 1 |
+| Guarded, nothing names this value | 0 |
+| Guarded, crossed a module boundary | 0 |
+| Guarded, not a shape the checker reasons about | 0 |
+| Guarded, no reason (an `ensures` clause, which does not go through `facts::holds`) | 9 |
+
+**What this decides.** Zero of the corpus's `Guarded` obligations are "not a shape the
+checker reasons about", and zero crossed a module boundary. The two that are categorised at
+all are both "nothing narrowed this name": a name the body never bothered to narrow, not a
+predicate the interval machinery is structurally unable to read. That is documentation and
+message work, not evidence for a solver, so the question in the next section is answered
+against a count rather than an impression.
+
+### Whether this checker ever calls a solver
+
+Not now. Verus, Dafny, F\* and Liquid Haskell all reach for an SMT solver; this checker sits
+entirely on interval reasoning plus one relation. The corpus count above is the argument: if
+most `Guarded` obligations were "not the shape the checker reasons about", the SMT question
+would be open on evidence rather than on the general appeal of a bigger hammer. None are. What
+the corpus actually has trouble with is names nothing narrowed, and a solver does not narrow a
+name a `where` clause never mentioned; better messages and documentation do.
+
+The argument against stands independently of the count: P9 gives the whole edit loop a
+hundred milliseconds, a solver does not fit in it, and a workspace with zero dependencies
+would be taking on the least small one available. A solver that sometimes answers and
+sometimes times out turns a tier into a coin flip, which reads worse than an honest `Guarded`.
+
+**What would change this answer:** a program whose `Guarded` obligations are mostly "not a
+shape the checker reasons about", counted the same way `reasons.rs` counts this corpus today.
+That is a different corpus than the one this language ships with, and until one exists this
+is a decision rather than a placeholder.
+
 **A test can say that a contract turns something down.**
 
 ```deed
