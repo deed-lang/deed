@@ -40,13 +40,33 @@ impl Value {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Trap {
-    /// `unreachable`, which is what a contract failure compiles to today.
+    /// `unreachable` with nothing left behind saying why.
     Unreachable,
+    /// A contract, assertion or match that did not hold, with the code and
+    /// sentence the compiled program left in memory before it stopped.
+    ///
+    /// The same two things the interpreter files a diagnostic with, so the
+    /// two engines can be asked whether they stopped for the same reason
+    /// rather than only whether they both stopped.
+    Failed {
+        code: String,
+        message: String,
+    },
     DivideByZero,
     /// Reached past the end of memory.
     OutOfBounds,
     /// Ran longer than the budget below allows.
     TooLong,
+    /// A module that would not validate: an instruction was handed a value
+    /// of the wrong width.
+    ///
+    /// Not a trap a real engine raises, because a real engine would have
+    /// refused the module before running a byte of it. This runner does not
+    /// validate, so without the check it would happily run something no
+    /// engine would load, and the backend would have a bug nothing here
+    /// could see. That is not hypothetical: an `i32` stored through an
+    /// `i64.store` is what a missing sign extension looks like.
+    Mistyped(String),
     /// Something this small runner does not implement, named rather than
     /// silently skipped.
     Unimplemented(String),
@@ -56,9 +76,11 @@ impl std::fmt::Display for Trap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Trap::Unreachable => write!(f, "the program stopped"),
+            Trap::Failed { code, message } => write!(f, "{code}: {message}"),
             Trap::DivideByZero => write!(f, "divided by zero"),
             Trap::OutOfBounds => write!(f, "reached past the end of memory"),
             Trap::TooLong => write!(f, "ran too long"),
+            Trap::Mistyped(what) => write!(f, "{what}, which no engine would load"),
             Trap::Unimplemented(what) => write!(f, "`{what}` is not implemented here"),
         }
     }
@@ -85,7 +107,13 @@ pub fn call(module: &Module, name: &str, args: &[Value]) -> Result<Option<Value>
         fuel: BUDGET,
         memory: memory_of(module),
     };
-    run.call(index, args)
+    match run.call(index, args) {
+        // A trap that left something behind says what it was. Read here
+        // rather than where the trap is raised, because the two words are
+        // in memory and memory is what this owns.
+        Err(Trap::Unreachable) => Err(run.why().unwrap_or(Trap::Unreachable)),
+        other => other,
+    }
 }
 
 /// Linear memory, with whatever the data section placed already in it.
@@ -116,6 +144,32 @@ enum Flow {
 }
 
 impl Run<'_> {
+    /// What the program left in memory about why it stopped, if anything.
+    fn why(&self) -> Option<Trap> {
+        Some(Trap::Failed {
+            code: self.string_at(crate::layout::FAILURE_CODE)?,
+            message: self.string_at(crate::layout::FAILURE_MESSAGE)?,
+        })
+    }
+
+    /// The string whose address is in this word, read the way every string
+    /// in a compiled module is laid out: a length, then the bytes.
+    fn string_at(&self, word: u32) -> Option<String> {
+        let address = u64::from_le_bytes(
+            self.memory
+                .get(word as usize..word as usize + 8)?
+                .try_into()
+                .ok()?,
+        ) as usize;
+        if address == 0 {
+            return None;
+        }
+        let length =
+            u64::from_le_bytes(self.memory.get(address..address + 8)?.try_into().ok()?) as usize;
+        let bytes = self.memory.get(address + 8..address + 8 + length)?;
+        String::from_utf8(bytes.to_vec()).ok()
+    }
+
     fn call(&mut self, index: u32, args: &[Value]) -> Result<Option<Value>, Trap> {
         let func = &self.module.funcs[index as usize];
         let signature = &self.module.types[func.type_index as usize];
@@ -242,14 +296,20 @@ impl Run<'_> {
                     stack.push(Value::I32(self.load(at)? as i32));
                 }
                 Ins::I64Store(offset) => {
-                    let value = pop(stack)?.as_i64();
+                    let value = pop(stack)?;
+                    if !matches!(value, Value::I64(_)) {
+                        return Err(Trap::Mistyped("an i64.store was handed an i32".to_string()));
+                    }
                     let at = pop(stack)?.as_i64() as usize + *offset as usize;
-                    self.store(at, value)?;
+                    self.store(at, value.as_i64())?;
                 }
                 Ins::I32Store(offset) => {
-                    let value = pop(stack)?.as_i64();
+                    let value = pop(stack)?;
+                    if !matches!(value, Value::I32(_)) {
+                        return Err(Trap::Mistyped("an i32.store was handed an i64".to_string()));
+                    }
                     let at = pop(stack)?.as_i64() as usize + *offset as usize;
-                    self.store(at, value)?;
+                    self.store(at, value.as_i64())?;
                 }
                 other => self.arithmetic(other, stack)?,
             }
@@ -406,5 +466,38 @@ mod tests {
             call(&module, "nonesuch", &[]),
             Err(Trap::Unimplemented(_))
         ));
+    }
+
+    /// This does not validate modules, so the one thing it can usefully be
+    /// strict about is the width of what an instruction is handed.
+    ///
+    /// Being lenient here is not a shortcut, it is a hole: a store that took
+    /// whatever was on the stack would run a module no engine would load,
+    /// and the backend bug behind it would look like a passing test.
+    #[test]
+    fn a_store_handed_the_wrong_width_says_so_rather_than_running() {
+        let mut module = module_with(
+            vec![Ins::I32Const(0), Ins::I32Const(7), Ins::I64Store(0)],
+            vec![],
+            vec![],
+        );
+        module.memory_pages = Some(1);
+        assert!(
+            matches!(call(&module, "f", &[]), Err(Trap::Mistyped(_))),
+            "an i32 through an i64.store should be refused"
+        );
+
+        let mut widened = module_with(
+            vec![
+                Ins::I32Const(0),
+                Ins::I32Const(7),
+                Ins::I64ExtendI32S,
+                Ins::I64Store(0),
+            ],
+            vec![],
+            vec![],
+        );
+        widened.memory_pages = Some(1);
+        assert_eq!(call(&widened, "f", &[]), Ok(None));
     }
 }

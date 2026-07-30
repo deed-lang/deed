@@ -39,8 +39,23 @@ pub const BUMP: u32 = 0;
 /// matches. See `design/05-backend.md`.
 pub const HANDLERS: u32 = 8;
 
-/// Where allocation starts, leaving room for the two words above.
-pub const HEAP_START: u32 = 16;
+/// Where allocation starts, leaving room for the words above.
+pub const HEAP_START: u32 = 32;
+
+/// Where the code of the contract that failed is left, as the address of a
+/// string, or zero when nothing has failed.
+///
+/// A `unreachable` says a program stopped and nothing else. Deed says which
+/// clause and whose fault it is, and that has to survive the trap or a
+/// compiled program is worse to debug than an interpreted one for no reason
+/// anybody chose. So the two words are written just before the trap, and
+/// whatever runs the module reads them out of memory afterwards. They are
+/// ordinary strings in the layout every string here has, so a host that is
+/// not this repo's runner can read them too.
+pub const FAILURE_CODE: u32 = 16;
+
+/// Where the sentence of the contract that failed is left.
+pub const FAILURE_MESSAGE: u32 = 24;
 
 /// The width of every field, element and tag.
 pub const WORD: u32 = 8;

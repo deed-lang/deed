@@ -648,9 +648,8 @@ impl Lowering<'_> {
                 then: Box::new(Block::of(Expr::Unit)),
                 otherwise: Box::new(Block {
                     stmts: vec![Stmt::Fail {
-                        message: format!(
-                            "`{name}` was called with something its `where` clause refuses"
-                        ),
+                        code: crate::codes::PRECONDITION_FAILED.to_string(),
+                        message: format!("this call does not satisfy what `{name}` requires"),
                     }],
                     value: Expr::Unit,
                 }),
@@ -755,6 +754,7 @@ impl Lowering<'_> {
                         then: Box::new(Block::of(Expr::Unit)),
                         otherwise: Box::new(Block {
                             stmts: vec![Stmt::Fail {
+                                code: crate::codes::ASSERTION_FAILED.to_string(),
                                 message: format!("an assertion at {} did not hold", span.start),
                             }],
                             value: Expr::Unit,
@@ -1452,6 +1452,7 @@ impl Lowering<'_> {
         // Built back to front, so each arm's else is the chain below it.
         let mut chain = Block {
             stmts: vec![Stmt::Fail {
+                code: crate::codes::NOT_RUNNABLE.to_string(),
                 message: "no arm of this match applied".to_string(),
             }],
             value: Expr::Unit,

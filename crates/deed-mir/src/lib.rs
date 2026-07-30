@@ -14,6 +14,26 @@ pub mod lower;
 
 pub use lower::{Unlowered, lower};
 
+/// The diagnostic codes a compiled program can stop with.
+///
+/// The `DEED6xxx` range belongs to `deed-interp`, which owns the vocabulary
+/// and documents what each code covers. These are the ones a compiled
+/// program can reach, spelled here rather than depended on because the
+/// dependency would run the wrong way: a backend that needed the interpreter
+/// to build is a backend that could not replace it.
+///
+/// `crates/deed-driver/tests/failures.rs` pins them to the interpreter's, so
+/// the copy cannot drift without something saying so.
+pub mod codes {
+    /// An `assert` that was not true.
+    pub const ASSERTION_FAILED: &str = "DEED6001";
+    /// A `where` clause that did not hold on entry.
+    pub const PRECONDITION_FAILED: &str = "DEED6002";
+    /// Something the run could not do, which is where a match running out of
+    /// arms lands.
+    pub const NOT_RUNNABLE: &str = "DEED6006";
+}
+
 /// The types a value can have at this level.
 ///
 /// Deliberately smaller than `deed_typeck::Ty`. Refinements are gone: a
@@ -221,7 +241,11 @@ pub enum Stmt {
     /// Only reached from an obligation the checker left `Guarded`. A `Proven`
     /// one emits nothing at all, which is the whole of what the tier buys at
     /// runtime.
-    Fail { message: String },
+    ///
+    /// Carries the diagnostic code as well as the sentence, because a run
+    /// that stops should say the same thing whichever engine ran it, and the
+    /// code is what makes two messages comparable.
+    Fail { code: String, message: String },
     /// Run the body while the condition holds, checking it first.
     ///
     /// A `for` in Deed is a fold over a list rather than a loop, and this is
@@ -457,4 +481,88 @@ pub mod runtime {
         LIST_LEN,
         CONTRACT_FAILED,
     ];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn effect(name: &str) -> Effect {
+        Effect {
+            name: name.to_string(),
+            operations: Vec::new(),
+        }
+    }
+
+    fn layout(name: &str) -> Layout {
+        Layout {
+            name: name.to_string(),
+            variants: Vec::new(),
+        }
+    }
+
+    /// Adding something hands back the identifier that reads it back.
+    ///
+    /// Worth asking directly rather than through a lowered program, because
+    /// a program that numbered everything consistently wrong would still
+    /// run: an installation and a `perform` comparing the same wrong number
+    /// agree. What that would break is anybody reading the MIR, and this is
+    /// what would say so.
+    #[test]
+    fn what_goes_in_comes_back_out_under_the_identifier_it_was_given() {
+        let mut program = Program::new();
+
+        let counter = program.add_effect(effect("Counter"));
+        let clock = program.add_effect(effect("Clock"));
+        assert_eq!(program.effect(counter).name, "Counter");
+        assert_eq!(program.effect(clock).name, "Clock");
+        assert_ne!(counter, clock);
+
+        let pair = program.add_layout(layout("Pair"));
+        let tone = program.add_layout(layout("Tone"));
+        assert_eq!(program.layout(pair).name, "Pair");
+        assert_eq!(program.layout(tone).name, "Tone");
+
+        let first = program.add_function(Function::new("first", Vec::new(), Ty::Unit));
+        let second = program.add_function(Function::new("second", Vec::new(), Ty::Unit));
+        assert_eq!(program.function(first).name, "first");
+        assert_eq!(program.function(second).name, "second");
+        assert_eq!(program.find("second"), Some(second));
+        assert_eq!(program.find("third"), None);
+    }
+
+    /// A choice has something to tell apart and a record does not.
+    #[test]
+    fn only_a_layout_with_more_than_one_variant_carries_a_tag() {
+        let variant = |name: &str| Variant {
+            name: name.to_string(),
+            fields: Vec::new(),
+        };
+
+        assert!(
+            !Layout {
+                name: "Pair".to_string(),
+                variants: vec![variant("Pair")],
+            }
+            .is_tagged()
+        );
+        assert!(
+            Layout {
+                name: "Tone".to_string(),
+                variants: vec![variant("Plain"), variant("Loud")],
+            }
+            .is_tagged()
+        );
+    }
+
+    /// What lives in memory and what fits in a slot.
+    #[test]
+    fn a_type_says_whether_it_lives_in_memory() {
+        assert!(!Ty::Unit.is_boxed());
+        assert!(!Ty::Bool.is_boxed());
+        assert!(!Ty::Int.is_boxed());
+        assert!(Ty::Str.is_boxed());
+        assert!(Ty::List(Box::new(Ty::Int)).is_boxed());
+        assert!(Ty::Aggregate(LayoutId(0)).is_boxed());
+    }
 }
