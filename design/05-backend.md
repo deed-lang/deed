@@ -250,3 +250,29 @@ in. Type names (`Int`, `String`, `Bool`, `Result`, `List`, `System`, `Console`, 
 through the backend is a different, already-answered question (`generics.rs`, `result.rs`,
 `lists.rs`, `host.rs`), not one a function call can ask.
 
+## The runner validates the module before it runs one, and a real engine is not tested against
+
+`crates/deed-codegen/src/run.rs` says plainly it is a test oracle, not a WebAssembly
+implementation: it runs the instructions the compiler emits and nothing checks in advance
+that the module those instructions form is one a real engine would load. #567 found the
+cost of that being incomplete by accident, when an `i32` stored through an `i64.store` ran
+here and would have loaded nowhere else.
+
+#625 closes the general case rather than the one instance: `crates/deed-codegen/src/validate.rs`
+is the actual validation algorithm from the WebAssembly specification's own appendix (a
+value stack and a control stack, both allowed to answer "anything" once a branch has made
+the rest of a block unreachable), run over every function this backend emits. `run::call`
+runs it first, so every existing test that calls a compiled module, `agreement.rs`,
+`corpus_backend.rs`, and everything under them, validates the module it is about to run
+without having to ask to. The runtime width check `run.rs` used to raise on a mistyped
+store is gone: it is unreachable now that nothing gets that far without validating first.
+
+Whether a real engine (wasmtime, wasmparser, or similar) is worth testing against as well:
+decided no, for now. The specification's validation algorithm is the thing being
+implemented, not approximated, so a real engine would mostly be confirming this workspace's
+own transcription of a published algorithm rather than finding a different class of bug,
+and it is the one dependency this backend has spent every other design decision in this
+document avoiding. The number that would change this: a bug reaches a released `deed build`
+that validation here missed and a real engine would have caught. None has, yet.
+
+

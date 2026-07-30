@@ -15,8 +15,10 @@
 pub mod compile;
 pub mod layout;
 pub mod run;
+pub mod validate;
 pub mod wasm;
 
 pub use compile::{Unsupported, compile};
 pub use run::{Trap, Value, call};
+pub use validate::{Invalid, validate};
 pub use wasm::Module;
