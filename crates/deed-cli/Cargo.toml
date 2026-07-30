@@ -13,7 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 deed-diagnostics = { path = "../deed-diagnostics" }
+deed-codegen = { path = "../deed-codegen" }
 deed-driver = { path = "../deed-driver" }
+deed-mir = { path = "../deed-mir" }
 deed-fmt = { path = "../deed-fmt" }
 deed-interp = { path = "../deed-interp" }
 deed-lsp = { path = "../deed-lsp" }
