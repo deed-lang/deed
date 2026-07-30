@@ -239,6 +239,11 @@ pub enum Stmt {
     Assign { local: Local, value: Expr },
     /// Evaluate something for what it does rather than what it produces.
     Discard(Expr),
+    /// End the enclosing function now.
+    ///
+    /// Carries the value to return, including `Expr::Unit` when the source
+    /// wrote `return` with no value.
+    Return { value: Expr },
     /// Stop with a contract failure.
     ///
     /// Only reached from an obligation the checker left `Guarded`. A `Proven`

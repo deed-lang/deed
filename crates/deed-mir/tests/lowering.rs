@@ -279,7 +279,7 @@ fn each_pair_of_types_a_result_holds_gets_its_own_layout() {
 /// What is not lowered yet is named rather than approximated.
 #[test]
 fn a_shape_that_is_not_lowered_says_which_one() {
-    let why = lowered("module a\n\nfn f(n: Int) -> Int {\n    return n\n}\n")
-        .expect_err("an early return is not lowered yet");
-    assert!(why.contains("an early `return`"), "{why}");
+    let why = lowered("module a\n\nfn f() -> () {\n    assert refuses 1\n}\n")
+        .expect_err("`assert refuses` is not lowered yet");
+    assert!(why.contains("not lowered yet"), "{why}");
 }

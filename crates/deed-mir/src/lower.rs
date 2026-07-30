@@ -878,8 +878,13 @@ impl Lowering<'_> {
                         ty: Box::new(Ty::Unit),
                     }));
                 }
-                ast::Stmt::Return { span, .. } => {
-                    return Err(unlowered("an early `return`", *span));
+                ast::Stmt::Return { value, .. } => {
+                    stmts.push(Stmt::Return {
+                        value: match value {
+                            Some(value) => self.expr(value)?,
+                            None => Expr::Unit,
+                        },
+                    });
                 }
                 ast::Stmt::Assign {
                     target,

@@ -188,7 +188,9 @@ fn host_calls(program: &Program) -> Vec<(String, FuncType)> {
 
     fn walk_stmt(stmt: &Stmt, found: &mut Vec<(String, FuncType)>) {
         match stmt {
-            Stmt::Assign { value, .. } | Stmt::Discard(value) => walk(value, found),
+            Stmt::Assign { value, .. } | Stmt::Discard(value) | Stmt::Return { value } => {
+                walk(value, found)
+            }
             Stmt::Fail { .. } => {}
             Stmt::While { condition, body } => {
                 walk(condition, found);
@@ -444,6 +446,10 @@ impl<'a> Builder<'a> {
                 self.instructions.push(Ins::I64Store(0));
 
                 self.instructions.push(Ins::Unreachable);
+            }
+            Stmt::Return { value } => {
+                self.expr(value)?;
+                self.instructions.push(Ins::Return);
             }
             Stmt::While { condition, body } => {
                 // A block to jump out of and a loop to jump back to, which is
