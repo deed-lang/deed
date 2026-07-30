@@ -58,9 +58,43 @@ fn run() -> ExitCode {
             println!("deed {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Command::Explain(code) => run_explain(&code),
         Command::Check(check) => run_check(check),
         Command::Lsp => run_lsp(),
     }
+}
+
+/// Prints the generated page for one diagnostic code.
+///
+/// The argument may be the code identifier (`DEED4025`) or the constant name
+/// (`BROKEN_PRECONDITION`).  The content comes from the build-generated data
+/// in `deed-explain`, which in turn comes from the doc-comment lines already
+/// above each `pub const` in a `codes.rs` file and from an example extracted
+/// from the test corpus.
+fn run_explain(query: &str) -> ExitCode {
+    let Some(p) = deed_explain::page(query) else {
+        eprintln!("error: no page for `{query}`");
+        eprintln!("       use the code identifier (e.g. DEED4025) or the constant name");
+        return ExitCode::from(EXIT_USAGE);
+    };
+
+    println!("{} {}", p.code, p.name);
+    println!();
+
+    if !p.text.is_empty() {
+        println!("{}", p.text);
+    }
+
+    if let (Some(example), Some(source)) = (p.example, p.example_source) {
+        println!();
+        println!("Example (from {source}):");
+        println!();
+        for line in example.lines() {
+            println!("    {line}");
+        }
+    }
+
+    ExitCode::SUCCESS
 }
 
 /// Speaks the language server protocol until the editor stops.

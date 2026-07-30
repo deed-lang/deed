@@ -16,6 +16,7 @@ dependencies = [
  "deed-codegen",
  "deed-diagnostics",
  "deed-driver",
+ "deed-explain",
  "deed-fmt",
  "deed-interp",
  "deed-lsp",
@@ -42,6 +43,7 @@ dependencies = [
  "deed-codegen",
  "deed-diagnostics",
  "deed-effects",
+ "deed-explain",
  "deed-fmt",
  "deed-interp",
  "deed-lexer",
@@ -62,6 +64,10 @@ dependencies = [
  "deed-resolve",
  "deed-typeck",
 ]
+
+[[package]]
+name = "deed-explain"
+version = "0.1.0"
 
 [[package]]
 name = "deed-fmt"
