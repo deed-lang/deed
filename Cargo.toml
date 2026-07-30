@@ -16,6 +16,7 @@ members = [
     "crates/deed-resolve",
     "crates/deed-rt",
     "crates/deed-typeck",
+    "crates/deed-wasm",
 ]
 
 [workspace.package]

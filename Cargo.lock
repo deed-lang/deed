@@ -151,3 +151,11 @@ dependencies = [
  "deed-parser",
  "deed-resolve",
 ]
+
+[[package]]
+name = "deed-wasm"
+version = "0.1.0"
+dependencies = [
+ "deed-diagnostics",
+ "deed-driver",
+]

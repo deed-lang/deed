@@ -1,0 +1,18 @@
+[package]
+name = "deed-wasm"
+description = "The boundary a page calls across: linear memory in, JSON out, no binding generator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-driver = { path = "../deed-driver" }
+
+[lints]
+workspace = true
