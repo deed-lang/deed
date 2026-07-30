@@ -207,3 +207,23 @@ dispatch this needs without contortions that erase the sandboxing benefit, nativ
 output moves first instead. If embedding never turns out to matter to anyone building with
 Deed, the case for a backend at all gets weaker, independent of anything about dispatch
 speed above.
+
+## Checking already compiles for `wasm32-unknown-unknown`
+
+Measured for #586, before planning the rest of #573 (running Deed in a browser page with no
+install step): `cargo check --target wasm32-unknown-unknown -p deed-driver` succeeds today,
+with zero errors, and that pulls in every crate up through `deed-interp` and `deed-effects`.
+
+The worry going in was `std::fs`, `std::time` and `std::env`, all reachable from
+`deed-interp`'s `Io.now`, `Io.epoch` and file operations. They are reachable and they still
+compile: `wasm32-unknown-unknown`'s standard library carries these APIs and returns an
+`io::Error` at the call site rather than refusing to link. Nothing here needed `getrandom`,
+`serde` or a time crate, matching the workspace's dependency-free shape.
+
+This means the *checking* path (`check_all`, the thing #585 already reaches from named
+strings) is a small job for the browser: it needs no code that fails to compile for that
+target. Running a program (`deed run`) is the open question, because the compiling-cleanly
+result says nothing about what happens when one of those calls executes: a `wasm32-unknown-unknown`
+program has no filesystem and no clock underneath it, so `Io.*` needs a host answer, not a
+recompile. That is the shape of #591 (what capabilities a page can hand a program), not a
+finding about `deed-driver` itself.
