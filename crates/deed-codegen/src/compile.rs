@@ -307,6 +307,34 @@ impl<'a> Builder<'a> {
                     }],
                 });
             }
+            Stmt::SetField {
+                object,
+                layout: id,
+                variant,
+                field,
+                value,
+            } => {
+                let tagged = self.program.layout(*id).is_tagged();
+                let offset = layout::field_offset(tagged, *field);
+                let _ = variant;
+
+                let ty = self.ty_of(value)?;
+                let Some(width) = val_type(&ty) else {
+                    // A field with no representation holds nothing, so
+                    // writing to it writes nothing. The expression still
+                    // runs, since it may be a call.
+                    self.expr(value)?;
+                    return Ok(());
+                };
+
+                self.expr(object)?;
+                self.instructions.push(Ins::I32WrapI64);
+                self.expr(value)?;
+                if width == ValType::I32 {
+                    self.instructions.push(Ins::I64ExtendI32S);
+                }
+                self.instructions.push(Ins::I64Store(offset));
+            }
         }
         Ok(())
     }
@@ -323,6 +351,15 @@ impl<'a> Builder<'a> {
         self.instructions.push(Ins::I64Const(size as i64));
         self.instructions.push(Ins::I64Add);
         self.instructions.push(Ins::I64Store(0));
+    }
+
+    /// Writes one word at `address + offset`, where what to write is pushed
+    /// by instructions rather than lowered from an expression.
+    fn write(&mut self, address: u32, offset: u32, value: impl FnOnce(&mut Vec<Ins>)) {
+        self.instructions.push(Ins::LocalGet(address));
+        self.instructions.push(Ins::I32WrapI64);
+        value(&mut self.instructions);
+        self.instructions.push(Ins::I64Store(offset));
     }
 
     /// Writes one word at `address + offset`, where `address` is a slot.
@@ -433,6 +470,131 @@ impl<'a> Builder<'a> {
                 self.expr(callee)?;
                 self.instructions.push(Ins::I32WrapI64);
                 self.instructions.push(Ins::I64Load(0));
+                self.instructions.push(Ins::I32WrapI64);
+                self.instructions.push(Ins::CallIndirect(type_index));
+            }
+            Expr::Install {
+                effect,
+                state,
+                operations,
+                body,
+                ..
+            } => {
+                // The state first, since the frame points at it.
+                let held = self.temporary(ValType::I64);
+                self.expr(state)?;
+                self.instructions.push(Ins::LocalSet(held));
+
+                let frame = self.temporary(ValType::I64);
+                self.allocate(layout::frame_size(operations.len()), frame);
+
+                // The frame under this one, so ending the block is a matter
+                // of putting back what was there. Nothing is popped: the
+                // frame stays allocated and unreachable, which is what every
+                // allocation in this backend does.
+                self.write(frame, 0, |body| {
+                    body.push(Ins::I32Const(layout::HANDLERS as i32));
+                    body.push(Ins::I64Load(0));
+                });
+                self.write(frame, layout::WORD, |body| {
+                    body.push(Ins::I64Const(effect.0 as i64));
+                });
+                self.write(frame, 2 * layout::WORD, |body| {
+                    body.push(Ins::LocalGet(held));
+                });
+                for (position, operation) in operations.iter().enumerate() {
+                    self.write(frame, layout::operation_offset(position), |body| {
+                        body.push(Ins::I64Const(operation.0 as i64));
+                    });
+                }
+
+                self.instructions
+                    .push(Ins::I32Const(layout::HANDLERS as i32));
+                self.instructions.push(Ins::LocalGet(frame));
+                self.instructions.push(Ins::I64Store(0));
+
+                self.block(body)?;
+
+                // The body's value is on the stack and stays there: what
+                // follows pushes an address and a value of its own and ends
+                // balanced.
+                self.instructions
+                    .push(Ins::I32Const(layout::HANDLERS as i32));
+                self.instructions.push(Ins::LocalGet(frame));
+                self.instructions.push(Ins::I32WrapI64);
+                self.instructions.push(Ins::I64Load(0));
+                self.instructions.push(Ins::I64Store(0));
+            }
+            Expr::Perform {
+                effect,
+                operation,
+                args,
+                ret,
+            } => {
+                // Walk down from the innermost frame until one answers for
+                // this effect. Which frame that is cannot be worked out
+                // here: the function doing the performing is compiled once
+                // and may be called from inside any `with` block, or none.
+                let cursor = self.temporary(ValType::I64);
+                self.instructions
+                    .push(Ins::I32Const(layout::HANDLERS as i32));
+                self.instructions.push(Ins::I64Load(0));
+                self.instructions.push(Ins::LocalSet(cursor));
+
+                let search = vec![
+                    // Nothing left to ask. The checker refuses a program
+                    // that performs outside a handler, so reaching this
+                    // means the effect row and the frames disagree.
+                    Ins::LocalGet(cursor),
+                    Ins::I64Eqz,
+                    Ins::If {
+                        result: None,
+                        then: vec![Ins::Unreachable],
+                        otherwise: Vec::new(),
+                    },
+                    Ins::LocalGet(cursor),
+                    Ins::I32WrapI64,
+                    Ins::I64Load(layout::WORD),
+                    Ins::I64Const(effect.0 as i64),
+                    Ins::I64Eq,
+                    Ins::BrIf(1),
+                    Ins::LocalGet(cursor),
+                    Ins::I32WrapI64,
+                    Ins::I64Load(0),
+                    Ins::LocalSet(cursor),
+                    Ins::Br(0),
+                ];
+                self.instructions.push(Ins::Block {
+                    result: None,
+                    body: vec![Ins::Loop {
+                        result: None,
+                        body: search,
+                    }],
+                });
+
+                // The state, the arguments, then the code pointer, which is
+                // the order an operation's parameters are in.
+                let signature =
+                    FuncType {
+                        params: std::iter::once(ValType::I64)
+                            .chain(args.iter().filter_map(|arg| {
+                                self.ty_of(arg).ok().and_then(|ty| val_type(&ty))
+                            }))
+                            .collect(),
+                        results: val_type(ret).into_iter().collect(),
+                    };
+                let type_index = self.signature(signature)?;
+
+                self.instructions.push(Ins::LocalGet(cursor));
+                self.instructions.push(Ins::I32WrapI64);
+                self.instructions.push(Ins::I64Load(2 * layout::WORD));
+                for arg in args {
+                    self.expr(arg)?;
+                }
+                self.instructions.push(Ins::LocalGet(cursor));
+                self.instructions.push(Ins::I32WrapI64);
+                self.instructions
+                    .push(Ins::I64Load(layout::operation_offset(*operation)));
                 self.instructions.push(Ins::I32WrapI64);
                 self.instructions.push(Ins::CallIndirect(type_index));
             }
@@ -625,6 +787,8 @@ impl<'a> Builder<'a> {
             Expr::Block(block) => self.ty_of(&block.value)?,
             Expr::Runtime { ret, .. } => (**ret).clone(),
             Expr::ElementAt { element, .. } => (**element).clone(),
+            Expr::Install { ty, .. } => (**ty).clone(),
+            Expr::Perform { ret, .. } => (**ret).clone(),
         })
     }
 

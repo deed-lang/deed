@@ -103,6 +103,19 @@ pub struct Field {
     pub ty: Ty,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct EffectId(pub usize);
+
+/// An effect, reduced to what dispatch needs.
+///
+/// The operations are in declaration order and a `Perform` names one by
+/// position, so nothing at this level does a lookup by string.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Effect {
+    pub name: String,
+    pub operations: Vec<String>,
+}
+
 /// A whole program, ready to compile.
 ///
 /// Self-contained on purpose: nothing here points back at a syntax tree, a
@@ -111,6 +124,7 @@ pub struct Field {
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Program {
     pub layouts: Vec<Layout>,
+    pub effects: Vec<Effect>,
     pub functions: Vec<Function>,
     /// Which function `deed run` calls, when the program has one.
     pub entry: Option<FuncId>,
@@ -131,8 +145,17 @@ impl Program {
         FuncId(self.functions.len() - 1)
     }
 
+    pub fn add_effect(&mut self, effect: Effect) -> EffectId {
+        self.effects.push(effect);
+        EffectId(self.effects.len() - 1)
+    }
+
     pub fn layout(&self, id: LayoutId) -> &Layout {
         &self.layouts[id.0]
+    }
+
+    pub fn effect(&self, id: EffectId) -> &Effect {
+        &self.effects[id.0]
     }
 
     pub fn function(&self, id: FuncId) -> &Function {
@@ -207,6 +230,19 @@ pub enum Stmt {
     /// one; nothing lowers to it except a walk whose turns a list already
     /// bounds.
     While { condition: Expr, body: Vec<Stmt> },
+    /// Write one field of an aggregate in place.
+    ///
+    /// The only thing in this IR that changes something already built, and
+    /// it exists for the only thing in the language that can: a handler's
+    /// `state`. Nothing else lowers to it. A record is built once by `Make`
+    /// and read by `Field` from then on.
+    SetField {
+        object: Expr,
+        layout: LayoutId,
+        variant: usize,
+        field: usize,
+        value: Expr,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -291,6 +327,41 @@ pub enum Expr {
         list: Box<Expr>,
         index: Box<Expr>,
         element: Box<Ty>,
+    },
+    /// Run a block with a handler answering for an effect.
+    ///
+    /// The handler is in scope for the block and no longer once it ends,
+    /// which is what makes this an expression that wraps a body rather than
+    /// a statement that installs something. Nesting is what decides which
+    /// handler answers: the innermost one that names the effect.
+    Install {
+        effect: EffectId,
+        /// What the handler's `state` starts as, or `Unit` when it declares
+        /// none. One cell per installation, not one per handler declaration,
+        /// so two `with` blocks over the same handler do not share it.
+        state: Box<Expr>,
+        /// One function per operation the effect declares, in that order.
+        /// Each takes the state cell first and its own parameters after.
+        operations: Vec<FuncId>,
+        body: Box<Block>,
+        ty: Box<Ty>,
+    },
+    /// Perform an operation, answered by whichever handler is innermost.
+    ///
+    /// Which one that is cannot be read off the call site, because the
+    /// function performing may have been called from inside any number of
+    /// `with` blocks and is compiled once. So this is a search at runtime,
+    /// and the thing it searches is the only piece of state the compiled
+    /// program keeps that the source does not name.
+    ///
+    /// It is a search and a call, and nothing else. An operation runs once
+    /// per `perform` and its answer is a return value, so there is no
+    /// continuation to capture and nothing to resume. See `design/05-backend.md`.
+    Perform {
+        effect: EffectId,
+        operation: usize,
+        args: Vec<Expr>,
+        ret: Box<Ty>,
     },
 }
 

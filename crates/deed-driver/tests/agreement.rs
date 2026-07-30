@@ -235,6 +235,44 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 3,
         },
+        // Handlers. The compiled form is a frame linked into a stack and a
+        // search down it, so what these check is that the search finds what
+        // the interpreter's scoping says it should.
+        Agreed {
+            name: "a handler answering an operation",
+            source: "module a\n\neffect Counter {\n    fn value() -> Int\n}\n\nhandler Fixed implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n}\n\nfn answer() -> Int {\n    with Fixed { count: 7 } {\n        Counter.value()\n    }\n}\n\ntest \"a handler answers what it holds\" {\n    assert answer() == 7\n}\n",
+            call: "answer",
+            expect: 7,
+        },
+        Agreed {
+            name: "handler state that changes",
+            source: "module a\n\neffect Counter {\n    fn value() -> Int\n    fn bump(by: Int) -> ()\n}\n\nhandler InMemory implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n\n    fn bump(by) -> () {\n        count = count + by\n    }\n}\n\nfn answer() -> Int {\n    with InMemory { count: 0 } {\n        Counter.bump(2)\n        Counter.bump(3)\n        Counter.value()\n    }\n}\n\ntest \"state carries between operations\" {\n    assert answer() == 5\n}\n",
+            call: "answer",
+            expect: 5,
+        },
+        // The frame is found at runtime rather than read off the call site,
+        // and this is the program that needs it: `report` is compiled once
+        // and performs into whichever handler is installed when it runs.
+        Agreed {
+            name: "performing from a function the handler does not enclose",
+            source: "module a\n\neffect Counter {\n    fn value() -> Int\n}\n\nhandler Fixed implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n}\n\nfn report() -> Int uses Counter.value { Counter.value() * 2 }\n\nfn answer() -> Int {\n    with Fixed { count: 4 } {\n        report()\n    }\n}\n\ntest \"a performing function finds the handler its caller installed\" {\n    assert answer() == 8\n}\n",
+            call: "answer",
+            expect: 8,
+        },
+        Agreed {
+            name: "the innermost handler is the one that answers",
+            source: "module a\n\neffect Counter {\n    fn value() -> Int\n}\n\nhandler Fixed implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n}\n\nfn answer() -> Int {\n    with Fixed { count: 1 } {\n        with Fixed { count: 2 } {\n            Counter.value()\n        }\n    }\n}\n\ntest \"nesting decides\" {\n    assert answer() == 2\n}\n",
+            call: "answer",
+            expect: 2,
+        },
+        // What the frame being unlinked buys: the outer handler is back once
+        // the inner block ends, rather than being shadowed forever.
+        Agreed {
+            name: "a handler stops answering when its block ends",
+            source: "module a\n\neffect Counter {\n    fn value() -> Int\n}\n\nhandler Fixed implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n}\n\nfn answer() -> Int {\n    with Fixed { count: 10 } {\n        let inner = with Fixed { count: 3 } {\n            Counter.value()\n        }\n        inner + Counter.value()\n    }\n}\n\ntest \"the outer handler comes back\" {\n    assert answer() == 13\n}\n",
+            call: "answer",
+            expect: 13,
+        },
     ]
 }
 

@@ -142,6 +142,33 @@ pub fn lower(
         }
     }
 
+    // Effects, which dispatch reduces to a number and a position. What an
+    // operation is called stays for the sake of anybody reading the MIR;
+    // nothing looks one up by name after this.
+    let mut effects: HashMap<String, crate::EffectId> = HashMap::new();
+    let mut signatures: HashMap<String, &ast::EffectDecl> = HashMap::new();
+    for item in &module.items {
+        if let Item::Effect(effect) = item {
+            let id = program.add_effect(crate::Effect {
+                name: effect.name.name.to_string(),
+                operations: effect
+                    .operations
+                    .iter()
+                    .map(|operation| operation.name.name.to_string())
+                    .collect(),
+            });
+            effects.insert(effect.name.name.to_string(), id);
+            signatures.insert(effect.name.name.to_string(), effect);
+        }
+    }
+
+    let mut handlers: HashMap<String, &ast::HandlerDecl> = HashMap::new();
+    for item in &module.items {
+        if let Item::Handler(handler) = item {
+            handlers.insert(handler.name.name.to_string(), handler);
+        }
+    }
+
     // What each alias comes out as, worked out once now that the layouts it
     // may name are all built.
     let mut alias_types: HashMap<String, Ty> = HashMap::new();
@@ -189,6 +216,8 @@ pub fn lower(
         declarations.insert(declaration.sig.name.name.to_string(), declaration);
     }
     let mut instantiated: HashMap<String, crate::FuncId> = HashMap::new();
+    let mut answered: HashMap<String, (crate::EffectId, crate::LayoutId, Vec<crate::FuncId>)> =
+        HashMap::new();
 
     // Only the ones that got a signature above, in the same order, since a
     // generic declaration is lowered by the calls that name it rather than
@@ -212,6 +241,11 @@ pub fn lower(
             bindings: HashMap::new(),
             declarations: &declarations,
             instantiated: &mut instantiated,
+            effects: &effects,
+            signatures: &signatures,
+            handlers: &handlers,
+            answered: &mut answered,
+            state: None,
             function: program.functions[index].clone(),
             slots: HashMap::new(),
         };
@@ -326,6 +360,22 @@ struct Lowering<'a> {
     declarations: &'a HashMap<String, &'a ast::FnDecl>,
     /// Which copies already exist, by the name they were given.
     instantiated: &'a mut HashMap<String, crate::FuncId>,
+    /// Which effect each name stands for.
+    effects: &'a HashMap<String, crate::EffectId>,
+    /// What each effect declares, since a handler operation writes no types
+    /// of its own and inherits them from here.
+    signatures: &'a HashMap<String, &'a ast::EffectDecl>,
+    handlers: &'a HashMap<String, &'a ast::HandlerDecl>,
+    /// Which handlers have been lowered, by name: the effect they answer
+    /// for, the shape of their state, and a function per operation. A
+    /// handler is one set of bodies however many `with` blocks name it, so
+    /// this is worked out once and the installations share it.
+    answered: &'a mut HashMap<String, (crate::EffectId, crate::LayoutId, Vec<crate::FuncId>)>,
+    /// Inside a handler operation: the shape of the state and the slot
+    /// holding it. `None` everywhere else, which is what makes writing to
+    /// state outside a handler impossible to lower rather than merely
+    /// rejected.
+    state: Option<(crate::LayoutId, Local)>,
     function: Function,
     /// Where each bound name lives.
     slots: HashMap<DefId, Local>,
@@ -715,8 +765,33 @@ impl Lowering<'_> {
                 ast::Stmt::Return { span, .. } => {
                     return Err(unlowered("an early `return`", *span));
                 }
-                ast::Stmt::Assign { span, .. } => {
-                    return Err(unlowered("handler state", *span));
+                ast::Stmt::Assign {
+                    target,
+                    value,
+                    span,
+                } => {
+                    // The only assignment the language has, and it writes a
+                    // field of the enclosing handler's state. Outside one
+                    // there is nothing to write to, and the resolver already
+                    // said so.
+                    let Some((shape, cell)) = self.state else {
+                        return Err(unlowered("an assignment outside a handler", *span));
+                    };
+                    let field = self.layout(shape).variants[0]
+                        .fields
+                        .iter()
+                        .position(|field| field.name == target.name.as_str())
+                        .ok_or_else(|| {
+                            unlowered("an assignment to something that is not state", *span)
+                        })?;
+                    let lowered = self.expr(value)?;
+                    stmts.push(Stmt::SetField {
+                        object: Expr::Local(cell),
+                        layout: shape,
+                        variant: 0,
+                        field,
+                        value: lowered,
+                    });
                 }
                 ast::Stmt::Refuses { span, .. } => {
                     return Err(unlowered("`assert refuses`", *span));
@@ -744,11 +819,28 @@ impl Lowering<'_> {
                     .ok_or_else(|| unlowered("a name nothing resolved", ident.span))?;
                 match self.slots.get(&def) {
                     Some(local) => Expr::Local(*local),
-                    // Not a local, so it is a variant carrying no fields,
-                    // written bare the way this language writes them. A
-                    // function used as a value would also land here and is
-                    // refused, since it needs a closure to carry.
+                    // Not a local. Inside a handler operation it may be a
+                    // field of the state, which is written bare the way a
+                    // parameter is and reads out of the cell.
                     None => {
+                        if let Some((shape, cell)) = self.state
+                            && let Some(field) = self.layout(shape).variants[0]
+                                .fields
+                                .iter()
+                                .position(|field| field.name == ident.name.as_str())
+                        {
+                            return Ok(Expr::Field {
+                                value: Box::new(Expr::Local(cell)),
+                                layout: shape,
+                                variant: 0,
+                                field,
+                            });
+                        }
+
+                        // So it is a variant carrying no fields, written
+                        // bare the way this language writes them. A function
+                        // used as a value would also land here and is
+                        // refused, since it needs a closure to carry.
                         let (layout, variant) = self.variant_named(&ident.name, ident.span)?;
                         if !self.layout(layout).variants[variant].fields.is_empty() {
                             return Err(unlowered(
@@ -782,6 +874,37 @@ impl Lowering<'_> {
                 }
             }
             ast::Expr::Call { callee, args, span } => {
+                // `Log.note("hi")`. Whether the receiver is an effect or a
+                // value is a question the resolver already answered, and the
+                // effects table is what it comes out as here.
+                if let ast::Expr::Field { receiver, name, .. } = &**callee
+                    && let ast::Expr::Ident(qualifier) = &**receiver
+                    && let Some(effect) = self.effects.get(qualifier.name.as_str()).copied()
+                {
+                    let operation = self
+                        .signatures
+                        .get(qualifier.name.as_str())
+                        .and_then(|declared| {
+                            declared
+                                .operations
+                                .iter()
+                                .position(|sig| sig.name.name == name.name)
+                        })
+                        .ok_or_else(|| {
+                            unlowered("an operation this effect does not declare", name.span)
+                        })?;
+                    let lowered = args
+                        .iter()
+                        .map(|arg| self.expr(arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(Expr::Perform {
+                        effect,
+                        operation,
+                        args: lowered,
+                        ret: Box::new(self.ty_at(*span)?),
+                    });
+                }
+
                 let ast::Expr::Ident(name) = &**callee else {
                     return Err(unlowered(
                         "a call through something other than a name",
@@ -991,14 +1114,202 @@ impl Lowering<'_> {
                 *span,
             )?,
             ast::Expr::Closure { params, body, span } => self.closure(params, body, *span)?,
+            ast::Expr::With {
+                handlers,
+                body,
+                span,
+            } => self.install(handlers, body, *span)?,
             other => {
                 return Err(unlowered("this expression", other.span()));
             }
         })
     }
 
-    /// A closure becomes a top-level function and a value that points at it.
+    /// `with H { .. }`, or several handlers at once.
     ///
+    /// Several nest, and the one written last is the innermost, so a program
+    /// naming two handlers of the same effect gets the second. That falls
+    /// out of the search `Perform` does rather than being arranged here.
+    fn install(
+        &mut self,
+        handlers: &[ast::Expr],
+        body: &ast::Block,
+        span: Span,
+    ) -> Result<Expr, Unlowered> {
+        let mut installations = Vec::new();
+        for handler in handlers {
+            // `InMemory { count: 0 }` gives the state its first value, and a
+            // handler with no state is written bare.
+            let (name, initial) = match handler {
+                ast::Expr::Ident(ident) => (ident, Vec::new()),
+                ast::Expr::StructLit { path, fields, .. } => match &**path {
+                    ast::Expr::Ident(ident) => (ident, fields.clone()),
+                    other => return Err(unlowered("a handler written this way", other.span())),
+                },
+                other => return Err(unlowered("a handler written this way", other.span())),
+            };
+
+            let (effect, shape, operations) = self.answer(&name.name, name.span)?;
+
+            // In the order the state was declared, not the order it was
+            // written, since the layout is what the operations read.
+            let declared: Vec<String> = self.layout(shape).variants[0]
+                .fields
+                .iter()
+                .map(|field| field.name.clone())
+                .collect();
+            let mut start = Vec::new();
+            for field in &declared {
+                let written = initial
+                    .iter()
+                    .find(|init| init.name.name.as_str() == field.as_str())
+                    .ok_or_else(|| unlowered("an installation missing a state field", span))?;
+                let value = match &written.value {
+                    Some(value) => self.expr(value)?,
+                    None => return Err(unlowered("a shorthand state field", written.span)),
+                };
+                start.push(value);
+            }
+
+            installations.push((effect, shape, operations, start));
+        }
+
+        let ty = match &body.tail {
+            Some(tail) => self.ty_at(tail.span())?,
+            None => Ty::Unit,
+        };
+        let mut inner = Expr::Block(Box::new(self.block(body)?));
+
+        // Written first means outermost, so they are wrapped from the inside.
+        for (effect, shape, operations, start) in installations.into_iter().rev() {
+            inner = Expr::Install {
+                effect,
+                state: Box::new(Expr::Make {
+                    layout: shape,
+                    variant: 0,
+                    fields: start,
+                }),
+                operations,
+                body: Box::new(Block::of(inner)),
+                ty: Box::new(ty.clone()),
+            };
+        }
+        Ok(inner)
+    }
+
+    /// Lowers a handler's operations, once per handler however many `with`
+    /// blocks name it.
+    ///
+    /// Each operation becomes an ordinary function taking the state cell
+    /// first and its own parameters after, which is the same shape a closure
+    /// body gets and for the same reason: the code is one thing and what it
+    /// works on is another.
+    fn answer(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Result<(crate::EffectId, crate::LayoutId, Vec<crate::FuncId>), Unlowered> {
+        if let Some(found) = self.answered.get(name) {
+            return Ok(found.clone());
+        }
+
+        let handler = *self
+            .handlers
+            .get(name)
+            .ok_or_else(|| unlowered("a handler not declared here", span))?;
+        let effect = *self
+            .effects
+            .get(handler.effect.name.as_str())
+            .ok_or_else(|| unlowered("a handler for an effect not declared here", span))?;
+        let declared = *self
+            .signatures
+            .get(handler.effect.name.as_str())
+            .ok_or_else(|| unlowered("a handler for an effect not declared here", span))?;
+
+        let shape = crate::LayoutId(self.shapes.len());
+        self.shapes.push(crate::Layout {
+            name: format!("state of {name}"),
+            variants: vec![crate::Variant {
+                name: "state".to_string(),
+                fields: handler
+                    .state
+                    .iter()
+                    .map(|field| {
+                        Ok(crate::Field {
+                            name: field.name.name.to_string(),
+                            ty: written(&field.ty, self.layouts, &HashMap::new(), &self.bindings)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Unlowered>>()?,
+            }],
+        });
+
+        // Registered before the bodies are lowered, so an operation that
+        // performs its own effect finds the functions rather than asking for
+        // them again forever.
+        let mut operations = Vec::new();
+        for (position, _) in declared.operations.iter().enumerate() {
+            operations.push(crate::FuncId(self.declared + self.lifted.len() + position));
+        }
+        self.answered
+            .insert(name.to_string(), (effect, shape, operations.clone()));
+
+        // Every operation the effect declares, in that order, so dispatch
+        // can index rather than search. A handler that leaves one out did
+        // not pass the checker.
+        for signature in &declared.operations {
+            let body = handler
+                .operations
+                .iter()
+                .find(|operation| operation.sig.name.name == signature.name.name)
+                .ok_or_else(|| unlowered("a handler missing an operation", handler.span))?;
+
+            // The types come from the effect. A handler writes its parameter
+            // names and nothing else, which is what keeps the two from
+            // drifting apart.
+            let mut params = vec![Ty::Aggregate(shape)];
+            for param in &signature.params {
+                params.push(match &param.ty {
+                    Some(ty) => written(ty, self.layouts, &HashMap::new(), &self.bindings)?,
+                    None => return Err(unlowered("an operation with no type", param.span)),
+                });
+            }
+            let ret = match &signature.ret {
+                None => Ty::Unit,
+                Some(ty) => written(ty, self.layouts, &HashMap::new(), &self.bindings)?,
+            };
+
+            self.lifted.push(Function::new(
+                format!("{name}.{}", signature.name.name),
+                params.clone(),
+                ret.clone(),
+            ));
+            let at = self.lifted.len() - 1;
+
+            let outer_slots = std::mem::take(&mut self.slots);
+            let outer_state = self.state.replace((shape, Local(0)));
+            let outer_function =
+                std::mem::replace(&mut self.function, Function::new("", params, ret));
+
+            for (position, param) in body.sig.params.iter().enumerate() {
+                if let Some(def) = self.resolutions.resolution(param.name.span) {
+                    self.slots.insert(def, Local(position + 1));
+                }
+            }
+
+            let lowered = self.block(&body.body)?;
+            let done = std::mem::replace(&mut self.function, outer_function);
+            self.slots = outer_slots;
+            self.state = outer_state;
+
+            self.lifted[at].locals = done.locals;
+            self.lifted[at].body = lowered;
+        }
+
+        Ok((effect, shape, operations))
+    }
+
+    /// A closure becomes a top-level function and a value that points at it.    ///
     /// The value is a code pointer and an environment, laid out as an
     /// aggregate whose first field is the pointer and whose rest is whatever
     /// the body reads from outside itself. Nothing about it is special to

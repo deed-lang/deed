@@ -171,10 +171,45 @@ fn a_closure_that_captures_nothing_holds_only_its_code() {
     assert_eq!(environment.variants[0].fields.len(), 1);
 }
 
+/// A handler is one set of bodies however many blocks install it, and each
+/// operation is a function taking the state cell first.
+#[test]
+fn a_handler_becomes_one_function_per_operation() {
+    let program = lowered(
+        "module a\n\neffect Counter {\n    fn value() -> Int\n    fn bump(by: Int) -> ()\n}\n\nhandler InMemory implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n\n    fn bump(by) -> () {\n        count = count + by\n    }\n}\n\nfn f() -> Int {\n    with InMemory { count: 0 } {\n        Counter.bump(1)\n        Counter.value()\n    }\n}\n\nfn g() -> Int {\n    with InMemory { count: 5 } {\n        Counter.value()\n    }\n}\n",
+    )
+    .expect("this lowers");
+
+    assert_eq!(program.effects.len(), 1);
+    assert_eq!(program.effect(deed_mir::EffectId(0)).name, "Counter");
+    assert_eq!(
+        program.effect(deed_mir::EffectId(0)).operations,
+        vec!["value".to_string(), "bump".to_string()]
+    );
+
+    let value = program.find("InMemory.value").expect("value is lowered");
+    let bump = program.find("InMemory.bump").expect("bump is lowered");
+    // Two installations, one set of bodies.
+    assert_eq!(
+        program
+            .functions
+            .iter()
+            .filter(|function| function.name.starts_with("InMemory."))
+            .count(),
+        2
+    );
+
+    // The state cell first, then what the effect declared.
+    let state = program.function(value).params[0].clone();
+    assert!(matches!(state, Ty::Aggregate(_)));
+    assert_eq!(program.function(bump).params, vec![state, Ty::Int]);
+    assert_eq!(program.function(bump).ret, Ty::Unit);
+}
+
 /// What is not lowered yet is named rather than approximated.
 #[test]
 fn a_shape_that_is_not_lowered_says_which_one() {
-    let why = lowered("module a\n\neffect Log {\n    fn note(text: String)\n}\n\nhandler Quiet implements Log {\n    fn note(text: String) -> () { () }\n}\n\nfn f() -> Int uses Log.note {\n    Log.note(\"hi\")\n    1\n}\n")
-        .expect_err("effects are not lowered yet");
-    assert!(why.contains("not lowered yet"), "{why}");
+    let why = lowered("module a\n\nfn f(n: Int) -> Int {\n    return n\n}\n")
+        .expect_err("an early return is not lowered yet");
+    assert!(why.contains("an early `return`"), "{why}");
 }
