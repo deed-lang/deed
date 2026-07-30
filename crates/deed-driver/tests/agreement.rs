@@ -209,9 +209,20 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 42,
         },
+        Agreed {
+            name: "a closure called through a name",
+            source: "module a\n\nfn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\nfn answer() -> Int { apply(|n: Int| n + n, 21) }\n\ntest \"a closure is a value that can be called\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
+        Agreed {
+            name: "a closure that captures",
+            source: "module a\n\nfn apply(f: Fn(Int) -> Int, n: Int) -> Int { f(n) }\n\nfn answer() -> Int {\n    let by = 10\n    apply(|n: Int| n * by, 4)\n}\n\ntest \"a closure reads what it captured\" {\n    assert answer() == 40\n}\n",
+            call: "answer",
+            expect: 40,
+        },
     ]
 }
-
 /// Checks a program, and refuses to go on if it does not check.
 ///
 /// A backend is only meant to see programs the checker accepted, so a

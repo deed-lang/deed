@@ -172,6 +172,8 @@ pub fn lower(
         }
     }
 
+    let mut lifted: Vec<Function> = Vec::new();
+
     for (index, declaration) in order.iter().enumerate() {
         let id = crate::FuncId(index);
         let mut lowering = Lowering {
@@ -180,7 +182,9 @@ pub fn lower(
             by_def: &by_def,
             layouts: &layouts,
             alias_types: &alias_types,
-            program: &program,
+            shapes: program.layouts.clone(),
+            declared: program.functions.len() + lifted.len(),
+            lifted: Vec::new(),
             function: program.functions[index].clone(),
             slots: HashMap::new(),
         };
@@ -193,12 +197,20 @@ pub fn lower(
 
         let body = lowering.block(&declaration.body)?;
         let contract = lowering.contract(declaration)?;
+        // A closure body adds a layout for its environment, so what the
+        // lowering ended up with is what the program has.
+        program.layouts = lowering.shapes;
+        lifted.extend(lowering.lifted);
         let mut function = lowering.function;
         function.body = Block {
             stmts: contract.into_iter().chain(body.stmts).collect(),
             value: body.value,
         };
         program.functions[id.0] = function;
+    }
+
+    for function in lifted {
+        program.add_function(function);
     }
 
     program.entry = program.find("main");
@@ -263,7 +275,14 @@ struct Lowering<'a> {
     by_def: &'a HashMap<DefId, crate::FuncId>,
     layouts: &'a HashMap<String, crate::LayoutId>,
     alias_types: &'a HashMap<String, Ty>,
-    program: &'a Program,
+    /// Every layout the module declares, copied rather than borrowed so a
+    /// closure body can be added to the program while one is being lowered.
+    shapes: Vec<crate::Layout>,
+    /// How many functions the program already has, since a closure body
+    /// becomes one and needs to know its own index.
+    declared: usize,
+    /// Closure bodies, lifted out and appended once everything is lowered.
+    lifted: Vec<Function>,
     function: Function,
     /// Where each bound name lives.
     slots: HashMap<DefId, Local>,
@@ -272,7 +291,107 @@ struct Lowering<'a> {
 /// Which variants an arm names, and which field each name it binds reads.
 type Arm<'p> = (Vec<usize>, Vec<(usize, &'p ast::Ident)>);
 
+/// Every name an expression mentions, by where it was written.
+///
+/// Used to work out what a closure captures. Over-approximating is safe here
+/// and under-approximating is not, so this walks everything rather than
+/// trying to know which positions can bind.
+fn names_in(expr: &ast::Expr, out: &mut Vec<Span>) {
+    match expr {
+        ast::Expr::Ident(ident) => out.push(ident.span),
+        ast::Expr::Field { receiver, .. } => names_in(receiver, out),
+        ast::Expr::Call { callee, args, .. } => {
+            names_in(callee, out);
+            for arg in args {
+                names_in(arg, out);
+            }
+        }
+        ast::Expr::List { elements, .. } => {
+            for element in elements {
+                names_in(element, out);
+            }
+        }
+        ast::Expr::StructLit { fields, .. } => {
+            for field in fields {
+                out.push(field.name.span);
+                if let Some(value) = &field.value {
+                    names_in(value, out);
+                }
+            }
+        }
+        ast::Expr::Unary { operand, .. } => names_in(operand, out),
+        ast::Expr::Binary { lhs, rhs, .. } => {
+            names_in(lhs, out);
+            names_in(rhs, out);
+        }
+        ast::Expr::Try { operand, .. } => names_in(operand, out),
+        ast::Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            names_in(condition, out);
+            names_in_block(then_branch, out);
+            if let Some(other) = else_branch {
+                names_in(other, out);
+            }
+        }
+        ast::Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            names_in(scrutinee, out);
+            for arm in arms {
+                names_in(&arm.body, out);
+            }
+        }
+        ast::Expr::For {
+            iterable,
+            accumulator,
+            keep,
+            body,
+            ..
+        } => {
+            names_in(iterable, out);
+            if let Some(one) = accumulator {
+                names_in(&one.init, out);
+            }
+            if let Some(more) = keep {
+                names_in(more, out);
+            }
+            names_in_block(body, out);
+        }
+        ast::Expr::Block(block) => names_in_block(block, out),
+        ast::Expr::Closure { body, .. } => names_in(body, out),
+        _ => {}
+    }
+}
+
+fn names_in_block(block: &ast::Block, out: &mut Vec<Span>) {
+    for stmt in &block.stmts {
+        match stmt {
+            ast::Stmt::Let { init, .. } => names_in(init, out),
+            ast::Stmt::Expr(expr) => names_in(expr, out),
+            ast::Stmt::Assert { condition, .. } => names_in(condition, out),
+            ast::Stmt::Assign { value, .. } => names_in(value, out),
+            ast::Stmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    names_in(value, out);
+                }
+            }
+            ast::Stmt::Refuses { .. } => {}
+        }
+    }
+    if let Some(tail) = &block.tail {
+        names_in(tail, out);
+    }
+}
+
 impl Lowering<'_> {
+    fn layout(&self, id: crate::LayoutId) -> &crate::Layout {
+        &self.shapes[id.0]
+    }
+
     /// The checks a function's contract asks for on the way in.
     ///
     /// A `where` clause is answered where the call is written, and the
@@ -454,10 +573,7 @@ impl Lowering<'_> {
                     // refused, since it needs a closure to carry.
                     None => {
                         let (layout, variant) = self.variant_named(&ident.name, ident.span)?;
-                        if !self.program.layout(layout).variants[variant]
-                            .fields
-                            .is_empty()
-                        {
+                        if !self.layout(layout).variants[variant].fields.is_empty() {
                             return Err(unlowered(
                                 "a variant with fields written without them",
                                 ident.span,
@@ -504,6 +620,18 @@ impl Lowering<'_> {
                     .iter()
                     .map(|arg| self.expr(arg))
                     .collect::<Result<Vec<_>, _>>()?;
+
+                // A local holding a function value is called through the
+                // value rather than by name, since which body it points at
+                // is not known here.
+                if let Some(local) = self.slots.get(&def) {
+                    let ret = self.ty_at(*span)?;
+                    return Ok(Expr::CallIndirect {
+                        callee: Box::new(Expr::Local(*local)),
+                        args: lowered,
+                        ret: Box::new(ret),
+                    });
+                }
 
                 match self.by_def.get(&def) {
                     Some(func) => Expr::Call {
@@ -586,12 +714,16 @@ impl Lowering<'_> {
                 // Written in whatever order somebody typed, stored in the
                 // order the layout declared, because a field's place is a
                 // property of the type rather than of one literal.
-                let declared = &self.program.layout(layout).variants[variant].fields;
+                let declared: Vec<String> = self.layout(layout).variants[variant]
+                    .fields
+                    .iter()
+                    .map(|field| field.name.clone())
+                    .collect();
                 let mut values = Vec::new();
-                for field in declared {
+                for field in &declared {
                     let written = fields
                         .iter()
-                        .find(|given| given.name.name.as_str() == field.name)
+                        .find(|given| given.name.name.as_str() == field.as_str())
                         .ok_or_else(|| unlowered("a literal missing a field", *span))?;
                     values.push(match &written.value {
                         Some(value) => self.expr(value)?,
@@ -628,7 +760,7 @@ impl Lowering<'_> {
                 let Ty::Aggregate(layout) = receiver_ty else {
                     return Err(unlowered("reading a field of this", *span));
                 };
-                let held = self.program.layout(layout);
+                let held = self.layout(layout);
                 let (variant, field) = held
                     .variants
                     .iter()
@@ -669,9 +801,125 @@ impl Lowering<'_> {
                 body,
                 *span,
             )?,
+            ast::Expr::Closure { params, body, span } => self.closure(params, body, *span)?,
             other => {
                 return Err(unlowered("this expression", other.span()));
             }
+        })
+    }
+
+    /// A closure becomes a top-level function and a value that points at it.
+    ///
+    /// The value is a code pointer and an environment, laid out as an
+    /// aggregate whose first field is the pointer and whose rest is whatever
+    /// the body reads from outside itself. Nothing about it is special to
+    /// this backend: it is the conversion every compiler does, written out
+    /// because the alternative is a runtime that keeps frames alive and this
+    /// language already refuses to let a closure outlive what it captured in
+    /// any way that would need one.
+    ///
+    /// What it captures is worked out from what the body names, so a closure
+    /// that reads nothing carries nothing.
+    fn closure(
+        &mut self,
+        params: &[ast::Param],
+        body: &ast::Expr,
+        span: Span,
+    ) -> Result<Expr, Unlowered> {
+        let captured: Vec<(DefId, Local)> = {
+            let mut found = Vec::new();
+            let mut seen = Vec::new();
+            names_in(body, &mut seen);
+            for name in seen {
+                if let Some(def) = self.resolutions.resolution(name)
+                    && let Some(local) = self.slots.get(&def)
+                    && !found.iter().any(|(known, _)| *known == def)
+                {
+                    found.push((def, *local));
+                }
+            }
+            found
+        };
+
+        // The environment holds one field per captured name, and the code
+        // pointer sits in front of them so a call can find it without
+        // knowing how many there are.
+        let mut fields = vec![crate::Field {
+            name: "code".to_string(),
+            ty: Ty::Int,
+        }];
+        for (index, (_, local)) in captured.iter().enumerate() {
+            fields.push(crate::Field {
+                name: format!("held{index}"),
+                ty: self.function.local_ty(*local).clone(),
+            });
+        }
+        let shape = crate::LayoutId(self.shapes.len());
+        self.shapes.push(crate::Layout {
+            name: format!("closure at {}", span.start),
+            variants: vec![crate::Variant {
+                name: "closure".to_string(),
+                fields,
+            }],
+        });
+
+        // The lifted body takes its environment first and its own parameters
+        // after, which is the order a call has them in.
+        let mut lifted_params = vec![Ty::Aggregate(shape)];
+        for param in params {
+            lifted_params.push(match &param.ty {
+                Some(ty) => written(ty, self.layouts, &HashMap::new())?,
+                None => self.ty_at(param.span)?,
+            });
+        }
+        let ret = self.ty_at(body.span())?;
+        let index = self.declared + self.lifted.len();
+        let mut lifted = Function::new(format!("closure{index}"), lifted_params, ret);
+
+        // Inside the body, a captured name reads out of the environment and
+        // a parameter is a parameter. Saved and put back, because the
+        // enclosing function goes on being lowered afterwards.
+        let outer_slots = self.slots.clone();
+        let outer_function = std::mem::replace(&mut self.function, lifted);
+
+        for (position, param) in params.iter().enumerate() {
+            if let Some(def) = self.resolutions.resolution(param.name.span) {
+                self.slots.insert(def, Local(position + 1));
+            }
+        }
+        let mut reads = Vec::new();
+        for (at, (def, _)) in captured.iter().enumerate() {
+            let ty = self.shapes[shape.0].variants[0].fields[at + 1].ty.clone();
+            let local = self.function.add_local(ty);
+            self.slots.insert(*def, local);
+            reads.push(Stmt::Assign {
+                local,
+                value: Expr::Field {
+                    value: Box::new(Expr::Local(Local(0))),
+                    layout: shape,
+                    variant: 0,
+                    field: at + 1,
+                },
+            });
+        }
+
+        let lowered = self.expr(body)?;
+        lifted = std::mem::replace(&mut self.function, outer_function);
+        lifted.body = Block {
+            stmts: reads,
+            value: lowered,
+        };
+        self.lifted.push(lifted);
+        self.slots = outer_slots;
+
+        let mut held = vec![Expr::Int(index as i64)];
+        for (_, local) in &captured {
+            held.push(Expr::Local(*local));
+        }
+        Ok(Expr::Make {
+            layout: shape,
+            variant: 0,
+            fields: held,
         })
     }
 
@@ -713,7 +961,7 @@ impl Lowering<'_> {
             let (variants, bindings) = self.arm_pattern(&arm.pattern, layout)?;
             let mut stmts = Vec::new();
             for (field, name) in bindings {
-                let field_ty = self.program.layout(layout).variants[variants[0]].fields[field]
+                let field_ty = self.layout(layout).variants[variants[0]].fields[field]
                     .ty
                     .clone();
                 let local = self.function.add_local(field_ty);
@@ -768,7 +1016,7 @@ impl Lowering<'_> {
         layout: crate::LayoutId,
         held: Local,
     ) -> Option<Expr> {
-        if variants.len() == self.program.layout(layout).variants.len() {
+        if variants.len() == self.layout(layout).variants.len() {
             return None;
         }
         let mut condition: Option<Expr> = None;
@@ -799,7 +1047,7 @@ impl Lowering<'_> {
         pattern: &'p ast::Pattern,
         layout: crate::LayoutId,
     ) -> Result<Arm<'p>, Unlowered> {
-        let held = self.program.layout(layout);
+        let held = self.layout(layout);
         Ok(match pattern {
             ast::Pattern::Wildcard(_) => ((0..held.variants.len()).collect(), Vec::new()),
             ast::Pattern::Path { segments, span } => {
@@ -975,7 +1223,7 @@ impl Lowering<'_> {
         if let Some(id) = self.layouts.get(name) {
             return Ok((*id, 0));
         }
-        for (index, layout) in self.program.layouts.iter().enumerate() {
+        for (index, layout) in self.shapes.iter().enumerate() {
             if let Some(at) = layout
                 .variants
                 .iter()
