@@ -13,6 +13,7 @@
 //! small.
 
 pub mod compile;
+pub mod layout;
 pub mod run;
 pub mod wasm;
 
