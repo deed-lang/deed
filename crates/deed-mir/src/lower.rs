@@ -92,7 +92,7 @@ pub fn lower(
                         .map(|field| {
                             Ok(crate::Field {
                                 name: field.name.name.to_string(),
-                                ty: written(&field.ty, &layouts, &aliases)?,
+                                ty: written(&field.ty, &layouts, &aliases, &HashMap::new())?,
                             })
                         })
                         .collect::<Result<Vec<_>, Unlowered>>()?,
@@ -115,7 +115,12 @@ pub fn lower(
                                         .map(|field| {
                                             Ok(crate::Field {
                                                 name: field.name.name.to_string(),
-                                                ty: written(&field.ty, &layouts, &aliases)?,
+                                                ty: written(
+                                                    &field.ty,
+                                                    &layouts,
+                                                    &aliases,
+                                                    &HashMap::new(),
+                                                )?,
                                             })
                                         })
                                         .collect::<Result<Vec<_>, Unlowered>>()
@@ -141,7 +146,7 @@ pub fn lower(
     // may name are all built.
     let mut alias_types: HashMap<String, Ty> = HashMap::new();
     for (name, ty) in &aliases {
-        if let Ok(lowered) = written(ty, &layouts, &aliases) {
+        if let Ok(lowered) = written(ty, &layouts, &aliases, &HashMap::new()) {
             alias_types.insert(name.clone(), lowered);
         }
     }
@@ -152,19 +157,25 @@ pub fn lower(
     // language does not have.
     let mut by_def: HashMap<DefId, crate::FuncId> = HashMap::new();
     for declaration in &order {
+        // A generic declaration has no one signature until a call says what
+        // its parameters stand for, so it is lowered per instantiation
+        // rather than once here.
+        if !declaration.sig.generics.is_empty() {
+            continue;
+        }
         let name = declaration.sig.name.name.to_string();
         let params = declaration
             .sig
             .params
             .iter()
             .map(|param| match &param.ty {
-                Some(ty) => written(ty, &layouts, &aliases),
+                Some(ty) => written(ty, &layouts, &aliases, &HashMap::new()),
                 None => Err(unlowered("a parameter with no type", param.span)),
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match &declaration.sig.ret {
             None => Ty::Unit,
-            Some(ty) => written(ty, &layouts, &aliases)?,
+            Some(ty) => written(ty, &layouts, &aliases, &HashMap::new())?,
         };
         let id = program.add_function(Function::new(name, params, ret));
         if let Some(def) = resolutions.resolution(declaration.sig.name.span) {
@@ -173,8 +184,21 @@ pub fn lower(
     }
 
     let mut lifted: Vec<Function> = Vec::new();
+    let mut declarations: HashMap<String, &ast::FnDecl> = HashMap::new();
+    for declaration in &order {
+        declarations.insert(declaration.sig.name.name.to_string(), declaration);
+    }
+    let mut instantiated: HashMap<String, crate::FuncId> = HashMap::new();
 
-    for (index, declaration) in order.iter().enumerate() {
+    // Only the ones that got a signature above, in the same order, since a
+    // generic declaration is lowered by the calls that name it rather than
+    // once here.
+    let concrete: Vec<&&ast::FnDecl> = order
+        .iter()
+        .filter(|declaration| declaration.sig.generics.is_empty())
+        .collect();
+
+    for (index, declaration) in concrete.iter().enumerate() {
         let id = crate::FuncId(index);
         let mut lowering = Lowering {
             resolutions,
@@ -185,6 +209,9 @@ pub fn lower(
             shapes: program.layouts.clone(),
             declared: program.functions.len() + lifted.len(),
             lifted: Vec::new(),
+            bindings: HashMap::new(),
+            declarations: &declarations,
+            instantiated: &mut instantiated,
             function: program.functions[index].clone(),
             slots: HashMap::new(),
         };
@@ -227,6 +254,7 @@ fn written(
     ty: &ast::Type,
     layouts: &HashMap<String, crate::LayoutId>,
     aliases: &HashMap<String, &ast::Type>,
+    bindings: &HashMap<String, Ty>,
 ) -> Result<Ty, Unlowered> {
     Ok(match ty {
         ast::Type::Unit(_) => Ty::Unit,
@@ -236,11 +264,15 @@ fn written(
             ("Int", 0) => Ty::Int,
             ("Bool", 0) => Ty::Bool,
             ("String", 0) => Ty::Str,
-            ("List", 1) => Ty::List(Box::new(written(&args[0], layouts, aliases)?)),
+            ("List", 1) => Ty::List(Box::new(written(&args[0], layouts, aliases, bindings)?)),
+            // A type parameter first, since a copy of a generic function was
+            // lowered for exactly one thing and that is what it stands for
+            // here.
+            (other, 0) if bindings.contains_key(other) => bindings[other].clone(),
             (other, 0) => match layouts.get(other) {
                 Some(id) => Ty::Aggregate(*id),
                 None => match aliases.get(other) {
-                    Some(names) => written(names, layouts, aliases)?,
+                    Some(names) => written(names, layouts, aliases, bindings)?,
                     None => return Err(unlowered(&format!("the type `{other}`"), *span)),
                 },
             },
@@ -283,6 +315,17 @@ struct Lowering<'a> {
     declared: usize,
     /// Closure bodies, lifted out and appended once everything is lowered.
     lifted: Vec<Function>,
+    /// What each type parameter stands for in this copy of the function.
+    ///
+    /// Empty for a function declaring none, which is most of them. A generic
+    /// function is lowered once per set of type arguments it is called with,
+    /// and this is what tells the copies apart.
+    bindings: HashMap<String, Ty>,
+    /// Every function the module declares, by name, so a generic one can be
+    /// lowered again when a call needs a copy it does not have.
+    declarations: &'a HashMap<String, &'a ast::FnDecl>,
+    /// Which copies already exist, by the name they were given.
+    instantiated: &'a mut HashMap<String, crate::FuncId>,
     function: Function,
     /// Where each bound name lives.
     slots: HashMap<DefId, Local>,
@@ -290,6 +333,36 @@ struct Lowering<'a> {
 
 /// Which variants an arm names, and which field each name it binds reads.
 type Arm<'p> = (Vec<usize>, Vec<(usize, &'p ast::Ident)>);
+
+/// Matches a written parameter type against what an argument actually is,
+/// recording what each type parameter must stand for.
+///
+/// Walks both in step and stops where they stop agreeing. There is no
+/// unification here and none is needed: the checker already accepted the
+/// call, so the shapes line up and this is reading an answer rather than
+/// searching for one.
+fn bind(written: &ast::Type, actual: &Ty, generics: &[ast::Ident], out: &mut HashMap<String, Ty>) {
+    match written {
+        ast::Type::Named { name, args, .. } => {
+            if args.is_empty()
+                && generics.iter().any(|one| one.name == name.name)
+                && !out.contains_key(name.name.as_str())
+            {
+                out.insert(name.name.to_string(), actual.clone());
+                return;
+            }
+            if name.name.as_str() == "List"
+                && args.len() == 1
+                && let Ty::List(element) = actual
+            {
+                bind(&args[0], element, generics, out);
+            }
+        }
+        // A row variable is not a type and carries nothing to bind; the
+        // effect checker already answered what it stands for.
+        ast::Type::Fn { .. } | ast::Type::Unit(_) | ast::Type::Error(_) => {}
+    }
+}
 
 /// Every name an expression mentions, by where it was written.
 ///
@@ -388,6 +461,103 @@ fn names_in_block(block: &ast::Block, out: &mut Vec<Span>) {
 }
 
 impl Lowering<'_> {
+    /// The copy of a generic function this call goes to, lowering it if this
+    /// is the first call with these type arguments.
+    ///
+    /// What each parameter stands for is read off the arguments, which the
+    /// checker already agreed about, rather than worked out again here: a
+    /// parameter written `List<T>` against an argument of `List<Int>` says
+    /// `T` is `Int`, and every type parameter appears in a parameter's type
+    /// because `DEED4023` refuses one that does not. That rule is what makes
+    /// this possible without type arguments ever being written down.
+    ///
+    /// Named for what it was lowered for, so two copies cannot collide and
+    /// the name in a stack trace says which one it is.
+    fn instantiate(
+        &mut self,
+        name: &str,
+        generics: &[ast::Ident],
+        args: &[ast::Expr],
+        span: Span,
+    ) -> Result<crate::FuncId, Unlowered> {
+        let declaration = *self
+            .declarations
+            .get(name)
+            .ok_or_else(|| unlowered("a call to something not declared here", span))?;
+
+        let mut bindings: HashMap<String, Ty> = HashMap::new();
+        for (param, arg) in declaration.sig.params.iter().zip(args) {
+            let Some(written) = &param.ty else {
+                continue;
+            };
+            let actual = self.ty_at(arg.span())?;
+            bind(written, &actual, generics, &mut bindings);
+        }
+
+        let mut spelled: Vec<String> = generics
+            .iter()
+            .map(|generic| match bindings.get(generic.name.as_str()) {
+                Some(ty) => format!("{ty:?}"),
+                None => "?".to_string(),
+            })
+            .collect();
+        spelled.sort();
+        let copy = format!("{name}<{}>", spelled.join(", "));
+
+        if let Some(found) = self.instantiated.get(&copy) {
+            return Ok(*found);
+        }
+
+        if bindings.len() != generics.len() {
+            return Err(unlowered(
+                &format!("a call to `{name}` whose type arguments this cannot work out"),
+                span,
+            ));
+        }
+
+        let params = declaration
+            .sig
+            .params
+            .iter()
+            .map(|param| match &param.ty {
+                Some(ty) => written(ty, self.layouts, &HashMap::new(), &bindings),
+                None => Err(unlowered("a parameter with no type", param.span)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = match &declaration.sig.ret {
+            None => Ty::Unit,
+            Some(ty) => written(ty, self.layouts, &HashMap::new(), &bindings)?,
+        };
+
+        // Registered before the body is lowered, so a generic function that
+        // calls itself with the same arguments finds the copy rather than
+        // asking for another one forever.
+        let id = crate::FuncId(self.declared + self.lifted.len());
+        self.instantiated.insert(copy.clone(), id);
+        self.lifted
+            .push(Function::new(copy, params.clone(), ret.clone()));
+
+        let outer_slots = std::mem::take(&mut self.slots);
+        let outer_bindings = std::mem::replace(&mut self.bindings, bindings);
+        let outer_function = std::mem::replace(&mut self.function, Function::new("", params, ret));
+
+        for (position, param) in declaration.sig.params.iter().enumerate() {
+            if let Some(def) = self.resolutions.resolution(param.name.span) {
+                self.slots.insert(def, Local(position));
+            }
+        }
+
+        let body = self.block(&declaration.body)?;
+        let lowered = std::mem::replace(&mut self.function, outer_function);
+        self.slots = outer_slots;
+        self.bindings = outer_bindings;
+
+        let at = id.0 - self.declared;
+        self.lifted[at].locals = lowered.locals;
+        self.lifted[at].body = body;
+        Ok(id)
+    }
+
     fn layout(&self, id: crate::LayoutId) -> &crate::Layout {
         &self.shapes[id.0]
     }
@@ -468,6 +638,13 @@ impl Lowering<'_> {
 
     fn convert(&self, ty: &CheckedTy, span: Span) -> Result<Ty, Unlowered> {
         Ok(match ty {
+            // A type parameter, standing for whatever this copy of the
+            // function was lowered for. The checker carries it by position
+            // and by name; the name is what a call bound.
+            CheckedTy::Param { name, .. } => match self.bindings.get(name.as_ref()) {
+                Some(bound) => bound.clone(),
+                None => return Err(unlowered(&format!("the type `{name}`"), span)),
+            },
             // An empty list's element type is never known and never read,
             // because there is no element to read it off.
             CheckedTy::List(element) if matches!(**element, CheckedTy::Unknown) => {
@@ -638,11 +815,23 @@ impl Lowering<'_> {
                         func: *func,
                         args: lowered,
                     },
-                    // Not something this module declared, so it is a name the
-                    // language provides. Only the ones whose answer is
-                    // already sitting in memory are here; the rest are
-                    // refused rather than guessed at.
+                    // Not something with a signature of its own. A generic
+                    // declaration is one of these and gets a copy per set of
+                    // type arguments; everything else is a name the language
+                    // provides, and only the ones whose answer is already
+                    // sitting in memory are here.
                     None => {
+                        if let Some(found) = self.declarations.get(name.name.as_str())
+                            && !found.sig.generics.is_empty()
+                        {
+                            let generics = found.sig.generics.clone();
+                            let copy = self.instantiate(&name.name, &generics, args, *span)?;
+                            return Ok(Expr::Call {
+                                func: copy,
+                                args: lowered,
+                            });
+                        }
+
                         let subject = match args.first() {
                             Some(first) => self.ty_at(first.span())?,
                             None => Ty::Unit,
@@ -868,7 +1057,7 @@ impl Lowering<'_> {
         let mut lifted_params = vec![Ty::Aggregate(shape)];
         for param in params {
             lifted_params.push(match &param.ty {
-                Some(ty) => written(ty, self.layouts, &HashMap::new())?,
+                Some(ty) => written(ty, self.layouts, &HashMap::new(), &self.bindings)?,
                 None => self.ty_at(param.span)?,
             });
         }

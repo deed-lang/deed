@@ -111,6 +111,8 @@ version = "0.1.0"
 dependencies = [
  "deed-ast",
  "deed-diagnostics",
+ "deed-lexer",
+ "deed-parser",
  "deed-resolve",
  "deed-typeck",
 ]

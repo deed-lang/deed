@@ -221,8 +221,23 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 40,
         },
+        Agreed {
+            name: "a generic function at one type",
+            source: "module a\n\nfn firstly<T>(items: List<T>, fallback: T) -> T {\n    for item at i in items with found = fallback {\n        if i == 0 {\n            item\n        } else {\n            found\n        }\n    }\n}\n\nfn answer() -> Int { firstly([7, 8, 9], 0) }\n\ntest \"a generic function answers at the type it was called with\" {\n    assert answer() == 7\n}\n",
+            call: "answer",
+            expect: 7,
+        },
+        // Two copies of one declaration, which is what monomorphization is
+        // for and what a single copy would get wrong.
+        Agreed {
+            name: "a generic function at two types",
+            source: "module a\n\nfn count_of<T>(items: List<T>) -> Int { length(items) }\n\nfn answer() -> Int { count_of([1, 2]) + count_of([true]) }\n\ntest \"one declaration, two element types\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
     ]
 }
+
 /// Checks a program, and refuses to go on if it does not check.
 ///
 /// A backend is only meant to see programs the checker accepted, so a
