@@ -1,0 +1,60 @@
+// A calendar on top of `Io.epoch`, which only gives milliseconds since 1970.
+// design/04-capabilities.md says the language has no way to write one yet:
+// this is that attempt, to find out whether that is still true.
+//
+// The algorithm is Howard Hinnant's `civil_from_days`: integer arithmetic
+// only, no lookup table, no leap-year rule spelled out by name (it falls out
+// of the same division and modulo every other line here uses).
+//
+// Only forward from 1970 is handled. A negative day count (a clock set
+// before 1970) would need floor division where this uses the truncating
+// division `/` already is, and nothing here needed that yet.
+module examples/calendar
+
+record Date {
+    year: Int,
+    month: Int,
+    day: Int,
+}
+
+fn days_since_epoch(milliseconds: Int) -> Int {
+    milliseconds / 86400000
+}
+
+fn date_of(milliseconds: Int) -> Date {
+    let z = days_since_epoch(milliseconds) + 719468
+    let era = z / 146097
+    let day_of_era = z - era * 146097
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365
+    let year = year_of_era + era * 400
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100)
+    let mp = (5 * day_of_year + 2) / 153
+    let day = day_of_year - (153 * mp + 2) / 5 + 1
+    let month = if mp < 10 {
+        mp + 3
+    } else {
+        mp - 9
+    }
+    Date {
+        year: if month <= 2 {
+            year + 1
+        } else {
+            year
+        },
+        month,
+        day,
+    }
+}
+
+test "the epoch itself is 1970-01-01" {
+    assert date_of(0) == Date { year: 1970, month: 1, day: 1 }
+}
+
+test "a well known date, the turn of the millennium's next leap day" {
+    assert date_of(951868800000) == Date { year: 2000, month: 3, day: 1 }
+}
+
+test "a leap day, and the day right after it" {
+    assert date_of(1709164800000) == Date { year: 2024, month: 2, day: 29 }
+    assert date_of(1709251200000) == Date { year: 2024, month: 3, day: 1 }
+}
