@@ -358,6 +358,43 @@ fn lsp_takes_no_arguments() {
     );
 }
 
+// -- explain ---------------------------------------------------------------
+
+#[test]
+fn explain_prints_the_reasoning_for_a_known_code() {
+    let output = run(&["explain", "DEED4025"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("DEED4025"), "{text}");
+    assert!(text.contains("BROKEN_PRECONDITION"), "{text}");
+    // The reasoning comes from the doc comment in typeck/src/codes.rs.
+    assert!(text.contains("precondition"), "{text}");
+}
+
+#[test]
+fn explain_accepts_a_constant_name_too() {
+    let output = run(&["explain", "BROKEN_PRECONDITION"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("DEED4025"), "{}", stdout(&output));
+}
+
+#[test]
+fn explain_unknown_code_is_a_usage_error() {
+    let output = run(&["explain", "DEED9999"]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("no page for"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn explain_without_a_code_is_a_usage_error() {
+    let output = run(&["explain"]);
+    assert_eq!(code(&output), 2);
+}
+
 // -- running tests ---------------------------------------------------------
 
 #[test]

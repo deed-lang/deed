@@ -16,6 +16,7 @@ Usage:
   deed build [options] <path>...
   deed fmt   [--check] <path>...
   deed fix   [--check] <path>...
+  deed explain <code>
   deed lsp
 
 Options:
@@ -39,6 +40,8 @@ compiles less of the language than `deed run` interprets, and says what it could
 not compile rather than guessing.
 `deed fmt` has no options for the output. There is one canonical form.
 `deed fix` applies the fixes that are certain and leaves the guesses alone.
+`deed explain` prints the page for one diagnostic code. The argument may be the
+code identifier (`DEED4025`) or the constant name (`BROKEN_PRECONDITION`).
 `deed lsp` speaks the language server protocol on stdin and stdout. It is for an
 editor to start, not for a person to type.
 
@@ -92,6 +95,8 @@ pub struct CheckArgs {
 #[derive(Debug)]
 pub enum Command {
     Check(CheckArgs),
+    /// Print the page for one diagnostic code.
+    Explain(String),
     /// Speak the language server protocol on stdin and stdout.
     Lsp,
     Help,
@@ -115,6 +120,14 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 Some(extra) => Err(format!("`deed lsp` takes no arguments, found `{extra}`")),
             };
         }
+        "explain" => {
+            return match args.next() {
+                None => {
+                    Err("`deed explain` needs a code, e.g. `deed explain DEED4025`".to_string())
+                }
+                Some(code) => Ok(Command::Explain(code)),
+            };
+        }
         "check" => Mode::Check,
         "test" => Mode::Test,
         "run" => Mode::Run,
@@ -123,7 +136,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "build" => Mode::Build,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `check`, `test`, `run`, `build`, `fmt`, `fix` and `lsp`"
+                "unknown command `{other}`, the choices are `check`, `test`, `run`, `build`, `fmt`, `fix`, `explain` and `lsp`"
             ));
         }
     };
@@ -283,6 +296,19 @@ mod tests {
     fn help_wins_wherever_it_appears() {
         assert!(matches!(parse(args(&["--help"])), Ok(Command::Help)));
         assert!(matches!(parse(args(&["check", "-h"])), Ok(Command::Help)));
+    }
+
+    #[test]
+    fn explain_is_a_command() {
+        let Ok(Command::Explain(code)) = parse(args(&["explain", "DEED4025"])) else {
+            panic!("should parse");
+        };
+        assert_eq!(code, "DEED4025");
+    }
+
+    #[test]
+    fn explain_without_a_code_is_an_error() {
+        assert!(parse(args(&["explain"])).is_err());
     }
 
     #[test]

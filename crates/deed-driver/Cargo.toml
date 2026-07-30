@@ -22,6 +22,7 @@ deed-ast = { path = "../deed-ast" }
 deed-codegen = { path = "../deed-codegen" }
 deed-diagnostics = { path = "../deed-diagnostics" }
 deed-effects = { path = "../deed-effects" }
+deed-explain = { path = "../deed-explain" }
 deed-fmt = { path = "../deed-fmt" }
 deed-interp = { path = "../deed-interp" }
 deed-mir = { path = "../deed-mir" }

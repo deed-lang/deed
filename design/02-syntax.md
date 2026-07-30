@@ -1471,7 +1471,7 @@ using an effect to get around not having a loop.
   them in. `Ty::Result` and `Ty::List` are named in three crates: the type checker, and the
   two the backend added, since a list has to be laid out in memory and compiled into
   instructions as well as checked. What names `Result`'s two variants is `?` and the outcome
-  an `ensures` clause is keyed by, and those are in nine of the sixteen crates: the syntax
+  an `ensures` clause is keyed by, and those are in nine of the seventeen crates: the syntax
   tree, the parser, the
   resolver, the type checker, the effect checker, the interpreter, the formatter, the driver
   and the lowering the backend reads. Declaring `Result` in a prelude module moves the first set and leaves every one of
