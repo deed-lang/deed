@@ -1486,9 +1486,12 @@ using an effect to get around not having a loop.
   parameter is the answer the language already supports; a `for` over a `String` is
   `split(s, "")`. What would change this is a measurement rather than an argument: write a
   program that needs a generic sort over a user type, or needs to print a `T`, and find that
-  it is not merely uglier with a passed function but unwritable. Nobody in this corpus has
-  tried. Until one does, a trait system is machinery bought against a bill nobody has been
-  handed. The old form of this question, whether a trait could be implemented outside the
-  module that defines the type, is a coherence problem worth having only after there is
-  something to implement.
+  it is not merely uglier with a passed function but unwritable. Nobody in this corpus had
+  tried, until `examples/ranking.deed`: a generic sort over a user record (`sort` from
+  `std/list`, a comparator instead of a bound) and a function that prints one (`describe`,
+  an ordinary function a caller writes once). Neither was unwritable, both were exactly as
+  uncomfortable as the passed-function answer always said they would be, so this still has
+  not found the bill a trait system would be bought against. The old form of this question,
+  whether a trait could be implemented outside the module that defines the type, is a
+  coherence problem worth having only after there is something to implement.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
