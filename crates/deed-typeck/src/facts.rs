@@ -233,11 +233,62 @@ impl Range {
 }
 
 /// What a comparison worked out to, when it worked out at all.
+///
+/// `Unknown` carries [`Reason`] rather than nothing, because it is the answer
+/// a reader sees the most: it is what produces `Guarded`. A reason with no
+/// content is a checker that says "I don't know" and nothing else, which is
+/// not something a reader can act on. There is no `Unknown` value without one:
+/// every place in this file and in `check.rs` that used to write the bare
+/// variant now has to say why, and the type does not compile until it does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Truth {
     Always,
     Never,
-    Unknown,
+    Unknown(Reason),
+}
+
+/// Why a `Truth` came back `Unknown`, said about the obligation rather than
+/// about the checker.
+///
+/// "The solver gave up" tells a reader nothing they can act on; these are
+/// meant to. Each one is the answer to "what would make this Proven instead":
+/// narrow the name, establish the length, give the value a name, keep the
+/// clause on this side of a module boundary, or write the condition in a
+/// shape this checker reasons about at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reason {
+    /// A name is being compared, but nothing in scope narrowed its range
+    /// enough to settle the comparison.
+    NothingNarrowedThisName,
+    /// A `length(name)` is being compared, but nothing in scope established a
+    /// bound on it.
+    NothingEstablishedThisLength,
+    /// Neither side of the comparison is a name or a `length(name)`, so there
+    /// is nothing in `Facts` this could be keyed on.
+    NothingNamesThisValue,
+    /// The clause was read across a module boundary, where a nested call
+    /// answers `Promise::any()` instead of whatever its own `ensures` says.
+    CrossedAModuleBoundary,
+    /// The condition is not `and`, `or`, `not`, or a comparison the interval
+    /// machinery understands, so there is nothing here to evaluate at all.
+    NotAShapeTheCheckerReasonsAbout,
+}
+
+impl Reason {
+    /// A sentence a diagnostic, a hover or an inlay hint can show as-is.
+    pub fn text(self) -> &'static str {
+        match self {
+            Reason::NothingNarrowedThisName => "nothing narrowed this name",
+            Reason::NothingEstablishedThisLength => "nothing established this length",
+            Reason::NothingNamesThisValue => "nothing names this value",
+            Reason::CrossedAModuleBoundary => {
+                "this clause crossed a module boundary and arrived thinner"
+            }
+            Reason::NotAShapeTheCheckerReasonsAbout => {
+                "this predicate is not the shape the checker reasons about"
+            }
+        }
+    }
 }
 
 impl Truth {
@@ -249,7 +300,7 @@ impl Truth {
         match self {
             Truth::Always => Truth::Never,
             Truth::Never => Truth::Always,
-            Truth::Unknown => Truth::Unknown,
+            Truth::Unknown(reason) => Truth::Unknown(reason),
         }
     }
 
@@ -257,7 +308,7 @@ impl Truth {
         match (self, other) {
             (Truth::Never, _) | (_, Truth::Never) => Truth::Never,
             (Truth::Always, Truth::Always) => Truth::Always,
-            _ => Truth::Unknown,
+            (Truth::Unknown(reason), _) | (_, Truth::Unknown(reason)) => Truth::Unknown(reason),
         }
     }
 
@@ -265,7 +316,7 @@ impl Truth {
         match (self, other) {
             (Truth::Always, _) | (_, Truth::Always) => Truth::Always,
             (Truth::Never, Truth::Never) => Truth::Never,
-            _ => Truth::Unknown,
+            (Truth::Unknown(reason), _) | (_, Truth::Unknown(reason)) => Truth::Unknown(reason),
         }
     }
 }
@@ -924,6 +975,42 @@ fn is_length_call(callee: &Expr, args: &[Expr], env: &Env<'_>) -> bool {
     env.length.is_some() && args.len() == 1 && (env.def_of)(callee) == env.length
 }
 
+/// Whether `expr` contains a call the checker cannot see through, other than
+/// one to `length`.
+///
+/// `length(x)` crosses a module boundary intact: `Origin::Elsewhere` still
+/// knows which import is `length`. Any other call does not, because the
+/// promise a call keeps comes from its own `ensures`, and reading a clause
+/// across a boundary answers every such call with `Promise::any()` rather
+/// than looking one up. Walking only as far as `holds` itself does, because a
+/// clause is `and`/`or`/`not` over comparisons and nothing deeper needs this.
+fn mentions_an_opaque_call(expr: &Expr, env: &Env<'_>) -> bool {
+    match expr {
+        Expr::Unary { operand, .. } => mentions_an_opaque_call(operand, env),
+        Expr::Binary { lhs, rhs, .. } => {
+            mentions_an_opaque_call(lhs, env) || mentions_an_opaque_call(rhs, env)
+        }
+        Expr::Call { callee, args, .. } => !is_length_call(callee, args, env),
+        _ => false,
+    }
+}
+
+/// Blames a boundary rather than a name, when a boundary is why.
+///
+/// An unsettled clause read across a module boundary that contains an opaque
+/// call would sometimes have settled read locally, where the call's own
+/// `ensures` is available. Nothing else changes: a clause with no such call
+/// crossed the boundary exactly as thick as it was written, and keeps
+/// whichever reason [`holds`] already gave it.
+pub(crate) fn thinned_by_boundary(clause: &Expr, env: &Env<'_>, outcome: Truth) -> Truth {
+    match outcome {
+        Truth::Unknown(_) if mentions_an_opaque_call(clause, env) => {
+            Truth::Unknown(Reason::CrossedAModuleBoundary)
+        }
+        other => other,
+    }
+}
+
 /// Whether an expression is something a fact can be attached to.
 ///
 /// Two shapes. A name, which is the obvious one, and `length(x)` where `x` is
@@ -1292,7 +1379,22 @@ pub fn holds(condition: &Expr, facts: &Facts, env: &Env<'_>) -> Truth {
             BinaryOp::Or => holds(lhs, facts, env).or(holds(rhs, facts, env)),
             _ => compare(*op, lhs, rhs, facts, env),
         },
-        _ => Truth::Unknown,
+        _ => Truth::Unknown(Reason::NotAShapeTheCheckerReasonsAbout),
+    }
+}
+
+/// What to blame when a comparison between `lhs` and `rhs` did not settle.
+///
+/// A `length(name)` on either side means the missing bound is about a length,
+/// not a name; a bare name on either side means it is a name nothing narrowed;
+/// neither means there was nothing here to key a fact on in the first place.
+fn unresolved_comparison(lhs: &Expr, rhs: &Expr, env: &Env<'_>) -> Reason {
+    match (term_of(lhs, env), term_of(rhs, env)) {
+        (Some(Term::Length(_)), _) | (_, Some(Term::Length(_))) => {
+            Reason::NothingEstablishedThisLength
+        }
+        (Some(Term::Name(_)), _) | (_, Some(Term::Name(_))) => Reason::NothingNarrowedThisName,
+        (None, None) => Reason::NothingNamesThisValue,
     }
 }
 
@@ -1311,6 +1413,7 @@ fn compare(op: BinaryOp, lhs: &Expr, rhs: &Expr, facts: &Facts, env: &Env<'_>) -
     let Some((low, high)) = difference_of(lhs, rhs, facts, env).bounds() else {
         return Truth::Never;
     };
+    let unclear = || Truth::Unknown(unresolved_comparison(lhs, rhs, env));
 
     match op {
         BinaryOp::Lt => {
@@ -1319,7 +1422,7 @@ fn compare(op: BinaryOp, lhs: &Expr, rhs: &Expr, facts: &Facts, env: &Env<'_>) -
             } else if low >= 0 {
                 Truth::Never
             } else {
-                Truth::Unknown
+                unclear()
             }
         }
         BinaryOp::Le => {
@@ -1328,7 +1431,7 @@ fn compare(op: BinaryOp, lhs: &Expr, rhs: &Expr, facts: &Facts, env: &Env<'_>) -
             } else if low > 0 {
                 Truth::Never
             } else {
-                Truth::Unknown
+                unclear()
             }
         }
         BinaryOp::Gt => {
@@ -1337,7 +1440,7 @@ fn compare(op: BinaryOp, lhs: &Expr, rhs: &Expr, facts: &Facts, env: &Env<'_>) -
             } else if high <= 0 {
                 Truth::Never
             } else {
-                Truth::Unknown
+                unclear()
             }
         }
         BinaryOp::Ge => {
@@ -1346,7 +1449,7 @@ fn compare(op: BinaryOp, lhs: &Expr, rhs: &Expr, facts: &Facts, env: &Env<'_>) -
             } else if high < 0 {
                 Truth::Never
             } else {
-                Truth::Unknown
+                unclear()
             }
         }
         BinaryOp::Eq => {
@@ -1355,11 +1458,11 @@ fn compare(op: BinaryOp, lhs: &Expr, rhs: &Expr, facts: &Facts, env: &Env<'_>) -
             } else if low > 0 || high < 0 {
                 Truth::Never
             } else {
-                Truth::Unknown
+                unclear()
             }
         }
         BinaryOp::Ne => compare(BinaryOp::Eq, lhs, rhs, facts, env).negate(),
-        _ => Truth::Unknown,
+        _ => Truth::Unknown(Reason::NotAShapeTheCheckerReasonsAbout),
     }
 }
 
@@ -1725,6 +1828,8 @@ fn narrow_subject(
 
 #[cfg(test)]
 mod tests {
+    use deed_ast::Ident;
+
     use super::*;
 
     /// An integer-valued name, for the tests that only need a key.
@@ -1913,5 +2018,168 @@ mod tests {
         assert_eq!(divided(Range::between(4, 4), 2), Some(Range::exactly(2)));
         assert_eq!(divided(Range::between(1, 1), 2), Some(Range::Empty));
         assert_eq!(divided(Range::ANY, 0), None);
+    }
+
+    /// A bare identifier, so a test can name a value without a real resolver.
+    fn ident(text: &str) -> Expr {
+        Expr::Ident(Ident::new(text, Span::at(0)))
+    }
+
+    fn less_than(lhs: Expr, rhs: Expr) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Lt,
+            op_span: Span::at(0),
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+            span: Span::at(0),
+        }
+    }
+
+    fn call(callee: Expr, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            callee: Box::new(callee),
+            args,
+            span: Span::at(0),
+        }
+    }
+
+    /// An environment where `n` resolves to a name and `length` resolves to
+    /// the builtin, and nothing else does.
+    fn env_with_a_name() -> Env<'static> {
+        Env {
+            def_of: &|expr| match expr {
+                Expr::Ident(ident) if ident.name == "n" => Some(DefId::from_raw(0)),
+                Expr::Ident(ident) if ident.name == "length" => Some(DefId::from_raw(1)),
+                _ => None,
+            },
+            length: Some(DefId::from_raw(1)),
+            call: &|_| Promise::any(),
+        }
+    }
+
+    fn unknown_reason(truth: Truth) -> Reason {
+        match truth {
+            Truth::Unknown(reason) => reason,
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_shape_the_checker_does_not_evaluate_says_so() {
+        // A call used as a whole condition, rather than `and`/`or`/`not`/a
+        // comparison: `holds` never reasons about what a call returns.
+        let condition = call(ident("truthy"), vec![]);
+        let facts = Facts::new();
+        assert_eq!(
+            unknown_reason(holds(&condition, &facts, &Env::blind())),
+            Reason::NotAShapeTheCheckerReasonsAbout
+        );
+    }
+
+    #[test]
+    fn a_name_with_no_narrowing_blames_the_name() {
+        let condition = less_than(
+            ident("n"),
+            Expr::Int {
+                value: 10,
+                span: Span::at(0),
+            },
+        );
+        let facts = Facts::new();
+        assert_eq!(
+            unknown_reason(holds(&condition, &facts, &env_with_a_name())),
+            Reason::NothingNarrowedThisName
+        );
+    }
+
+    #[test]
+    fn a_length_with_no_bound_blames_the_length() {
+        let condition = less_than(
+            call(ident("length"), vec![ident("n")]),
+            Expr::Int {
+                value: 10,
+                span: Span::at(0),
+            },
+        );
+        let facts = Facts::new();
+        assert_eq!(
+            unknown_reason(holds(&condition, &facts, &env_with_a_name())),
+            Reason::NothingEstablishedThisLength
+        );
+    }
+
+    #[test]
+    fn neither_side_a_name_blames_the_value() {
+        // `unknown < unknown`: two identifiers this environment cannot
+        // resolve, so there is no term on either side to key a fact on.
+        let condition = less_than(ident("a"), ident("b"));
+        let facts = Facts::new();
+        assert_eq!(
+            unknown_reason(holds(&condition, &facts, &Env::blind())),
+            Reason::NothingNamesThisValue
+        );
+    }
+
+    #[test]
+    fn an_opaque_call_inside_a_boundary_clause_blames_the_boundary() {
+        let clause = less_than(
+            call(ident("check"), vec![ident("n")]),
+            Expr::Int {
+                value: 10,
+                span: Span::at(0),
+            },
+        );
+        let outcome = Truth::Unknown(Reason::NothingNamesThisValue);
+        assert_eq!(
+            thinned_by_boundary(&clause, &env_with_a_name(), outcome),
+            Truth::Unknown(Reason::CrossedAModuleBoundary)
+        );
+    }
+
+    #[test]
+    fn a_boundary_clause_with_no_opaque_call_keeps_its_own_reason() {
+        let clause = less_than(
+            ident("n"),
+            Expr::Int {
+                value: 10,
+                span: Span::at(0),
+            },
+        );
+        let outcome = Truth::Unknown(Reason::NothingNarrowedThisName);
+        assert_eq!(
+            thinned_by_boundary(&clause, &env_with_a_name(), outcome),
+            Truth::Unknown(Reason::NothingNarrowedThisName)
+        );
+    }
+
+    #[test]
+    fn a_length_call_at_a_boundary_is_not_an_opaque_one() {
+        // `length(n)` crosses a boundary intact (`Env::length` still resolves
+        // it), so it should never be blamed on the boundary itself.
+        let clause = less_than(
+            call(ident("length"), vec![ident("n")]),
+            Expr::Int {
+                value: 10,
+                span: Span::at(0),
+            },
+        );
+        let outcome = Truth::Unknown(Reason::NothingEstablishedThisLength);
+        assert_eq!(
+            thinned_by_boundary(&clause, &env_with_a_name(), outcome),
+            Truth::Unknown(Reason::NothingEstablishedThisLength)
+        );
+    }
+
+    #[test]
+    fn every_reason_renders_a_sentence_someone_can_read() {
+        for reason in [
+            Reason::NothingNarrowedThisName,
+            Reason::NothingEstablishedThisLength,
+            Reason::NothingNamesThisValue,
+            Reason::CrossedAModuleBoundary,
+            Reason::NotAShapeTheCheckerReasonsAbout,
+        ] {
+            assert!(!reason.text().is_empty());
+        }
     }
 }
