@@ -363,7 +363,61 @@ The list is longer than I would like, and this is the least settled document her
   above milliseconds since 1970. A calendar is a library rather than a capability, and the
   language has no way to write one yet.
 
-## Prior art worth reading
+## A page is a host too
+
+`deed-wasm` (#573, the playground epic) compiles the interpreter itself to
+`wasm32-unknown-unknown` so a page can check, test and run a program with no
+install step. A page is a host in exactly the sense `deed-rt` already is one,
+with fewer things to offer, which #591 asked to be decided rather than
+assumed away.
+
+**Which operations.** `Io.write` and `Io.now` only. Both stay inside the
+module's own memory: `Io.write` is buffered rather than printed, and `Io.now`
+was already a deterministic counter (P8) rather than a real clock, so neither
+needed the page for anything. Everything else is refused before `main` runs
+rather than attempted and left to fail two different ways depending on which
+operation it was:
+
+- `Io.epoch` has no fallible form on this target. `SystemTime::now()` is not a
+  `Result`, and the standard library's answer for a target with no clock is to
+  trap, not to return an error a Deed program's own `Result` handling could
+  see. Running it anyway would turn one call into a wasm trap the page did
+  not choose and could not give a program-shaped answer to.
+- The directory operations (`Io.open`, `Io.read`, `Io.save`, `Io.list`,
+  `Io.remove`, `Io.make`) do have a fallible form and fail with a plain
+  `io::Error` on this target, message and all, because there is no
+  filesystem underneath it. That is a real answer and a bad one: "os error
+  38" is not a message a person reading a playground should have to decode,
+  and it says nothing about whether an in-memory directory would be worth
+  building, which is a real option (`deed-rt`'s `Dir` is already a sandbox
+  around a root, not a wrapper around real syscalls specifically) and is
+  future work rather than a decision made here.
+
+**What a program gets when it asks for one that is not offered.** `main`'s
+row is read before anything runs, and every operation in it outside the two
+above becomes one plain sentence: `` this page does not offer `Io.save` yet ``.
+Refusing on the row rather than on the first call means a program with three
+unsupported operations gets told about all three at once, and means the
+message names the operation a person wrote rather than an error the
+operating system underneath a browser tab produced.
+
+**What happens to a program that does not stop (#590).** There is no `while`
+in this language; the only way to not return is recursion, and the
+interpreter already bounds that at `MAX_DEPTH` (`crates/deed-interp/src/interp.rs`),
+turning an unbounded mutually recursive `Diverge` chain into `DEED6009 TOO_DEEP`
+rather than a hang, on every host including this one. That leaves one honest
+answer to the question this issue asked, a fuel limit or a worker thread that
+can be killed: **the worker thread, and it is the page's job, not the
+compiler's.** A fuel limit would be a second way to bound execution sitting
+next to `MAX_DEPTH`, paid by every embedder including the CLI, for a failure
+mode (a single very large loop, not a call that never returns) that is the
+"time and memory are also resources" open question below rather than a new
+one. A page already has the tool that fits the shape of that question and
+nothing else does: a `Worker` it can terminate, keeping the compiler's answer
+the same on every host and the timeout policy where the thing being timed
+out is running.
+
+
 
 Capability security is old and mostly ignored, which is a bad sign for adoption and a good
 sign for the idea being underexplored rather than wrong.

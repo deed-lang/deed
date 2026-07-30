@@ -31,9 +31,12 @@
 
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::Cell;
+use std::path::Path;
 
-use deed_diagnostics::SourceMap;
-use deed_driver::{check_all, json_report, shipped_for, shipped_source};
+use deed_ast::Item;
+use deed_diagnostics::{SourceMap, render_json};
+use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
+use deed_interp::{Program, run_main, run_tests};
 
 thread_local! {
     /// Where the last `deed_*` verb's answer is, for [`deed_result_ptr`] and
@@ -119,6 +122,19 @@ fn set_result(text: String) {
 /// filesystem to resolve a second file's import against, so the only import
 /// this can answer is one the compiler already carries.
 pub fn check_source(source: &str) -> String {
+    let (sources, checks) = checked_of(source);
+    // Only the file the page wrote is a subject; the shipped modules behind
+    // it are context, the same distinction `deed check` draws between a named
+    // file and what it imports.
+    json_report(&sources, &checks[..1], true)
+}
+
+/// Parses and checks `source` plus whatever it imports from the shipped
+/// library, the way [`check_source`] does, and hands back what the rest of
+/// this crate's verbs need to run or test it.
+///
+/// The page's own file is always `checks[0]`.
+fn checked_of(source: &str) -> (SourceMap, Vec<Checked>) {
     let mut sources = SourceMap::new();
     let main = sources.add("main.deed".to_string(), source.to_string());
     let mut ids = vec![main];
@@ -128,11 +144,137 @@ pub fn check_source(source: &str) -> String {
         ids.push(sources.add(format!("{module}.deed"), text.to_string()));
     }
 
-    // Only the file the page wrote is a subject; the shipped modules behind
-    // it are context, the same distinction `deed check` draws between a named
-    // file and what it imports.
     let checks = check_all(&sources, &ids);
-    json_report(&sources, &checks[..1], true)
+    (sources, checks)
+}
+
+/// Every `Io` operation `main`'s row mentions that a page host does not
+/// answer for, as a sentence rather than a code.
+///
+/// #591's decision: a page offers exactly `Io.write` (buffered, already
+/// in-memory) and `Io.now` (a deterministic counter, never the real clock).
+/// Nothing else, for now: `Io.epoch` has no fallible form on this target, so
+/// the standard library call behind it traps rather than returning a
+/// `Result`, and the directory operations have a real host answer (an
+/// in-memory directory) that nobody has built yet. Refusing before running
+/// turns both into one honest message instead of a trap or an OS error
+/// nobody chose.
+pub fn unsupported_capabilities(checked: &Checked) -> Vec<String> {
+    let Some(io) = checked.resolutions.builtin("Io") else {
+        return Vec::new();
+    };
+    let Some(main_span) = checked.module.items.iter().find_map(|item| match item {
+        Item::Function(function) if function.sig.name.name == "main" => {
+            Some(function.sig.name.span)
+        }
+        _ => None,
+    }) else {
+        return Vec::new();
+    };
+
+    let rows = checked.rows();
+    let Some(row) = rows.get(&main_span) else {
+        return Vec::new();
+    };
+
+    row.iter()
+        .filter(|item| item.effect == io)
+        .filter_map(|item| match item.operation.as_deref() {
+            Some("write") | Some("now") => None,
+            Some(operation) => Some(format!("this page does not offer `Io.{operation}` yet")),
+            None => Some(
+                "this page only offers `Io.write` and `Io.now`, not the whole `Io` effect yet"
+                    .to_string(),
+            ),
+        })
+        .collect()
+}
+
+/// Runs every `test` block in the page's file.
+///
+/// No capability decision applies here: a `test` block takes no parameters,
+/// so there is no way for one to hold a capability at all, the same reason
+/// `deed test` never asks for a directory to run one in.
+pub fn test_source(source: &str) -> String {
+    let (sources, checks) = checked_of(source);
+    let subject = &checks[0];
+
+    let mut program = Program::new();
+    for checked in &checks {
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+            checked.rows(),
+        );
+    }
+
+    let mut out = String::new();
+    for outcome in run_tests(&program, subject.file) {
+        match outcome.failure {
+            None => out.push_str(&format!(
+                "{{\"kind\":\"test\",\"name\":\"{}\",\"passed\":true}}\n",
+                outcome.name
+            )),
+            Some(failure) => out.push_str(&format!(
+                "{{\"kind\":\"test\",\"name\":\"{}\",\"passed\":false,\"diagnostic\":{}}}\n",
+                outcome.name,
+                render_json(&sources, &failure)
+            )),
+        }
+    }
+    out
+}
+
+/// Runs the page's `main`, refusing first if its row asks for a capability
+/// #591 decided a page does not offer.
+///
+/// `root` is a placeholder path rather than a real directory: there is no
+/// filesystem under `wasm32-unknown-unknown` to root one in, and a program
+/// whose row could reach it was already refused above.
+pub fn run_source(source: &str) -> String {
+    let (sources, checks) = checked_of(source);
+    let subject = &checks[0];
+
+    let refused = unsupported_capabilities(subject);
+    if !refused.is_empty() {
+        let mut out = String::new();
+        for message in refused {
+            out.push_str(&format!(
+                "{{\"kind\":\"capability\",\"message\":\"{message}\"}}\n"
+            ));
+        }
+        return out;
+    }
+
+    let mut program = Program::new();
+    for checked in &checks {
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+            checked.rows(),
+        );
+    }
+
+    let Some(run) = run_main(&program, subject.file, Path::new("/sandbox"), &[]) else {
+        return "{\"kind\":\"result\",\"ok\":false,\"message\":\"no `main` found\"}\n".to_string();
+    };
+
+    let mut out = String::new();
+    for line in &run.output {
+        out.push_str(&format!("{{\"kind\":\"output\",\"line\":\"{line}\"}}\n"));
+    }
+    match run.result {
+        Ok(_) => out.push_str("{\"kind\":\"result\",\"ok\":true}\n"),
+        Err(failure) => out.push_str(&format!(
+            "{{\"kind\":\"result\",\"ok\":false,\"diagnostic\":{}}}\n",
+            render_json(&sources, &failure)
+        )),
+    }
+    out
 }
 
 /// The `check` entry point: reads `len` UTF-8 bytes starting at `ptr` as a
@@ -149,6 +291,39 @@ pub unsafe extern "C" fn deed_check(ptr: *const u8, len: usize) {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
     let source = String::from_utf8_lossy(bytes);
     set_result(check_source(&source));
+}
+
+/// The `test` entry point: same input shape as [`deed_check`], and leaves
+/// one JSON object a line at [`deed_result_ptr`]/[`deed_result_len`], one per
+/// `test` block: `{"kind":"test","name":...,"passed":bool}`, with a
+/// `"diagnostic"` key added when it failed.
+///
+/// # Safety
+///
+/// Same contract as [`deed_check`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn deed_test(ptr: *const u8, len: usize) {
+    // SAFETY: forwarded from this function's own contract.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let source = String::from_utf8_lossy(bytes);
+    set_result(test_source(&source));
+}
+
+/// The `run` entry point: same input shape as [`deed_check`], and leaves
+/// JSON at [`deed_result_ptr`]/[`deed_result_len`]: zero or more
+/// `{"kind":"output",...}` lines, then one `{"kind":"result",...}` line, or
+/// one `{"kind":"capability",...}` line per capability #591 does not offer
+/// when `main`'s row asks for one, in which case nothing runs.
+///
+/// # Safety
+///
+/// Same contract as [`deed_check`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn deed_run(ptr: *const u8, len: usize) {
+    // SAFETY: forwarded from this function's own contract.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let source = String::from_utf8_lossy(bytes);
+    set_result(run_source(&source));
 }
 
 #[cfg(test)]
@@ -234,5 +409,81 @@ mod tests {
         // on its way through raw memory.
         let source = "module main\n\nfn main() -> Int {\n    1\n}\n";
         assert_eq!(check_source(source), call_check(source));
+    }
+
+    #[test]
+    fn a_passing_test_is_reported_as_passing() {
+        let json = test_source("module main\n\ntest \"one is one\" {\n    assert 1 == 1\n}\n");
+        assert_eq!(
+            json,
+            "{\"kind\":\"test\",\"name\":\"one is one\",\"passed\":true}\n"
+        );
+    }
+
+    #[test]
+    fn a_failing_test_carries_its_diagnostic() {
+        let json = test_source("module main\n\ntest \"never\" {\n    assert 1 == 2\n}\n");
+        assert!(
+            json.contains("\"passed\":false") && json.contains("\"diagnostic\":"),
+            "a failing test should carry a diagnostic, got {json:?}"
+        );
+    }
+
+    #[test]
+    fn running_a_clean_program_reports_its_output_and_a_true_result() {
+        let json = run_source("module main\n\nfn main() -> Int {\n    1 + 1\n}\n");
+        assert_eq!(json, "{\"kind\":\"result\",\"ok\":true}\n");
+    }
+
+    #[test]
+    fn a_program_that_can_never_stop_terminates_with_a_depth_error_rather_than_hanging() {
+        // #590: there is no `while`, so the only way to not stop is
+        // recursion, and the interpreter's own depth limit (`MAX_DEPTH`,
+        // deed-interp) already turns that into an error rather than a hang.
+        // A page is never left waiting on a call that cannot return.
+        let json = run_source(
+            "module main\n\n\
+             fn a() -> Int\n  uses\n    Diverge,\n{\n    b()\n}\n\n\
+             fn b() -> Int\n  uses\n    Diverge,\n{\n    a()\n}\n\n\
+             fn main() -> Int {\n    a()\n}\n",
+        );
+        assert!(
+            json.contains("\"kind\":\"result\",\"ok\":false"),
+            "a call that can never return should fail rather than hang, got {json:?}"
+        );
+        assert!(
+            json.contains("more than 128 deep") || json.contains("DEED6009"),
+            "the failure should be the depth limit, not some other mistake, got {json:?}"
+        );
+    }
+
+    #[test]
+    fn a_program_using_only_write_and_now_is_not_refused() {
+        let (_, checks) = checked_of(
+            "module main\n\nfn main(sys: System) -> Int\n  uses\n    Io.write,\n    Io.now,\n{\n    Io.write(sys.console, \"hi\")\n    Io.now(sys.clock)\n}\n",
+        );
+        assert_eq!(unsupported_capabilities(&checks[0]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_program_asking_to_save_a_file_is_refused_with_a_message() {
+        let (_, checks) = checked_of(
+            "module main\n\nfn main(sys: System) -> Result<(), String>\n  uses\n    Io.save,\n{\n    Io.save(sys.files, \"x\", \"y\")\n}\n",
+        );
+        assert_eq!(
+            unsupported_capabilities(&checks[0]),
+            vec!["this page does not offer `Io.save` yet".to_string()]
+        );
+    }
+
+    #[test]
+    fn running_a_program_that_asks_to_save_a_file_is_refused_before_it_runs() {
+        let json = run_source(
+            "module main\n\nfn main(sys: System) -> Result<(), String>\n  uses\n    Io.save,\n{\n    Io.save(sys.files, \"x\", \"y\")\n}\n",
+        );
+        assert_eq!(
+            json,
+            "{\"kind\":\"capability\",\"message\":\"this page does not offer `Io.save` yet\"}\n"
+        );
     }
 }
