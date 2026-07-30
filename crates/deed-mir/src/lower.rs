@@ -235,6 +235,9 @@ struct Lowering<'a> {
     slots: HashMap<DefId, Local>,
 }
 
+/// Which variants an arm names, and which field each name it binds reads.
+type Arm<'p> = (Vec<usize>, Vec<(usize, &'p ast::Ident)>);
+
 impl Lowering<'_> {
     /// The MIR type of whatever the checker recorded at this span.
     ///
@@ -347,11 +350,26 @@ impl Lowering<'_> {
                     .ok_or_else(|| unlowered("a name nothing resolved", ident.span))?;
                 match self.slots.get(&def) {
                     Some(local) => Expr::Local(*local),
+                    // Not a local, so it is a variant carrying no fields,
+                    // written bare the way this language writes them. A
+                    // function used as a value would also land here and is
+                    // refused, since it needs a closure to carry.
                     None => {
-                        // A function used as a value, which needs a closure
-                        // to carry, or a name from somewhere this does not
-                        // reach yet.
-                        return Err(unlowered("a name that is not a local", ident.span));
+                        let (layout, variant) = self.variant_named(&ident.name, ident.span)?;
+                        if !self.program.layout(layout).variants[variant]
+                            .fields
+                            .is_empty()
+                        {
+                            return Err(unlowered(
+                                "a variant with fields written without them",
+                                ident.span,
+                            ));
+                        }
+                        Expr::Make {
+                            layout,
+                            variant,
+                            fields: Vec::new(),
+                        }
                     }
                 }
             }
@@ -531,10 +549,324 @@ impl Lowering<'_> {
                     field,
                 }
             }
+            ast::Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => self.match_arms(scrutinee, arms, *span)?,
+            ast::Expr::For {
+                binder,
+                index,
+                iterable,
+                accumulator,
+                keep,
+                body,
+                span,
+            } => self.walk(
+                binder,
+                index.as_ref(),
+                iterable,
+                accumulator.as_ref(),
+                keep.as_deref(),
+                body,
+                *span,
+            )?,
             other => {
                 return Err(unlowered("this expression", other.span()));
             }
         })
+    }
+
+    /// A `match` becomes a chain of `if`s over the discriminant.
+    ///
+    /// Nothing is lost by not having a jump table: the checker already
+    /// refused a match that does not cover its choice, so the last arm is
+    /// reached exactly when every earlier test failed and there is no
+    /// fallthrough to invent. A table would be faster on a wide choice and
+    /// there is no program yet where that is measurable.
+    fn match_arms(
+        &mut self,
+        scrutinee: &ast::Expr,
+        arms: &[ast::MatchArm],
+        span: Span,
+    ) -> Result<Expr, Unlowered> {
+        let subject_ty = self.ty_at(scrutinee.span())?;
+        let Ty::Aggregate(layout) = subject_ty.clone() else {
+            return Err(unlowered("a match on something other than a choice", span));
+        };
+
+        let held = self.function.add_local(subject_ty);
+        let value = self.expr(scrutinee)?;
+
+        let ty = match arms.first() {
+            Some(first) => self.ty_at(first.body.span())?,
+            None => Ty::Unit,
+        };
+
+        // Built back to front, so each arm's else is the chain below it.
+        let mut chain = Block {
+            stmts: vec![Stmt::Fail {
+                message: "no arm of this match applied".to_string(),
+            }],
+            value: Expr::Unit,
+        };
+
+        for arm in arms.iter().rev() {
+            let (variants, bindings) = self.arm_pattern(&arm.pattern, layout)?;
+            let mut stmts = Vec::new();
+            for (field, name) in bindings {
+                let field_ty = self.program.layout(layout).variants[variants[0]].fields[field]
+                    .ty
+                    .clone();
+                let local = self.function.add_local(field_ty);
+                if let Some(def) = self.resolutions.resolution(name.span) {
+                    self.slots.insert(def, local);
+                }
+                stmts.push(Stmt::Assign {
+                    local,
+                    value: Expr::Field {
+                        value: Box::new(Expr::Local(held)),
+                        layout,
+                        variant: variants[0],
+                        field,
+                    },
+                });
+            }
+
+            let taken = Block {
+                stmts,
+                value: self.expr(&arm.body)?,
+            };
+
+            // No condition at all means this arm always applies, which is
+            // what a catch-all is and what the last arm of an exhaustive
+            // match on a single-variant layout is.
+            let Some(condition) = self.discriminates(&variants, layout, held) else {
+                chain = taken;
+                continue;
+            };
+
+            chain = Block::of(Expr::If {
+                condition: Box::new(condition),
+                then: Box::new(taken),
+                otherwise: Box::new(chain),
+                ty: Box::new(ty.clone()),
+            });
+        }
+
+        Ok(Expr::Block(Box::new(Block {
+            stmts: vec![Stmt::Assign { local: held, value }],
+            value: Expr::Block(Box::new(chain)),
+        })))
+    }
+
+    /// Whether the value in `held` is one of these variants.
+    ///
+    /// `None` when every variant is named, since a test that is always true
+    /// is a branch nothing needs.
+    fn discriminates(
+        &self,
+        variants: &[usize],
+        layout: crate::LayoutId,
+        held: Local,
+    ) -> Option<Expr> {
+        if variants.len() == self.program.layout(layout).variants.len() {
+            return None;
+        }
+        let mut condition: Option<Expr> = None;
+        for variant in variants {
+            let test = Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(Expr::Discriminant {
+                    value: Box::new(Expr::Local(held)),
+                    layout,
+                }),
+                right: Box::new(Expr::Int(*variant as i64)),
+            };
+            condition = Some(match condition {
+                None => test,
+                Some(so_far) => Expr::Binary {
+                    op: BinaryOp::Or,
+                    left: Box::new(so_far),
+                    right: Box::new(test),
+                },
+            });
+        }
+        condition
+    }
+
+    /// Which variants an arm's pattern names, and what it binds.
+    fn arm_pattern<'p>(
+        &self,
+        pattern: &'p ast::Pattern,
+        layout: crate::LayoutId,
+    ) -> Result<Arm<'p>, Unlowered> {
+        let held = self.program.layout(layout);
+        Ok(match pattern {
+            ast::Pattern::Wildcard(_) => ((0..held.variants.len()).collect(), Vec::new()),
+            ast::Pattern::Path { segments, span } => {
+                let name = segments
+                    .last()
+                    .ok_or_else(|| unlowered("an empty pattern", *span))?;
+                let at = held
+                    .variants
+                    .iter()
+                    .position(|variant| variant.name == name.name.as_str())
+                    .ok_or_else(|| unlowered("a pattern naming no variant", *span))?;
+                (vec![at], Vec::new())
+            }
+            ast::Pattern::Record { path, fields, span } => {
+                let name = path
+                    .last()
+                    .ok_or_else(|| unlowered("an empty pattern", *span))?;
+                let at = held
+                    .variants
+                    .iter()
+                    .position(|variant| variant.name == name.name.as_str())
+                    .ok_or_else(|| unlowered("a pattern naming no variant", *span))?;
+                let mut bindings = Vec::new();
+                for field in fields {
+                    let index = held.variants[at]
+                        .fields
+                        .iter()
+                        .position(|declared| declared.name == field.name.name.as_str())
+                        .ok_or_else(|| unlowered("a field the variant does not have", *span))?;
+                    bindings.push((index, &field.name));
+                }
+                (vec![at], bindings)
+            }
+            ast::Pattern::OneOf {
+                alternatives,
+                span: _,
+            } => {
+                let mut variants = Vec::new();
+                for alternative in alternatives {
+                    let (named, _) = self.arm_pattern(alternative, layout)?;
+                    variants.extend(named);
+                }
+                (variants, Vec::new())
+            }
+            other => return Err(unlowered("this pattern", other.span())),
+        })
+    }
+
+    /// A `for` walk: a counter, the list's own length as the bound, and a
+    /// body that rebinds the accumulator.
+    ///
+    /// The index is generated here rather than read from the program, so
+    /// every element read is inside the list by construction and none of
+    /// them needs a bound check. That is the one place this backend indexes
+    /// without asking, and it is why [`Expr::ElementAt`] exists separately
+    /// from the prelude's `at`.
+    #[allow(clippy::too_many_arguments)]
+    fn walk(
+        &mut self,
+        binder: &ast::Ident,
+        index: Option<&ast::Ident>,
+        iterable: &ast::Expr,
+        accumulator: Option<&ast::Accumulator>,
+        keep: Option<&ast::Expr>,
+        body: &ast::Block,
+        span: Span,
+    ) -> Result<Expr, Unlowered> {
+        let list_ty = self.ty_at(iterable.span())?;
+        let Ty::List(element_ty) = list_ty.clone() else {
+            return Err(unlowered("a walk over something that is not a list", span));
+        };
+
+        let list = self.function.add_local(list_ty);
+        let counter = self.function.add_local(Ty::Int);
+        let element = self.function.add_local((*element_ty).clone());
+
+        let (carried, start) = match accumulator {
+            Some(one) => {
+                let ty = self.ty_at(one.init.span())?;
+                let value = self.expr(&one.init)?;
+                (self.function.add_local(ty), value)
+            }
+            None => (self.function.add_local(Ty::Unit), Expr::Unit),
+        };
+
+        if let Some(one) = accumulator
+            && let Some(def) = self.resolutions.resolution(one.name.span)
+        {
+            self.slots.insert(def, carried);
+        }
+        if let Some(def) = self.resolutions.resolution(binder.span) {
+            self.slots.insert(def, element);
+        }
+        if let Some(at) = index
+            && let Some(def) = self.resolutions.resolution(at.span)
+        {
+            self.slots.insert(def, counter);
+        }
+
+        let walked = self.expr(iterable)?;
+
+        let mut condition = Expr::Binary {
+            op: BinaryOp::LtInt,
+            left: Box::new(Expr::Local(counter)),
+            right: Box::new(Expr::Runtime {
+                name: crate::runtime::LIST_LEN,
+                args: vec![Expr::Local(list)],
+                ret: Box::new(Ty::Int),
+            }),
+        };
+        if let Some(more) = keep {
+            // Read before each turn, with the accumulator in scope, which is
+            // where the language already says it is read.
+            condition = Expr::Binary {
+                op: BinaryOp::And,
+                left: Box::new(condition),
+                right: Box::new(self.expr(more)?),
+            };
+        }
+
+        let turn = self.block(body)?;
+        let inner = vec![
+            Stmt::Assign {
+                local: element,
+                value: Expr::ElementAt {
+                    list: Box::new(Expr::Local(list)),
+                    index: Box::new(Expr::Local(counter)),
+                    element: element_ty,
+                },
+            },
+            Stmt::Assign {
+                local: carried,
+                value: Expr::Block(Box::new(turn)),
+            },
+            Stmt::Assign {
+                local: counter,
+                value: Expr::Binary {
+                    op: BinaryOp::AddInt,
+                    left: Box::new(Expr::Local(counter)),
+                    right: Box::new(Expr::Int(1)),
+                },
+            },
+        ];
+
+        Ok(Expr::Block(Box::new(Block {
+            stmts: vec![
+                Stmt::Assign {
+                    local: list,
+                    value: walked,
+                },
+                Stmt::Assign {
+                    local: counter,
+                    value: Expr::Int(0),
+                },
+                Stmt::Assign {
+                    local: carried,
+                    value: start,
+                },
+                Stmt::While {
+                    condition,
+                    body: inner,
+                },
+            ],
+            value: Expr::Local(carried),
+        })))
     }
 
     /// Which layout and which variant a name refers to.
