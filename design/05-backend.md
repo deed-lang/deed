@@ -82,6 +82,31 @@ What would change this: a `resume` in the language, or an operation that returns
 somewhere other than where it was performed. Neither exists, and adding either would be a
 change to `design/03-effects.md` before it was a change here.
 
+## Native object code is not the next thing, and there is a reason rather than a plan
+
+The order at the top of this document was WASM first and native object output second, and
+the second half no longer follows from the first. It was written when the backend was going
+to be Cranelift, where emitting an object file is the same work as emitting anything else
+and a linker is the only extra step. Without Cranelift, native output means either taking
+that dependency back or writing an object-file writer and a machine-code emitter per
+architecture, and those are not comparable amounts of work to what is here.
+
+So: **the distribution format is a WebAssembly module**, and native executables are deferred
+rather than scheduled. What that costs is the one thing a native binary has that a module
+does not, which is running with no host at all. What it saves is an object writer, a
+relocation model, a linker search, and a per-architecture emitter, none of which this has a
+program asking for yet.
+
+Linker discovery is deferred with it. It only exists to serve an object file, and there is
+no object file.
+
+**What would change this:** somebody who wants to ship a Deed program to a machine that has
+no `deed` on it and cannot run a module either. That is a real thing to want and nobody has
+said it yet, and the argument in the first section of this document, that distribution is
+what a backend is for, is exactly what would make it worth doing. It would then most likely
+be Cranelift after all, on a machine with a linker, and the dependency argument gets
+weighed against a request rather than against a guess.
+
 ## What would falsify this
 
 If a WASM host turns out unable to express the calling convention or the effect-handler
