@@ -194,6 +194,18 @@ impl Run<'_> {
                         stack.push(result);
                     }
                 }
+                Ins::CallIndirect(_) => {
+                    let slot = pop(stack)?.as_i64() as usize;
+                    let index = *self.module.table.get(slot).ok_or(Trap::OutOfBounds)?;
+                    let callee = &self.module.funcs[index as usize];
+                    let signature = &self.module.types[callee.type_index as usize];
+                    let count = signature.params.len();
+                    let at = stack.len() - count;
+                    let args: Vec<Value> = stack.split_off(at);
+                    if let Some(result) = self.call(index, &args)? {
+                        stack.push(result);
+                    }
+                }
                 Ins::LocalGet(index) => stack.push(locals[*index as usize]),
                 Ins::LocalSet(index) => {
                     let value = pop(stack)?;

@@ -296,6 +296,13 @@ pub struct Module {
     pub memory_pages: Option<u32>,
     /// Bytes placed in memory before anything runs, by offset.
     pub data: Vec<(u32, Vec<u8>)>,
+    /// Functions reachable through `call_indirect`, in table order.
+    ///
+    /// A closure is a code pointer and an environment, and a code pointer in
+    /// WebAssembly is an index into this. Only what a closure could name goes
+    /// in, so the table is the set of function bodies a value can carry
+    /// rather than everything the module declares.
+    pub table: Vec<u32>,
 }
 
 impl Module {
@@ -319,6 +326,15 @@ impl Module {
 
     pub fn export(&mut self, name: impl Into<String>, func: u32) {
         self.exports.push((name.into(), func));
+    }
+
+    /// Where this function sits in the table, putting it there if it is new.
+    pub fn intern_table(&mut self, func: u32) -> u32 {
+        if let Some(at) = self.table.iter().position(|found| *found == func) {
+            return at as u32;
+        }
+        self.table.push(func);
+        (self.table.len() - 1) as u32
     }
 
     /// The module as bytes, in the order the specification lays the sections
@@ -354,6 +370,17 @@ impl Module {
             write_section(&mut out, 3, &section);
         }
 
+        if !self.table.is_empty() {
+            let mut section = Vec::new();
+            write_u32(&mut section, 1);
+            // A table of function references, exactly as big as what went in.
+            section.push(0x70);
+            section.push(0x01);
+            write_u32(&mut section, self.table.len() as u32);
+            write_u32(&mut section, self.table.len() as u32);
+            write_section(&mut out, 4, &section);
+        }
+
         if let Some(pages) = self.memory_pages {
             let mut section = Vec::new();
             write_u32(&mut section, 1);
@@ -361,7 +388,6 @@ impl Module {
             write_u32(&mut section, pages);
             write_section(&mut out, 5, &section);
         }
-
         if !self.exports.is_empty() {
             let mut section = Vec::new();
             write_u32(&mut section, self.exports.len() as u32);
@@ -371,6 +397,22 @@ impl Module {
                 write_u32(&mut section, *index);
             }
             write_section(&mut out, 7, &section);
+        }
+
+        // The element section fills the table, and comes before the code
+        // that calls through it.
+        if !self.table.is_empty() {
+            let mut section = Vec::new();
+            write_u32(&mut section, 1);
+            write_u32(&mut section, 0);
+            section.push(0x41);
+            write_i32(&mut section, 0);
+            section.push(0x0b);
+            write_u32(&mut section, self.table.len() as u32);
+            for func in &self.table {
+                write_u32(&mut section, *func);
+            }
+            write_section(&mut out, 9, &section);
         }
 
         if !self.funcs.is_empty() {

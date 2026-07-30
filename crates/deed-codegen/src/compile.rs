@@ -70,7 +70,8 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
 
     for function in &program.functions {
         let type_index = index_of_signature(&mut module, function);
-        let mut body = Builder::new(program, function, &mut strings);
+        let interned = module.types.clone();
+        let mut body = Builder::new(program, function, &mut strings, interned);
         body.block(&function.body)?;
         body.instructions.push(Ins::Return);
 
@@ -81,6 +82,10 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         };
         let func_index = module.add_func(compiled);
         module.export(function.name.clone(), func_index);
+        // Every function goes in the table at its own index, so a code
+        // pointer and a function index are the same number and lowering does
+        // not need a second numbering to keep straight.
+        module.intern_table(func_index);
     }
 
     // The bump pointer starts past every literal the data section placed.
@@ -100,7 +105,6 @@ fn index_of_signature(module: &mut Module, function: &Function) -> u32 {
 fn reject(function: &Function, ty: &Ty) -> Result<(), Unsupported> {
     let what = match ty {
         Ty::Capability => "a capability",
-        Ty::Closure => "a function value",
         _ => return Ok(()),
     };
     Err(Unsupported {
@@ -162,10 +166,18 @@ struct Builder<'a> {
     slots: Vec<Option<u32>>,
     /// How many parameters have a representation.
     params: usize,
+    /// Every signature the module has interned, so an indirect call can name
+    /// the one it goes through.
+    signatures: Vec<FuncType>,
 }
 
 impl<'a> Builder<'a> {
-    fn new(program: &'a Program, function: &'a Function, strings: &'a mut Strings) -> Self {
+    fn new(
+        program: &'a Program,
+        function: &'a Function,
+        strings: &'a mut Strings,
+        signatures: Vec<FuncType>,
+    ) -> Self {
         let mut slots = Vec::new();
         let mut next = 0;
         let mut extra_locals = Vec::new();
@@ -191,7 +203,22 @@ impl<'a> Builder<'a> {
             extra_locals,
             slots,
             params: function.params.iter().filter_map(val_type).count(),
+            signatures,
         }
+    }
+
+    /// Which interned signature this is.
+    ///
+    /// Every signature an indirect call can reach is already interned,
+    /// because the body it reaches is a function the program declares and
+    /// the first pass walked all of them. A call that found none would be a
+    /// call to something that was never lowered.
+    fn signature(&self, wanted: FuncType) -> Result<u32, Unsupported> {
+        self.signatures
+            .iter()
+            .position(|found| *found == wanted)
+            .map(|at| at as u32)
+            .ok_or_else(|| self.fail("a call to a shape nothing declares"))
     }
 
     /// A slot nothing else uses, for holding something mid-expression.
@@ -383,7 +410,32 @@ impl<'a> Builder<'a> {
                 }
                 self.instructions.push(Ins::Call(func.0 as u32));
             }
-            Expr::CallIndirect { .. } => return Err(self.fail("a function value")),
+            Expr::CallIndirect { callee, args, ret } => {
+                // The environment goes first, then the arguments, then the
+                // code pointer the table is indexed by. That order is the
+                // lifted body's parameter list, which is why a closure's
+                // environment is its first parameter.
+                let signature =
+                    FuncType {
+                        params: std::iter::once(ValType::I64)
+                            .chain(args.iter().filter_map(|arg| {
+                                self.ty_of(arg).ok().and_then(|ty| val_type(&ty))
+                            }))
+                            .collect(),
+                        results: val_type(ret).into_iter().collect(),
+                    };
+                let type_index = self.signature(signature)?;
+
+                self.expr(callee)?;
+                for arg in args {
+                    self.expr(arg)?;
+                }
+                self.expr(callee)?;
+                self.instructions.push(Ins::I32WrapI64);
+                self.instructions.push(Ins::I64Load(0));
+                self.instructions.push(Ins::I32WrapI64);
+                self.instructions.push(Ins::CallIndirect(type_index));
+            }
             Expr::Make {
                 layout: id,
                 variant,
@@ -636,17 +688,14 @@ mod tests {
 
     #[test]
     fn what_is_not_compiled_yet_is_named_rather_than_approximated() {
-        let mut function = Function::new("hand", vec![], Ty::Closure);
+        let mut function = Function::new("reach", vec![Ty::Capability], Ty::Unit);
         function.body = Block::of(Expr::Unit);
         let mut program = Program::new();
         program.add_function(function);
 
-        let refused = compile(&program).expect_err("a function value is not compiled yet");
-        assert_eq!(refused.function, "hand");
-        assert!(
-            refused.to_string().contains("a function value"),
-            "{refused}"
-        );
+        let refused = compile(&program).expect_err("a capability is not compiled yet");
+        assert_eq!(refused.function, "reach");
+        assert!(refused.to_string().contains("a capability"), "{refused}");
     }
 
     /// A literal is placed once however many times it is written, and the

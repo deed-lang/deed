@@ -1425,10 +1425,10 @@ using an effect to get around not having a loop.
   them in. `Ty::Result` and `Ty::List` are named in three crates: the type checker, and the
   two the backend added, since a list has to be laid out in memory and compiled into
   instructions as well as checked. What names `Result`'s two variants is `?` and the outcome
-  an `ensures` clause is keyed by, and those are in eight of the fifteen crates: the syntax
+  an `ensures` clause is keyed by, and those are in nine of the fifteen crates: the syntax
   tree, the parser, the
-  resolver, the type checker, the effect checker, the interpreter, the formatter and the
-  driver. Declaring `Result` in a prelude module moves the first set and leaves every one of
+  resolver, the type checker, the effect checker, the interpreter, the formatter, the driver
+  and the lowering the backend reads. Declaring `Result` in a prelude module moves the first set and leaves every one of
   the second in place, with a lookup through a module added in front of a type the syntax
   already knows the shape of. That is not a smaller language, it is the same one with an
   indirection in it. `List` is the same shape: `[1, 2, 3]` has to build something, and `for`
@@ -1437,7 +1437,7 @@ using an effect to get around not having a loop.
   So the three ways out written down here before, positional variants, respelling it
   `Ok { value: x }` at every use, and letting a parameter that appears only in a return type
   be unknown at the call site, are three ways to write a constructor, and all three leave the
-  eight crates alone. Worth keeping the last one on record: it is what `ok` already does, and
+  nine crates alone. Worth keeping the last one on record: it is what `ok` already does, and
   it would make `ok` an ordinary function rather than an exemption from `DEED4023`. It is a
   smaller change than it sounds and it is not this one.
 
