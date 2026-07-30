@@ -206,6 +206,46 @@ fn a_handler_becomes_one_function_per_operation() {
     assert_eq!(program.function(bump).ret, Ty::Unit);
 }
 
+/// Two effects in one module get told apart, and by position.
+///
+/// A `Perform` names its effect by number, so a program with two of them is
+/// what says the numbering is real.
+#[test]
+fn each_effect_gets_its_own_number() {
+    let program = lowered(
+        "module a\n\neffect Counter {\n    fn value() -> Int\n}\n\neffect Clock {\n    fn now() -> Int\n}\n\nhandler Fixed implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n}\n\nhandler Frozen implements Clock {\n    state at: Int\n\n    fn now() -> Int { at }\n}\n\nfn f() -> Int {\n    with Fixed { count: 1 } {\n        with Frozen { at: 2 } {\n            Counter.value() + Clock.now()\n        }\n    }\n}\n",
+    )
+    .expect("this lowers");
+
+    assert_eq!(program.effects.len(), 2);
+    assert_eq!(program.effect(deed_mir::EffectId(0)).name, "Counter");
+    assert_eq!(program.effect(deed_mir::EffectId(1)).name, "Clock");
+}
+
+/// Each installation carries the function that answers each operation, and
+/// they are in the order the effect declared them.
+///
+/// The frame holds these as code pointers, so an off-by-one here is a
+/// program that calls the wrong body.
+#[test]
+fn an_installation_points_at_the_right_body_for_each_operation() {
+    let program = lowered(
+        "module a\n\neffect Counter {\n    fn value() -> Int\n    fn bump(by: Int) -> ()\n}\n\nhandler InMemory implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n\n    fn bump(by) -> () {\n        count = count + by\n    }\n}\n\nfn f() -> Int {\n    with InMemory { count: 0 } {\n        Counter.bump(1)\n        Counter.value()\n    }\n}\n",
+    )
+    .expect("this lowers");
+
+    let f = program.function(program.find("f").expect("f is there"));
+    let deed_mir::Expr::Install { operations, .. } = &f.body.value else {
+        panic!("`f` should be an installation, not {:?}", f.body.value);
+    };
+
+    let named: Vec<&str> = operations
+        .iter()
+        .map(|id| program.function(*id).name.as_str())
+        .collect();
+    assert_eq!(named, vec!["InMemory.value", "InMemory.bump"]);
+}
+
 /// What is not lowered yet is named rather than approximated.
 #[test]
 fn a_shape_that_is_not_lowered_says_which_one() {

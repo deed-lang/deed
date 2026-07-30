@@ -273,6 +273,15 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 13,
         },
+        // State that is not a number. A field narrower than a word is
+        // widened on the way in, and a handler is the only place anything
+        // gets written twice, so this is where getting that wrong shows.
+        Agreed {
+            name: "handler state that is a boolean",
+            source: "module a\n\neffect Switch {\n    fn on() -> Bool\n    fn flip() -> ()\n}\n\nhandler Toggle implements Switch {\n    state lit: Bool\n\n    fn on() -> Bool { lit }\n\n    fn flip() -> () {\n        lit = !lit\n    }\n}\n\nfn answer() -> Int {\n    with Toggle { lit: false } {\n        Switch.flip()\n        if Switch.on() {\n            1\n        } else {\n            0\n        }\n    }\n}\n\ntest \"a boolean field survives being written\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
     ]
 }
 

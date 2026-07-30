@@ -279,10 +279,25 @@ impl<'a> Builder<'a> {
                     self.instructions.push(Ins::Drop);
                 }
             }
-            Stmt::Fail { .. } => {
-                // A contract failure ends the program. Carrying the message
-                // would need somewhere to print it, and a module compiled by
-                // `deed build` has no host to print to yet.
+            Stmt::Fail { code, message } => {
+                // A contract failure ends the program, and says which one
+                // before it does. The two strings are placed the way every
+                // literal is, and their addresses go in the two words
+                // `layout` set aside, so whatever runs the module can read
+                // them after the trap.
+                let at_code = self.strings.place(code);
+                let at_message = self.strings.place(message);
+
+                self.instructions
+                    .push(Ins::I32Const(layout::FAILURE_CODE as i32));
+                self.instructions.push(Ins::I64Const(at_code as i64));
+                self.instructions.push(Ins::I64Store(0));
+
+                self.instructions
+                    .push(Ins::I32Const(layout::FAILURE_MESSAGE as i32));
+                self.instructions.push(Ins::I64Const(at_message as i64));
+                self.instructions.push(Ins::I64Store(0));
+
                 self.instructions.push(Ins::Unreachable);
             }
             Stmt::While { condition, body } => {
