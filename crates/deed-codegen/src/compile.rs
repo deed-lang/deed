@@ -1,9 +1,12 @@
 //! Compiling [`deed_mir`] to a WebAssembly module.
 //!
 //! What this handles: `Unit`, `Bool` and `Int`, the operators over them,
-//! string literals, lists, records and choices, direct calls, `if`, blocks
-//! and slots. Closures, capabilities and effects reach here and are refused
-//! by name; see `design/05-backend.md` for the order the rest arrives in.
+//! string literals, lists, records and choices, direct calls, closures, `if`,
+//! blocks, slots, generics (monomorphized), contracts, effect handlers and
+//! capabilities (as host imports, #569). What still is not: the prelude
+//! functions beyond `ok`, `err` and `length`, and early `return`; see #621
+//! and `design/05-backend.md` for the rest of the gap, enumerated rather
+//! than remembered.
 //!
 //! Refusing rather than approximating is the checker's own rule. A backend
 //! that quietly compiled something into the wrong shape would produce a
