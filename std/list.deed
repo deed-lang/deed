@@ -390,6 +390,96 @@ fn flat_map<A, B, uses r>(items: List<A>, step: Fn(A) uses r -> List<B>) -> List
     }
 }
 
+// Every partial fold, in order. `fold` keeps only the last one; scan is for a
+// caller that wants to see how it got there instead of writing the same loop
+// with the accumulator swapped for a pair.
+fn scan<T, S, uses r>(items: List<T>, start: S, step: Fn(S, T) uses r -> S) -> List<S>
+  uses
+    r,
+{
+    let done = for item in items with pair = Pair { left: start, right: [] } {
+        let next = step(pair.left, item)
+        Pair { left: next, right: push(pair.right, next) }
+    }
+    done.right
+}
+
+// Rows become columns, stopping at the shortest row rather than inventing a
+// value for one that ran out.
+fn transpose<T>(rows: List<List<T>>) -> List<List<T>> {
+    match first(rows) {
+        err(_) => [],
+        ok(head) => {
+            let width = fold(
+                rows,
+                length(head),
+                |shortest: Int, row: List<T>| {
+                    if length(row) < shortest {
+                        length(row)
+                    } else {
+                        shortest
+                    }
+                },
+            )
+            for _zero at column in repeat(0, width) with out = [] {
+                push(
+                    out,
+                    fold(
+                        rows,
+                        [],
+                        |built: List<T>, row: List<T>| {
+                            match at(row, column) {
+                                ok(value) => push(built, value),
+                                err(_) => built,
+                            }
+                        },
+                    ),
+                )
+            }
+        },
+    }
+}
+
+// Bucket elements by a key, keeping first-seen order for both the buckets and
+// what went into them. A group is a `Pair` rather than the table this file
+// does not import, `left` the key and `right` what landed in it.
+fn group_by<T, K, uses r>(items: List<T>, key_of: Fn(T) uses r -> K)
+    -> List<Pair<K, List<T>>>
+  uses
+    r,
+{
+    for item in items with groups = [] {
+        let key = key_of(item)
+        match find(groups, |group: Pair<K, List<T>>| group.left == key) {
+            err(_) => push(groups, Pair { left: key, right: [item] }),
+            ok(_) => map(
+                groups,
+                |group: Pair<K, List<T>>| {
+                    if group.left == key {
+                        Pair { left: group.left, right: push(group.right, item) }
+                    } else {
+                        group
+                    }
+                },
+            ),
+        }
+    }
+}
+
+// Insertion sort: each element finds its place among what has already been
+// placed, using a caller-supplied "does the first belong before the second"
+// rather than a bound on `T`. `partition` already answers where a new element
+// splits the list, so placing one is the same three lines as filtering twice.
+fn sort<T, uses r>(items: List<T>, before: Fn(T, T) uses r -> Bool) -> List<T>
+  uses
+    r,
+{
+    for item in items with sorted = [] {
+        let parts = partition(sorted, |existing: T| before(existing, item))
+        concat(push(parts.kept, item), parts.rest)
+    }
+}
+
 // What holds this file up.
 //
 // `examples/using_list.deed` walks most of what is above, and it is a program
@@ -581,4 +671,30 @@ test "flat_map expands each element into a list" {
     ) == [2, 3]
     assert flat_map([], |n: Int| [n]) == []
     assert flat_map(["a", "bb"], |word: String| [word, word]) == ["a", "a", "bb", "bb"]
+}
+
+test "scan keeps every partial fold, in the order they were made" {
+    assert scan([1, 2, 3], 0, |sum: Int, n: Int| sum + n) == [1, 3, 6]
+    assert scan([], 7, |sum: Int, n: Int| sum + n) == []
+    assert scan(["a", "b"], "", |joined: String, word: String| joined + word) == ["a", "ab"]
+}
+
+test "transpose turns rows into columns, at the shortest row" {
+    assert transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]]
+    assert transpose([[1, 2], [3]]) == [[1, 3]]
+    assert transpose([[1, 2, 3]]) == [[1], [2], [3]]
+    assert transpose([]) == []
+}
+
+test "group_by buckets by key and keeps first-seen order" {
+    let grouped = group_by([1, 2, 3, 4, 5, 6], |n: Int| n % 2)
+    assert grouped == [Pair { left: 1, right: [1, 3, 5] }, Pair { left: 0, right: [2, 4, 6] }]
+    assert group_by([], |n: Int| n) == []
+}
+
+test "sort places each element among what came before it" {
+    assert sort([3, 1, 2], |a: Int, b: Int| a < b) == [1, 2, 3]
+    assert sort([3, 1, 2], |a: Int, b: Int| a > b) == [3, 2, 1]
+    assert sort([1], |a: Int, b: Int| a < b) == [1]
+    assert sort([], |a: Int, b: Int| a < b) == []
 }
