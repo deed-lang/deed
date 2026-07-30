@@ -1094,6 +1094,249 @@ mod tests {
         assert_eq!(module.imports.len(), 1);
     }
 
+    /// Two operations that share a name in different namespaces are two
+    /// imports, and finding one has to look at both halves.
+    #[test]
+    fn two_namespaces_can_publish_the_same_operation_name() {
+        let host = |name: &str| Expr::Host {
+            name: name.to_string(),
+            args: vec![Expr::Local(Local(0))],
+            ret: Box::new(Ty::Int),
+        };
+        let mut function = Function::new("both", vec![Ty::Capability], Ty::Int);
+        function.body = Block {
+            stmts: vec![Stmt::Discard(host("io.now"))],
+            value: host("clock.now"),
+        };
+        let mut program = Program::new();
+        program.add_function(function);
+
+        let module = compile(&program).expect("this compiles");
+        assert_eq!(module.imports.len(), 2);
+
+        // The second call has to reach the second import. Matching on the
+        // operation name alone would send both to whichever was declared
+        // first, and both calls would still compile.
+        let calls: Vec<u32> = module.funcs[0]
+            .body
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Ins::Call(index) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, vec![0, 1], "each call should reach its own import");
+    }
+
+    /// Every shape a host call can be buried in.
+    ///
+    /// The collector walks bodies before any function is placed, because an
+    /// import added later would renumber everything. A shape it does not
+    /// walk is a program that asks for something the module never declared,
+    /// and the program that finds it is an ordinary one: `Io.write` inside
+    /// an `if` is not exotic.
+    ///
+    /// One test rather than one per shape, because what is being checked is
+    /// that the walk is total, and a list of shapes with one missing looks
+    /// exactly like a list of shapes.
+    #[test]
+    fn a_host_call_is_found_wherever_it_is_buried() {
+        let host = |name: &str| Expr::Host {
+            name: format!("io.{name}"),
+            args: vec![Expr::Local(Local(0))],
+            ret: Box::new(Ty::Int),
+        };
+
+        let mut program = Program::new();
+        let shape = program.add_layout(Layout {
+            name: "Pair".to_string(),
+            variants: vec![Variant {
+                name: "Pair".to_string(),
+                fields: vec![Field {
+                    name: "only".to_string(),
+                    ty: Ty::Int,
+                }],
+            }],
+        });
+        let effect = program.add_effect(deed_mir::Effect {
+            name: "Log".to_string(),
+            operations: vec!["note".to_string()],
+        });
+
+        // Something for the indirect call and the perform to reach. Both
+        // want a state or environment first and one argument after, which
+        // is the same shape, so one body serves both.
+        let mut answering =
+            Function::new("answering", vec![Ty::Aggregate(shape), Ty::Int], Ty::Int);
+        answering.body = Block::of(Expr::Int(0));
+        let note = program.add_function(answering);
+
+        // One name per shape, so a missing arm loses exactly one import and
+        // the count says how many were lost.
+        let buried = vec![
+            Expr::Unary {
+                op: UnaryOp::Negate,
+                operand: Box::new(host("a")),
+            },
+            Expr::Binary {
+                op: BinaryOp::AddInt,
+                left: Box::new(host("b")),
+                right: Box::new(host("c")),
+            },
+            Expr::List {
+                element: Box::new(Ty::Int),
+                items: vec![host("d")],
+            },
+            Expr::CallIndirect {
+                callee: Box::new(host("e")),
+                args: vec![host("f")],
+                ret: Box::new(Ty::Int),
+            },
+            Expr::Field {
+                value: Box::new(Expr::Make {
+                    layout: shape,
+                    variant: 0,
+                    fields: vec![host("g")],
+                }),
+                layout: shape,
+                variant: 0,
+                field: 0,
+            },
+            Expr::Discriminant {
+                value: Box::new(Expr::Make {
+                    layout: shape,
+                    variant: 0,
+                    fields: vec![host("h")],
+                }),
+                layout: shape,
+            },
+            Expr::If {
+                condition: Box::new(Expr::Bool(true)),
+                then: Box::new(Block::of(host("i"))),
+                otherwise: Box::new(Block::of(host("j"))),
+                ty: Box::new(Ty::Int),
+            },
+            Expr::Block(Box::new(Block {
+                stmts: vec![Stmt::Discard(host("k"))],
+                value: host("l"),
+            })),
+            Expr::ElementAt {
+                list: Box::new(Expr::List {
+                    element: Box::new(Ty::Int),
+                    items: vec![host("m")],
+                }),
+                index: Box::new(host("n")),
+                element: Box::new(Ty::Int),
+            },
+            Expr::Runtime {
+                name: deed_mir::runtime::LIST_LEN,
+                args: vec![host("o")],
+                ret: Box::new(Ty::Int),
+            },
+            Expr::Perform {
+                effect,
+                operation: 0,
+                args: vec![host("p")],
+                ret: Box::new(Ty::Int),
+            },
+            Expr::Install {
+                effect,
+                state: Box::new(Expr::Make {
+                    layout: shape,
+                    variant: 0,
+                    fields: vec![host("q")],
+                }),
+                operations: vec![note],
+                body: Box::new(Block::of(host("r"))),
+                ty: Box::new(Ty::Int),
+            },
+            Expr::Host {
+                name: "io.s".to_string(),
+                args: vec![host("t")],
+                ret: Box::new(Ty::Int),
+            },
+        ];
+
+        let mut function = Function::new("everywhere", vec![Ty::Capability], Ty::Unit);
+        function.body = Block {
+            stmts: buried
+                .into_iter()
+                .map(Stmt::Discard)
+                // And the statements that hold expressions of their own.
+                .chain([
+                    Stmt::Assign {
+                        local: Local(0),
+                        value: host("u"),
+                    },
+                    Stmt::While {
+                        condition: Expr::Bool(false),
+                        body: vec![Stmt::Discard(host("v"))],
+                    },
+                    Stmt::SetField {
+                        object: Expr::Make {
+                            layout: shape,
+                            variant: 0,
+                            fields: vec![host("w")],
+                        },
+                        layout: shape,
+                        variant: 0,
+                        field: 0,
+                        value: host("x"),
+                    },
+                ])
+                .collect(),
+            value: Expr::Unit,
+        };
+        program.add_function(function);
+
+        let module = compile(&program).expect("this compiles");
+        let mut asked: Vec<String> = module
+            .imports
+            .iter()
+            .map(|import| import.name.clone())
+            .collect();
+        asked.sort();
+
+        // One letter per place a host call was buried, in order, so a shape
+        // the walk misses says which one by the letter that went missing.
+        let wanted: Vec<String> = (b'a'..=b'x')
+            .map(|letter| (letter as char).to_string())
+            .collect();
+        assert_eq!(
+            asked, wanted,
+            "a shape the walk misses is a program asking for something the module \
+             never declared"
+        );
+    }
+
+    /// Every literal a host call can be handed, since the import's signature
+    /// is built from what the arguments are.
+    #[test]
+    fn a_host_call_takes_its_arguments_at_the_width_they_are() {
+        let mut function = Function::new("hand", vec![], Ty::Unit);
+        function.body = Block::of(Expr::Host {
+            name: "io.everything".to_string(),
+            args: vec![
+                Expr::Unit,
+                Expr::Bool(true),
+                Expr::Int(1),
+                Expr::Str("s".to_string()),
+            ],
+            ret: Box::new(Ty::Unit),
+        });
+        let mut program = Program::new();
+        program.add_function(function);
+
+        let module = compile(&program).expect("this compiles");
+        let signature = &module.types[module.imports[0].type_index as usize];
+        // Unit has no representation and is not passed. The rest are, and a
+        // boolean is narrower than the others.
+        assert_eq!(
+            signature.params,
+            vec![ValType::I32, ValType::I64, ValType::I64]
+        );
+    }
+
     /// A literal is placed once however many times it is written, and the
     /// bump pointer starts past everything placed.
     #[test]
