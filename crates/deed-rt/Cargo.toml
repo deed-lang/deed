@@ -1,0 +1,13 @@
+[package]
+name = "deed-rt"
+description = "Runtime support code that native-compiled Deed programs call into"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

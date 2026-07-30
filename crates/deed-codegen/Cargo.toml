@@ -1,0 +1,14 @@
+[package]
+name = "deed-codegen"
+description = "Compiles deed-mir to a runnable form (JIT, WASM, or native object code)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deed-mir = { path = "../deed-mir" }
+
+[lints]
+workspace = true
