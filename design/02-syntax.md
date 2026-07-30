@@ -1422,9 +1422,11 @@ using an effect to get around not having a loop.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
   Answered for now: no, and what settled it is a count rather than a preference. The question
   had been asked twice about the constructor, and the constructor is not what holds either of
-  them in. `Ty::Result` and `Ty::List` are named in one crate, the type checker, and in three
-  files of it. What names `Result`'s two variants is `?` and the outcome an `ensures` clause
-  is keyed by, and those are in eight of the fifteen crates: the syntax tree, the parser, the
+  them in. `Ty::Result` and `Ty::List` are named in three crates: the type checker, and the
+  two the backend added, since a list has to be laid out in memory and compiled into
+  instructions as well as checked. What names `Result`'s two variants is `?` and the outcome
+  an `ensures` clause is keyed by, and those are in eight of the fifteen crates: the syntax
+  tree, the parser, the
   resolver, the type checker, the effect checker, the interpreter, the formatter and the
   driver. Declaring `Result` in a prelude module moves the first set and leaves every one of
   the second in place, with a lookup through a module added in front of a type the syntax

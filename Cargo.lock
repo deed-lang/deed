@@ -37,11 +37,13 @@ name = "deed-driver"
 version = "0.1.0"
 dependencies = [
  "deed-ast",
+ "deed-codegen",
  "deed-diagnostics",
  "deed-effects",
  "deed-fmt",
  "deed-interp",
  "deed-lexer",
+ "deed-mir",
  "deed-parser",
  "deed-resolve",
  "deed-typeck",
@@ -104,6 +106,12 @@ dependencies = [
 [[package]]
 name = "deed-mir"
 version = "0.1.0"
+dependencies = [
+ "deed-ast",
+ "deed-diagnostics",
+ "deed-resolve",
+ "deed-typeck",
+]
 
 [[package]]
 name = "deed-parser"

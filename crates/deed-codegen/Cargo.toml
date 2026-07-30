@@ -1,6 +1,6 @@
 [package]
 name = "deed-codegen"
-description = "Compiles deed-mir to a runnable form (JIT, WASM, or native object code)"
+description = "Compiles deed-mir to WebAssembly, and runs the result"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
