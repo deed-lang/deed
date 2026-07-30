@@ -1439,3 +1439,75 @@ fn fix_count_is_on_stdout() {
     assert!(stdout(&output).contains("1 fix"), "{}", stdout(&output));
     assert_eq!(stderr(&output), "");
 }
+
+/// `deed build` writes a WebAssembly module beside the file it was given.
+///
+/// The bytes are checked rather than only the exit code: a compiler whose
+/// output nobody looks at is a compiler that can start writing anything.
+#[test]
+fn build_writes_a_module_next_to_the_source() {
+    let scratch = Scratch::new("build");
+    let source = scratch.write(
+        "small.deed",
+        "module small\n\nfn double(n: Int) -> Int { n + n }\n\nfn answer() -> Int { double(21) }\n",
+    );
+
+    let output = run(&["build", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let target = scratch.path().join("small.wasm");
+    assert!(target.is_file(), "{}", stdout(&output));
+
+    let bytes = std::fs::read(&target).unwrap();
+    assert_eq!(&bytes[..4], b"\0asm", "the magic number");
+    assert_eq!(&bytes[4..8], &1u32.to_le_bytes(), "the version");
+}
+
+/// What the backend cannot compile it names, and answers with a failure
+/// rather than writing a module that would be wrong.
+#[test]
+fn build_says_what_it_could_not_compile() {
+    let scratch = Scratch::new("build-refused");
+    let source = scratch.write(
+        "hard.deed",
+        "module hard\n\nfn greet(name: String) -> String { \"hi \" + name }\n",
+    );
+
+    let output = run(&["build", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("two strings"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(!scratch.path().join("hard.wasm").exists());
+}
+
+/// One file that compiles and one that does not, handed over together.
+///
+/// The half this pins is that a refusal does not take the build down with
+/// it: what could be compiled is written, what could not is named, and the
+/// answer is still a failure because something was asked for and not
+/// delivered.
+#[test]
+fn build_writes_what_it_can_and_names_what_it_cannot() {
+    let scratch = Scratch::new("build-mixed");
+    scratch.write("fine.deed", "module fine\n\nfn answer() -> Int { 1 }\n");
+    scratch.write(
+        "hard.deed",
+        "module hard\n\nfn greet(name: String) -> String { \"hi \" + name }\n",
+    );
+
+    let output = run(&["build", scratch.path().to_str().unwrap()]);
+    assert!(
+        scratch.path().join("fine.wasm").is_file(),
+        "{}",
+        stdout(&output)
+    );
+    assert!(!scratch.path().join("hard.wasm").exists());
+    assert!(
+        stdout(&output).contains("two strings"),
+        "{}",
+        stdout(&output)
+    );
+}
