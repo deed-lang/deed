@@ -332,12 +332,24 @@ The list is longer than I would like, and this is the least settled document her
   that killed explicit dependency passing before, and "just use a container" won that
   argument for a reason. Implicit parameters would fix the plumbing and would put a hole
   straight through P1.
+  Measured: the deepest capability chain in the corpus is two hops (`main` takes `System`,
+  hands `Dir` or `Clock` straight to one helper); nothing here nests three or more levels
+  deep. The ergonomics argument has nothing to point at yet.
 - **Interop.** The moment Deed calls C or WASM, ambient authority comes back with it. A
   foreign function can do whatever the host process can. This is currently unsolved and it
   is the most likely place the whole model leaks.
+  Design note, no FFI exists yet to decide against: a capability-respecting boundary would
+  have to keep the same invariant a Deed-to-Deed call already gets, that receiving no
+  capability argument means no authority, so a foreign signature would need to declare which
+  capabilities cross with it and the boundary would refuse a call that isn't given one
+  explicitly. This is the bar an FFI proposal has to clear, not a decision made here.
 - **Serialization.** A capability must not be forgeable, so it cannot be a plain value that
   round-trips through a byte stream. What that means for sending work between machines is
   not worked out.
+  Looked at again: a byte stream cannot carry unforgeability across a network, so the honest
+  version of this is the receiving machine minting its own new capability after checking a
+  request, which is an authorization protocol layered on top rather than a serialization
+  format. Nothing here needs that yet, since there is no networking story. Left open.
 - **Time and memory are also resources.** Nothing here bounds them. A function with an empty
   row can still allocate forever.
 - **The clock is a lie, and now it says which one.** `Io.now` counts calls rather than
