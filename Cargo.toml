@@ -35,3 +35,17 @@ all = "warn"
 [profile.mutants]
 inherits = "test"
 debug = "none"
+
+# For `deed-wasm`'s release artifact (#592). A page waits on this download
+# before it can do anything, so it is tuned for size rather than speed: `z`
+# over `3`, one codegen unit over parallelism, symbols and the panic
+# unwinder both cut. None of this touches `deed`'s own release profile,
+# which stays tuned for the opposite trade.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
