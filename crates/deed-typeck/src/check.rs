@@ -904,7 +904,7 @@ impl<'a> Checker<'a> {
                     ));
                     Tier::Guarded
                 }
-                Truth::Unknown => Tier::Guarded,
+                Truth::Unknown(_) => Tier::Guarded,
             };
 
             self.types.push_precondition(Precondition {
@@ -943,7 +943,8 @@ impl<'a> Checker<'a> {
                     length: Some(imported_name(ClauseName::Length)),
                     call: &|_| Promise::any(),
                 };
-                facts::holds(clause, facts, &env)
+                let outcome = facts::holds(clause, facts, &env);
+                facts::thinned_by_boundary(clause, &env, outcome)
             }
         }
     }
@@ -1865,7 +1866,7 @@ impl<'a> Checker<'a> {
     /// the number inside the `ok` of a call that can fail.
     fn proves(&self, predicate: &Expr, subject: Option<facts::Subject>) -> Truth {
         let Some(subject) = subject else {
-            return Truth::Unknown;
+            return Truth::Unknown(facts::Reason::NothingNamesThisValue);
         };
         let with_subject = self.facts.with_subject(subject);
         let (def_of, call) = self.env();
@@ -1929,7 +1930,10 @@ impl<'a> Checker<'a> {
 
         let outcome = match predicate {
             Some(predicate) => self.proves(predicate, subject),
-            None => Truth::Unknown,
+            // Not a value nothing narrowed: there is no predicate at all to
+            // check it against, which is not a shape this checker reasons
+            // about any more than a condition it does not recognise is.
+            None => Truth::Unknown(facts::Reason::NotAShapeTheCheckerReasonsAbout),
         };
 
         let name = self.types.name_of(refinement).to_string();
