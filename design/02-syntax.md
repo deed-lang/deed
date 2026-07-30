@@ -1361,6 +1361,10 @@ using an effect to get around not having a loop.
 - Property tests only cover pure functions. Running an effectful one needs a handler, and
   inventing a handler means inventing the behaviour the property would then check against
   itself. A module declaring exactly one handler per effect might be a defensible default.
+  Measured: every handler in the corpus already is exactly one per effect per file (`Counted`
+  for `Log`, `Collect`/`Discard` for `Sink` in separate tests, `InMemory`/`Frozen` for
+  `Counter` the same way), so the default costs nothing new to write down. Nobody has written
+  the property runner that would use it, which is the part still open.
 - Refinements have no conversion form, and it turned out they do not need one to be usable.
   `try_positive(n)` returning a `Result` is the thing `Positive.try(n)` would have been, it is
   ordinary code, and the `ok` is Proven because the guard above it says what the predicate
@@ -1374,8 +1378,15 @@ using an effect to get around not having a loop.
   are told apart at the point somebody is deciding which one they have.
 - Banning shadowing outright may turn out to be more annoying than it is worth. It is easy
   to relax later and hard to tighten, which is the only reason it starts strict.
+  Measured: nothing in `examples/` or `std/` asks for it. Every rebinding in the corpus picks
+  a new name on purpose (`total`/`after`, `seen`/`found`), and none of it reads like a
+  workaround for the rule. Still nothing forcing a change.
 - Capitalisation carrying meaning in patterns is a wart, even though it earns its place.
   Explicit variant syntax would avoid it and would cost more to write everywhere else.
+  Sketched and set aside: a distinct constructor form would need its own spelling for every
+  variant that carries fields, on top of the record-literal one already used everywhere else
+  in the language, which is a second way to build the same value. That is the kind of
+  duplication P4 refuses elsewhere, so the wart stays.
 - The `with` handler list is disambiguated by a lookahead hack: a brace opens a struct
   literal when followed by `name:`, which is what separates `with H { a: 1 }, Other` from the
   block that follows the handler list, or when it is `{ }` with a block behind it, which is
@@ -1384,11 +1395,19 @@ using an effect to get around not having a loop.
   as an empty record: a literal with no fields has no name to look at. It works for
   everything written so far and it is still not a rule anyone should have to know. Better
   ideas welcome.
+  Looked again: the two cases already cover every record literal in the corpus, name-then-
+  colon or empty-braces-then-block, and nothing exercises a literal that opens with anything
+  else. No smaller rule has been found, only the same one restated; worth revisiting the day
+  something needs a third case.
 - Whether a line break ending an expression should be relaxed inside brackets. It is uniform
   today, which is the version nobody has to remember, and it costs an expression that wants
   to run over several lines a pair of parentheses it would not otherwise need. Nothing
   written so far wants that, and the moment something does the answer is probably to let a
   line break inside an unclosed bracket keep going rather than to special case operators.
+  Measured: no expression in `examples/` or `std/` runs long enough to want it. The shapes
+  that do span several lines, call argument lists and record literals, already get their own
+  breaks from canonical formatting; nothing observed asks for one inside an operator
+  expression specifically.
 - Whether a `for` should be able to stop early. It can: `while` is read before each turn with
   the accumulator in scope, and it is a fold rather than a loop with control flow in it. What
   is left of the question is the shape nobody has needed yet, which is a walk that wants to
@@ -1425,6 +1444,12 @@ using an effect to get around not having a loop.
   something for `for` to walk that is not spelled `List`. Both are larger questions than
   moving a type, and with either answered the move stops being the work and starts being
   what falls out of it.
+
+  Looked again, nothing smaller found: a "which variant means stop" rule has to work for any
+  two-variant choice somebody declares, not only the ones spelled like `Result`, and no such
+  rule has turned up that does not already assume the naming it is supposed to generalise
+  away from. A second walkable built-in is, by construction, a second `List`. Both replacements
+  are the size of the thing they would replace. Still open.
 - An index into a list has nowhere to say it is in range, and most of that is now fixed. A
   length is a term the prover can hold, so `index < length(items)` is a relation like any
   other, and a `where` clause saying it is read at the call site, so a caller that checked the
@@ -1434,11 +1459,17 @@ using an effect to get around not having a loop.
   cannot happen. A total indexing form is a precondition on a prelude function, which is a
   thing the language can now express, and whether the prelude should carry one is the
   question.
+  Looked again: `at` is implemented in Rust rather than declared in Deed, so giving it a
+  precondition means building a `Requires` with no Deed source behind it for the checker to
+  attach, which is a gap in how `Signature` is built rather than a design question. That is
+  more mechanism than a single pass here, so it stays open rather than half-done.
 - Position is not something a callback can be handed by a library that does not already have
   it. A `for` says where it is now, so `std/list` can write `map_at`, `filter_at` and
   `fold_at` and anything else it wants out of that. What is still unanswered is whether an
   indexed form of every walk belongs in that library at all, since one of each doubles it and
   so far only those three have been wanted.
+  Measured: `std/list` ships exactly those three, and nothing in `examples/` or `std/` calls
+  for a fourth (`any_at`, `all_at`, `find_at`). Leaving it at three until something asks.
 - Whether there should be traits at all. Answered for now: no, and this is the reasoning
   rather than a shrug. The question was measured against the code instead of argued, and the
   motivation people expect to find here was absorbed years ago by three decisions made for
