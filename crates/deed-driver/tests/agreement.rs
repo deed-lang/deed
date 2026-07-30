@@ -142,6 +142,58 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 0,
         },
+        Agreed {
+            name: "a match on a choice",
+            source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
+            call: "answer",
+            expect: 10,
+        },
+        // A variant with fields, bound by the arm that names it.
+        Agreed {
+            name: "a match that binds a field",
+            source: "module a\n\nchoice Shape {\n    Dot,\n    Box { side: Int },\n}\n\nfn area(shape: Shape) -> Int {\n    match shape {\n        Dot => 0,\n        Box { side } => side * side,\n    }\n}\n\nfn answer() -> Int { area(Box { side: 7 }) }\n\ntest \"an arm reads the field it binds\" {\n    assert area(Dot) == 0\n    assert answer() == 49\n}\n",
+            call: "answer",
+            expect: 49,
+        },
+        // Alternatives bind nothing, which is what makes them cheap.
+        Agreed {
+            name: "a match arm naming several variants",
+            source: "module a\n\nchoice Step {\n    Up,\n    Down,\n    Stay,\n}\n\nfn moves(step: Step) -> Int {\n    match step {\n        Up | Down => 1,\n        Stay => 0,\n    }\n}\n\nfn answer() -> Int { moves(Up) + moves(Down) + moves(Stay) }\n\ntest \"two variants share one arm\" {\n    assert answer() == 2\n}\n",
+            call: "answer",
+            expect: 2,
+        },
+        Agreed {
+            name: "a walk that adds up",
+            source: "module a\n\nfn answer() -> Int {\n    for n in [1, 2, 3, 4] with sum = 0 {\n        sum + n\n    }\n}\n\ntest \"a fold reaches the end\" {\n    assert answer() == 10\n}\n",
+            call: "answer",
+            expect: 10,
+        },
+        Agreed {
+            name: "a walk over nothing",
+            source: "module a\n\nfn answer() -> Int {\n    for n in [] with sum = 7 {\n        sum + n\n    }\n}\n\ntest \"an empty walk answers with what it started from\" {\n    assert answer() == 7\n}\n",
+            call: "answer",
+            expect: 7,
+        },
+        Agreed {
+            name: "a walk that says where it is",
+            source: "module a\n\nfn answer() -> Int {\n    for n at i in [10, 20, 30] with sum = 0 {\n        sum + i\n    }\n}\n\ntest \"the index counts from zero\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        // `while` is read before each turn with the accumulator in scope, so
+        // this stops after the third element rather than walking all six.
+        Agreed {
+            name: "a walk that stops early",
+            source: "module a\n\nfn answer() -> Int {\n    for n in [1, 2, 3, 4, 5, 6] with sum = 0 while sum < 6 {\n        sum + n\n    }\n}\n\ntest \"a walk can stop before the end\" {\n    assert answer() == 6\n}\n",
+            call: "answer",
+            expect: 6,
+        },
+        Agreed {
+            name: "a walk over a list of records",
+            source: "module a\n\nrecord Item {\n    weight: Int,\n}\n\nfn answer() -> Int {\n    for item in [Item { weight: 3 }, Item { weight: 4 }] with sum = 0 {\n        sum + item.weight\n    }\n}\n\ntest \"a walk reads a field of each element\" {\n    assert answer() == 7\n}\n",
+            call: "answer",
+            expect: 7,
+        },
     ]
 }
 

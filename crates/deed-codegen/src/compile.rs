@@ -258,6 +258,28 @@ impl<'a> Builder<'a> {
                 // `deed build` has no host to print to yet.
                 self.instructions.push(Ins::Unreachable);
             }
+            Stmt::While { condition, body } => {
+                // A block to jump out of and a loop to jump back to, which is
+                // how WebAssembly spells a walk: the condition is read at the
+                // top and its inverse leaves.
+                let saved = std::mem::take(&mut self.instructions);
+                self.expr(condition)?;
+                self.instructions.push(Ins::I32Eqz);
+                self.instructions.push(Ins::BrIf(1));
+                for stmt in body {
+                    self.stmt(stmt)?;
+                }
+                self.instructions.push(Ins::Br(0));
+                let inner = std::mem::replace(&mut self.instructions, saved);
+
+                self.instructions.push(Ins::Block {
+                    result: None,
+                    body: vec![Ins::Loop {
+                        result: None,
+                        body: inner,
+                    }],
+                });
+            }
         }
         Ok(())
     }
@@ -450,6 +472,26 @@ impl<'a> Builder<'a> {
                     other => return Err(self.fail(&format!("the runtime function `{other}`"))),
                 }
             }
+            Expr::ElementAt {
+                list,
+                index,
+                element,
+            } => {
+                // address = list + (index + 1) * word, since the length sits
+                // where the zeroth element would.
+                self.expr(list)?;
+                self.expr(index)?;
+                self.instructions.push(Ins::I64Const(1));
+                self.instructions.push(Ins::I64Add);
+                self.instructions.push(Ins::I64Const(layout::WORD as i64));
+                self.instructions.push(Ins::I64Mul);
+                self.instructions.push(Ins::I64Add);
+                self.instructions.push(Ins::I32WrapI64);
+                self.instructions.push(Ins::I64Load(0));
+                if matches!(val_type(element), Some(ValType::I32)) {
+                    self.instructions.push(Ins::I32WrapI64);
+                }
+            }
         }
         Ok(())
     }
@@ -530,6 +572,7 @@ impl<'a> Builder<'a> {
             Expr::If { ty, .. } => (**ty).clone(),
             Expr::Block(block) => self.ty_of(&block.value)?,
             Expr::Runtime { ret, .. } => (**ret).clone(),
+            Expr::ElementAt { element, .. } => (**element).clone(),
         })
     }
 

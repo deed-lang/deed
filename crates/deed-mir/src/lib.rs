@@ -199,6 +199,14 @@ pub enum Stmt {
     /// one emits nothing at all, which is the whole of what the tier buys at
     /// runtime.
     Fail { message: String },
+    /// Run the body while the condition holds, checking it first.
+    ///
+    /// A `for` in Deed is a fold over a list rather than a loop, and this is
+    /// what it becomes: a counter, a bound, and a body that rebinds the
+    /// accumulator. The language has no `while` statement and this is not
+    /// one; nothing lowers to it except a walk whose turns a list already
+    /// bounds.
+    While { condition: Expr, body: Vec<Stmt> },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -272,6 +280,17 @@ pub enum Expr {
         name: &'static str,
         args: Vec<Expr>,
         ret: Box<Ty>,
+    },
+    /// One element of a list, by position, with nothing checking the bound.
+    ///
+    /// Total on purpose, and only produced where the bound is already known:
+    /// a walk generates its own index from the list's own length. The
+    /// prelude's `at`, which anybody can call with anything, is a different
+    /// thing and still hands back a `Result`.
+    ElementAt {
+        list: Box<Expr>,
+        index: Box<Expr>,
+        element: Box<Ty>,
     },
 }
 
