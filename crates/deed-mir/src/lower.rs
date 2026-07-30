@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use deed_ast::{self as ast, Item, Module};
 use deed_diagnostics::Span;
 use deed_resolve::{DefId, Resolutions};
+use deed_typeck::Tier;
 use deed_typeck::Types;
 use deed_typeck::ty::Ty as CheckedTy;
 
@@ -55,6 +56,17 @@ pub fn lower(
     // Two passes, and for the same reason as functions below: a record may
     // hold one declared under it.
     let mut layouts: HashMap<String, crate::LayoutId> = HashMap::new();
+
+    // An alias is a name for something else, and a refinement is a claim
+    // about a value rather than a shape it has, so both come out as whatever
+    // they are written over. Nothing downstream needs to know either existed.
+    let mut aliases: HashMap<String, &ast::Type> = HashMap::new();
+    for item in &module.items {
+        if let Item::TypeAlias(alias) = item {
+            aliases.insert(alias.name.name.to_string(), &alias.ty);
+        }
+    }
+
     for item in &module.items {
         let name = match item {
             Item::Record(record) => record.name.name.to_string(),
@@ -80,7 +92,7 @@ pub fn lower(
                         .map(|field| {
                             Ok(crate::Field {
                                 name: field.name.name.to_string(),
-                                ty: written(&field.ty, &layouts)?,
+                                ty: written(&field.ty, &layouts, &aliases)?,
                             })
                         })
                         .collect::<Result<Vec<_>, Unlowered>>()?,
@@ -103,7 +115,7 @@ pub fn lower(
                                         .map(|field| {
                                             Ok(crate::Field {
                                                 name: field.name.name.to_string(),
-                                                ty: written(&field.ty, &layouts)?,
+                                                ty: written(&field.ty, &layouts, &aliases)?,
                                             })
                                         })
                                         .collect::<Result<Vec<_>, Unlowered>>()
@@ -125,6 +137,15 @@ pub fn lower(
         }
     }
 
+    // What each alias comes out as, worked out once now that the layouts it
+    // may name are all built.
+    let mut alias_types: HashMap<String, Ty> = HashMap::new();
+    for (name, ty) in &aliases {
+        if let Ok(lowered) = written(ty, &layouts, &aliases) {
+            alias_types.insert(name.clone(), lowered);
+        }
+    }
+
     // Two passes over functions: every signature first, so a body can call
     // anything the module declares regardless of where it sits in the file.
     // One pass would make calling forward an error, which is a rule this
@@ -137,13 +158,13 @@ pub fn lower(
             .params
             .iter()
             .map(|param| match &param.ty {
-                Some(ty) => written(ty, &layouts),
+                Some(ty) => written(ty, &layouts, &aliases),
                 None => Err(unlowered("a parameter with no type", param.span)),
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match &declaration.sig.ret {
             None => Ty::Unit,
-            Some(ty) => written(ty, &layouts)?,
+            Some(ty) => written(ty, &layouts, &aliases)?,
         };
         let id = program.add_function(Function::new(name, params, ret));
         if let Some(def) = resolutions.resolution(declaration.sig.name.span) {
@@ -158,6 +179,7 @@ pub fn lower(
             types,
             by_def: &by_def,
             layouts: &layouts,
+            alias_types: &alias_types,
             program: &program,
             function: program.functions[index].clone(),
             slots: HashMap::new(),
@@ -170,8 +192,12 @@ pub fn lower(
         }
 
         let body = lowering.block(&declaration.body)?;
+        let contract = lowering.contract(declaration)?;
         let mut function = lowering.function;
-        function.body = body;
+        function.body = Block {
+            stmts: contract.into_iter().chain(body.stmts).collect(),
+            value: body.value,
+        };
         program.functions[id.0] = function;
     }
 
@@ -185,7 +211,11 @@ pub fn lower(
 /// rather than worked out, and reading it here asks the checker for nothing.
 /// It also already passed the checker, so a name that is not one of these is
 /// a type this backend has not got to rather than a mistake.
-fn written(ty: &ast::Type, layouts: &HashMap<String, crate::LayoutId>) -> Result<Ty, Unlowered> {
+fn written(
+    ty: &ast::Type,
+    layouts: &HashMap<String, crate::LayoutId>,
+    aliases: &HashMap<String, &ast::Type>,
+) -> Result<Ty, Unlowered> {
     Ok(match ty {
         ast::Type::Unit(_) => Ty::Unit,
         ast::Type::Fn { .. } => Ty::Closure,
@@ -194,10 +224,13 @@ fn written(ty: &ast::Type, layouts: &HashMap<String, crate::LayoutId>) -> Result
             ("Int", 0) => Ty::Int,
             ("Bool", 0) => Ty::Bool,
             ("String", 0) => Ty::Str,
-            ("List", 1) => Ty::List(Box::new(written(&args[0], layouts)?)),
+            ("List", 1) => Ty::List(Box::new(written(&args[0], layouts, aliases)?)),
             (other, 0) => match layouts.get(other) {
                 Some(id) => Ty::Aggregate(*id),
-                None => return Err(unlowered(&format!("the type `{other}`"), *span)),
+                None => match aliases.get(other) {
+                    Some(names) => written(names, layouts, aliases)?,
+                    None => return Err(unlowered(&format!("the type `{other}`"), *span)),
+                },
             },
             (other, _) => {
                 return Err(unlowered(&format!("the generic type `{other}`"), *span));
@@ -229,6 +262,7 @@ struct Lowering<'a> {
     types: &'a Types,
     by_def: &'a HashMap<DefId, crate::FuncId>,
     layouts: &'a HashMap<String, crate::LayoutId>,
+    alias_types: &'a HashMap<String, Ty>,
     program: &'a Program,
     function: Function,
     /// Where each bound name lives.
@@ -239,6 +273,66 @@ struct Lowering<'a> {
 type Arm<'p> = (Vec<usize>, Vec<(usize, &'p ast::Ident)>);
 
 impl Lowering<'_> {
+    /// The checks a function's contract asks for on the way in.
+    ///
+    /// A `where` clause is answered where the call is written, and the
+    /// checker already recorded how much each call site settled. A callee
+    /// every caller proved cannot be reached with something its clause
+    /// refuses, so it needs no check at all. One with a caller the checker
+    /// could not follow keeps it.
+    ///
+    /// This is the one place a tier is worth something at runtime rather
+    /// than in a report, and it is worth saying plainly: a precondition
+    /// every caller proved costs no instructions.
+    ///
+    /// Per callee rather than per call site, which checks more than strictly
+    /// needed and never less. Doing it per call site means translating the
+    /// clause into the caller's names, which is a real piece of work the
+    /// checker already does once and is not worth doing twice for what it
+    /// would save.
+    ///
+    /// The interpreter checks every one of them, proven or not, because it
+    /// has no compile step to spend the proof in. That difference cannot
+    /// change an answer: a clause the checker proved is one no run can
+    /// break, so the check that is skipped is one that would have passed.
+    fn contract(&mut self, declaration: &ast::FnDecl) -> Result<Vec<Stmt>, Unlowered> {
+        let name = declaration.sig.name.name.as_str();
+        if self.every_caller_proved(name) {
+            return Ok(Vec::new());
+        }
+
+        let mut checks = Vec::new();
+        for clause in &declaration.contract.requires {
+            let condition = self.expr(clause)?;
+            checks.push(Stmt::Discard(Expr::If {
+                condition: Box::new(condition),
+                then: Box::new(Block::of(Expr::Unit)),
+                otherwise: Box::new(Block {
+                    stmts: vec![Stmt::Fail {
+                        message: format!(
+                            "`{name}` was called with something its `where` clause refuses"
+                        ),
+                    }],
+                    value: Expr::Unit,
+                }),
+                ty: Box::new(Ty::Unit),
+            }));
+        }
+        Ok(checks)
+    }
+
+    /// Whether every call to this function settled its preconditions.
+    ///
+    /// A function nothing calls answers yes, which is right: a clause that
+    /// no call can break is a clause with nothing to check.
+    fn every_caller_proved(&self, callee: &str) -> bool {
+        self.types
+            .preconditions()
+            .iter()
+            .filter(|precondition| precondition.callee == callee)
+            .all(|precondition| precondition.tier == Tier::Proven)
+    }
+
     /// The MIR type of whatever the checker recorded at this span.
     ///
     /// A refinement is a claim about a value that the checker either proved
@@ -265,9 +359,13 @@ impl Lowering<'_> {
                 let name = &self.resolutions.def(*def).name;
                 match self.layouts.get(name.as_str()) {
                     Some(id) => Ty::Aggregate(*id),
-                    // A refinement is declared like a type and is not one
-                    // here: its base is what a backend lays out.
-                    None => return Err(unlowered(&format!("the type `{name}`"), span)),
+                    // An alias is a name for something else, and a
+                    // refinement is a claim about a value rather than a shape
+                    // it has. Both come out as what they are written over.
+                    None => match self.alias_types.get(name.as_str()) {
+                        Some(ty) => ty.clone(),
+                        None => return Err(unlowered(&format!("the type `{name}`"), span)),
+                    },
                 }
             }
             other => lower_ty(other, span)?,
