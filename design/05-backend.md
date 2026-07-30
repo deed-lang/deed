@@ -118,7 +118,6 @@ when that stops being acceptable applies here with a number attached: a `with` i
 allocates once per turn.
 
 ## A capability is a handle, and everything it reaches is an import
-
 A WebAssembly module cannot open a file, write a line or read a clock. It says what it wants
 from its host and the host decides. That reads like a limitation and is the opposite of one:
 it is the same shape `design/04-capabilities.md` already gives a `Dir`, and getting it from
@@ -154,6 +153,27 @@ module on its way to a real embedder.
 **What would change this:** a WASI target. `deed:io.read` and `wasi:filesystem` want the same
 things, and a program compiled against the names here would need a shim. That is a mapping
 rather than a redesign, and it is worth writing when somebody has a host to run it on.
+
+## Monomorphization is affordable, and here is the number
+
+A generic function is lowered once per set of type arguments it is called with. The obvious
+worry is that a program leaning on generics compiles into something much larger than it
+looks, and the alternative, a single copy taking everything by pointer, is real: it is what
+the interpreter does and it costs no duplication at all.
+
+Measured rather than argued, in `crates/deed-driver/tests/growth.rs`. Calling one generic
+function forty times at one type produces the same number of functions as calling it once,
+and the module grows by 46 bytes per call site, the same for the fortieth as for the second.
+A second element type costs one more body and nothing else.
+
+So the growth is in distinct type arguments, and a program's distinct type arguments are
+bounded by what it writes down. That is what makes this affordable, and it is why the
+by-pointer version is not worth building: it would trade a bounded duplication for a boxed
+representation on every generic value, and nothing here is asking for that trade.
+
+**What would change this:** a program whose distinct instantiations are not bounded by what
+it writes down. Deed has no type-level recursion that could produce one, so this would
+arrive with a language change rather than with a large program.
 
 ## Native object code is not the next thing, and there is a reason rather than a plan
 
