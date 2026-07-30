@@ -492,6 +492,7 @@ fn the_documents_these_read_are_all_there() {
         "design/02-syntax.md",
         "design/03-effects.md",
         "design/04-capabilities.md",
+        "design/05-backend.md",
         "README.md",
         "editors/README.md",
     ] {
