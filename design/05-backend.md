@@ -227,3 +227,26 @@ result says nothing about what happens when one of those calls executes: a `wasm
 program has no filesystem and no clock underneath it, so `Io.*` needs a host answer, not a
 recompile. That is the shape of #591 (what capabilities a page can hand a program), not a
 finding about `deed-driver` itself.
+
+## Which prelude names the backend compiles, enumerated rather than remembered
+
+Measured for #621, against the compiler's own lists (`deed_resolve::PRELUDE`,
+`deed_resolve::IO_OPERATIONS`) rather than typed by hand:
+`crates/deed-driver/tests/backend_prelude.rs` tries one minimal program per name through
+the real pipeline (check, lower, compile) and pins the result by name.
+
+**All ten `Io` operations compile.** They reach the backend as host imports (#569), and a
+call through one compiles the same way any other direct call does. `deed-codegen/src/compile.rs`'s
+own doc comment used to say capabilities were refused by name; that was true before #569
+and stayed written down after, which is the same mistake this document's other measured
+sections keep finding elsewhere in this repository. Fixed alongside the test.
+
+**Three of the thirteen callable prelude functions compile: `ok`, `err`, `length`.** The
+other ten (`at`, `push`, `repeat`, `split`, `join`, `trim`, `upper`, `lower`, `to_string`,
+`to_int`) do not yet; none of them have a body in `deed-mir`'s lowering to call, the same
+gap `sink.deed`'s closure signature and the three examples early `return` blocks (#620) sit
+in. Type names (`Int`, `String`, `Bool`, `Result`, `List`, `System`, `Console`, `Clock`,
+`Dir`) are left out of this count on purpose: whether a *value* of one of them passes
+through the backend is a different, already-answered question (`generics.rs`, `result.rs`,
+`lists.rs`, `host.rs`), not one a function call can ask.
+
