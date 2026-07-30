@@ -1,0 +1,43 @@
+// design/02-syntax.md's stated falsification test for "no traits": write a
+// program needing a generic sort over a user type, or needing to print a
+// `T`, and see whether it is unwritable rather than merely uglier with a
+// passed function.
+//
+// Both questions get an answer here, and neither needed a trait. `sort`
+// (std/list) takes a comparator instead of a bound on `T` — a caller who
+// wants an order supplies it, the same way `examples/logs.deed` supplies
+// the question a walk asks. `describe` is the language's actual answer to
+// printing a `T`: an ordinary function the caller writes once, which is
+// what a trait's `to_string` would have been minus the trait and minus the
+// coherence question of where that function is allowed to live.
+module examples/ranking
+
+use std/list.{sort, map}
+
+record Runner {
+    name: String,
+    seconds: Int,
+}
+
+fn faster(a: Runner, b: Runner) -> Bool {
+    a.seconds < b.seconds
+}
+
+fn describe(r: Runner) -> String {
+    r.name + " (" + to_string(r.seconds) + "s)"
+}
+
+fn ranked(runners: List<Runner>) -> String {
+    join(map(sort(runners, faster), describe), ", ")
+}
+
+test "sort orders by the comparator, and describe prints every field" {
+    let runners = [
+        Runner { name: "Ana", seconds: 51 },
+        Runner { name: "Bo", seconds: 47 },
+        Runner { name: "Cy", seconds: 49 },
+    ]
+    assert ranked(runners) == "Bo (47s), Cy (49s), Ana (51s)"
+    assert ranked([]) == ""
+    assert ranked([Runner { name: "Solo", seconds: 1 }]) == "Solo (1s)"
+}
