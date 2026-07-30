@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/deed-ast",
     "crates/deed-cli",
+    "crates/deed-codegen",
     "crates/deed-diagnostics",
     "crates/deed-driver",
     "crates/deed-effects",
@@ -10,8 +11,10 @@ members = [
     "crates/deed-interp",
     "crates/deed-lexer",
     "crates/deed-lsp",
+    "crates/deed-mir",
     "crates/deed-parser",
     "crates/deed-resolve",
+    "crates/deed-rt",
     "crates/deed-typeck",
 ]
 

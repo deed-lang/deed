@@ -1,0 +1,13 @@
+[package]
+name = "deed-mir"
+description = "A monomorphized mid-level IR lowered from the checked Deed tree, for the native backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
