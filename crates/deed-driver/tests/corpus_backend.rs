@@ -164,16 +164,33 @@ fn every_refusal_says_what_it_found() {
 /// which file stopped compiling, and a number only says that one did. What
 /// it catches is a change that quietly stops compiling things that used to,
 /// which is the direction a backend regresses in.
+///
+/// #623: the other direction regresses just as quietly, so this checks it
+/// too. Every file the backend compiles today has to be in the list below,
+/// not only every file in the list has to compile: a file that starts
+/// compiling and is not added here passes silently, and six months later
+/// nobody remembers whether that was on purpose. Growing this list is the
+/// last commit of whatever PR made the file compile, not a cleanup
+/// afterwards.
+///
+/// The files not in this list are refused for one of two reasons, both
+/// tracked as their own issue rather than repeated here per file: a prelude
+/// function the backend does not compile yet (#621, everything but `ok`,
+/// `err` and `length`), or early `return` (#620, `counter.deed`,
+/// `transfer.deed` and `proven.deed` specifically). A file refused for a
+/// third reason should say so in `every_refusal_says_what_it_found`'s
+/// output before it is worth chasing further.
 #[test]
 fn the_backend_still_compiles_what_it_used_to() {
     let outcomes = walked();
-    let compiled: Vec<&str> = outcomes
+    let mut compiled: Vec<&str> = outcomes
         .iter()
         .filter(|one| one.refused.is_none())
         .map(|one| one.name.as_str())
         .collect();
+    compiled.sort_unstable();
 
-    for name in [
+    let mut expected = vec![
         "calendar.deed",
         // The capability example: a program that reads a file it was given
         // access to and cannot read one it was not.
@@ -183,10 +200,20 @@ fn the_backend_still_compiles_what_it_used_to() {
         // A program that writes a line, which the module asks its host for.
         "hello.deed",
         "names.deed",
-    ] {
+    ];
+    expected.sort_unstable();
+
+    for name in &expected {
         assert!(
-            compiled.contains(&name),
+            compiled.contains(name),
             "`{name}` used to compile and does not any more; the corpus now compiles {compiled:?}"
         );
     }
+
+    assert_eq!(
+        compiled, expected,
+        "the corpus now compiles a file this list does not name; add it to `expected` \
+         in the same change that made it compile, so the next reader does not have to \
+         rediscover which files the backend handles"
+    );
 }
