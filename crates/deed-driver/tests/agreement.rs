@@ -102,6 +102,46 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 99,
         },
+        Agreed {
+            name: "a record",
+            source: "module a\n\nrecord Pair {\n    left: Int,\n    right: Int,\n}\n\nfn answer() -> Int {\n    let p = Pair { left: 4, right: 2 }\n    p.left * 10 + p.right\n}\n\ntest \"a record holds both fields\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
+        // A field's place is a property of the type, not of the literal, so
+        // writing them out of order still reads back correctly.
+        Agreed {
+            name: "a record written out of order",
+            source: "module a\n\nrecord Pair {\n    left: Int,\n    right: Int,\n}\n\nfn answer() -> Int {\n    let p = Pair { right: 2, left: 4 }\n    p.left * 10 + p.right\n}\n\ntest \"order in the literal does not matter\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
+        // Two addresses live at once, which a shared scratch slot would get
+        // wrong by having the inner build overwrite the outer one.
+        Agreed {
+            name: "a record inside a record",
+            source: "module a\n\nrecord Inner {\n    n: Int,\n}\n\nrecord Outer {\n    held: Inner,\n    beside: Int,\n}\n\nfn answer() -> Int {\n    let o = Outer { held: Inner { n: 40 }, beside: 2 }\n    o.held.n + o.beside\n}\n\ntest \"nesting keeps both apart\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
+        Agreed {
+            name: "a record passed to a function",
+            source: "module a\n\nrecord Pair {\n    left: Int,\n    right: Int,\n}\n\nfn total(p: Pair) -> Int { p.left + p.right }\n\nfn answer() -> Int { total(Pair { left: 40, right: 2 }) }\n\ntest \"a record crosses a call\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
+        Agreed {
+            name: "a list and its length",
+            source: "module a\n\nfn answer() -> Int { length([1, 2, 3]) }\n\ntest \"a list knows how long it is\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        Agreed {
+            name: "an empty list",
+            source: "module a\n\nfn answer() -> Int { length([]) }\n\ntest \"an empty list has no elements\" {\n    assert answer() == 0\n}\n",
+            call: "answer",
+            expect: 0,
+        },
     ]
 }
 
@@ -186,12 +226,12 @@ fn the_agreement_covers_more_than_one_program() {
 /// into something that runs and answers wrongly.
 #[test]
 fn what_the_backend_cannot_compile_is_refused_by_name() {
-    let (_, one) = checked("module a\n\nfn greet() -> String { \"hi\" }\n");
+    let (_, one) = checked("module a\n\nfn greet(name: String) -> String { \"hi \" + name }\n");
     let lowered = deed_mir::lower(&one.module, &one.resolutions, &one.types)
-        .expect("a string lowers, it is compiling it that does not");
-    let refused = compile(&lowered).expect_err("a string is not compiled yet");
+        .expect("joining two strings lowers, compiling it is what does not");
+    let refused = compile(&lowered).expect_err("joining two strings is not compiled yet");
     assert_eq!(refused.function, "greet");
-    assert!(refused.to_string().contains("a string"), "{refused}");
+    assert!(refused.to_string().contains("two strings"), "{refused}");
 }
 
 /// The interpreter stays the reference implementation, so a program the
@@ -200,7 +240,7 @@ fn what_the_backend_cannot_compile_is_refused_by_name() {
 #[test]
 fn a_program_the_backend_refuses_still_runs_under_the_interpreter() {
     let (_, one) = checked(
-        "module a\n\nfn greet() -> String { \"hi\" }\n\ntest \"it greets\" {\n    assert greet() == \"hi\"\n}\n",
+        "module a\n\nfn greet(name: String) -> String { \"hi \" + name }\n\ntest \"it greets\" {\n    assert greet(\"you\") == \"hi you\"\n}\n",
     );
 
     let mut interpreted = Interpreted::new();

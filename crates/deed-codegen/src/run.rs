@@ -43,6 +43,8 @@ pub enum Trap {
     /// `unreachable`, which is what a contract failure compiles to today.
     Unreachable,
     DivideByZero,
+    /// Reached past the end of memory.
+    OutOfBounds,
     /// Ran longer than the budget below allows.
     TooLong,
     /// Something this small runner does not implement, named rather than
@@ -55,6 +57,7 @@ impl std::fmt::Display for Trap {
         match self {
             Trap::Unreachable => write!(f, "the program stopped"),
             Trap::DivideByZero => write!(f, "divided by zero"),
+            Trap::OutOfBounds => write!(f, "reached past the end of memory"),
             Trap::TooLong => write!(f, "ran too long"),
             Trap::Unimplemented(what) => write!(f, "`{what}` is not implemented here"),
         }
@@ -80,13 +83,28 @@ pub fn call(module: &Module, name: &str, args: &[Value]) -> Result<Option<Value>
     let mut run = Run {
         module,
         fuel: BUDGET,
+        memory: memory_of(module),
     };
     run.call(index, args)
+}
+
+/// Linear memory, with whatever the data section placed already in it.
+fn memory_of(module: &Module) -> Vec<u8> {
+    let pages = module.memory_pages.unwrap_or(0) as usize;
+    let mut memory = vec![0u8; pages * 64 * 1024];
+    for (at, bytes) in &module.data {
+        let at = *at as usize;
+        if at + bytes.len() <= memory.len() {
+            memory[at..at + bytes.len()].copy_from_slice(bytes);
+        }
+    }
+    memory
 }
 
 struct Run<'a> {
     module: &'a Module,
     fuel: u64,
+    memory: Vec<u8>,
 }
 
 /// What a block ended with: fell off the end, or jumped out of one.
@@ -203,10 +221,44 @@ impl Run<'_> {
                     let value = pop(stack)?.as_i64();
                     stack.push(Value::I64(value));
                 }
+                Ins::I64Load(offset) => {
+                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
+                    stack.push(Value::I64(self.load(at)?));
+                }
+                Ins::I32Load(offset) => {
+                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
+                    stack.push(Value::I32(self.load(at)? as i32));
+                }
+                Ins::I64Store(offset) => {
+                    let value = pop(stack)?.as_i64();
+                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
+                    self.store(at, value)?;
+                }
+                Ins::I32Store(offset) => {
+                    let value = pop(stack)?.as_i64();
+                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
+                    self.store(at, value)?;
+                }
                 other => self.arithmetic(other, stack)?,
             }
         }
         Ok(Flow::Normal)
+    }
+
+    fn load(&self, at: usize) -> Result<i64, Trap> {
+        let bytes = self
+            .memory
+            .get(at..at + 8)
+            .ok_or(Trap::OutOfBounds)?
+            .try_into()
+            .expect("eight bytes");
+        Ok(i64::from_le_bytes(bytes))
+    }
+
+    fn store(&mut self, at: usize, value: i64) -> Result<(), Trap> {
+        let place = self.memory.get_mut(at..at + 8).ok_or(Trap::OutOfBounds)?;
+        place.copy_from_slice(&value.to_le_bytes());
+        Ok(())
     }
 
     fn arithmetic(&mut self, instruction: &Ins, stack: &mut Vec<Value>) -> Result<(), Trap> {

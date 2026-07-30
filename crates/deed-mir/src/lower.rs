@@ -51,6 +51,73 @@ pub fn lower(
 ) -> Result<Program, Unlowered> {
     let mut program = Program::new();
 
+    // Every record and choice first, so a signature naming one can find it.
+    // Two passes, and for the same reason as functions below: a record may
+    // hold one declared under it.
+    let mut layouts: HashMap<String, crate::LayoutId> = HashMap::new();
+    for item in &module.items {
+        let name = match item {
+            Item::Record(record) => record.name.name.to_string(),
+            Item::Choice(choice) => choice.name.name.to_string(),
+            _ => continue,
+        };
+        let id = program.add_layout(crate::Layout {
+            name: name.clone(),
+            variants: Vec::new(),
+        });
+        layouts.insert(name, id);
+    }
+
+    for item in &module.items {
+        match item {
+            Item::Record(record) => {
+                let id = layouts[record.name.name.as_str()];
+                program.layouts[id.0].variants = vec![crate::Variant {
+                    name: record.name.name.to_string(),
+                    fields: record
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            Ok(crate::Field {
+                                name: field.name.name.to_string(),
+                                ty: written(&field.ty, &layouts)?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, Unlowered>>()?,
+                }];
+            }
+            Item::Choice(choice) => {
+                let id = layouts[choice.name.name.as_str()];
+                program.layouts[id.0].variants = choice
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        Ok(crate::Variant {
+                            name: variant.name.name.to_string(),
+                            fields: variant
+                                .fields
+                                .as_ref()
+                                .map(|fields| {
+                                    fields
+                                        .iter()
+                                        .map(|field| {
+                                            Ok(crate::Field {
+                                                name: field.name.name.to_string(),
+                                                ty: written(&field.ty, &layouts)?,
+                                            })
+                                        })
+                                        .collect::<Result<Vec<_>, Unlowered>>()
+                                })
+                                .transpose()?
+                                .unwrap_or_default(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Unlowered>>()?;
+            }
+            _ => {}
+        }
+    }
+
     let mut order: Vec<&ast::FnDecl> = Vec::new();
     for item in &module.items {
         if let Item::Function(function) = item {
@@ -58,10 +125,10 @@ pub fn lower(
         }
     }
 
-    // Two passes: every signature first, so a body can call anything the
-    // module declares regardless of where it sits in the file. One pass would
-    // make calling forward an error, which is a rule this language does not
-    // have.
+    // Two passes over functions: every signature first, so a body can call
+    // anything the module declares regardless of where it sits in the file.
+    // One pass would make calling forward an error, which is a rule this
+    // language does not have.
     let mut by_def: HashMap<DefId, crate::FuncId> = HashMap::new();
     for declaration in &order {
         let name = declaration.sig.name.name.to_string();
@@ -70,13 +137,13 @@ pub fn lower(
             .params
             .iter()
             .map(|param| match &param.ty {
-                Some(ty) => written(ty),
+                Some(ty) => written(ty, &layouts),
                 None => Err(unlowered("a parameter with no type", param.span)),
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match &declaration.sig.ret {
             None => Ty::Unit,
-            Some(ty) => written(ty)?,
+            Some(ty) => written(ty, &layouts)?,
         };
         let id = program.add_function(Function::new(name, params, ret));
         if let Some(def) = resolutions.resolution(declaration.sig.name.span) {
@@ -90,6 +157,8 @@ pub fn lower(
             resolutions,
             types,
             by_def: &by_def,
+            layouts: &layouts,
+            program: &program,
             function: program.functions[index].clone(),
             slots: HashMap::new(),
         };
@@ -110,21 +179,13 @@ pub fn lower(
     Ok(program)
 }
 
-/// The MIR type of whatever the checker recorded at this span.
-fn lower_ty_at(types: &Types, span: Span) -> Result<Ty, Unlowered> {
-    match types.type_of(span) {
-        Some(ty) => lower_ty(ty, span),
-        None => Err(unlowered("a value the checker recorded no type for", span)),
-    }
-}
-
 /// The MIR type of a type somebody wrote down.
 ///
 /// A signature in this language is complete, so every type in one is written
 /// rather than worked out, and reading it here asks the checker for nothing.
 /// It also already passed the checker, so a name that is not one of these is
 /// a type this backend has not got to rather than a mistake.
-fn written(ty: &ast::Type) -> Result<Ty, Unlowered> {
+fn written(ty: &ast::Type, layouts: &HashMap<String, crate::LayoutId>) -> Result<Ty, Unlowered> {
     Ok(match ty {
         ast::Type::Unit(_) => Ty::Unit,
         ast::Type::Fn { .. } => Ty::Closure,
@@ -133,9 +194,13 @@ fn written(ty: &ast::Type) -> Result<Ty, Unlowered> {
             ("Int", 0) => Ty::Int,
             ("Bool", 0) => Ty::Bool,
             ("String", 0) => Ty::Str,
-            ("List", 1) => Ty::List(Box::new(written(&args[0])?)),
+            ("List", 1) => Ty::List(Box::new(written(&args[0], layouts)?)),
+            (other, 0) => match layouts.get(other) {
+                Some(id) => Ty::Aggregate(*id),
+                None => return Err(unlowered(&format!("the type `{other}`"), *span)),
+            },
             (other, _) => {
-                return Err(unlowered(&format!("the type `{other}`"), *span));
+                return Err(unlowered(&format!("the generic type `{other}`"), *span));
             }
         },
     })
@@ -163,12 +228,49 @@ struct Lowering<'a> {
     resolutions: &'a Resolutions,
     types: &'a Types,
     by_def: &'a HashMap<DefId, crate::FuncId>,
+    layouts: &'a HashMap<String, crate::LayoutId>,
+    program: &'a Program,
     function: Function,
     /// Where each bound name lives.
     slots: HashMap<DefId, Local>,
 }
 
 impl Lowering<'_> {
+    /// The MIR type of whatever the checker recorded at this span.
+    ///
+    /// A refinement is a claim about a value that the checker either proved
+    /// or turned into a runtime check, so what is left to compile is the
+    /// base type. A named type is a layout this pass already built, found by
+    /// the name its definition carries.
+    fn ty_at(&self, span: Span) -> Result<Ty, Unlowered> {
+        let ty = self
+            .types
+            .type_of(span)
+            .ok_or_else(|| unlowered("a value the checker recorded no type for", span))?;
+        self.convert(ty, span)
+    }
+
+    fn convert(&self, ty: &CheckedTy, span: Span) -> Result<Ty, Unlowered> {
+        Ok(match ty {
+            // An empty list's element type is never known and never read,
+            // because there is no element to read it off.
+            CheckedTy::List(element) if matches!(**element, CheckedTy::Unknown) => {
+                Ty::List(Box::new(Ty::Unit))
+            }
+            CheckedTy::List(element) => Ty::List(Box::new(self.convert(element, span)?)),
+            CheckedTy::Named { def, args } if args.is_empty() => {
+                let name = &self.resolutions.def(*def).name;
+                match self.layouts.get(name.as_str()) {
+                    Some(id) => Ty::Aggregate(*id),
+                    // A refinement is declared like a type and is not one
+                    // here: its base is what a backend lays out.
+                    None => return Err(unlowered(&format!("the type `{name}`"), span)),
+                }
+            }
+            other => lower_ty(other, span)?,
+        })
+    }
+
     fn block(&mut self, block: &ast::Block) -> Result<Block, Unlowered> {
         let mut stmts = Vec::new();
         for stmt in &block.stmts {
@@ -180,7 +282,7 @@ impl Lowering<'_> {
                     ..
                 } => {
                     let value = self.expr(init)?;
-                    let ty = lower_ty_at(self.types, init.span())?;
+                    let ty = self.ty_at(init.span())?;
                     let local = self.function.add_local(ty);
                     match pattern {
                         ast::Pattern::Path { segments, .. } if segments.len() == 1 => {
@@ -263,7 +365,7 @@ impl Lowering<'_> {
             ast::Expr::Binary {
                 op, lhs, rhs, span, ..
             } => {
-                let operand = lower_ty_at(self.types, lhs.span())?;
+                let operand = self.ty_at(lhs.span())?;
                 Expr::Binary {
                     op: binary(*op, &operand, *span)?,
                     left: Box::new(self.expr(lhs)?),
@@ -281,16 +383,39 @@ impl Lowering<'_> {
                     .resolutions
                     .resolution(name.span)
                     .ok_or_else(|| unlowered("a call to a name nothing resolved", name.span))?;
-                let func = *self
-                    .by_def
-                    .get(&def)
-                    .ok_or_else(|| unlowered("a call to something not declared here", name.span))?;
-                Expr::Call {
-                    func,
-                    args: args
-                        .iter()
-                        .map(|arg| self.expr(arg))
-                        .collect::<Result<Vec<_>, _>>()?,
+
+                let lowered = args
+                    .iter()
+                    .map(|arg| self.expr(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                match self.by_def.get(&def) {
+                    Some(func) => Expr::Call {
+                        func: *func,
+                        args: lowered,
+                    },
+                    // Not something this module declared, so it is a name the
+                    // language provides. Only the ones whose answer is
+                    // already sitting in memory are here; the rest are
+                    // refused rather than guessed at.
+                    None => {
+                        let subject = match args.first() {
+                            Some(first) => self.ty_at(first.span())?,
+                            None => Ty::Unit,
+                        };
+                        let which = match (name.name.as_str(), &subject) {
+                            ("length", Ty::Str) => crate::runtime::STR_LEN,
+                            ("length", Ty::List(_)) => crate::runtime::LIST_LEN,
+                            (other, _) => {
+                                return Err(unlowered(&format!("a call to `{other}`"), name.span));
+                            }
+                        };
+                        Expr::Runtime {
+                            name: which,
+                            args: lowered,
+                            ret: Box::new(Ty::Int),
+                        }
+                    }
                 }
             }
             ast::Expr::If {
@@ -304,7 +429,7 @@ impl Lowering<'_> {
                 // the time anything gets here, which is what the checker was
                 // for.
                 let ty = match &then_branch.tail {
-                    Some(tail) => lower_ty_at(self.types, tail.span())?,
+                    Some(tail) => self.ty_at(tail.span())?,
                     None => Ty::Unit,
                 };
                 let _ = span;
@@ -320,10 +445,116 @@ impl Lowering<'_> {
                 }
             }
             ast::Expr::Block(block) => Expr::Block(Box::new(self.block(block)?)),
+            ast::Expr::List { elements, span } => {
+                let element = match elements.first() {
+                    Some(first) => self.ty_at(first.span())?,
+                    // Nothing to look at, and nothing that reads the element
+                    // type of an empty list needs it to be right, since there
+                    // is no element to read.
+                    None => Ty::Unit,
+                };
+                let _ = span;
+                Expr::List {
+                    element: Box::new(element),
+                    items: elements
+                        .iter()
+                        .map(|item| self.expr(item))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }
+            }
+            ast::Expr::StructLit { path, fields, span } => {
+                let ast::Expr::Ident(name) = &**path else {
+                    return Err(unlowered("a literal with a dotted name", *span));
+                };
+                let (layout, variant) = self.variant_named(&name.name, *span)?;
+                // Written in whatever order somebody typed, stored in the
+                // order the layout declared, because a field's place is a
+                // property of the type rather than of one literal.
+                let declared = &self.program.layout(layout).variants[variant].fields;
+                let mut values = Vec::new();
+                for field in declared {
+                    let written = fields
+                        .iter()
+                        .find(|given| given.name.name.as_str() == field.name)
+                        .ok_or_else(|| unlowered("a literal missing a field", *span))?;
+                    values.push(match &written.value {
+                        Some(value) => self.expr(value)?,
+                        // `Pair { left, right }`, the shorthand.
+                        None => {
+                            let def = self
+                                .resolutions
+                                .resolution(written.name.span)
+                                .ok_or_else(|| unlowered("a shorthand field", written.name.span))?;
+                            match self.slots.get(&def) {
+                                Some(local) => Expr::Local(*local),
+                                None => {
+                                    return Err(unlowered(
+                                        "a shorthand field naming something that is not a local",
+                                        written.name.span,
+                                    ));
+                                }
+                            }
+                        }
+                    });
+                }
+                Expr::Make {
+                    layout,
+                    variant,
+                    fields: values,
+                }
+            }
+            ast::Expr::Field {
+                receiver,
+                name,
+                span,
+            } => {
+                let receiver_ty = self.ty_at(receiver.span())?;
+                let Ty::Aggregate(layout) = receiver_ty else {
+                    return Err(unlowered("reading a field of this", *span));
+                };
+                let held = self.program.layout(layout);
+                let (variant, field) = held
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .find_map(|(at, one)| {
+                        one.fields
+                            .iter()
+                            .position(|field| field.name == name.name.as_str())
+                            .map(|index| (at, index))
+                    })
+                    .ok_or_else(|| unlowered("a field this type does not declare", *span))?;
+                Expr::Field {
+                    value: Box::new(self.expr(receiver)?),
+                    layout,
+                    variant,
+                    field,
+                }
+            }
             other => {
                 return Err(unlowered("this expression", other.span()));
             }
         })
+    }
+
+    /// Which layout and which variant a name refers to.
+    ///
+    /// A record's only variant carries the record's own name, so one lookup
+    /// answers both shapes.
+    fn variant_named(&self, name: &str, span: Span) -> Result<(crate::LayoutId, usize), Unlowered> {
+        if let Some(id) = self.layouts.get(name) {
+            return Ok((*id, 0));
+        }
+        for (index, layout) in self.program.layouts.iter().enumerate() {
+            if let Some(at) = layout
+                .variants
+                .iter()
+                .position(|variant| variant.name == name)
+            {
+                return Ok((crate::LayoutId(index), at));
+            }
+        }
+        Err(unlowered(&format!("the name `{name}`"), span))
     }
 }
 
