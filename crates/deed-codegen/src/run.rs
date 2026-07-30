@@ -57,6 +57,15 @@ pub enum Trap {
     OutOfBounds,
     /// Ran longer than the budget below allows.
     TooLong,
+    /// The module asked the host for something, and this is not a host.
+    ///
+    /// Nothing missing here is going to be filled in: writing a line or
+    /// reading a file are the host's to decide about, and a test oracle that
+    /// decided them would be a program with authority nobody granted it. So
+    /// this says which operation was wanted and stops, which is also the
+    /// most useful thing it could say about a module that is going to be
+    /// handed to a real embedder.
+    NeedsAHost(String),
     /// A module that would not validate: an instruction was handed a value
     /// of the wrong width.
     ///
@@ -80,6 +89,9 @@ impl std::fmt::Display for Trap {
             Trap::DivideByZero => write!(f, "divided by zero"),
             Trap::OutOfBounds => write!(f, "reached past the end of memory"),
             Trap::TooLong => write!(f, "ran too long"),
+            Trap::NeedsAHost(what) => {
+                write!(f, "`{what}` is the host's to answer, and this is not one")
+            }
             Trap::Mistyped(what) => write!(f, "{what}, which no engine would load"),
             Trap::Unimplemented(what) => write!(f, "`{what}` is not implemented here"),
         }
@@ -170,8 +182,31 @@ impl Run<'_> {
         String::from_utf8(bytes.to_vec()).ok()
     }
 
+    /// How many arguments the function at this index takes, whether it is
+    /// imported or defined here.
+    fn arity(&self, index: u32) -> Result<usize, Trap> {
+        let type_index = match (index as usize).checked_sub(self.module.imports.len()) {
+            None => self.module.imports[index as usize].type_index,
+            Some(at) => {
+                self.module
+                    .funcs
+                    .get(at)
+                    .ok_or(Trap::OutOfBounds)?
+                    .type_index
+            }
+        };
+        Ok(self.module.types[type_index as usize].params.len())
+    }
+
     fn call(&mut self, index: u32, args: &[Value]) -> Result<Option<Value>, Trap> {
-        let func = &self.module.funcs[index as usize];
+        let Some(at) = (index as usize).checked_sub(self.module.imports.len()) else {
+            let import = &self.module.imports[index as usize];
+            return Err(Trap::NeedsAHost(format!(
+                "{}.{}",
+                import.module, import.name
+            )));
+        };
+        let func = &self.module.funcs[at];
         let signature = &self.module.types[func.type_index as usize];
 
         let mut locals: Vec<Value> = args.to_vec();
@@ -239,9 +274,7 @@ impl Run<'_> {
                     }
                 }
                 Ins::Call(index) => {
-                    let callee = &self.module.funcs[*index as usize];
-                    let signature = &self.module.types[callee.type_index as usize];
-                    let count = signature.params.len();
+                    let count = self.arity(*index)?;
                     let at = stack.len() - count;
                     let args: Vec<Value> = stack.split_off(at);
                     if let Some(result) = self.call(*index, &args)? {
@@ -251,9 +284,7 @@ impl Run<'_> {
                 Ins::CallIndirect(_) => {
                     let slot = pop(stack)?.as_i64() as usize;
                     let index = *self.module.table.get(slot).ok_or(Trap::OutOfBounds)?;
-                    let callee = &self.module.funcs[index as usize];
-                    let signature = &self.module.types[callee.type_index as usize];
-                    let count = signature.params.len();
+                    let count = self.arity(index)?;
                     let at = stack.len() - count;
                     let args: Vec<Value> = stack.split_off(at);
                     if let Some(result) = self.call(index, &args)? {

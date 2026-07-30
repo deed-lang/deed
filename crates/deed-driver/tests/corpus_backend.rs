@@ -177,6 +177,8 @@ fn the_backend_still_compiles_what_it_used_to() {
         "calendar.deed",
         "diverge.deed",
         "generics.deed",
+        // A program that writes a line, which the module asks its host for.
+        "hello.deed",
         "names.deed",
     ] {
         assert!(

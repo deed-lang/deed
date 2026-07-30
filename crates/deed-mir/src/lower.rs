@@ -299,6 +299,12 @@ fn written(
             ("Bool", 0) => Ty::Bool,
             ("String", 0) => Ty::Str,
             ("List", 1) => Ty::List(Box::new(written(&args[0], layouts, aliases, bindings)?)),
+            // The four capabilities the language provides. All one type
+            // here, because a handle is a handle: what a program may do with
+            // one is decided by the effect row and by which host operation
+            // it is handed to, and neither of those is a question about its
+            // representation. See `design/04-capabilities.md`.
+            ("System" | "Console" | "Clock" | "Dir", 0) => Ty::Capability,
             // A type parameter first, since a copy of a generic function was
             // lowered for exactly one thing and that is what it stands for
             // here.
@@ -329,6 +335,16 @@ fn lower_ty(ty: &CheckedTy, span: Span) -> Result<Ty, Unlowered> {
         // proved or turned into a runtime check. Either way what is left to
         // compile is the base type, and this layer is where that is said.
         CheckedTy::Never => Ty::Unit,
+        // The capabilities the language provides, which the checker files
+        // as coming from the prelude. All one handle here, for the reason
+        // `written` gives.
+        CheckedTy::External { module, name, args }
+            if &**module == "<prelude>"
+                && args.is_empty()
+                && matches!(&**name, "System" | "Console" | "Clock" | "Dir") =>
+        {
+            Ty::Capability
+        }
         other => {
             return Err(unlowered(&format!("a value of type `{other:?}`"), span));
         }
@@ -874,6 +890,27 @@ impl Lowering<'_> {
                 }
             }
             ast::Expr::Call { callee, args, span } => {
+                // `Io.write(out, text)`. Nothing a compiled module can do by
+                // itself, so it becomes a call to the host. The capability
+                // is the first argument and stays there: the row says what
+                // kind of thing is happening and the handle says which
+                // resource, and neither is enough alone.
+                if let ast::Expr::Field { receiver, name, .. } = &**callee
+                    && let ast::Expr::Ident(qualifier) = &**receiver
+                    && qualifier.name.as_str() == "Io"
+                {
+                    let ret = self.ty_at(*span)?;
+                    let lowered = args
+                        .iter()
+                        .map(|arg| self.expr(arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(Expr::Host {
+                        name: format!("io.{}", name.name),
+                        args: lowered,
+                        ret: Box::new(ret),
+                    });
+                }
+
                 // `Log.note("hi")`. Whether the receiver is an effect or a
                 // value is a question the resolver already answered, and the
                 // effects table is what it comes out as here.
@@ -1069,6 +1106,21 @@ impl Lowering<'_> {
                 span,
             } => {
                 let receiver_ty = self.ty_at(receiver.span())?;
+
+                // `sys.console`. A capability has no fields to read: it is a
+                // handle, and narrowing it is something only the host can
+                // do. So this is a call rather than a load, which is also
+                // what makes it impossible for a compiled program to widen
+                // one by reaching into its own memory.
+                if receiver_ty == Ty::Capability {
+                    let held = self.expr(receiver)?;
+                    return Ok(Expr::Host {
+                        name: format!("sys.{}", name.name),
+                        args: vec![held],
+                        ret: Box::new(self.ty_at(*span)?),
+                    });
+                }
+
                 let Ty::Aggregate(layout) = receiver_ty else {
                     return Err(unlowered("reading a field of this", *span));
                 };
