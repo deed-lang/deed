@@ -227,8 +227,8 @@ except `to_int`, which speaks about text that spells a number and so covers the 
 and no letter. Writing `upper` in Deed means writing the alphabet out by hand, twice.
 
 Slicing, searching and padding are not missing any more, and they are not in the prelude
-either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `contains`, `replace`, `pad_left` and
-`pad_right`, all of them written in Deed, because the prelude test says a thing that can be
+either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `contains`, `replace`, `pad_left`,
+`pad_right`, `trim_start`, `trim_end`, `to_upper` and `to_lower`, all of them written in Deed, because the prelude test says a thing that can be
 written in the language is written in the language. What they were waiting for was somewhere
 to live.
 

@@ -94,6 +94,74 @@ fn pad_right(text: String, width: Int) -> String {
     text + join(repeat(" ", width - length(text)), "")
 }
 
+// `text` with the whitespace at the front gone. `trim` in the prelude does
+// both ends; these two do one each, for a caller that only means one of
+// them. The flag stops the count once a non-space character breaks the run,
+// so whitespace elsewhere in the string does not count again. Four
+// characters count as whitespace here, the same choice `trim` already made:
+// space, tab, carriage return, line feed, not a Unicode table.
+record LeadingSpaces {
+    count: Int,
+    counting: Bool,
+}
+
+fn trim_start(text: String) -> String {
+    let counted = for ch in split(text, "") with state = LeadingSpaces { count: 0, counting: true } {
+        if state.counting && (ch == " " || ch == "\t" || ch == "\r" || ch == "\n") {
+            LeadingSpaces { count: state.count + 1, counting: true }
+        } else {
+            LeadingSpaces { count: state.count, counting: false }
+        }
+    }
+    slice(text, counted.count, length(text))
+}
+
+// The same, from the other end. One forward pass: the run resets at every
+// non-space character, so what it holds at the end is exactly the run
+// touching the end of the string.
+fn trim_end(text: String) -> String {
+    let trailing = for ch in split(text, "") with run = 0 {
+        if ch == " " || ch == "\t" || ch == "\r" || ch == "\n" {
+            run + 1
+        } else {
+            0
+        }
+    }
+    slice(text, 0, length(text) - trailing)
+}
+
+// Case conversion is a character-code table, not a rewrite: what a character
+// becomes depends on what it is, not on anything the walk that reads it
+// knows. `index_of` on the two alphabets below is that table, written the
+// only way this language can write one today.
+fn to_upper(text: String) -> String {
+    let lowercase = "abcdefghijklmnopqrstuvwxyz"
+    let uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    let mapped = for ch in split(text, "") with out = [] {
+        let position = index_of(lowercase, ch)
+        if position < length(lowercase) {
+            push(out, slice(uppercase, position, position + 1))
+        } else {
+            push(out, ch)
+        }
+    }
+    join(mapped, "")
+}
+
+fn to_lower(text: String) -> String {
+    let lowercase = "abcdefghijklmnopqrstuvwxyz"
+    let uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    let mapped = for ch in split(text, "") with out = [] {
+        let position = index_of(uppercase, ch)
+        if position < length(uppercase) {
+            push(out, slice(lowercase, position, position + 1))
+        } else {
+            push(out, ch)
+        }
+    }
+    join(mapped, "")
+}
+
 test "a slice is the characters between two positions" {
     assert slice("abcdef", 1, 4) == "bcd"
     assert slice("abcdef", 0, 6) == "abcdef"
@@ -139,4 +207,22 @@ test "padding fills to a width and never cuts" {
     assert pad_left("ab", 5) == "   ab"
     assert pad_right("abcdef", 3) == "abcdef"
     assert pad_left("abcdef", 3) == "abcdef"
+}
+
+test "trim_start and trim_end each take one side" {
+    assert trim_start("  hi  ") == "hi  "
+    assert trim_end("  hi  ") == "  hi"
+    assert trim_start("hi") == "hi"
+    assert trim_end("hi") == "hi"
+    assert trim_start("   ") == ""
+    assert trim_end("   ") == ""
+    assert trim_start("") == ""
+    assert trim_end("") == ""
+}
+
+test "to_upper and to_lower touch letters and leave everything else" {
+    assert to_upper("Hello, World! 123") == "HELLO, WORLD! 123"
+    assert to_lower("Hello, World! 123") == "hello, world! 123"
+    assert to_upper("") == ""
+    assert to_lower("ALREADY") == "already"
 }
