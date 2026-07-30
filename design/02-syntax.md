@@ -213,18 +213,18 @@ Unicode whitespace table. That is a large amount of behaviour to hide behind a f
 name, and it would make what `trim` does depend on a table nobody reading the signature can
 see. A program that needs the full definition can say so in a name of its own.
 
-Case is `upper` and `lower`, and they are the twenty-six letters and nothing else, for the
-reason `trim` gives above. Deciding what an uppercase letter is in general needs a table, and
+Case is `to_upper` and `to_lower`, and they are the twenty-six letters and nothing else, for
+the reason `trim` gives above. Deciding what an uppercase letter is in general needs a table, and
 a name this short may not depend on one a reader of the signature cannot see. Every other
 character comes back as it went in, so text in a script that has no case survives rather than
 being mangled by a rule that was not written for it. A program that needs the full definition
 can say so in a name of its own, the same way it can for whitespace.
 
-They are in the prelude rather than in `std/string` because the prelude test is whether a
-thing can be written in the language, and this cannot: a program can reach the characters of
-a string with `split(s, "")`, but there is nothing that turns one of them into a number
-except `to_int`, which speaks about text that spells a number and so covers the ten digits
-and no letter. Writing `upper` in Deed means writing the alphabet out by hand, twice.
+They are in `std/string` rather than the prelude because the prelude test is whether a
+thing can be written in the language, and this can: `index_of` on the two alphabets is the
+table, written the only way this language can write one today, the same as every other
+function that name ships with. What they were waiting for was somewhere to live, and now
+they have it.
 
 Slicing, searching and padding are not missing any more, and they are not in the prelude
 either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `contains`, `replace`, `pad_left`,
@@ -256,10 +256,9 @@ be missing.
 A file of your own at the same module path wins. Roots are asked first and the compiler only
 last, because the file you can read is the file you can change.
 
-What goes here is what the prelude turns away. `contains` and `replace` can be written in the
-language and so they are not prelude names; before this they were not anywhere. `trim` stays
-in the prelude because it cannot be written, and case will stay out of both until it is one or
-the other.
+What goes here is what the prelude turns away. `contains`, `replace`, `to_upper` and
+`to_lower` can be written in the language and so they are not prelude names; before this they
+were not anywhere. `trim` stays in the prelude because it cannot be written.
 
 The other thing that goes here is a library that was already written and had nowhere to be.
 `std/list` and `std/table` were both under `examples/`, which made their names paths into
