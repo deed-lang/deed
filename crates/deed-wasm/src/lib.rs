@@ -283,7 +283,10 @@ pub fn run_source(source: &str) -> String {
     }
 
     let Some(run) = run_main(&program, subject.file, Path::new("/sandbox"), &[]) else {
-        return "{\"kind\":\"result\",\"ok\":false,\"message\":\"no `main` found\"}\n".to_string();
+        return format!(
+            "{{\"kind\":\"result\",\"ok\":false,\"message\":{}}}\n",
+            json_string(deed_driver::NOTHING_TO_RUN)
+        );
     };
 
     let mut out = String::new();
@@ -660,6 +663,18 @@ mod tests {
                 .unwrap_or_else(|| panic!("nothing classified {name:?}"));
             assert_eq!(class, "name", "{name} should be a plain name");
         }
+    }
+
+    /// Most of the corpus is libraries, so this is the answer a page is most
+    /// likely to show first, and it has to say why rather than only what.
+    #[test]
+    fn a_library_is_told_why_there_is_nothing_to_run() {
+        let json = call_export(deed_run, "module a\n\nfn f() -> Int {\n    1\n}\n");
+        assert_eq!(
+            json_field(&json, "message"),
+            deed_driver::NOTHING_TO_RUN,
+            "the artifact and the CLI should give the same answer: {json}"
+        );
     }
 
     #[test]

@@ -20,7 +20,11 @@ release notes.
 
 ### Diagnostics
 
-- None yet.
+- The wasm artifact says why there is nothing to run. It answered "no `main`
+  found" where the CLI says "no `main` found, so there is nothing to run", and
+  twenty-two of the twenty-nine corpus examples are libraries, so that is the
+  answer a reader is most likely to meet first. One constant now, used by
+  both.
 
 ### Standard library
 
