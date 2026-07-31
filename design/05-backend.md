@@ -193,30 +193,50 @@ representation on every generic value, and nothing here is asking for that trade
 it writes down. Deed has no type-level recursion that could produce one, so this would
 arrive with a language change rather than with a large program.
 
-## Native object code is not the next thing, and there is a reason rather than a plan
+## Distribution without a linker: options and the decision
 
-The order at the top of this document was WASM first and native object output second, and
-the second half no longer follows from the first. It was written when the backend was going
-to be Cranelift, where emitting an object file is the same work as emitting anything else
-and a linker is the only extra step. Without Cranelift, native output means either taking
-that dependency back or writing an object-file writer and a machine-code emitter per
-architecture, and those are not comparable amounts of work to what is here.
+The options for distributing a compiled Deed program, given no system linker and no
+Cranelift dependency, are worth writing down explicitly before any of them is started.
 
-So: **the distribution format is a WebAssembly module**, and native executables are deferred
-rather than scheduled. What that costs is the one thing a native binary has that a module
-does not, which is running with no host at all. What it saves is an object writer, a
-relocation model, a linker search, and a per-architecture emitter, none of which this has a
-program asking for yet.
+**Option 1: `cranelift-object`.** Take Cranelift back as a dependency, emit a native
+object file per architecture, and link it with the system linker. Cost: roughly sixty
+transitive crates reappear, the build requires a linker on every supported machine, and
+cross-compilation adds a second linker. The dependency argument was already lost once
+before the WASM encoder existed, and the second time around it gets weighed against a
+concrete request rather than a guess.
+
+**Option 2: hand-written object file plus machine-code emitter.** Emit ELF or PE by hand
+the same way `crates/deed-codegen/src/wasm.rs` emits WASM binary. Cost: one object format
+per target platform, one instruction set per architecture, and a linker on every build
+machine. The WASM encoder is about 700 lines. A production-quality x86-64 ELF emitter is
+not, and nothing is asking for it yet.
+
+**Option 3: a small runner that embeds the WASM module.** Compile the program to WASM,
+then ship a single binary with the module embedded in it, the same way `deed` ships its
+standard library. Cost: building the runner, which is additional work but not a new
+dependency and not a linker. Benefit: the recipient needs nothing but the binary, and the
+sandbox survives because the runner supplies the host. This is the path to reach when
+somebody wants to distribute to a machine with no `deed` and no module host, and it does
+not require changing the module format.
+
+**The decision: the distribution format is a WebAssembly module**, and a runner is deferred
+rather than rejected. Option 3 is the natural next step once somebody has a machine that
+needs it; the module format already supports the upgrade without redesign. Option 1 and
+option 2 both require a linker that this workspace does not have and no program has asked
+for yet.
+
+What the current choice costs is the one thing a native binary has that a module does not:
+running with no host at all. What it saves is an object writer, a relocation model, a
+linker search, and a per-architecture emitter.
 
 Linker discovery is deferred with it. It only exists to serve an object file, and there is
 no object file.
 
 **What would change this:** somebody who wants to ship a Deed program to a machine that has
-no `deed` on it and cannot run a module either. That is a real thing to want and nobody has
-said it yet, and the argument in the first section of this document, that distribution is
-what a backend is for, is exactly what would make it worth doing. It would then most likely
-be Cranelift after all, on a machine with a linker, and the dependency argument gets
-weighed against a request rather than against a guess.
+no `deed` on it and cannot run a module either. That request would move option 3 from
+deferred to scheduled, and if option 3 proved insufficient for that case, option 1 would
+follow, on a machine with a linker, with the dependency argument weighed against a real
+need.
 
 ## What would falsify this
 
