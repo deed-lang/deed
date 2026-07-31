@@ -31,6 +31,10 @@ Options:
                           would have changed.
   --compiled              With `test`, run test blocks through the compiled
                           WebAssembly backend instead of the interpreter.
+  --component             With `build`, produce a component instead of a
+                          standalone module. Writes a `.wit` world alongside
+                          the `.wasm`. Refuses programs that declare `main` or
+                          use a capability in an exported function's signature.
   -h, --help              Print this.
   -V, --version           Print the version.
 
@@ -45,6 +49,11 @@ Everything after `--` goes to the program, which reads it with `Io.args`.
 `deed build` compiles to a WebAssembly module beside the file it was given. It
 compiles less of the language than `deed run` interprets, and says what it could
 not compile rather than guessing.
+`deed build --component` produces a WebAssembly module and a `.wit` world file
+beside the source. The component's exported interface is every function the
+module declares. A function is its own export; there is no `main`. Functions
+whose signatures contain a capability have no world-level type in WIT and are
+refused with an explanation. Tests are not part of the interface.
 `deed fmt` has no options for the output. There is one canonical form.
 `deed fix` applies the fixes that are certain and leaves the guesses alone.
 `deed explain` prints the page for one diagnostic code. The argument may be the
@@ -98,6 +107,8 @@ pub struct CheckArgs {
     pub dir: Option<PathBuf>,
     /// With `fmt`, report rather than rewrite.
     pub check_only: bool,
+    /// With `build`, produce a component instead of a standalone module.
+    pub component: bool,
     /// Everything after `--`, handed to the program rather than read here.
     ///
     /// A separator rather than "whatever is left over", because a program's
@@ -178,6 +189,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut runtime_profile = false;
     let mut dir = None;
     let mut check_only = false;
+    let mut component = false;
     let mut arguments = Vec::new();
     let mut compiled = false;
 
@@ -195,6 +207,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             "--profile-runtime" => runtime_profile = true,
             "--check" => check_only = true,
             "--compiled" => compiled = true,
+            "--component" => component = true,
             "--format" => {
                 let value = args
                     .next()
@@ -247,6 +260,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         runtime_profile,
         dir,
         check_only,
+        component,
         arguments,
         compiled,
     }))

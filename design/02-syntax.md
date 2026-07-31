@@ -1485,9 +1485,10 @@ using an effect to get around not having a loop.
 - Whether `Result` and `List` should stop being built in now that they could be declared.
   Answered for now: no, and what settled it is a count rather than a preference. The question
   had been asked twice about the constructor, and the constructor is not what holds either of
-  them in. `Ty::Result` and `Ty::List` are named in three crates: the type checker, and the
+  them in. `Ty::Result` and `Ty::List` are named in four crates: the type checker, the
   two the backend added, since a list has to be laid out in memory and compiled into
-  instructions as well as checked. What names `Result`'s two variants is `?` and the outcome
+  instructions as well as checked, and the CLI, which inspects the MIR to generate WIT
+  world files for `deed build --component`. What names `Result`'s two variants is `?` and the outcome
   an `ensures` clause is keyed by, and those are in nine of the eighteen crates: the syntax
   tree, the parser, the
   resolver, the type checker, the effect checker, the interpreter, the formatter, the driver

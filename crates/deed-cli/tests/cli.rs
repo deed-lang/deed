@@ -1685,3 +1685,109 @@ fn build_writes_what_it_can_and_names_what_it_cannot() {
         stdout(&output)
     );
 }
+
+// -- building a component --------------------------------------------------
+
+/// `deed build --component` writes both a `.wasm` module and a `.wit` world.
+///
+/// The WIT file is the component's interface declaration. The bytes of the
+/// module are checked the same way `build_writes_a_module_next_to_the_source`
+/// checks them: a compiler whose output nobody reads can start writing anything.
+#[test]
+fn component_build_writes_wasm_and_wit() {
+    let scratch = Scratch::new("component");
+    let source = scratch.write(
+        "math.deed",
+        "module math\n\nfn double(n: Int) -> Int { n + n }\n\nfn negate(b: Bool) -> Bool { !b }\n",
+    );
+
+    let output = run(&["build", "--component", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    // Both files are named on stdout.
+    let text = stdout(&output);
+    assert!(text.contains("math.wasm"), "{text}");
+    assert!(text.contains("math.wit"), "{text}");
+
+    // The module is a real WebAssembly binary.
+    let wasm = std::fs::read(scratch.path().join("math.wasm")).unwrap();
+    assert_eq!(&wasm[..4], b"\0asm", "the magic number");
+    assert_eq!(&wasm[4..8], &1u32.to_le_bytes(), "the version");
+
+    // The WIT file declares the component package and world.
+    let wit = std::fs::read_to_string(scratch.path().join("math.wit")).unwrap();
+    assert!(wit.contains("package deed:math"), "{wit}");
+    assert!(wit.contains("world component"), "{wit}");
+    assert!(wit.contains("export double"), "{wit}");
+    assert!(wit.contains("export negate"), "{wit}");
+    assert!(wit.contains("s64"), "{wit}");
+    assert!(wit.contains("bool"), "{wit}");
+}
+
+/// A module that declares `main` is a program, not a component.
+///
+/// `deed build --component` refuses it with a message that names both the
+/// problem (`main`) and the alternative (`deed build`).
+#[test]
+fn component_build_refuses_a_program_with_main() {
+    let scratch = Scratch::new("component-main");
+    let source = scratch.write(
+        "prog.deed",
+        "module prog\n\nfn main(sys: System) -> Int { 0 }\n",
+    );
+
+    let output = run(&["build", "--component", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("`main`"), "{text}");
+    assert!(text.contains("deed build"), "{text}");
+
+    // Nothing is written.
+    assert!(!scratch.path().join("prog.wasm").exists());
+    assert!(!scratch.path().join("prog.wit").exists());
+}
+
+/// A function whose signature contains a capability has no world-level type
+/// in WIT. `deed build --component` refuses the module and names the function.
+#[test]
+fn component_build_refuses_capability_in_signature() {
+    let scratch = Scratch::new("component-cap");
+    let source = scratch.write(
+        "sneaky.deed",
+        "module sneaky\n\nfn write_it(c: Console, msg: String) -> ()\n  uses Io.write,\n{ Io.write(c, msg) }\n",
+    );
+
+    let output = run(&["build", "--component", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("write_it"), "{text}");
+    assert!(text.contains("capability"), "{text}");
+    assert!(text.contains("no world-level type"), "{text}");
+
+    // Nothing is written when the module is refused.
+    assert!(!scratch.path().join("sneaky.wasm").exists());
+    assert!(!scratch.path().join("sneaky.wit").exists());
+}
+
+/// `deed build --component` tests are not part of the interface.
+///
+/// Tests live only in the source; they cannot be called from outside the
+/// module, and so they are not exported in the WIT world.
+#[test]
+fn component_build_does_not_export_tests() {
+    let scratch = Scratch::new("component-tests");
+    let source = scratch.write(
+        "lib.deed",
+        "module lib\n\nfn double(n: Int) -> Int { n + n }\n\ntest \"two plus two\" {\n    assert double(2) == 4\n}\n",
+    );
+
+    let output = run(&["build", "--component", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let wit = std::fs::read_to_string(scratch.path().join("lib.wit")).unwrap();
+    assert!(wit.contains("export double"), "{wit}");
+    // Test blocks do not appear in the compiled output at all.
+    assert!(!wit.contains("two plus two"), "{wit}");
+}
