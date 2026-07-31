@@ -180,6 +180,7 @@ The longer version, including the cost model this is all based on, is in
 | [07-editions.md](design/07-editions.md) | How a breaking change ships without splitting the ecosystem |
 | [characters.md](design/characters.md) | Why characters remain one-scalar strings |
 | [fractional-values.md](design/fractional-values.md) | The decision on fractional values and money |
+| [hash-map-requirements.md](design/hash-map-requirements.md) | What a hash map would require from the language |
 | [refusals.md](design/refusals.md) | Everything deliberately left out, and why |
 | [07-versioning.md](design/07-versioning.md) | Compatibility policy for language, diagnostics, and `std/` |
 
