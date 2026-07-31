@@ -20,4 +20,20 @@ If `examples/logs.deed` needs percentages before the language gains a fractional
 
 What would change the answer is a real program that must store, compare, and pass fractional quantities around as values rather than only print them. If that program is about money, decimal is the front runner because exact base ten arithmetic is the point. If that program is about exact ratios that participate in contracts, rational is the front runner, but only with an explicit design for canonical equality and a proof story that goes beyond integer intervals.
 
+## What the library answered
+
+The suggestion above was taken, and it went further than a formatter. `std/ratio` ships with the compiler and holds a `Ratio` as two `Int`s in a record. It adds, subtracts, multiplies, divides, orders, and renders to a chosen number of decimal places, and `examples/logs.deed` has the percentage column that motivated this page.
+
+Three things came out of writing it, and they are the reason this page is now a measurement rather than an argument.
+
+**Canonical equality was the cheap part.** `simplified` puts every ratio in lowest terms with the sign on top, and once it does, the language's own structural `==` says `2/4 == 1/2` without the checker knowing anything about ratios. The concern above was that structural equality forces a canonical form. It does, and a constructor is where it goes.
+
+**The proof story never came up.** No contract in `std/ratio` says anything about a ratio. The refinements the language can express are over one integer, and every clause here is either about an `Int` parameter or absent, so the interval model was not asked a question it could not answer. The worry that a fractional type would reach into `facts` turns out to be a worry about a fractional type *in contracts*, which is a narrower thing than a fractional type at all.
+
+**What the library cannot have is operators.** `1/2 + 1/3` is `added(half, third)`, and `first < second` is `is_below(first, second)`, because `+` is `Int` and `String` and `<` is `Int` and `String` and there is no way for a module to add a meaning. That is the whole remaining cost, and it is a cost about operator overloading rather than about numbers. `design/refusals.md` has no entry for operator overloading because nothing had wanted one; this is the first thing that does.
+
+The decision therefore stands, with the reason narrowed. Refusing float is still right. Refusing decimal is still right, because no program here stores base ten quantities. Refusing rational *as a language type* is now supported by something better than an argument: a rational library exists, it is exact, and the only thing it is missing is syntax.
+
+**What would change the answer now.** A program where the arithmetic is dense enough that named calls stop being readable, which is an argument for operator overloading rather than for a number type. Or a contract that has to say something about a fractional quantity, which is the half of the original worry that writing the library never tested.
+
 AI assistance: drafted with GitHub Copilot and reviewed by the author.

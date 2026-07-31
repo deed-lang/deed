@@ -46,12 +46,15 @@ it takes, would need its own rule there.
 
 **What would change the answer:** [fractional-values.md](fractional-values.md) takes the
 first real case from `examples/logs.deed` and answers [#655](https://github.com/deed-lang/deed/issues/655)
-for now: keep refusing every fractional number type. The first concrete need is an exact
-ratio that only becomes text at the edge, which is not yet enough to choose one language
-wide representation. Binary floating point is still the wrong answer for money, decimal is
-still the leading candidate for stored base ten quantities, and rational is still the
-leading candidate for exact ratios, but either one would need a new story for structural
-equality, refinements, and `facts` beyond the integer interval model that exists today.
+for now: keep refusing every fractional number type. That page is no longer only an argument.
+`std/ratio` ships, holds exact fractions as two `Int`s in a record, and `examples/logs.deed`
+has the percentage column that raised the question. Writing it settled two of the three
+worries: canonical equality turned out to be a constructor, and the proof model was never
+asked anything, because no contract in the library says anything about a ratio. What is left
+is that `1/2 + 1/3` has to be spelled `added(half, third)`, which is an argument about
+operator overloading rather than about numbers. Binary floating point is still the wrong
+answer for money and decimal is still the leading candidate for stored base ten quantities,
+but neither has a program here that wants one.
 
 ## No ranges
 
