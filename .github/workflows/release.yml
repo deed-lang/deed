@@ -100,7 +100,7 @@ jobs:
             echo "asset=dist/$name.tar.gz" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: ${{ env.asset }}
@@ -129,7 +129,7 @@ jobs:
           name="deed-${GITHUB_REF_NAME}-wasm32-unknown-unknown"
           cp target/wasm32-unknown-unknown/wasm/deed_wasm.wasm "dist/$name.wasm"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wasm32-unknown-unknown
           path: dist/*.wasm
@@ -140,7 +140,7 @@ jobs:
     needs: [build, wasm]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
