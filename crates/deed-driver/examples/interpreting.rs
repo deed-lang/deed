@@ -59,6 +59,8 @@ fn main() {
     println!();
     per_table();
     println!();
+    per_map();
+    println!();
     real_program();
     println!();
     notes();
@@ -584,9 +586,165 @@ test \"inserting\" {{
     }
 }
 
-// -- a real program ----------------------------------------------------------
+// -- what std/map costs, vs std/table -----------------------------------------
 
-/// `examples/logs.deed`, on a growing number of lines.
+/// `std/map`'s `get` (lookup) and `insert`, against a map with a given number
+/// of distinct keys, run alongside `std/table` at the same sizes.
+///
+/// The question from deed-lang/deed#616: does the red-black tree beat the
+/// list at the sizes real programs reach? Both halves use the same LENGTHS
+/// and the same PUSHES so the numbers sit next to each other rather than in
+/// separate tables.
+///
+/// Same worst-case discipline as `per_table`: lookup asks for the last key
+/// inserted (in string sort order it may not be the last node visited, but
+/// it is always a key that is present), and insert adds a key that is not
+/// already there so the whole tree is traversed.
+fn per_map() {
+    let table = deed_driver::shipped_source("std/table")
+        .expect("a module that ships has a source")
+        .to_string();
+    let map = deed_driver::shipped_source("std/map")
+        .expect("a module that ships has a source")
+        .to_string();
+
+    let table_files = |bench: String| {
+        vec![
+            ("bench.deed", bench),
+            ("<shipped>/std/table.deed", table.clone()),
+        ]
+    };
+    let list = deed_driver::shipped_source("std/list")
+        .expect("a module that ships has a source")
+        .to_string();
+    let map_files = |bench: String| {
+        vec![
+            ("bench.deed", bench),
+            ("<shipped>/std/map.deed", map.clone()),
+            ("<shipped>/std/list.deed", list.clone()),
+        ]
+    };
+
+    println!("{PUSHES} lookups: std/table vs std/map, by number of keys");
+    println!("keys       table      table/key  map        map/key");
+    println!("------------------------------------------------------");
+
+    for size in LENGTHS {
+        let last = size.saturating_sub(1);
+
+        let table_source = format!(
+            "module bench
+
+use std/table.{{set, or_else}}
+
+test \"lookup\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
+    let turns = {PUSHES}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{ sum + or_else(base, \"{last}\", 0) }}
+    assert got == turns * {last}
+}}
+"
+        );
+
+        let map_source = format!(
+            "module bench
+
+use std/map.{{insert, get, cmp_string, Map, Empty}}
+
+fn lookup(m: Map<String, Int>, key: String) -> Int
+  uses Diverge,
+{{
+    match get(m, key, cmp_string) {{
+        ok(v) => v,
+        err(_) => 0,
+    }}
+}}
+
+test \"lookup\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with m = Empty {{ insert(m, to_string(i), i, cmp_string) }}
+    let turns = {PUSHES}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{ sum + lookup(base, \"{last}\") }}
+    assert got == turns * {last}
+}}
+"
+        );
+
+        let t = time(&table_files(table_source), 0);
+        let m = time(&map_files(map_source), 0);
+
+        println!(
+            "{size:<10} {:<10} {:<10} {:<10} {}",
+            millis(t),
+            nanos(t / PUSHES as u32),
+            millis(m),
+            nanos(m / PUSHES as u32),
+        );
+    }
+
+    println!();
+    println!("{PUSHES} inserts of a key not already there: std/table vs std/map");
+    println!("keys       table      table/ins  map        map/ins");
+    println!("------------------------------------------------------");
+
+    for size in LENGTHS {
+        let table_source = format!(
+            "module bench
+
+use std/table.{{set}}
+
+test \"inserting\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
+    let turns = {PUSHES}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{ sum + length(set(base, \"new\", 0)) }}
+    assert got == turns * {}
+}}
+",
+            size + 1
+        );
+
+        // The map insert benchmark avoids calling `size` on the result, which
+        // would be O(N) and would dominate the O(log N) insert. Instead the
+        // body runs the insert and adds 1, so `got == turns` confirms nothing
+        // was skipped without walking the result tree.
+        let map_source = format!(
+            "module bench
+
+use std/map.{{insert, cmp_string, Empty}}
+
+test \"inserting\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with m = Empty {{ insert(m, to_string(i), i, cmp_string) }}
+    let turns = {PUSHES}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{
+        let _m = insert(base, \"new\", 0, cmp_string)
+        sum + 1
+    }}
+    assert got == turns
+}}
+"
+        );
+
+        let t = time(&table_files(table_source), 0);
+        let m = time(&map_files(map_source), 0);
+
+        println!(
+            "{size:<10} {:<10} {:<10} {:<10} {}",
+            millis(t),
+            nanos(t / PUSHES as u32),
+            millis(m),
+            nanos(m / PUSHES as u32),
+        );
+    }
+}
+
+// -- a real program ----------------------------------------------------------
 ///
 /// The pure half of it, which is everything down to `report`: it takes lines
 /// and gives back lines, so a benchmark can hand it text without a filesystem
