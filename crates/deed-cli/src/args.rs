@@ -35,6 +35,10 @@ Options:
                           standalone module. Writes a `.wit` world alongside
                           the `.wasm`. Refuses programs that declare `main` or
                           use a capability in an exported function's signature.
+  --lock <path>           Write a lock file listing every input with its
+                          SHA-256 hash. Existing file is overwritten.
+  --locked <path>         Refuse to proceed if any input differs from the lock
+                          file. Use after `--lock` to reproduce a build exactly.
   -h, --help              Print this.
   -V, --version           Print the version.
 
@@ -117,6 +121,10 @@ pub struct CheckArgs {
     pub arguments: Vec<String>,
     /// With `run` or `test`, use the compiled backend.
     pub compiled: bool,
+    /// Path to write a lock file recording every input with its hash.
+    pub lock: Option<PathBuf>,
+    /// Path to a lock file; refuse to proceed if any input has changed.
+    pub locked: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -192,6 +200,8 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut component = false;
     let mut arguments = Vec::new();
     let mut compiled = false;
+    let mut lock = None;
+    let mut locked = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -225,6 +235,24 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             }
             other if other.starts_with("--dir=") => {
                 dir = Some(PathBuf::from(&other["--dir=".len()..]));
+            }
+            "--lock" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "`--lock` needs a path".to_string())?;
+                lock = Some(PathBuf::from(value));
+            }
+            other if other.starts_with("--lock=") => {
+                lock = Some(PathBuf::from(&other["--lock=".len()..]));
+            }
+            "--locked" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "`--locked` needs a path".to_string())?;
+                locked = Some(PathBuf::from(value));
+            }
+            other if other.starts_with("--locked=") => {
+                locked = Some(PathBuf::from(&other["--locked=".len()..]));
             }
             other if other.starts_with('-') && other != "-" => {
                 return Err(format!("unknown option `{other}`"));
@@ -263,6 +291,8 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         component,
         arguments,
         compiled,
+        lock,
+        locked,
     }))
 }
 
@@ -387,5 +417,60 @@ mod tests {
         assert!(error.contains("there is no REPL"), "{error}");
         assert!(error.contains("scratch `.deed` file"), "{error}");
         assert!(error.contains("playground"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::{Command, parse};
+
+    fn args(items: &[&str]) -> impl Iterator<Item = String> {
+        items
+            .iter()
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn lock_accepts_both_spellings() {
+        for spelling in [
+            vec!["check", "--lock", "deed.lock", "a.deed"],
+            vec!["check", "--lock=deed.lock", "a.deed"],
+        ] {
+            let Ok(Command::Check(check)) = parse(args(&spelling)) else {
+                panic!("should parse {spelling:?}");
+            };
+            assert_eq!(
+                check.lock.as_deref(),
+                Some(std::path::Path::new("deed.lock"))
+            );
+        }
+    }
+
+    #[test]
+    fn locked_accepts_both_spellings() {
+        for spelling in [
+            vec!["check", "--locked", "deed.lock", "a.deed"],
+            vec!["check", "--locked=deed.lock", "a.deed"],
+        ] {
+            let Ok(Command::Check(check)) = parse(args(&spelling)) else {
+                panic!("should parse {spelling:?}");
+            };
+            assert_eq!(
+                check.locked.as_deref(),
+                Some(std::path::Path::new("deed.lock"))
+            );
+        }
+    }
+
+    #[test]
+    fn lock_without_a_path_is_an_error() {
+        assert!(parse(args(&["check", "--lock"])).is_err());
+    }
+
+    #[test]
+    fn locked_without_a_path_is_an_error() {
+        assert!(parse(args(&["check", "--locked"])).is_err());
     }
 }

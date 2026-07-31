@@ -1791,3 +1791,226 @@ fn component_build_does_not_export_tests() {
     // Test blocks do not appear in the compiled output at all.
     assert!(!wit.contains("two plus two"), "{wit}");
 }
+
+// -- lock files: provenance, offline verification, and reproducibility -----
+
+/// `deed build --lock <path>` writes a lock file listing every input.
+///
+/// The lock file must start with the deed header, and every local source
+/// file must appear with a `sha256:` line. The format pins the content so
+/// that a later `--locked` run can verify nothing changed.
+#[test]
+fn build_writes_a_lock_file_when_asked() {
+    let scratch = Scratch::new("lock-write");
+    let source = scratch.write(
+        "small.deed",
+        "module small\n\nfn double(n: Int) -> Int { n + n }\n",
+    );
+    let lock_path = scratch.path().join("small.lock");
+
+    let output = run(&[
+        "build",
+        source.to_str().unwrap(),
+        "--lock",
+        lock_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let lock_text = std::fs::read_to_string(&lock_path).expect("lock file should be written");
+    assert!(lock_text.starts_with("deed lock v1\n"), "{lock_text}");
+    // The source file appears with its hash.
+    assert!(lock_text.contains("sha256:"), "{lock_text}");
+    assert!(lock_text.contains("small.deed"), "{lock_text}");
+}
+
+/// `deed check --locked <path>` succeeds when inputs match the lock.
+///
+/// Write a lock for a file, then verify it immediately. The file has not
+/// changed, so verification passes.
+#[test]
+fn locked_build_passes_when_inputs_match() {
+    let scratch = Scratch::new("lock-pass");
+    let source = scratch.write("match.deed", "module match_\n\nfn f() -> Int { 0 }\n");
+    let lock_path = scratch.path().join("match.lock");
+
+    // Write the lock.
+    let write_output = run(&[
+        "check",
+        source.to_str().unwrap(),
+        "--lock",
+        lock_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&write_output), 0, "{}", stderr(&write_output));
+
+    // Verify the lock.
+    let verify_output = run(&[
+        "check",
+        source.to_str().unwrap(),
+        "--locked",
+        lock_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&verify_output), 0, "{}", stderr(&verify_output));
+}
+
+/// `deed check --locked <path>` refuses when a source file has been modified.
+///
+/// Write a lock, then tamper with the source file. The hash no longer
+/// matches, so `--locked` must reject the build before compiling anything.
+#[test]
+fn locked_build_refuses_tampered_input() {
+    let scratch = Scratch::new("lock-tamper");
+    let source = scratch.write("tamper.deed", "module tamper\n\nfn f() -> Int { 0 }\n");
+    let lock_path = scratch.path().join("tamper.lock");
+
+    // Write the lock.
+    let write_output = run(&[
+        "check",
+        source.to_str().unwrap(),
+        "--lock",
+        lock_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&write_output), 0, "{}", stderr(&write_output));
+
+    // Tamper: change the source file after locking.
+    std::fs::write(&source, "module tamper\n\nfn f() -> Int { 999 }\n").unwrap();
+
+    // --locked should now reject the build.
+    let verify_output = run(&[
+        "check",
+        source.to_str().unwrap(),
+        "--locked",
+        lock_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&verify_output), 1, "tampered build should fail");
+    let text = stderr(&verify_output);
+    assert!(
+        text.contains("changed since the lock"),
+        "should explain what went wrong:\n{text}"
+    );
+}
+
+/// `deed check --locked <path>` refuses when the lock file names a file that
+/// no longer exists.
+///
+/// This covers the "missing cached input" requirement: a vendored build that
+/// is missing a file should be refused, not silently broken.
+#[test]
+fn locked_build_refuses_missing_input() {
+    let scratch = Scratch::new("lock-missing");
+    let source = scratch.write("gone.deed", "module gone\n\nfn f() -> Int { 0 }\n");
+    let lock_path = scratch.path().join("gone.lock");
+
+    // Write the lock.
+    let write_output = run(&[
+        "check",
+        source.to_str().unwrap(),
+        "--lock",
+        lock_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&write_output), 0, "{}", stderr(&write_output));
+
+    // Delete the source file.
+    std::fs::remove_file(&source).unwrap();
+
+    // --locked should now refuse because the file is gone.
+    let verify_output = run(&[
+        "check",
+        source.to_str().unwrap(),
+        "--locked",
+        lock_path.to_str().unwrap(),
+    ]);
+    // Either exit 1 (tamper) or exit 2 (usage/io error): both are non-zero.
+    assert_ne!(code(&verify_output), 0, "missing-file build should fail");
+}
+
+/// Building the same source twice produces byte-identical WebAssembly output.
+///
+/// Same inputs must produce the same bytes. This is the strongest form of
+/// reproducibility: not just the same behavior but the same artifact.
+#[test]
+fn same_inputs_produce_same_bytes() {
+    let scratch = Scratch::new("repro");
+    let source = scratch.write(
+        "repro.deed",
+        "module repro\n\nfn double(n: Int) -> Int { n + n }\n\nfn answer() -> Int { double(21) }\n",
+    );
+
+    let first = scratch.path().join("first.wasm");
+    let second = scratch.path().join("second.wasm");
+
+    // Build twice to separate output files so we can compare.
+    let out1 = run(&["build", source.to_str().unwrap()]);
+    assert_eq!(code(&out1), 0, "{}", stderr(&out1));
+    let built = scratch.path().join("repro.wasm");
+    std::fs::copy(&built, &first).unwrap();
+    std::fs::remove_file(&built).unwrap();
+
+    let out2 = run(&["build", source.to_str().unwrap()]);
+    assert_eq!(code(&out2), 0, "{}", stderr(&out2));
+    std::fs::copy(&built, &second).unwrap();
+
+    let bytes1 = std::fs::read(&first).unwrap();
+    let bytes2 = std::fs::read(&second).unwrap();
+    assert_eq!(
+        bytes1, bytes2,
+        "two builds of the same source must be byte-identical"
+    );
+}
+
+/// A multi-module build resolves all imports from the local file system with
+/// no network access required. Both files compile together and all imports
+/// resolve.
+///
+/// This is the "offline build" requirement: the build must complete from a
+/// local checkout of the source tree with no network at all.
+#[test]
+fn offline_multi_module_build_needs_no_network() {
+    let scratch = Scratch::new("offline");
+    // A library module.
+    scratch.write(
+        "offline/lib.deed",
+        "module offline/lib\n\nfn add(a: Int, b: Int) -> Int { a + b }\n",
+    );
+    // A main module that imports the library.
+    let main = scratch.write(
+        "offline/main.deed",
+        "module offline/main\n\nuse offline/lib.{add}\n\nfn answer() -> Int { add(40, 2) }\n",
+    );
+
+    // The build must succeed without any network calls.  If it did reach the
+    // network it would fail (no registry is running), so a passing test here
+    // demonstrates the offline property.
+    let output = run(&["check", main.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "a clean check should say nothing");
+}
+
+/// A lock file written by `deed check` enumerates all inputs including
+/// transitive imports. The multi-module build produces entries for every
+/// file that went into it.
+#[test]
+fn lock_file_enumerates_all_transitive_inputs() {
+    let scratch = Scratch::new("lock-transitive");
+    scratch.write(
+        "tree/lib.deed",
+        "module tree/lib\n\nfn one() -> Int { 1 }\n",
+    );
+    let main = scratch.write(
+        "tree/main.deed",
+        "module tree/main\n\nuse tree/lib.{one}\n\nfn two() -> Int { one() + one() }\n",
+    );
+    let lock_path = scratch.path().join("tree.lock");
+
+    let output = run(&[
+        "check",
+        main.to_str().unwrap(),
+        "--lock",
+        lock_path.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let lock_text = std::fs::read_to_string(&lock_path).expect("lock file should be written");
+    // Both the named file and its import must appear.
+    assert!(lock_text.contains("main.deed"), "{lock_text}");
+    assert!(lock_text.contains("lib.deed"), "{lock_text}");
+}
