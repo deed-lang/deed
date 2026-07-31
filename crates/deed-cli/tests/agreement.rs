@@ -241,6 +241,30 @@ fn a_module_that_is_nowhere_is_the_same_answer_on_both_sides() {
 }
 
 #[test]
+fn a_file_that_imports_a_workspace_module_agrees() {
+    // The dependency case: one module importing another that lives in the same
+    // workspace. The command line tool follows the import chain from the root;
+    // the editor loads the whole workspace folder. Both reach the same file
+    // and both compile without any diagnostic.
+    //
+    // This is what `agreement.rs` covers for a program with a dependency. The
+    // existing tests all import shipped or missing modules. This one imports a
+    // plain workspace module, which is what most programs actually do.
+    let scratch = Scratch::new("workspace-dep");
+    scratch.write("lib.deed", "module lib\n\nfn value() -> Int { 42 }\n");
+    let app = scratch.write(
+        "app.deed",
+        "module app\n\nuse lib.{value}\n\nfn answer() -> Int { value() }\n",
+    );
+
+    assert_eq!(
+        both(&scratch.0, &app),
+        Vec::<String>::new(),
+        "app imports lib, which is in the workspace"
+    );
+}
+
+#[test]
 fn a_workspaces_own_module_wins_on_both_sides() {
     // The precedence half. Both of them offer everything a person can read
     // first, so the `std/list.deed` sitting in their own folder is the one

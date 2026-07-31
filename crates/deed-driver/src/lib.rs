@@ -20,12 +20,14 @@
 pub mod codes;
 pub mod fix;
 mod imports;
+mod inputs;
 pub mod manifest;
 mod report;
 mod rows;
 mod shipped;
 pub mod wit;
 
+pub use inputs::resolve_inputs;
 pub use manifest::{ComponentRoot, Manifest, parse_manifest};
 pub use report::json_report;
 pub use shipped::{shipped_for, shipped_modules, shipped_source, take_shipped};
