@@ -11,6 +11,9 @@ concurrency:
   group: performance-ratchet
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   ratchet:
     name: edit-loop and runtime ratchet
