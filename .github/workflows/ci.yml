@@ -149,3 +149,28 @@ jobs:
             exit 1
           fi
 
+  mcp-session:
+    name: mcp session
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build -p deed-cli
+        run: cargo build --release -p deed-cli --locked
+
+      # Deliberately unpinned. The crate's own tests already cover the protocol
+      # this repository believes in; the only thing this job adds is whether the
+      # clients that will actually call it still agree, and pinning the client
+      # would take that away.
+      - name: install the reference client
+        run: pip install mcp
+
+      # #816: the server's tests speak to it directly, which is the same shape
+      # as building the wasm artifact and never running it.
+      - name: a real client holds a session
+        run: python3 crates/deed-mcp/smoke.py target/release/deed
+
