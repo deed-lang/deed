@@ -46,7 +46,7 @@ fn answer(n: Int) -> Int { halve(n) }\n";
 #[test]
 fn a_broken_precondition_says_which_clause_and_whose_fault_it_is() {
     let trap = stopped(PRECONDITION, "answer", &[Value::I64(-4)]);
-    let Trap::Failed { code, message } = trap else {
+    let Trap::Failed { code, message, .. } = trap else {
         panic!("a broken precondition should say what it was, not {trap}");
     };
 
@@ -156,6 +156,47 @@ fn the_interpreter_and_compiler_stop_with_the_same_message() {
         compiled_message, interp_message,
         "compiled and interpreted engines should stop with the same sentence"
     );
+}
+
+#[test]
+fn the_interpreter_and_compiler_stop_at_the_same_place_for_a_broken_precondition() {
+    let source = "module a\n\n\
+fn halve(n: Int) -> Int\n\
+  where n > 0,\n\
+{ n / 2 }\n\n\
+fn answer(n: Int) -> Int {\n\
+    halve(n)\n\
+}\n\n\
+fn main() -> Int {\n\
+    answer(-4)\n\
+}\n";
+    let one = checked(source);
+    let program = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+    let module = compile(&program).expect("this compiles");
+    let trap = call(&module, "main", &[]).expect_err("this should have stopped");
+    let Trap::Failed {
+        message: compiled_message,
+        span: Some(compiled_span),
+        ..
+    } = trap
+    else {
+        panic!("the compiled engine should have stopped with a span, not {trap}");
+    };
+
+    let mut interpreted = Interpreted::new();
+    interpreted.add(
+        one.file,
+        &one.module,
+        &one.resolutions,
+        one.guards(),
+        one.rows(),
+    );
+    let run = deed_interp::run_main(&interpreted, one.file, std::path::Path::new(""), &[])
+        .expect("the source should define `main`");
+    let failure = run.result.expect_err("the interpreter should also fail");
+
+    assert_eq!(compiled_message, failure.message);
+    assert_eq!(compiled_span, failure.primary.span);
 }
 
 /// A contract the checker settled leaves nothing to fail, so nothing is

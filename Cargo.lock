@@ -13,6 +13,7 @@ dependencies = [
 name = "deed-cli"
 version = "0.1.0"
 dependencies = [
+ "deed-ast",
  "deed-codegen",
  "deed-diagnostics",
  "deed-driver",
@@ -28,6 +29,7 @@ dependencies = [
 name = "deed-codegen"
 version = "0.1.0"
 dependencies = [
+ "deed-diagnostics",
  "deed-mir",
 ]
 

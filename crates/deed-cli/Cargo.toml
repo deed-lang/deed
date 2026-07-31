@@ -12,6 +12,7 @@ name = "deed"
 path = "src/main.rs"
 
 [dependencies]
+deed-ast = { path = "../deed-ast" }
 deed-diagnostics = { path = "../deed-diagnostics" }
 deed-codegen = { path = "../deed-codegen" }
 deed-driver = { path = "../deed-driver" }

@@ -1068,6 +1068,7 @@ impl Lowering<'_> {
                     stmts: vec![Stmt::Fail {
                         code: crate::codes::PRECONDITION_FAILED.to_string(),
                         message: format!("this call does not satisfy what `{name}` requires"),
+                        span: clause.span(),
                     }],
                     value: Expr::Unit,
                 }),
@@ -1228,6 +1229,7 @@ impl Lowering<'_> {
                             stmts: vec![Stmt::Fail {
                                 code: crate::codes::ASSERTION_FAILED.to_string(),
                                 message: format!("an assertion at {} did not hold", span.start),
+                                span: *span,
                             }],
                             value: Expr::Unit,
                         }),
@@ -1360,6 +1362,7 @@ impl Lowering<'_> {
                     op: binary(*op, &operand, *span)?,
                     left: Box::new(self.expr(lhs)?),
                     right: Box::new(self.expr(rhs)?),
+                    span: *span,
                 }
             }
             ast::Expr::Call { callee, args, span } => {
@@ -1440,6 +1443,7 @@ impl Lowering<'_> {
                         callee: Box::new(Expr::Local(local)),
                         args: lowered,
                         ret: Box::new(ret),
+                        span: *span,
                     });
                 }
 
@@ -1447,6 +1451,7 @@ impl Lowering<'_> {
                     Some(func) => Expr::Call {
                         func: *func,
                         args: lowered,
+                        span: *span,
                     },
                     // Not something with a signature of its own. A generic
                     // declaration is one of these and gets a copy per set of
@@ -1462,6 +1467,7 @@ impl Lowering<'_> {
                             return Ok(Expr::Call {
                                 func: copy,
                                 args: lowered,
+                                span: *span,
                             });
                         }
 
@@ -2032,6 +2038,7 @@ impl Lowering<'_> {
             stmts: vec![Stmt::Fail {
                 code: crate::codes::NOT_RUNNABLE.to_string(),
                 message: "no arm of this match applied".to_string(),
+                span,
             }],
             value: Expr::Unit,
         };
@@ -2107,6 +2114,7 @@ impl Lowering<'_> {
                     layout,
                 }),
                 right: Box::new(Expr::Int(*variant as i64)),
+                span: Span::new(0, 0),
             };
             condition = Some(match condition {
                 None => test,
@@ -2114,6 +2122,7 @@ impl Lowering<'_> {
                     op: BinaryOp::Or,
                     left: Box::new(so_far),
                     right: Box::new(test),
+                    span: Span::new(0, 0),
                 },
             });
         }
@@ -2267,6 +2276,7 @@ impl Lowering<'_> {
                 args: vec![Expr::Local(list)],
                 ret: Box::new(Ty::Int),
             }),
+            span,
         };
         if let Some(more) = keep {
             // Read before each turn, with the accumulator in scope, which is
@@ -2275,6 +2285,7 @@ impl Lowering<'_> {
                 op: BinaryOp::And,
                 left: Box::new(condition),
                 right: Box::new(self.expr(more)?),
+                span,
             };
         }
 
@@ -2298,6 +2309,7 @@ impl Lowering<'_> {
                     op: BinaryOp::AddInt,
                     left: Box::new(Expr::Local(counter)),
                     right: Box::new(Expr::Int(1)),
+                    span,
                 },
             },
         ];

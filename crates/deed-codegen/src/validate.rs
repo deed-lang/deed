@@ -170,6 +170,9 @@ impl<'m> Checker<'m> {
 
     fn instruction(&mut self, ins: &Ins) -> Result<(), Invalid> {
         match ins {
+            Ins::Marked { inner, .. } => {
+                self.instruction(inner)?;
+            }
             Ins::Unreachable => self.set_unreachable(),
             Ins::Nop => {}
             Ins::Block { result, body } => {

@@ -12,6 +12,8 @@
 
 pub mod lower;
 
+use deed_diagnostics::Span;
+
 pub use lower::{Unlowered, lower, lower_with_tests};
 
 /// The diagnostic codes a compiled program can stop with.
@@ -282,7 +284,11 @@ pub enum Stmt {
     /// Carries the diagnostic code as well as the sentence, because a run
     /// that stops should say the same thing whichever engine ran it, and the
     /// code is what makes two messages comparable.
-    Fail { code: String, message: String },
+    Fail {
+        code: String,
+        message: String,
+        span: Span,
+    },
     /// Run the body while the condition holds, checking it first.
     ///
     /// A `for` in Deed is a fold over a list rather than a loop, and this is
@@ -322,11 +328,13 @@ pub enum Expr {
         op: BinaryOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        span: Span,
     },
     /// A direct call to a known function.
     Call {
         func: FuncId,
         args: Vec<Expr>,
+        span: Span,
     },
     /// A call through a function value, which carries its environment
     /// alongside the code pointer.
@@ -335,6 +343,7 @@ pub enum Expr {
         args: Vec<Expr>,
         /// What comes back, since a code pointer does not say.
         ret: Box<Ty>,
+        span: Span,
     },
     /// Build a record, or one variant of a choice.
     Make {

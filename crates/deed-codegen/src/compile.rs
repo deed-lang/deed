@@ -13,10 +13,14 @@
 //! program that runs and answers wrongly, which is worse than one that does
 //! not build.
 
+use deed_diagnostics::Span;
 use deed_mir::{BinaryOp, Block, Expr, FuncId, Function, Local, Program, Stmt, Ty, UnaryOp};
 
 use crate::layout;
-use crate::wasm::{Func, FuncType, Import, Ins, Module, ValType};
+use crate::wasm::{
+    Func, FuncType, FunctionSpans, Import, Ins, InstructionSpan, Module, SpanRole, ValType,
+    instruction_size,
+};
 
 const ARITHMETIC_CODE: &str = "DEED6007";
 const ARITHMETIC_MESSAGE: &str = "this arithmetic has no answer";
@@ -101,6 +105,8 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         let mut body = Builder::new(program, function, &mut strings, interned, imported, shift);
         body.block(&function.body)?;
         body.instructions.push(Ins::Return);
+        let func_index = shift + module.funcs.len() as u32;
+        let spans = body.finish_sites(func_index, &body.instructions);
 
         let compiled = Func {
             type_index,
@@ -109,6 +115,9 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         };
         let func_index = module.add_func(compiled);
         module.export(function.name.clone(), func_index);
+        if !spans.sites.is_empty() {
+            module.spans.push(spans);
+        }
         // Record the function's source name for the name section, so a
         // trap says which function rather than its index.
         module.names.push((func_index, function.name.clone()));
@@ -264,6 +273,12 @@ struct Strings {
     placed: Vec<(String, u32)>,
 }
 
+#[derive(Clone, Copy)]
+struct SiteDraft {
+    span: Span,
+    role: SpanRole,
+}
+
 impl Strings {
     fn new() -> Self {
         Strings {
@@ -317,6 +332,8 @@ struct Builder<'a> {
     /// difference, and it is applied in exactly two places: a direct call
     /// and the table.
     shift: u32,
+    /// Source spans attached to selected instructions in this function.
+    sites: Vec<SiteDraft>,
 }
 
 impl<'a> Builder<'a> {
@@ -356,6 +373,7 @@ impl<'a> Builder<'a> {
             signatures,
             imports,
             shift,
+            sites: Vec::new(),
         }
     }
 
@@ -422,11 +440,6 @@ impl<'a> Builder<'a> {
             Ins::I64Store(0),
             Ins::Unreachable,
         ]
-    }
-
-    fn emit_failure(&mut self, code: &str, message: &str) {
-        let failure = self.failure_instructions(code, message);
-        self.instructions.extend(failure);
     }
 
     fn trap_on_true(&mut self) {
@@ -595,6 +608,69 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
+    fn site(&mut self, span: Span, role: SpanRole) -> u32 {
+        self.sites.push(SiteDraft { span, role });
+        (self.sites.len() - 1) as u32
+    }
+
+    fn mark(&mut self, span: Span, role: SpanRole, inner: Ins) {
+        let site = self.site(span, role);
+        self.instructions.push(Ins::Marked {
+            site,
+            inner: Box::new(inner),
+        });
+    }
+
+    fn finish_sites(&self, function: u32, body: &[Ins]) -> FunctionSpans {
+        fn walk(
+            out: &mut [Option<InstructionSpan>],
+            sites: &[SiteDraft],
+            body: &[Ins],
+            offset: &mut u32,
+        ) {
+            for instruction in body {
+                match instruction {
+                    Ins::Marked { site, inner } => {
+                        out[*site as usize] = Some(InstructionSpan {
+                            offset: *offset,
+                            span: sites[*site as usize].span,
+                            role: sites[*site as usize].role,
+                        });
+                        walk(out, sites, std::slice::from_ref(inner.as_ref()), offset);
+                    }
+                    Ins::Block { body, .. } | Ins::Loop { body, .. } => {
+                        *offset += 2;
+                        walk(out, sites, body, offset);
+                        *offset += 1;
+                    }
+                    Ins::If {
+                        then, otherwise, ..
+                    } => {
+                        *offset += 2;
+                        walk(out, sites, then, offset);
+                        if !otherwise.is_empty() {
+                            *offset += 1;
+                            walk(out, sites, otherwise, offset);
+                        }
+                        *offset += 1;
+                    }
+                    _ => *offset += instruction_size(instruction),
+                }
+            }
+        }
+
+        let mut mapped = vec![None; self.sites.len()];
+        let mut offset = 0;
+        walk(&mut mapped, &self.sites, body, &mut offset);
+        FunctionSpans {
+            function,
+            sites: mapped
+                .into_iter()
+                .map(|site| site.expect("every marked instruction should have an offset"))
+                .collect(),
+        }
+    }
+
     fn block(&mut self, block: &Block) -> Result<(), Unsupported> {
         for stmt in &block.stmts {
             self.stmt(stmt)?;
@@ -627,8 +703,30 @@ impl<'a> Builder<'a> {
                     self.instructions.push(Ins::Drop);
                 }
             }
-            Stmt::Fail { code, message } => {
-                self.emit_failure(code, message);
+            Stmt::Fail {
+                code,
+                message,
+                span,
+            } => {
+                // A contract failure ends the program, and says which one
+                // before it does. The two strings are placed the way every
+                // literal is, and their addresses go in the two words
+                // `layout` set aside, so whatever runs the module can read
+                // them after the trap.
+                let at_code = self.strings.place(code);
+                let at_message = self.strings.place(message);
+
+                self.instructions
+                    .push(Ins::I32Const(layout::FAILURE_CODE as i32));
+                self.instructions.push(Ins::I64Const(at_code as i64));
+                self.instructions.push(Ins::I64Store(0));
+
+                self.instructions
+                    .push(Ins::I32Const(layout::FAILURE_MESSAGE as i32));
+                self.instructions.push(Ins::I64Const(at_message as i64));
+                self.instructions.push(Ins::I64Store(0));
+
+                self.mark(*span, SpanRole::Trap, Ins::Unreachable);
             }
             Stmt::Return { value } => {
                 self.expr(value)?;
@@ -779,7 +877,12 @@ impl<'a> Builder<'a> {
                 }
                 UnaryOp::Negate => self.checked_negate(operand)?,
             },
-            Expr::Binary { op, left, right } => match op {
+            Expr::Binary {
+                op,
+                left,
+                right,
+                span,
+            } => match op {
                 BinaryOp::AddInt
                 | BinaryOp::SubInt
                 | BinaryOp::MulInt
@@ -788,17 +891,21 @@ impl<'a> Builder<'a> {
                 _ => {
                     self.expr(left)?;
                     self.expr(right)?;
-                    self.binary(*op, left)?;
+                    self.binary(*op, left, *span)?;
                 }
             },
-            Expr::Call { func, args } => {
+            Expr::Call { func, args, span } => {
                 for arg in args {
                     self.expr(arg)?;
                 }
-                self.instructions
-                    .push(Ins::Call(func.0 as u32 + self.shift));
+                self.mark(*span, SpanRole::Call, Ins::Call(func.0 as u32 + self.shift));
             }
-            Expr::CallIndirect { callee, args, ret } => {
+            Expr::CallIndirect {
+                callee,
+                args,
+                ret,
+                span,
+            } => {
                 // The environment goes first, then the arguments, then the
                 // code pointer the table is indexed by. That order is the
                 // lifted body's parameter list, which is why a closure's
@@ -822,7 +929,7 @@ impl<'a> Builder<'a> {
                 self.instructions.push(Ins::I32WrapI64);
                 self.instructions.push(Ins::I64Load(0));
                 self.instructions.push(Ins::I32WrapI64);
-                self.instructions.push(Ins::CallIndirect(type_index));
+                self.mark(*span, SpanRole::Call, Ins::CallIndirect(type_index));
             }
             Expr::Install {
                 effect,
@@ -1068,7 +1175,7 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    fn binary(&mut self, op: BinaryOp, left: &Expr) -> Result<(), Unsupported> {
+    fn binary(&mut self, op: BinaryOp, left: &Expr, span: Span) -> Result<(), Unsupported> {
         let instruction = match op {
             BinaryOp::AddInt => Ins::I64Add,
             BinaryOp::SubInt => Ins::I64Sub,
@@ -1108,7 +1215,7 @@ impl<'a> Builder<'a> {
                 }
             }
         };
-        self.instructions.push(instruction);
+        self.mark(span, SpanRole::Trap, instruction);
         Ok(())
     }
 
@@ -1159,7 +1266,12 @@ impl<'a> Builder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use deed_diagnostics::Span;
     use deed_mir::{Field, Layout, Variant};
+
+    fn nowhere() -> Span {
+        Span::new(0, 0)
+    }
 
     fn adding() -> Program {
         let mut program = Program::new();
@@ -1168,6 +1280,7 @@ mod tests {
             op: BinaryOp::AddInt,
             left: Box::new(Expr::Local(Local(0))),
             right: Box::new(Expr::Local(Local(1))),
+            span: nowhere(),
         });
         program.add_function(function);
         program
@@ -1180,6 +1293,7 @@ mod tests {
             op,
             left: Box::new(Expr::Local(Local(0))),
             right: Box::new(Expr::Local(Local(1))),
+            span: nowhere(),
         });
         program.add_function(function);
         compile(&program).expect("this compiles")
@@ -1195,6 +1309,8 @@ mod tests {
             Err(crate::Trap::Failed {
                 code: ARITHMETIC_CODE.to_string(),
                 message: ARITHMETIC_MESSAGE.to_string(),
+                span: None,
+                blame_caller: false,
             })
         );
     }
@@ -1410,6 +1526,7 @@ mod tests {
                 op: BinaryOp::AddInt,
                 left: Box::new(host("b")),
                 right: Box::new(host("c")),
+                span: nowhere(),
             },
             Expr::List {
                 element: Box::new(Ty::Int),
@@ -1419,6 +1536,7 @@ mod tests {
                 callee: Box::new(host("e")),
                 args: vec![host("f")],
                 ret: Box::new(Ty::Int),
+                span: nowhere(),
             },
             Expr::Field {
                 value: Box::new(Expr::Make {

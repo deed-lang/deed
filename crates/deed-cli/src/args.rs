@@ -24,6 +24,7 @@ Options:
   --obligations           Report which tier each refinement obligation landed in.
   --timings               Report how long each pass took.
   --profile-runtime       With `run`, report where runtime went.
+    --compiled              With `run` or `test`, use the compiled backend.
   --dir <path>            What `sys.files` reaches when running. Default: the
                           current directory. A program cannot get outside it.
   --check                 With `fmt` or `fix`, change nothing and report what
@@ -103,8 +104,7 @@ pub struct CheckArgs {
     /// arguments can look exactly like this tool's and guessing which is which
     /// is how a flag ends up being eaten by the wrong reader.
     pub arguments: Vec<String>,
-    /// With `test`, run through the compiled backend rather than the
-    /// interpreter.
+    /// With `run` or `test`, use the compiled backend.
     pub compiled: bool,
 }
 
@@ -232,6 +232,10 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 Mode::Build => "build",
             }
         ));
+    }
+
+    if compiled && !matches!(mode, Mode::Run | Mode::Test) {
+        return Err("`--compiled` is only valid with `deed run` or `deed test`".to_string());
     }
 
     Ok(Command::Check(CheckArgs {
