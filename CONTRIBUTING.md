@@ -60,6 +60,20 @@ a machine with MSVC or on Linux/macOS needs none of it. `cargo check --target
 wasm32-unknown-unknown` additionally needs `rustup target add wasm32-unknown-unknown` once,
 for anything touching `deed-wasm`.
 
+That setting is not enough on its own. A build script is compiled and run for the *host*, so
+`deed-explain` (which generates its pages in `build.rs`), and therefore `deed-driver` and
+`deed-cli`, still wanted MSVC and could not be built or tested on this machine at all. Three
+crates and most of the test suite. The answer is a host toolchain that links with llvm-mingw
+instead:
+
+```
+rustup toolchain install stable-x86_64-pc-windows-gnullvm
+rustup run stable-x86_64-pc-windows-gnullvm cargo nextest run --workspace
+```
+
+`x86_64-pc-windows-gnu` looks like it should work and does not: it links against `libgcc`,
+which llvm-mingw does not ship.
+
 ## The ratchets
 
 This repository's tests are stricter than most, in ways nothing here will explain until CI
