@@ -23,8 +23,59 @@ fn run(args: &[&str]) -> Output {
         .expect("the deed binary should run")
 }
 
+#[test]
+fn runtime_profile_is_only_for_run() {
+    let output = run(&["check", "--profile-runtime", EXAMPLE]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("only for `deed run`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn run_can_report_runtime_profile() {
+    let scratch = Scratch::new("runtime-profile");
+    let file = scratch.write(
+        "profiled.deed",
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         effect Counter {\n\
+         \x20 fn bump(by: Int) -> Int\n\
+         }\n\n\
+         handler InMemory implements Counter {\n\
+         \x20 state count: Int\n\n\
+         \x20 fn bump(by) -> Int {\n\
+         \x20   count = count + by\n\
+         \x20   count\n\
+         \x20 }\n\
+         }\n\n\
+         fn needs(value: Positive) -> Int { value }\n\n\
+         fn work() -> Int {\n\
+         \x20 with InMemory { count: 0 } {\n\
+         \x20   let n = Counter.bump(1)\n\
+         \x20   needs(n)\n\
+         \x20 }\n\
+         }\n\n\
+         fn main(sys: System) -> Int {\n\
+         \x20 work()\n\
+         \x20 0\n\
+         }\n",
+    );
+
+    let output = run(&["run", "--profile-runtime", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("runtime profile:"), "{text}");
+    assert!(text.contains("contract"), "{text}");
+    assert!(text.contains("handler"), "{text}");
+    assert!(text.contains("needs"), "{text}");
+    assert!(text.contains("bump"), "{text}");
 }
 
 fn stderr(output: &Output) -> String {
@@ -313,6 +364,7 @@ fn help_and_version_succeed() {
     assert_eq!(code(&help), 0);
     assert!(stdout(&help).contains("Usage:"));
     assert!(stdout(&help).contains("--obligations"));
+    assert!(stdout(&help).contains("--profile-runtime"));
 
     let version = run(&["--version"]);
     assert_eq!(code(&version), 0);

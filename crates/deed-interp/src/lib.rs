@@ -62,7 +62,8 @@ pub mod value;
 pub use deed_rt::sandbox;
 
 pub use interp::{
-    DeclaredRows, Guard, Guards, Program, RowItem, Run, TestOutcome, run_main, run_tests,
+    DeclaredRows, FunctionProfile, Guard, Guards, Program, RowItem, Run, RuntimeProfile,
+    TestOutcome, run_main, run_main_profiled, run_tests,
 };
 pub use property::{
     GeneratedInputs, PropertyConfig, PropertyOutcome, generate_inputs, is_testable, run_properties,

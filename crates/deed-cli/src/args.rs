@@ -23,6 +23,7 @@ Options:
   --format <human|json>   How to print diagnostics. Default: human.
   --obligations           Report which tier each refinement obligation landed in.
   --timings               Report how long each pass took.
+  --profile-runtime       With `run`, report where runtime went.
   --dir <path>            What `sys.files` reaches when running. Default: the
                           current directory. A program cannot get outside it.
   --check                 With `fmt` or `fix`, change nothing and report what
@@ -86,6 +87,8 @@ pub struct CheckArgs {
     pub obligations: bool,
     /// Report how long each pass took.
     pub timings: bool,
+    /// With `run`, report where runtime went.
+    pub runtime_profile: bool,
     /// What `sys.files` is rooted at. `None` means the current directory.
     ///
     /// Granting the whole working directory by default is what every other
@@ -172,6 +175,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut format = Format::Human;
     let mut obligations = false;
     let mut timings = false;
+    let mut runtime_profile = false;
     let mut dir = None;
     let mut check_only = false;
     let mut arguments = Vec::new();
@@ -188,6 +192,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             "-h" | "--help" => return Ok(Command::Help),
             "--obligations" => obligations = true,
             "--timings" => timings = true,
+            "--profile-runtime" => runtime_profile = true,
             "--check" => check_only = true,
             "--compiled" => compiled = true,
             "--format" => {
@@ -235,6 +240,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         format,
         obligations,
         timings,
+        runtime_profile,
         dir,
         check_only,
         arguments,
@@ -294,6 +300,15 @@ mod tests {
         assert_eq!(check.paths.len(), 2);
         assert!(check.obligations);
         assert_eq!(check.format, Format::Human);
+    }
+
+    #[test]
+    fn run_accepts_runtime_profiling() {
+        let Ok(Command::Check(check)) = parse(args(&["run", "--profile-runtime", "a.deed"])) else {
+            panic!("should parse");
+        };
+        assert_eq!(check.mode, Mode::Run);
+        assert!(check.runtime_profile);
     }
 
     #[test]

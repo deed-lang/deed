@@ -10,7 +10,9 @@
 //! also says which of them are read here rather than there.
 
 use deed_diagnostics::{SourceMap, render_human};
-use deed_interp::{DeclaredRows, Guards, Program, TestOutcome, codes, run_tests};
+use deed_interp::{
+    DeclaredRows, Guards, Program, TestOutcome, codes, run_main_profiled, run_tests,
+};
 use deed_lexer::tokenize;
 use deed_parser::parse;
 use deed_resolve::{Universe, resolve};
@@ -115,6 +117,96 @@ fn expect_pass(src: &str) {
             );
         }
     }
+}
+
+#[test]
+fn profiling_can_separate_contracts_and_handler_operations() {
+    let source = "\
+module a
+
+type Positive = Int where value > 0
+
+effect Counter {
+    fn bump(by: Int) -> Int
+}
+
+handler InMemory implements Counter {
+    state count: Int
+
+    fn bump(by) -> Int {
+        count = count + by
+        count
+    }
+}
+
+fn needs(value: Positive) -> Int { value }
+
+fn work() -> Int
+  uses Counter.bump,
+{
+  with InMemory { count: 0 } {
+    let n = Counter.bump(1)
+    needs(n)
+  }
+}
+
+fn main(sys: System) -> Int
+  uses Counter.bump,
+{
+  work()
+  0
+}
+";
+
+    let mut sources = SourceMap::new();
+    let file = sources.add("profiled.deed", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    assert!(!lexed.has_errors(), "should lex cleanly");
+    let parsed = parse(file, &lexed.tokens);
+    assert!(!parsed.has_errors(), "should parse cleanly");
+    let resolved = resolve(file, &parsed.module, &Universe::new());
+    assert!(!resolved.has_errors(), "should resolve cleanly");
+
+    let mut program = Program::new();
+    program.add(
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        Guards::new(),
+        DeclaredRows::new(),
+    );
+
+    let run = run_main_profiled(&program, file, std::path::Path::new(""), &[])
+        .expect("there should be a main");
+    assert!(run.result.is_ok(), "the run should succeed");
+
+    let profile = run.profile.expect("profiling should be present");
+    assert!(
+        !profile.functions.is_empty(),
+        "at least one function should be reported"
+    );
+
+    let needs = profile
+        .functions
+        .iter()
+        .find(|entry| entry.function == "needs")
+        .expect("`needs` should be in the profile");
+    assert!(needs.calls > 0);
+    assert!(
+        needs.contract_checks > 0,
+        "`needs` should pay for a contract check"
+    );
+
+    let bump = profile
+        .functions
+        .iter()
+        .find(|entry| entry.function == "bump")
+        .expect("`bump` should be in the profile");
+    assert!(bump.calls > 0);
+    assert!(
+        bump.handler_calls > 0,
+        "`bump` should be counted as a handler operation"
+    );
 }
 
 /// The single failure from a source with exactly one test.
