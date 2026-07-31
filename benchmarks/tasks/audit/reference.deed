@@ -1,0 +1,34 @@
+module bench/audit
+
+effect Audit {
+    fn note(entry: String) -> ()
+    fn so_far() -> String
+}
+
+handler Collected implements Audit {
+    state entries: List<String>
+
+    fn note(entry) -> () {
+        entries = push(entries, entry)
+    }
+
+    fn so_far() -> String {
+        join(entries, ", ")
+    }
+}
+
+fn record_all(entries: List<String>) -> ()
+  uses
+    Audit.note,
+{
+    for entry in entries {
+        Audit.note(entry)
+    }
+}
+
+fn collected(entries: List<String>) -> String {
+    with Collected { entries: [] } {
+        record_all(entries)
+        Audit.so_far()
+    }
+}

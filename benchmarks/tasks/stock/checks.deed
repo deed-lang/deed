@@ -1,0 +1,17 @@
+module bench/stock_checks
+
+use bench/stock.{restock, take_one}
+
+test "taking one leaves one fewer" {
+    assert take_one(restock(5, 0)) == 4
+    assert take_one(restock(1, 0)) == 0
+}
+
+test "restocking adds to what is there" {
+    assert restock(3, 4) == 7
+    assert restock(1, 0) == 1
+}
+
+test "a restocked count is still something you can take from" {
+    assert take_one(restock(2, 3)) == 4
+}

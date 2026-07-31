@@ -1,0 +1,11 @@
+module bench/twice
+
+fn twice(n: Int) -> Int
+  where
+    n < 1000000000,
+    n > -1000000000,
+  ensures
+    ok  => result == n + n,
+{
+    n + n
+}

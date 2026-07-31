@@ -1,0 +1,15 @@
+module bench/grade_checks
+
+use bench/grade.{describe, grade}
+
+test "the boundaries land where they were asked to" {
+    assert describe(grade(39)) == "low"
+    assert describe(grade(40)) == "middling"
+    assert describe(grade(79)) == "middling"
+    assert describe(grade(80)) == "high"
+}
+
+test "the far ends" {
+    assert describe(grade(0)) == "low"
+    assert describe(grade(100)) == "high"
+}

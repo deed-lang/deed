@@ -1,0 +1,25 @@
+module bench/grade
+
+choice Grade {
+    Low,
+    Middling,
+    High,
+}
+
+fn grade(score: Int) -> Grade {
+    if score < 40 {
+        Low
+    } else if score >= 80 {
+        High
+    } else {
+        Middling
+    }
+}
+
+fn describe(mark: Grade) -> String {
+    match mark {
+        Low => "low",
+        Middling => "middling",
+        High => "high",
+    }
+}

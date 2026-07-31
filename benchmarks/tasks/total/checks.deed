@@ -1,0 +1,22 @@
+module bench/total_checks
+
+use bench/total.{largest, total}
+
+test "adds every number" {
+    assert total([1, 2, 3, 4]) == 10
+    assert total([5]) == 5
+}
+
+test "an empty list totals zero" {
+    assert total([]) == 0
+}
+
+test "finds the biggest" {
+    assert largest([3, 9, 4], 0) == 9
+    assert largest([9, 3, 4], 0) == 9
+}
+
+test "the fallback is only for an empty list" {
+    assert largest([], 7) == 7
+    assert largest([0 - 5, 0 - 2], 0) == 0 - 2
+}

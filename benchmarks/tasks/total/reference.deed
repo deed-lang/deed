@@ -1,0 +1,26 @@
+module bench/total
+
+record Best {
+    seen: Bool,
+    value: Int,
+}
+
+fn total(numbers: List<Int>) -> Int {
+    for n in numbers with sum = 0 {
+        sum + n
+    }
+}
+
+fn largest(numbers: List<Int>, fallback: Int) -> Int {
+    let found = for n in numbers with best = Best { seen: false, value: fallback } {
+        if !best.seen {
+            Best { seen: true, value: n }
+        } else if n > best.value {
+            Best { seen: true, value: n }
+        } else {
+            best
+        }
+    }
+
+    found.value
+}

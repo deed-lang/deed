@@ -1,0 +1,9 @@
+module bench/split_evenly
+
+fn split_evenly(amount: Int, people: Int) -> Result<Int, String> {
+    if people <= 0 {
+        err("there is nobody to share with")
+    } else {
+        ok(amount / people)
+    }
+}

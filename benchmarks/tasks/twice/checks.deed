@@ -1,0 +1,12 @@
+module bench/twice_checks
+
+use bench/twice.{twice}
+
+test "doubles a positive number" {
+    assert twice(21) == 42
+}
+
+test "doubles zero and a negative number" {
+    assert twice(0) == 0
+    assert twice(0 - 7) == 0 - 14
+}
