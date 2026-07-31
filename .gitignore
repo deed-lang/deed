@@ -14,3 +14,8 @@ Thumbs.db
 
 mutants.out*/
 *.wasm
+
+# Fuzz crash reproducers are uploaded as GitHub Actions artifacts. They are
+# not committed because they can be large and the corpus entries that matter
+# (the ones fuzz_corpus.rs replays) live in fuzz/corpus/check/ instead.
+crates/deed-driver/fuzz/artifacts/

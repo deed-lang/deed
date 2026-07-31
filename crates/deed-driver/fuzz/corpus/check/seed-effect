@@ -1,0 +1,12 @@
+module foo
+
+effect Log {
+    fn write(msg: String) -> ()
+}
+
+fn greet(out: Log) -> ()
+  uses
+    Log.write,
+{
+    Log.write(out, "hello")
+}
