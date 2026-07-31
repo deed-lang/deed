@@ -5,8 +5,9 @@ name: Fuzz
 # the corpus. It is on a schedule rather than on push so that it never runs
 # alongside the timing-sensitive scaling and LSP cost tests in CI.
 #
-# A crash input is added to the corpus automatically. The next regular CI run
-# will replay it, making the regression test permanent.
+# A crash input is opened as a pull request against the corpus. Merging it
+# makes the regression test permanent, because the next regular CI run and
+# every one after it replays it.
 on:
   schedule:
     # Sundays at 03:00 UTC. A weekday run would compete with review activity;
@@ -17,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -51,22 +53,9 @@ jobs:
       # Crash and timeout inputs become corpus entries. The replay test in
       # fuzz_corpus.rs will exercise them on every future build, so the fix
       # for a crash is a permanent regression test, not just a CI artifact.
-      - name: add any crash inputs to the corpus
-        run: |
-          artifacts=crates/deed-driver/fuzz/artifacts/check
-          corpus=crates/deed-driver/fuzz/corpus/check
-          if [ -d "$artifacts" ]; then
-            count=0
-            for f in "$artifacts"/crash-* "$artifacts"/timeout-* "$artifacts"/oom-*; do
-              [ -f "$f" ] || continue
-              cp "$f" "$corpus/"
-              count=$((count + 1))
-            done
-            echo "$count crash input(s) moved to corpus"
-          fi
-
-      # Upload the full artifacts directory so a developer can reproduce any
-      # crash locally with `cargo fuzz run check <input-file>`.
+      #
+      # Upload the full artifacts directory first so a developer can reproduce
+      # any crash locally with `cargo fuzz run check <input-file>`.
       - name: upload crash reproducers
         uses: actions/upload-artifact@v7
         if: always()
@@ -76,20 +65,66 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
 
-      # Commit whatever the fuzzer added to the corpus (both new coverage
-      # inputs and any crash inputs moved above). The next regular CI run
-      # will replay them all as the fast, deterministic fuzz_corpus test.
-      - name: commit new corpus entries
+      # Only what crashed is committed. libFuzzer also writes new coverage
+      # inputs into the corpus directory, and those are its working set rather
+      # than regression tests: fuzz_corpus.rs replays every entry on every
+      # build, so keeping them would charge each future build for inputs that
+      # assert nothing. If cumulative coverage turns out to be worth carrying
+      # between runs, the answer is a cache, not the corpus.
+      #
+      # This opens a PR instead of pushing. The ruleset on the default branch
+      # requires a pull request and exempts nobody, so a direct push is
+      # refused outright.
+      - name: open a PR for any crash inputs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          artifacts=crates/deed-driver/fuzz/artifacts/check
+          corpus=crates/deed-driver/fuzz/corpus/check
+
+          copied=()
+          for f in "$artifacts"/crash-* "$artifacts"/timeout-* "$artifacts"/oom-*; do
+            [ -f "$f" ] || continue
+            cp "$f" "$corpus/"
+            copied+=("$corpus/$(basename "$f")")
+          done
+
+          if [ "${#copied[@]}" -eq 0 ]; then
+            echo "the fuzzer found nothing that the check pipeline did not survive"
+            exit 0
+          fi
+
+          count="${#copied[@]}"
+          branch="fuzz/crash-${GITHUB_RUN_ID}"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add crates/deed-driver/fuzz/corpus/check/
-          if git diff --cached --quiet; then
-            echo "no new corpus entries"
-          else
-            git commit -m "fuzz: add corpus entries from scheduled run"
-            git push
-          fi
+          git checkout -b "$branch"
+          git add "${copied[@]}"
+          git commit -m "fuzz: add $count crash input(s) from the scheduled run"
+          git push origin "$branch"
+
+          body="$(mktemp)"
+          {
+            echo "The scheduled fuzz run found $count input(s) the check pipeline did not survive."
+            echo
+            echo "They are corpus entries now, so \`fuzz_corpus.rs\` replays them on every build."
+            echo
+            echo "**The checks on this PR are meant to fail.** The replay test reproduces the crash,"
+            echo "which is what makes this a regression test rather than a CI artifact. Push the fix"
+            echo "onto this branch and it goes green; merging it before then would only move a red"
+            echo "build onto the default branch."
+            echo
+            echo "Reproduce locally with \`cargo fuzz run check <input>\`. The same files are in the"
+            echo "\`fuzz-artifacts\` artifact on run $GITHUB_RUN_ID."
+            echo
+            echo "Checks start in an approval-required state because a pull request opened with"
+            echo "\`GITHUB_TOKEN\` does not start its own runs. Approve them from the merge box."
+          } > "$body"
+
+          gh pr create --base "$GITHUB_REF_NAME" --head "$branch" \
+            --title "fuzz: $count crash input(s) from the scheduled run" \
+            --body-file "$body"
 
       # Re-surface the fuzz failure after saving artifacts and corpus entries.
       # Without this the job always shows green, which would hide a finding.
