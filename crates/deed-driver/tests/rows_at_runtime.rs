@@ -277,6 +277,66 @@ fn a_contract_may_read_state_without_declaring_it() {
     assert!(said.is_empty(), "{}", rendered(&sources, &said));
 }
 
+/// Two effects, one narrow function, and a caller with both handlers installed.
+///
+/// `narrow` declares only `Log.note`. `wide` calls it from inside a `with`
+/// block that also has `Ticker` installed, so both handlers are on the stack
+/// when `narrow` runs. The check must hold `narrow` to what IT declared, not
+/// to what is available in the calling context.
+///
+/// This is the foundational property for spawned task rows: when a task is
+/// eventually resumed by a scheduler that has more handlers installed than the
+/// task declared, the task's own row must be the only thing it is held to. The
+/// handlers at the resume site are invisible to the task's row frames. That
+/// mechanism does not exist yet (spawn does not parse), but the check must
+/// already get the single-call version right, and this is that version.
+///
+/// See `design/decisions/2026-07-31-spawned-task-row.md`.
+const LOG_AND_TICKER: &str = "module two\n\n\
+     effect Log {\n\
+     \x20 fn note(message: String) -> Int\n\
+     }\n\n\
+     effect Ticker {\n\
+     \x20 fn tick() -> Int\n\
+     }\n\n\
+     handler Counted implements Log {\n\
+     \x20 state seen: Int\n\n\
+     \x20 fn note(message) -> Int {\n\
+     \x20   seen = seen + 1\n\
+     \x20   seen\n\
+     \x20 }\n\
+     }\n\n\
+     handler Silent implements Ticker {\n\
+     \x20 fn tick() -> Int { 7 }\n\
+     }\n\n";
+
+#[test]
+fn a_function_called_in_a_richer_context_is_held_to_its_own_row() {
+    // `narrow` only declares `Log.note`. It is called from `wide`, which
+    // also has `Ticker.tick`. The runtime must not report `narrow` for
+    // anything, because `narrow` only performs what it declared.
+    let (sources, said) = run_all(&[(
+        "two.deed".to_string(),
+        format!(
+            "{LOG_AND_TICKER}\
+             fn narrow() -> Int uses Log.note {{\n\
+             \x20 Log.note(\"narrow\")\n\
+             }}\n\n\
+             fn wide() -> Int uses Log.note, Ticker.tick, {{\n\
+             \x20 Ticker.tick() + narrow()\n\
+             }}\n\n\
+             test \"narrow is held to its own row in a richer context\" {{\n\
+             \x20 with Counted {{ seen: 0 }} {{\n\
+             \x20   with Silent {{\n\
+             \x20     assert wide() == 8\n\
+             \x20   }}\n\
+             \x20 }}\n\
+             }}\n"
+        ),
+    )]);
+    assert!(said.is_empty(), "{}", rendered(&sources, &said));
+}
+
 /// The words `DEED6010` says, which nothing had ever read.
 ///
 /// No program can reach them, and that is the invariant rather than a gap: the
