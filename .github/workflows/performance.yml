@@ -26,8 +26,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo test --release performance ratchet
+        id: measure
         env:
-          DEED_PERF_RESULTS: performance-results.json
+          # Absolute: cargo runs the test binary from the package directory, not the workspace root.
+          DEED_PERF_RESULTS: ${{ github.workspace }}/performance-results.json
         run: >
           cargo test --release -p deed-driver --test performance_regression
           existing_bench_slopes_stay_inside_the_ratchet
@@ -35,49 +37,56 @@ jobs:
 
       - name: summarize the measured slopes
         if: always()
+        env:
+          MEASURE_OUTCOME: ${{ steps.measure.outcome }}
         run: |
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           path = Path("performance-results.json")
           if not path.exists():
+              # The test writes this before it asserts, so a step that passed wrote one.
+              if os.environ["MEASURE_OUTCOME"] == "success":
+                  raise SystemExit(f"{path} is missing after the ratchet passed")
               raise SystemExit(0)
 
           data = json.loads(path.read_text())
-          with open(Path.home() / "summary.md", "w", encoding="utf-8") as out:
+          edit = data["edit_loop"]
+          passes = edit["passes_us_per_file"]
+          logs = data["logs_report"]
+
+          rows = [
+              (
+                  "edit loop total",
+                  f"{edit['total_us_per_file']:.2f} us/file",
+                  f"{edit['total_segment_ratio']:.2f}x",
+              )
+          ]
+          rows += [
+              (f"edit loop {name}", f"{passes[name]:.2f} us/file", "")
+              for name in ("lex", "parse", "resolve", "typeck", "effects")
+          ]
+          rows.append(
+              (
+                  "logs report",
+                  f"{logs['us_per_line']:.2f} us/line",
+                  f"{logs['segment_ratio']:.2f}x",
+              )
+          )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
               out.write("## Performance ratchet\n\n")
               out.write("| measurement | slope | segment ratio |\n")
               out.write("| --- | ---: | ---: |\n")
-              out.write(
-                  f"| edit loop total | {data['edit_loop']['total_us_per_file']:.2f} us/file | "
-                  f"{data['edit_loop']['total_segment_ratio']:.2f}x |\n"
-              )
-              out.write(
-                  f"| edit loop lex | {data['edit_loop']['passes_us_per_file']['lex']:.2f} us/file | |\n"
-              )
-              out.write(
-                  f"| edit loop parse | {data['edit_loop']['passes_us_per_file']['parse']:.2f} us/file | |\n"
-              )
-              out.write(
-                  f"| edit loop resolve | {data['edit_loop']['passes_us_per_file']['resolve']:.2f} us/file | |\n"
-              )
-              out.write(
-                  f"| edit loop typeck | {data['edit_loop']['passes_us_per_file']['typeck']:.2f} us/file | |\n"
-              )
-              out.write(
-                  f"| edit loop effects | {data['edit_loop']['passes_us_per_file']['effects']:.2f} us/file | |\n"
-              )
-              out.write(
-                  f"| logs report | {data['logs_report']['us_per_line']:.2f} us/line | "
-                  f"{data['logs_report']['segment_ratio']:.2f}x |\n"
-              )
+              for measurement, slope, ratio in rows:
+                  out.write(f"| {measurement} | {slope} | {ratio} |\n")
           PY
-          cat ~/summary.md >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: performance-results
           path: performance-results.json
-          if-no-files-found: ignore
+          if-no-files-found: warn
