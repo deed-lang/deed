@@ -185,3 +185,13 @@ fn span_of_error_on_second_line_accounts_for_first_line_length() {
     assert_eq!(span.start, 16);
     assert_eq!(span.end, 16 + 14); // "target release" is 14 chars.
 }
+
+#[test]
+fn spans_account_for_crlf_and_surrounding_whitespace() {
+    let m = parse("# ok\r\n  target release  \r\n   component   \r\n");
+    assert_eq!(m.diagnostics.len(), 2);
+    assert_eq!(m.diagnostics[0].primary.span.start, 8);
+    assert_eq!(m.diagnostics[0].primary.span.end, 22);
+    assert_eq!(m.diagnostics[1].primary.span.start, 29);
+    assert_eq!(m.diagnostics[1].primary.span.end, 38);
+}

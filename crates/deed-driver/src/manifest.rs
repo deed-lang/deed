@@ -68,24 +68,11 @@ pub fn parse_manifest(file: FileId, text: &str) -> Manifest {
     let mut diagnostics = Vec::new();
 
     let mut offset: u32 = 0;
-    for line in text.lines() {
+    for raw_line in text.split_inclusive('\n') {
         let line_start = offset;
-        // Advance past this line's bytes plus the newline that follows it.
-        // `.lines()` strips the newline, so we add 1 when the byte that
-        // follows the content is `\n` (or `\r\n`).
-        let raw_len = if text[offset as usize..].starts_with(line)
-            && text[offset as usize + line.len()..].starts_with('\n')
-        {
-            line.len() as u32 + 1
-        } else if text[offset as usize..].starts_with(line)
-            && text[offset as usize + line.len()..].starts_with("\r\n")
-        {
-            line.len() as u32 + 2
-        } else {
-            // Last line with no trailing newline.
-            line.len() as u32
-        };
-        offset += raw_len;
+        offset += raw_line.len() as u32;
+        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
 
         let trimmed = line.trim();
 

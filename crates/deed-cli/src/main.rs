@@ -205,12 +205,12 @@ fn run_check(args: CheckArgs) -> ExitCode {
     let mut out = stdout.lock();
 
     // Manifest diagnostics first, in source order within each manifest file.
-    let mut manifest_errors = 0usize;
+    let manifest_has_errors = manifest_diagnostics
+        .iter()
+        .flatten()
+        .any(Diagnostic::is_error);
     for diagnostics in &manifest_diagnostics {
         for diagnostic in diagnostics {
-            if diagnostic.is_error() {
-                manifest_errors += 1;
-            }
             if let Err(error) = writeln!(out, "{}", render_human(&sources, diagnostic)) {
                 eprintln!("error: {error}");
                 return ExitCode::from(EXIT_USAGE);
@@ -229,7 +229,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     let errors: usize = checks.iter().map(Checked::error_count).sum();
-    if errors > 0 || manifest_errors > 0 {
+    if errors > 0 || manifest_has_errors {
         return ExitCode::FAILURE;
     }
 
@@ -1039,14 +1039,16 @@ fn read_manifest(
         } else {
             root.join(&component.path)
         };
-        if !component_roots.contains(&resolved) {
-            component_roots.push(resolved);
+        if component_roots.contains(&resolved) {
+            continue;
         }
+        component_roots.push(resolved);
     }
 
-    if !parsed.diagnostics.is_empty() {
-        manifests.push((name, text, parsed.diagnostics));
+    if parsed.diagnostics.is_empty() {
+        return;
     }
+    manifests.push((name, text, parsed.diagnostics));
 }
 
 /// The directory a module path is relative to, when the file is where its name
@@ -1099,4 +1101,55 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    fn temporary_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "deed-manifest-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
+    #[test]
+    fn repeated_component_roots_are_added_once() {
+        let root = temporary_root("dedup");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("deed.manifest"),
+            "component ../shared\ncomponent ../shared\n",
+        )
+        .unwrap();
+
+        let mut component_roots = Vec::new();
+        let mut manifests = Vec::new();
+        read_manifest(&root, &mut component_roots, &mut manifests);
+
+        assert_eq!(component_roots, [root.join("../shared")]);
+        assert!(manifests.is_empty());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn invalid_manifest_diagnostics_are_retained() {
+        let root = temporary_root("diagnostic");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("deed.manifest"), "component\n").unwrap();
+
+        let mut component_roots = Vec::new();
+        let mut manifests = Vec::new();
+        read_manifest(&root, &mut component_roots, &mut manifests);
+
+        assert!(component_roots.is_empty());
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(
+            manifests[0].2[0].code,
+            deed_driver::codes::MISSING_COMPONENT_PATH
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
 }
