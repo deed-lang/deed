@@ -44,14 +44,14 @@ The absence of a float literal is also load-bearing elsewhere: it is what makes 
 parse unambiguously as `40`, `.`, `try` with no lookahead. A fractional type, whatever shape
 it takes, would need its own rule there.
 
-**What would change the answer:** [#655](https://github.com/deed-lang/deed/issues/655) is
-open and asks for the program that needs one first, the way every decision on this page was
-made. Binary floating point is very likely the wrong shape for it regardless: this
-language's whole position is that a signature should not lie, and a ledger built on binary
-floating point is a bug waiting rather than a convenience. Fixed-point, decimal or rational
-are the live candidates, and whichever is chosen has to survive structural equality being
-total, refinements being intervals over integers, and `facts` reasoning about linear
-arithmetic.
+**What would change the answer:** [fractional-values.md](fractional-values.md) takes the
+first real case from `examples/logs.deed` and answers [#655](https://github.com/deed-lang/deed/issues/655)
+for now: keep refusing every fractional number type. The first concrete need is an exact
+ratio that only becomes text at the edge, which is not yet enough to choose one language
+wide representation. Binary floating point is still the wrong answer for money, decimal is
+still the leading candidate for stored base ten quantities, and rational is still the
+leading candidate for exact ratios, but either one would need a new story for structural
+equality, refinements, and `facts` beyond the integer interval model that exists today.
 
 ## No ranges
 
