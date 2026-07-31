@@ -94,6 +94,11 @@ effects and capabilities, formatting, backend compilation, and editor setup.
 The shipped library API is indexed separately in [docs/std.md](docs/std.md), with one
 page per module and every exported function held there by a documentation ratchet.
 
+There is no REPL. A Deed input is a module of declarations, and `deed run` enters through
+`main` rather than evaluating a top-level expression. For quick experiments, use a scratch
+`.deed` file with `deed check`, `deed test` or `deed run`. The right browser answer is a
+playground that edits and runs a whole program in that same shape.
+
 ## The idea
 
 Most of the code being written today is not typed out by a person. That changes which

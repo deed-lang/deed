@@ -80,6 +80,31 @@ would bring `Diverge` back into ordinary loops and undo the reason `for` exists 
 `while` stays available as a name everywhere else, including as `for`'s own accumulator
 keyword, on the same reasoning that kept `at` out of the keyword list.
 
+## No REPL
+
+A Deed file parses as one `module`, an optional `edition`, zero or more `use` declarations,
+and then items. The tree is the same shape: a `Module` has `uses` and `items`, and an item
+is a declaration or a `test` block. A bare expression only exists inside a block as its tail
+expression, so there is nowhere today to put `1 + 2` at a prompt without inventing a module,
+a function, or both.
+
+The rest of the language makes that invention load-bearing rather than cosmetic. `deed run`
+enters through one `main`, handing it the `System` capability there is; a prompt would have
+to decide which row the session holds before the first line was checked. Contracts are also
+checked at call sites, and a prompt has no enclosing function body to prove a precondition
+from, so prompt-time obligations would become guarded by default. That is an interesting
+model, but it is a different surface from "evaluate this one expression".
+
+The answer for now is a whole-program surface: a scratch `.deed` file locally, or a browser
+playground built to the same shape. `deed check` answers whether the module is well formed,
+`deed test` runs executable examples, and `deed run` executes a `main` that names its
+capabilities up front. That matches the parser, the checker and the interpreter that already
+exist, rather than teaching each of them a second top level.
+
+**What would change the answer:** an explicit session model that says what synthetic module a
+prompt grows, which capability row it holds, and how prompt-time contract obligations are
+represented, very likely as guarded rather than proven.
+
 ## No search path, config file, or manifest
 
 The unit of compilation is the set of files handed to the compiler on the command line, not
