@@ -68,7 +68,7 @@ jobs:
       # Upload the full artifacts directory so a developer can reproduce any
       # crash locally with `cargo fuzz run check <input-file>`.
       - name: upload crash reproducers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: fuzz-artifacts
