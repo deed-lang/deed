@@ -697,6 +697,21 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_host_offer_matches_module_and_name_as_one_pair() {
+        let mut host = Host::new();
+        host.offer("deed:io", "read", |_| Some(Value::I64(1)));
+        host.offer("deed:clock", "write", |_| Some(Value::I64(2)));
+
+        assert!(host.implementation_for("deed:io", "write").is_none());
+
+        host.offer("deed:io", "write", |_| Some(Value::I64(3)));
+        let implementation = host
+            .implementation_for("deed:io", "write")
+            .expect("the exact offer should match");
+        assert_eq!(implementation(&[]), Some(Value::I64(3)));
+    }
+
     /// This runner does not validate on its own, but [`crate::call`] runs
     /// [`crate::validate::validate`] first, so a store handed the wrong
     /// width is refused before a byte of the module runs rather than
