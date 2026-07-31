@@ -27,7 +27,7 @@
 //! for code that is genuinely wrong. The editor never blocks on the network
 //! because it never asks the network.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 /// Finds every source a Deed program needs beyond what the caller already
 /// holds.
@@ -53,7 +53,7 @@ where
     F: FnMut(&str) -> Option<(String, String)>,
 {
     let mut have: HashSet<String> = HashSet::new();
-    let mut wanted: Vec<String> = Vec::new();
+    let mut wanted: VecDeque<String> = VecDeque::new();
     let mut extras: Vec<(String, String)> = Vec::new();
 
     let seed_texts: Vec<String> = seeds.into_iter().map(|s| s.as_ref().to_owned()).collect();
@@ -65,14 +65,10 @@ where
         }
     }
 
-    // Walk the queue with a cursor. Each source may append its own imports;
+    // Pop each queue entry once. Each source may append its own imports;
     // missing sources simply append nothing and therefore cannot make a
     // no-progress round spin forever.
-    let mut next = 0;
-    while next < wanted.len() {
-        let module = wanted[next].clone();
-        next += 1;
-
+    while let Some(module) = wanted.pop_front() {
         if have.contains(&module) {
             continue;
         }
