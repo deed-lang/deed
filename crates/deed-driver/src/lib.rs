@@ -22,6 +22,7 @@ pub mod fix;
 mod imports;
 mod inputs;
 pub mod manifest;
+pub mod program_gen;
 mod report;
 mod rows;
 mod shipped;
