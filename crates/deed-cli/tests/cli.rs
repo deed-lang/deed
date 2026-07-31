@@ -94,6 +94,21 @@ fn checking_the_worked_example_is_silent_and_succeeds() {
 }
 
 #[test]
+fn compiled_tests_report_the_same_complete_count_as_the_interpreter() {
+    let output = run(&[
+        "test",
+        "--compiled",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/diverge.deed"),
+    ]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        stdout(&output).contains("1 passed, 0 failed"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn obligations_are_reported_with_their_tier() {
     let output = run(&["check", RUNNABLE, "--obligations"]);
     assert_eq!(code(&output), 0);
