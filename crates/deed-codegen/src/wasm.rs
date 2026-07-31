@@ -10,6 +10,8 @@
 //! an instruction nothing tests, so the set below grows when a lowering needs
 //! it rather than in anticipation.
 
+use deed_diagnostics::Span;
+
 /// A WebAssembly value type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ValType {
@@ -72,6 +74,16 @@ fn write_name(out: &mut Vec<u8>, name: &str) {
 /// and cannot answer any question about what it has written.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Ins {
+    /// A marker kept in memory, but stripped when encoded.
+    ///
+    /// The backend uses this to remember which source span gave rise to an
+    /// instruction. WebAssembly has no such metadata in the core format, so
+    /// the marker is for the compiler and runner here rather than for the
+    /// bytes on disk.
+    Marked {
+        site: u32,
+        inner: Box<Ins>,
+    },
     Unreachable,
     Nop,
     /// A block that produces one value, or none when `result` is `None`.
@@ -138,6 +150,7 @@ pub enum Ins {
 impl Ins {
     fn write(&self, out: &mut Vec<u8>) {
         match self {
+            Ins::Marked { inner, .. } => inner.write(out),
             Ins::Unreachable => out.push(0x00),
             Ins::Nop => out.push(0x01),
             Ins::Block { result, body } => {
@@ -270,6 +283,25 @@ fn write_block_type(out: &mut Vec<u8>, result: Option<ValType>) {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpanRole {
+    Trap,
+    Call,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InstructionSpan {
+    pub offset: u32,
+    pub span: Span,
+    pub role: SpanRole,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FunctionSpans {
+    pub function: u32,
+    pub sites: Vec<InstructionSpan>,
+}
+
 /// One function's signature, which WebAssembly stores once and shares.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FuncType {
@@ -327,6 +359,8 @@ pub struct Module {
     /// `answer`" rather than "unreachable in function 3": without it, a host
     /// runtime has no way to name the frame.
     pub names: Vec<(u32, String)>,
+    /// Source spans for selected instructions, by function and byte offset.
+    pub spans: Vec<FunctionSpans>,
 }
 
 impl Module {
@@ -558,6 +592,12 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
         }
     }
     runs
+}
+
+pub fn instruction_size(instruction: &Ins) -> u32 {
+    let mut bytes = Vec::new();
+    instruction.write(&mut bytes);
+    bytes.len() as u32
 }
 
 fn write_section(out: &mut Vec<u8>, id: u8, body: &[u8]) {

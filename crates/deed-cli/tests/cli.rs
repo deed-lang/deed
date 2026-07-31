@@ -605,6 +605,60 @@ fn a_failed_contract_in_main_exits_with_one() {
 }
 
 #[test]
+fn compiled_run_reports_the_same_precondition_location_and_message() {
+    let scratch = Scratch::new("compiled-precondition");
+    let file = scratch.write(
+        "broken.deed",
+        "module a\n\n\
+fn halve(n: Int) -> Int\n\
+  where n > 0,\n\
+{ n / 2 }\n\n\
+fn answer(n: Int) -> Int {\n\
+    halve(n)\n\
+}\n\n\
+fn main() -> Int {\n\
+    answer(-4)\n\
+}\n",
+    );
+
+    let interpreted = run(&["run", file.to_str().unwrap()]);
+    let compiled = run(&["run", "--compiled", file.to_str().unwrap()]);
+    assert_eq!(code(&interpreted), 1, "{}", stderr(&interpreted));
+    assert_eq!(code(&compiled), 1, "{}", stderr(&compiled));
+
+    let interpreted = stdout(&interpreted);
+    let compiled = stdout(&compiled);
+
+    let interpreted_lines: Vec<&str> = interpreted.lines().collect();
+    let compiled_lines: Vec<&str> = compiled.lines().collect();
+    assert_eq!(
+        compiled_lines.first(),
+        interpreted_lines.first(),
+        "{compiled}"
+    );
+    assert_eq!(
+        compiled_lines.get(1),
+        interpreted_lines.get(1),
+        "{compiled}"
+    );
+    assert_eq!(
+        compiled_lines.get(3),
+        interpreted_lines.get(3),
+        "{compiled}"
+    );
+
+    let interpreted_caret = interpreted_lines
+        .get(4)
+        .and_then(|line| line.find('^'))
+        .expect("the interpreted diagnostic should contain a caret");
+    let compiled_caret = compiled_lines
+        .get(4)
+        .and_then(|line| line.find('^'))
+        .expect("the compiled diagnostic should contain a caret");
+    assert_eq!(compiled_caret, interpreted_caret, "{compiled}");
+}
+
+#[test]
 fn running_something_with_no_main_is_a_usage_error() {
     let scratch = Scratch::new("no-main");
     let file = scratch.write("quiet.deed", "module a\n\nfn f() -> Int { 0 }\n");
@@ -626,9 +680,14 @@ fn two_mains_is_a_question_not_a_choice() {
         "module two\n\nfn main(sys: System) -> Int { 0 }\n",
     );
 
-    let output = run(&["run", scratch.path().to_str().unwrap()]);
-    assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("more than one `main`"));
+    for arguments in [
+        vec!["run", scratch.path().to_str().unwrap()],
+        vec!["run", "--compiled", scratch.path().to_str().unwrap()],
+    ] {
+        let output = run(&arguments);
+        assert_eq!(code(&output), 2);
+        assert!(stderr(&output).contains("more than one `main`"));
+    }
 }
 
 #[test]

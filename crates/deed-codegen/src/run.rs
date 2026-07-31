@@ -16,7 +16,9 @@
 //! because the function index for an unimported operation does not exist in
 //! the module's index space.
 
-use crate::wasm::{Ins, Module, ValType};
+use deed_diagnostics::Span;
+
+use crate::wasm::{Ins, InstructionSpan, Module, SpanRole, ValType};
 
 /// A value on the stack.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -58,6 +60,8 @@ pub enum Trap {
     Failed {
         code: String,
         message: String,
+        span: Option<Span>,
+        blame_caller: bool,
     },
     DivideByZero,
     /// Reached past the end of memory.
@@ -94,7 +98,7 @@ impl std::fmt::Display for Trap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Trap::Unreachable => write!(f, "the program stopped"),
-            Trap::Failed { code, message } => write!(f, "{code}: {message}"),
+            Trap::Failed { code, message, .. } => write!(f, "{code}: {message}"),
             Trap::DivideByZero => write!(f, "divided by zero"),
             Trap::OutOfBounds => write!(f, "reached past the end of memory"),
             Trap::TooLong => write!(f, "ran too long"),
@@ -263,7 +267,7 @@ impl Linked<'_> {
             host: Some(self.host),
         };
         match run.call(index, args) {
-            Err(Trap::Unreachable) => Err(run.why().unwrap_or(Trap::Unreachable)),
+            Err(Trap::Unreachable) => Err(run.why(None).unwrap_or(Trap::Unreachable)),
             other => other,
         }
     }
@@ -304,7 +308,7 @@ pub fn call_measured(module: &Module, name: &str, args: &[Value]) -> Result<Outc
         // A trap that left something behind says what it was. Read here
         // rather than where the trap is raised, because the two words are
         // in memory and memory is what this owns.
-        Err(Trap::Unreachable) => Err(run.why().unwrap_or(Trap::Unreachable)),
+        Err(Trap::Unreachable) => Err(run.why(None).unwrap_or(Trap::Unreachable)),
         Err(other) => Err(other),
         Ok(value) => Ok(Outcome {
             value,
@@ -352,11 +356,24 @@ impl Run<'_> {
     }
 
     /// What the program left in memory about why it stopped, if anything.
-    fn why(&self) -> Option<Trap> {
+    fn why(&self, span: Option<Span>) -> Option<Trap> {
         Some(Trap::Failed {
             code: self.string_at(crate::layout::FAILURE_CODE)?,
             message: self.string_at(crate::layout::FAILURE_MESSAGE)?,
+            span,
+            blame_caller: self.string_at(crate::layout::FAILURE_CODE)?.as_str()
+                == deed_mir::codes::PRECONDITION_FAILED,
         })
+    }
+
+    fn site(&self, function: u32, site: u32) -> Option<InstructionSpan> {
+        self.module
+            .spans
+            .iter()
+            .find(|mapped| mapped.function == function)?
+            .sites
+            .get(site as usize)
+            .copied()
     }
 
     /// The string whose address is in this word, read the way every string
@@ -420,7 +437,7 @@ impl Run<'_> {
         }
 
         let mut stack = Vec::new();
-        self.run(&func.body, &mut locals, &mut stack)?;
+        self.run(index, &func.body, &mut locals, &mut stack)?;
 
         Ok(match signature.results.first() {
             None => None,
@@ -430,6 +447,7 @@ impl Run<'_> {
 
     fn run(
         &mut self,
+        function: u32,
         body: &[Ins],
         locals: &mut Vec<Value>,
         stack: &mut Vec<Value>,
@@ -437,8 +455,22 @@ impl Run<'_> {
         for instruction in body {
             self.fuel = self.fuel.checked_sub(1).ok_or(Trap::TooLong)?;
 
+            let (site, instruction) = match instruction {
+                Ins::Marked { site, inner } => (Some(*site), inner.as_ref()),
+                other => (None, other),
+            };
+
             match instruction {
-                Ins::Unreachable => return Err(Trap::Unreachable),
+                Ins::Marked { .. } => unreachable!("markers are unwrapped above"),
+                Ins::Unreachable => {
+                    return Err(self
+                        .why(
+                            site.and_then(|site| {
+                                self.site(function, site).map(|mapped| mapped.span)
+                            }),
+                        )
+                        .unwrap_or(Trap::Unreachable));
+                }
                 Ins::Nop | Ins::Drop => {
                     if matches!(instruction, Ins::Drop) {
                         stack.pop();
@@ -454,7 +486,7 @@ impl Run<'_> {
                 Ins::Block { body, .. } | Ins::Loop { body, .. } => {
                     let repeats = matches!(instruction, Ins::Loop { .. });
                     loop {
-                        match self.run(body, locals, stack)? {
+                        match self.run(function, body, locals, stack)? {
                             Flow::Normal => break,
                             Flow::Return => return Ok(Flow::Return),
                             Flow::Break(0) if repeats => continue,
@@ -471,7 +503,7 @@ impl Run<'_> {
                     } else {
                         otherwise
                     };
-                    match self.run(taken, locals, stack)? {
+                    match self.run(function, taken, locals, stack)? {
                         Flow::Normal => {}
                         Flow::Return => return Ok(Flow::Return),
                         Flow::Break(0) => {}
@@ -482,7 +514,11 @@ impl Run<'_> {
                     let count = self.arity(*index)?;
                     let at = stack.len() - count;
                     let args: Vec<Value> = stack.split_off(at);
-                    if let Some(result) = self.call(*index, &args)? {
+                    let call_site = call_span(site.and_then(|site| self.site(function, site)));
+                    if let Some(result) = self
+                        .call(*index, &args)
+                        .map_err(|trap| blame_call_site(trap, call_site))?
+                    {
                         stack.push(result);
                     }
                 }
@@ -492,7 +528,11 @@ impl Run<'_> {
                     let count = self.arity(index)?;
                     let at = stack.len() - count;
                     let args: Vec<Value> = stack.split_off(at);
-                    if let Some(result) = self.call(index, &args)? {
+                    let call_site = call_span(site.and_then(|site| self.site(function, site)));
+                    if let Some(result) = self
+                        .call(index, &args)
+                        .map_err(|trap| blame_call_site(trap, call_site))?
+                    {
                         stack.push(result);
                     }
                 }
@@ -612,6 +652,29 @@ fn pop(stack: &mut Vec<Value>) -> Result<Value, Trap> {
     stack.pop().ok_or(Trap::Unreachable)
 }
 
+fn call_span(mapped: Option<InstructionSpan>) -> Option<Span> {
+    mapped
+        .filter(|mapped| mapped.role == SpanRole::Call)
+        .map(|mapped| mapped.span)
+}
+
+fn blame_call_site(trap: Trap, call_site: Option<Span>) -> Trap {
+    match trap {
+        Trap::Failed {
+            code,
+            message,
+            span,
+            blame_caller,
+        } if code == deed_mir::codes::PRECONDITION_FAILED && blame_caller => Trap::Failed {
+            code,
+            message,
+            span: call_site.or(span),
+            blame_caller: false,
+        },
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,6 +773,66 @@ mod tests {
             .implementation_for("deed:io", "write")
             .expect("the exact offer should match");
         assert_eq!(implementation(&[]), Some(Value::I64(3)));
+    }
+
+    #[test]
+    fn only_call_sites_are_candidates_for_caller_blame() {
+        let span = Span::new(10, 20);
+        assert_eq!(
+            call_span(Some(InstructionSpan {
+                offset: 7,
+                span,
+                role: SpanRole::Call,
+            })),
+            Some(span)
+        );
+        assert_eq!(
+            call_span(Some(InstructionSpan {
+                offset: 7,
+                span,
+                role: SpanRole::Trap,
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn only_an_unassigned_precondition_moves_to_the_call_site() {
+        let callee = Span::new(1, 2);
+        let caller = Span::new(10, 20);
+        let failed = |code: &str, blame_caller| Trap::Failed {
+            code: code.to_string(),
+            message: "failed".to_string(),
+            span: Some(callee),
+            blame_caller,
+        };
+
+        assert_eq!(
+            blame_call_site(
+                failed(deed_mir::codes::PRECONDITION_FAILED, true),
+                Some(caller)
+            ),
+            Trap::Failed {
+                code: deed_mir::codes::PRECONDITION_FAILED.to_string(),
+                message: "failed".to_string(),
+                span: Some(caller),
+                blame_caller: false,
+            }
+        );
+        assert_eq!(
+            blame_call_site(
+                failed(deed_mir::codes::PRECONDITION_FAILED, false),
+                Some(caller)
+            ),
+            failed(deed_mir::codes::PRECONDITION_FAILED, false)
+        );
+        assert_eq!(
+            blame_call_site(
+                failed(deed_mir::codes::ASSERTION_FAILED, true),
+                Some(caller)
+            ),
+            failed(deed_mir::codes::ASSERTION_FAILED, true)
+        );
     }
 
     /// This runner does not validate on its own, but [`crate::call`] runs

@@ -495,6 +495,8 @@ fn overflow_near_the_boundary_fails_the_same_way_under_both_engines() {
         Err(Trap::Failed {
             code: codes::ARITHMETIC.to_string(),
             message: "this arithmetic has no answer".to_string(),
+            span: None,
+            blame_caller: false,
         })
     );
 }

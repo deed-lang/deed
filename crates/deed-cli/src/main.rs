@@ -7,7 +7,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use deed_diagnostics::{Diagnostic, SourceMap, render_human};
+use deed_ast::Item;
+use deed_diagnostics::{Diagnostic, FileId, SourceMap, render_human};
 use deed_driver::{Checked, ObligationReport};
 use deed_interp::{Program, PropertyConfig, RuntimeProfile};
 use deed_typeck::Tier;
@@ -252,15 +253,19 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     if args.mode == Mode::Run {
-        match run_main(
-            &mut out,
-            &sources,
-            &checks,
-            subject,
-            args.dir.as_deref(),
-            &args.arguments,
-            args.runtime_profile,
-        ) {
+        match if args.compiled {
+            run_compiled_main(&mut out, &sources, &checks, subject, &args.arguments)
+        } else {
+            run_main(
+                &mut out,
+                &sources,
+                &checks,
+                subject,
+                args.dir.as_deref(),
+                &args.arguments,
+                args.runtime_profile,
+            )
+        } {
             Ok(Some(true)) => {}
             Ok(Some(false)) => return ExitCode::FAILURE,
             Ok(None) => return ExitCode::from(EXIT_USAGE),
@@ -402,6 +407,128 @@ fn program_of(checks: &[Checked]) -> Program<'_> {
         );
     }
     program
+}
+
+fn compiled_diagnostic(file: FileId, trap: &deed_codegen::Trap) -> Option<Diagnostic> {
+    let deed_codegen::Trap::Failed {
+        code,
+        message,
+        span: Some(span),
+        ..
+    } = trap
+    else {
+        return None;
+    };
+
+    let (code, label) = match code.as_str() {
+        deed_mir::codes::ASSERTION_FAILED => {
+            (deed_mir::codes::ASSERTION_FAILED, "evaluated to false")
+        }
+        deed_mir::codes::PRECONDITION_FAILED => {
+            (deed_mir::codes::PRECONDITION_FAILED, "precondition not met")
+        }
+        deed_mir::codes::NOT_RUNNABLE => (deed_mir::codes::NOT_RUNNABLE, "not runnable"),
+        _ => return None,
+    };
+
+    Some(Diagnostic::error(code, file, *span, message.clone()).with_primary_label(label))
+}
+
+fn compiled_args(module: &deed_codegen::Module, name: &str) -> Option<Vec<deed_codegen::Value>> {
+    let index = module
+        .exports
+        .iter()
+        .find(|(exported, _)| exported == name)
+        .map(|(_, index)| *index)?;
+    let type_index = match (index as usize).checked_sub(module.imports.len()) {
+        None => module.imports[index as usize].type_index,
+        Some(at) => module.funcs.get(at)?.type_index,
+    };
+    let ty = module.types.get(type_index as usize)?;
+    Some(
+        ty.params
+            .iter()
+            .map(|param| match param {
+                deed_codegen::wasm::ValType::I32 => deed_codegen::Value::I32(0),
+                deed_codegen::wasm::ValType::I64 => deed_codegen::Value::I64(0),
+            })
+            .collect(),
+    )
+}
+
+fn run_compiled_main(
+    out: &mut impl Write,
+    sources: &SourceMap,
+    checks: &[Checked],
+    subject: usize,
+    arguments: &[String],
+) -> io::Result<Option<bool>> {
+    if !arguments.is_empty() {
+        eprintln!(
+            "error: `deed run --compiled` does not hand arguments to the backend test runner"
+        );
+        return Ok(None);
+    }
+
+    let mut runs = Vec::new();
+    for checked in &checks[..subject.min(checks.len())] {
+        let has_main = checked.module.items.iter().any(|item| {
+            matches!(
+                item,
+                Item::Function(function) if function.sig.name.name == "main"
+            )
+        });
+        if !has_main {
+            continue;
+        }
+
+        let lowered = match deed_mir::lower(&checked.module, &checked.resolutions, &checked.types) {
+            Ok(lowered) => lowered,
+            Err(why) => {
+                writeln!(out, "{}: {why}", sources.file(checked.file).name())?;
+                return Ok(Some(false));
+            }
+        };
+        let module = match deed_codegen::compile(&lowered) {
+            Ok(module) => module,
+            Err(why) => {
+                writeln!(out, "{}: {why}", sources.file(checked.file).name())?;
+                return Ok(Some(false));
+            }
+        };
+        let args = compiled_args(&module, "main").ok_or_else(|| {
+            io::Error::other("compiled `main` should be exported with a known signature")
+        })?;
+        runs.push((
+            checked.file,
+            sources.file(checked.file).name().to_string(),
+            module,
+            args,
+        ));
+    }
+
+    if runs.is_empty() {
+        eprintln!("error: no `main` found, so there is nothing to run");
+        return Ok(None);
+    }
+    if runs.len() > 1 {
+        let names: Vec<&str> = runs.iter().map(|(_, name, _, _)| name.as_str()).collect();
+        eprintln!("error: more than one `main`, in {}", names.join(" and "));
+        return Ok(None);
+    }
+
+    let (file, _, module, args) = runs.remove(0);
+    match deed_codegen::call(&module, "main", &args) {
+        Ok(_) => Ok(Some(true)),
+        Err(trap) => {
+            if let Some(diagnostic) = compiled_diagnostic(file, &trap) {
+                writeln!(out, "{}", render_human(sources, &diagnostic))?;
+            } else {
+                writeln!(out, "{trap}")?;
+            }
+            Ok(Some(false))
+        }
+    }
 }
 
 /// Applies the fixes that are certain and leaves the guesses alone.
@@ -1148,5 +1275,70 @@ mod manifest_tests {
             deed_driver::codes::MISSING_COMPONENT_PATH
         );
         std::fs::remove_dir_all(root).ok();
+    }
+}
+
+#[cfg(test)]
+mod compiled_tests {
+    use super::*;
+    use deed_codegen::wasm::{Func, FuncType, Ins, ValType};
+
+    #[test]
+    fn compiled_failure_codes_keep_their_diagnostic_labels() {
+        let mut sources = SourceMap::new();
+        let file = sources.add("test.deed", "0123456789");
+        let span = deed_diagnostics::Span::new(2, 5);
+
+        for (code, label) in [
+            (deed_mir::codes::ASSERTION_FAILED, "evaluated to false"),
+            (deed_mir::codes::PRECONDITION_FAILED, "precondition not met"),
+            (deed_mir::codes::NOT_RUNNABLE, "not runnable"),
+        ] {
+            let trap = deed_codegen::Trap::Failed {
+                code: code.to_string(),
+                message: "stopped".to_string(),
+                span: Some(span),
+                blame_caller: false,
+            };
+            let diagnostic = compiled_diagnostic(file, &trap).expect("known code");
+            assert_eq!(diagnostic.code, code);
+            assert_eq!(diagnostic.primary.span, span);
+            assert_eq!(diagnostic.primary.message, label);
+        }
+    }
+
+    #[test]
+    fn compiled_arguments_use_the_named_exports_signature() {
+        let mut module = deed_codegen::Module::new();
+        let other_ty = module.intern_type(FuncType {
+            params: vec![ValType::I32],
+            results: vec![],
+        });
+        let other = module.add_func(Func {
+            type_index: other_ty,
+            locals: vec![],
+            body: vec![Ins::I32Const(0)],
+        });
+        module.export("other", other);
+
+        let main_ty = module.intern_type(FuncType {
+            params: vec![ValType::I64, ValType::I32],
+            results: vec![],
+        });
+        let main = module.add_func(Func {
+            type_index: main_ty,
+            locals: vec![],
+            body: vec![Ins::I64Const(0)],
+        });
+        module.export("main", main);
+
+        assert_eq!(
+            compiled_args(&module, "main"),
+            Some(vec![
+                deed_codegen::Value::I64(0),
+                deed_codegen::Value::I32(0)
+            ])
+        );
+        assert!(compiled_args(&module, "missing").is_none());
     }
 }
