@@ -1,0 +1,80 @@
+name: Performance
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: performance-ratchet
+  cancel-in-progress: false
+
+jobs:
+  ratchet:
+    name: edit-loop and runtime ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test --release performance ratchet
+        env:
+          DEED_PERF_RESULTS: performance-results.json
+        run: >
+          cargo test --release -p deed-driver --test performance_regression
+          existing_bench_slopes_stay_inside_the_ratchet
+          -- --ignored --exact --nocapture --test-threads=1
+
+      - name: summarize the measured slopes
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("performance-results.json")
+          if not path.exists():
+              raise SystemExit(0)
+
+          data = json.loads(path.read_text())
+          with open(Path.home() / "summary.md", "w", encoding="utf-8") as out:
+              out.write("## Performance ratchet\n\n")
+              out.write("| measurement | slope | segment ratio |\n")
+              out.write("| --- | ---: | ---: |\n")
+              out.write(
+                  f"| edit loop total | {data['edit_loop']['total_us_per_file']:.2f} us/file | "
+                  f"{data['edit_loop']['total_segment_ratio']:.2f}x |\n"
+              )
+              out.write(
+                  f"| edit loop lex | {data['edit_loop']['passes_us_per_file']['lex']:.2f} us/file | |\n"
+              )
+              out.write(
+                  f"| edit loop parse | {data['edit_loop']['passes_us_per_file']['parse']:.2f} us/file | |\n"
+              )
+              out.write(
+                  f"| edit loop resolve | {data['edit_loop']['passes_us_per_file']['resolve']:.2f} us/file | |\n"
+              )
+              out.write(
+                  f"| edit loop typeck | {data['edit_loop']['passes_us_per_file']['typeck']:.2f} us/file | |\n"
+              )
+              out.write(
+                  f"| edit loop effects | {data['edit_loop']['passes_us_per_file']['effects']:.2f} us/file | |\n"
+              )
+              out.write(
+                  f"| logs report | {data['logs_report']['us_per_line']:.2f} us/line | "
+                  f"{data['logs_report']['segment_ratio']:.2f}x |\n"
+              )
+          PY
+          cat ~/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-results
+          path: performance-results.json
+          if-no-files-found: ignore
