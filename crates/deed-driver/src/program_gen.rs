@@ -421,9 +421,13 @@ fn smaller_expr(expr: &GeneratedExpr) -> Vec<GeneratedExpr> {
             let mut out = vec![GeneratedExpr::Int(0)];
             let abs = n.unsigned_abs();
             if abs > 1 {
-                out.push(GeneratedExpr::Int(n / 2));
+                let half = GeneratedExpr::Int(n / 2);
+                out.push(half.clone());
+                let step = GeneratedExpr::Int(if *n > 0 { n - 1 } else { n + 1 });
+                if step != half {
+                    out.push(step);
+                }
             }
-            out.push(GeneratedExpr::Int(if *n > 0 { n - 1 } else { n + 1 }));
             out
         }
 
@@ -559,8 +563,8 @@ impl Rng {
 mod tests {
     use super::{
         GeneratedExpr, GeneratedFn, GeneratedProgram, GeneratedStmt, ProgramFuzzConfig, Rng,
-        find_program_failure, generate_program, print_program, smaller_expr, smaller_fn,
-        smaller_programs,
+        find_program_failure, generate_program, print_program, replace_name, shrink_program,
+        smaller_expr, smaller_fn, smaller_programs,
     };
 
     fn one_fn_program(name: &str, tail: GeneratedExpr) -> GeneratedProgram {
@@ -609,6 +613,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn generated_programs_and_rng_have_an_exact_snapshot() {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut bytes = 0;
+        let mut functions = 0;
+        let mut statements = 0;
+        for seed in 0..64 {
+            let mut rng = Rng::new(seed);
+            let source = print_program(&generate_program(&mut rng));
+            bytes += source.len();
+            functions += source.matches("fn ").count();
+            statements += source.matches("let ").count();
+            for byte in source.bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        assert_eq!(
+            (hash, bytes, functions, statements),
+            (0x0a3e_d6ae_35d6_8ed1, 25_363, 161, 156,)
+        );
+
+        let mut next_rng = Rng::new(42);
+        assert_eq!(
+            (0..6).map(|_| next_rng.next()).collect::<Vec<_>>(),
+            [
+                45_454_805_674,
+                11_532_217_803_599_905_471,
+                10_021_416_941_527_320_954,
+                2_899_061_411_254_629_736,
+                5_661_411_637_479_084_162,
+                10_094_803_945_545_275_427,
+            ]
+        );
+        let mut int_rng = Rng::new(42);
+        assert_eq!(
+            (0..12).map(|_| int_rng.int()).collect::<Vec<_>>(),
+            [
+                33,
+                -66,
+                -61,
+                20,
+                -48,
+                -16,
+                -59,
+                10,
+                -28,
+                0,
+                -8_615_463_046_203_049_182,
+                78
+            ]
+        );
+    }
+
     // -- expression shrinker -----------------------------------------------
 
     #[test]
@@ -630,6 +688,18 @@ mod tests {
         assert!(candidates.contains(&GeneratedExpr::Int(0)));
         assert!(candidates.contains(&GeneratedExpr::Int(-50)));
         assert!(candidates.contains(&GeneratedExpr::Int(-99)));
+    }
+
+    #[test]
+    fn one_step_integers_have_only_zero_as_a_smaller_form() {
+        assert_eq!(
+            smaller_expr(&GeneratedExpr::Int(1)),
+            [GeneratedExpr::Int(0)]
+        );
+        assert_eq!(
+            smaller_expr(&GeneratedExpr::Int(-1)),
+            [GeneratedExpr::Int(0)]
+        );
     }
 
     #[test]
@@ -719,6 +789,37 @@ mod tests {
         assert_eq!(without_param.tail, GeneratedExpr::Int(0));
     }
 
+    #[test]
+    fn name_replacement_walks_every_compound_shape_and_only_the_target() {
+        let expression = GeneratedExpr::If {
+            cond: Box::new(GeneratedExpr::Name("keep".to_string())),
+            then_: Box::new(GeneratedExpr::BinOp {
+                op: "*",
+                left: Box::new(GeneratedExpr::Name("drop".to_string())),
+                right: Box::new(GeneratedExpr::Name("keep".to_string())),
+            }),
+            else_: Box::new(GeneratedExpr::Call {
+                name: "drop".to_string(),
+                args: vec![GeneratedExpr::Name("drop".to_string())],
+            }),
+        };
+        assert_eq!(
+            replace_name(&expression, "drop", &GeneratedExpr::Int(7)),
+            GeneratedExpr::If {
+                cond: Box::new(GeneratedExpr::Name("keep".to_string())),
+                then_: Box::new(GeneratedExpr::BinOp {
+                    op: "*",
+                    left: Box::new(GeneratedExpr::Int(7)),
+                    right: Box::new(GeneratedExpr::Name("keep".to_string())),
+                }),
+                else_: Box::new(GeneratedExpr::Call {
+                    name: "drop".to_string(),
+                    args: vec![GeneratedExpr::Int(7)],
+                }),
+            }
+        );
+    }
+
     // -- program shrinker --------------------------------------------------
 
     #[test]
@@ -756,6 +857,19 @@ mod tests {
         assert!(
             candidates.iter().all(|c| !c.fns.is_empty()),
             "the last function must not be removed"
+        );
+    }
+
+    #[test]
+    fn shrink_budget_counts_candidate_evaluations_exactly() {
+        let original = one_fn_program("f", GeneratedExpr::Int(100));
+        assert_eq!(
+            print_program(&shrink_program(original.clone(), |_| true, 0)),
+            print_program(&original)
+        );
+        assert_eq!(
+            print_program(&shrink_program(original, |_| true, 1)),
+            print_program(&one_fn_program("f", GeneratedExpr::Int(0)))
         );
     }
 
