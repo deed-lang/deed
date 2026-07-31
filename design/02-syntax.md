@@ -260,6 +260,18 @@ built on Okasaki's red-black tree. It takes a comparator so that any key type wo
 the same answer `examples/tree.deed` gave for an unbalanced BST and the one this file gives
 for a balanced one.
 
+Exact fractions are there too, and they are a library rather than a number type on purpose.
+`std/ratio` has `euclid_steps`, `absolute`, `greatest_common_divisor`, `simplified`, `ratio`,
+`whole`, `zero`, `is_zero`, `is_negative`, `negated`, `added`, `subtracted`, `multiplied`,
+`divided`, `is_below`, `is_above`, `smaller`, `larger`, `truncated`, `scaled`,
+`power_of_ten`, `zero_padded`, `text`, `percent_text`, `value_or`, `reason_or`, `percent_or`
+and `percent_reason_or`. [fractional-values.md](fractional-values.md) refused every
+fractional number type and said the first real need would be a report that wants exact ratios
+which become text at the edge. `examples/logs.deed` has that report and now has that column,
+and the language did not change to get it: a ratio is two `Int`s in a record, kept in lowest
+terms so that structural equality means what it says, and the rounding happens in one named
+place where the program can see it.
+
 ## A library that ships with the compiler
 
 A module named `std/x` lives inside the compiler.
@@ -280,8 +292,8 @@ were not anywhere. `trim` stays in the prelude because it cannot be written.
 The other thing that goes here is a library that was already written and had nowhere to be.
 `std/list` and `std/table` were both under `examples/`, which made their names paths into
 this repository, so a program elsewhere could not import them and had to copy the files
-instead. Four modules ship today,
-`std/string`, `std/list`, `std/table` and `std/map`, and `crates/deed-driver/src/shipped.rs` is the
+instead. Five modules ship today,
+`std/string`, `std/list`, `std/table`, `std/map` and `std/ratio`, and `crates/deed-driver/src/shipped.rs` is the
 table.
 
 ## Lists

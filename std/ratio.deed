@@ -1,0 +1,474 @@
+// Exact ratios, written in Deed.
+//
+// `design/fractional-values.md` refused every fractional number type and said
+// what would change the answer: a real program that has to store, compare and
+// pass fractional quantities around as values rather than only print them. It
+// also named the honest first move, which is a library rather than a language
+// change.
+//
+// This is that library. Nothing here is compiler machinery: a `Ratio` is two
+// `Int`s in a record, and every operation on it is an ordinary function. What
+// it demonstrates is that the refusal costs a program less than it looks like,
+// and where exactly it still costs something.
+//
+// Two things are load-bearing and neither is decoration.
+//
+// Equality in this language is structural and total, so `1/2` and `2/4` would
+// compare unequal unless every `Ratio` that exists is already in lowest terms
+// with the sign in one place. `simplified` is what makes that true, and every
+// constructor here goes through it. That is why there is no way to build a
+// `Ratio` by writing the record literal yourself and having it behave: you can,
+// and then `==` tells you something you did not mean.
+//
+// The greatest common divisor is a loop rather than a recursive function on
+// purpose. Written recursively it would declare `Diverge`, and `Diverge` spreads
+// to everything that calls it, so a report that wants one percentage would end
+// up unable to promise anything about termination. Euclid's algorithm is bounded
+// by the Fibonacci numbers below `Int`'s ceiling, which is ninety-something
+// steps, so a bounded walk is not a workaround here. It is the honest shape.
+
+module std/ratio
+
+// A ratio in lowest terms, with `bottom` positive.
+//
+// Both invariants are established by `simplified` and depended on by `==`. A
+// record literal written by hand can break either, which is the cost of a
+// library type in a language with no visibility modifiers, and it is written
+// here rather than left to be discovered.
+record Ratio {
+    top: Int,
+    bottom: Int,
+}
+
+// The step Euclid's algorithm carries. A record because the walk has to carry
+// two numbers and this language has no tuples.
+record Pair {
+    left: Int,
+    right: Int,
+}
+
+// Enough turns for any pair of `Int`s.
+//
+// Euclid's worst case is consecutive Fibonacci numbers, and the largest one
+// below `Int`'s ceiling is the ninety-first, so ninety-two steps settle every
+// input. The extra few are slack rather than a guess.
+fn euclid_steps() -> Int {
+    96
+}
+
+// The size of a number, ignoring its sign.
+fn absolute(n: Int) -> Int {
+    if n < 0 {
+        0 - n
+    } else {
+        n
+    }
+}
+
+// The greatest common divisor of two numbers, ignoring their signs.
+//
+// `gcd(0, 0)` is `0`, which is the usual convention and the only answer that
+// does not require refusing. Nothing here divides by it: `simplified` checks
+// for zero first.
+fn greatest_common_divisor(a: Int, b: Int) -> Int {
+    let settled = for _step at _i in repeat(0, euclid_steps()) with pair = Pair { left: absolute(a), right: absolute(b) } while pair.right != 0 {
+        Pair { left: pair.right, right: pair.left % pair.right }
+    }
+
+    settled.left
+}
+
+// The canonical form: lowest terms, sign on top, `bottom` positive.
+//
+// Called by every constructor. `bottom` of zero is not this function's problem
+// to refuse, because it has no way to say so; `ratio` refuses it before getting
+// here, and the two callers that skip `ratio` build their own denominators.
+fn simplified(top: Int, bottom: Int) -> Ratio {
+    if top == 0 {
+        Ratio { top: 0, bottom: 1 }
+    } else {
+        let divisor = greatest_common_divisor(top, bottom)
+        let smaller_top = top / divisor
+        let smaller_bottom = bottom / divisor
+
+        if smaller_bottom < 0 {
+            Ratio { top: 0 - smaller_top, bottom: 0 - smaller_bottom }
+        } else {
+            Ratio { top: smaller_top, bottom: smaller_bottom }
+        }
+    }
+}
+
+// A ratio of two numbers, or a refusal when the second is zero.
+//
+// A `Result` rather than a refinement on the parameter: a denominator is
+// usually a count that came from somewhere, and the caller is the one who knows
+// whether zero means "no data" or "a bug".
+fn ratio(top: Int, bottom: Int) -> Result<Ratio, String> {
+    if bottom == 0 {
+        err("a ratio has no denominator of zero")
+    } else {
+        ok(simplified(top, bottom))
+    }
+}
+
+// A whole number as a ratio. Total, because every `Int` is one.
+fn whole(n: Int) -> Ratio {
+    Ratio { top: n, bottom: 1 }
+}
+
+// The ratio nothing is a share of, and the identity `added` leaves alone.
+fn zero() -> Ratio {
+    Ratio { top: 0, bottom: 1 }
+}
+
+// Whether this is that one. Reads the numerator, because a canonical zero has
+// a denominator of one and no other form of zero exists.
+fn is_zero(value: Ratio) -> Bool {
+    value.top == 0
+}
+
+// Whether this is below zero. The sign lives on top by construction, so there
+// is only one place to look.
+fn is_negative(value: Ratio) -> Bool {
+    value.top < 0
+}
+
+// The same distance from zero, the other way.
+fn negated(value: Ratio) -> Ratio {
+    Ratio { top: 0 - value.top, bottom: value.bottom }
+}
+
+// The sum, in lowest terms.
+//
+// Over the common denominator rather than the least one: the least common
+// multiple would keep the numbers smaller, and `simplified` brings them back
+// down anyway, so it would buy a smaller intermediate at the cost of a second
+// divisor walk.
+fn added(left: Ratio, right: Ratio) -> Ratio {
+    simplified(
+        left.top * right.bottom + right.top * left.bottom,
+        left.bottom * right.bottom,
+    )
+}
+
+// The difference, which is the sum with one side turned around.
+fn subtracted(left: Ratio, right: Ratio) -> Ratio {
+    added(left, negated(right))
+}
+
+// The product, in lowest terms.
+fn multiplied(left: Ratio, right: Ratio) -> Ratio {
+    simplified(left.top * right.top, left.bottom * right.bottom)
+}
+
+// Division, refused when the divisor is zero.
+//
+// The same shape as `ratio` and for the same reason: dividing by nothing is a
+// question about the caller's data, not about arithmetic.
+fn divided(left: Ratio, right: Ratio) -> Result<Ratio, String> {
+    if right.top == 0 {
+        err("a ratio cannot be divided by zero")
+    } else {
+        ok(simplified(left.top * right.bottom, left.bottom * right.top))
+    }
+}
+
+// Whether `left` is below `right`.
+//
+// Cross multiplication, which is exact because both denominators are positive
+// by construction. This is the comparison the language cannot give a `Ratio`
+// for free: `<` is `Int` and `String` and nothing else.
+fn is_below(left: Ratio, right: Ratio) -> Bool {
+    left.top * right.bottom < right.top * left.bottom
+}
+
+// Whether `left` is above `right`, which is the same question the other way.
+fn is_above(left: Ratio, right: Ratio) -> Bool {
+    is_below(right, left)
+}
+
+// The smaller of two ratios.
+fn smaller(left: Ratio, right: Ratio) -> Ratio {
+    if is_below(left, right) {
+        left
+    } else {
+        right
+    }
+}
+
+// The larger of two ratios.
+fn larger(left: Ratio, right: Ratio) -> Ratio {
+    if is_below(left, right) {
+        right
+    } else {
+        left
+    }
+}
+
+// The whole part, truncated towards zero, which is what `/` already does.
+fn truncated(value: Ratio) -> Int {
+    value.top / value.bottom
+}
+
+// `value` multiplied by `factor`, rounded half away from zero.
+//
+// The one place a rounding policy is chosen, and it is chosen here rather than
+// inside `text` so that a caller who wants a different one can build on this
+// instead of reimplementing the ratio.
+fn scaled(value: Ratio, factor: Int) -> Int {
+    let doubled = value.top * factor * 2
+    let divisor = value.bottom * 2
+
+    if doubled < 0 {
+        (doubled - value.bottom) / divisor
+    } else {
+        (doubled + value.bottom) / divisor
+    }
+}
+
+// Ten to the power of `digits`, for a decimal rendering to scale by.
+//
+// A walk rather than a recursive function, for the reason
+// `greatest_common_divisor` is one: recursion here would declare `Diverge` and
+// spread it to every caller that wanted a percentage.
+// Ten to the power of `digits`, for a decimal rendering to scale by.
+//
+// A walk rather than a recursive function, for the reason
+// `greatest_common_divisor` is one: recursion here would declare `Diverge` and
+// spread it to every caller that wanted a percentage.
+fn power_of_ten(digits: Int) -> Int {
+    for _step at _i in repeat(0, digits) with total = 1 {
+        total * 10
+    }
+}
+
+// `text` left padded with zeros to `width`.
+//
+// `std/string` has `pad_left`, but it pads with spaces, and the padding a
+// decimal place needs is zeros. Written here rather than widening that one,
+// because a second parameter there would change every existing call.
+fn zero_padded(shown: String, width: Int) -> String {
+    let missing = width - length(shown)
+
+    if missing <= 0 {
+        shown
+    } else {
+        join([join(repeat("0", missing), ""), shown], "")
+    }
+}
+
+// A decimal rendering with exactly `digits` places after the point.
+//
+// Rounded rather than truncated, half away from zero, and that is a decision
+// this function makes on the caller's behalf rather than a property of the
+// value: `2/3` has no finite decimal expansion, so somebody has to choose. The
+// value itself stays exact until this is called, which is the whole reason a
+// ratio is worth having over a float.
+//
+// A negative digit count is read as zero, on the same reasoning `repeat` uses
+// for a negative count: the caller asked for no places, not for an error.
+fn text(value: Ratio, digits: Int) -> String {
+    let places = if digits < 0 {
+        0
+    } else {
+        digits
+    }
+    let scale = power_of_ten(places)
+    let units = scaled(value, scale)
+    let sign = if units < 0 {
+        "-"
+    } else {
+        ""
+    }
+    let size = absolute(units)
+    let whole_part = size / scale
+    let rest = size % scale
+
+    if places == 0 {
+        join([sign, to_string(whole_part)], "")
+    } else {
+        join([sign, to_string(whole_part), ".", zero_padded(to_string(rest), places)], "")
+    }
+}
+
+// `count` out of `total`, as a percentage with `digits` places.
+//
+// The call `design/fractional-values.md` said a report would want first. It is
+// two integers in and text out, but the middle of it is a value: the percentage
+// exists as an exact ratio, gets compared or carried if the caller wants, and
+// only becomes text here.
+fn percent_text(count: Int, total: Int, digits: Int) -> Result<String, String> {
+    match ratio(count, total) {
+        ok(share) => ok(text(multiplied(share, whole(100)), digits)),
+        err(why) => err(why),
+    }
+}
+
+// The value a fallible call produced, or `fallback` when it refused.
+//
+// Here rather than in a test because a caller that has already established the
+// denominator is not zero should not have to write a `match` that cannot take
+// its second arm. `percent_or` is the same shape for the text form.
+fn value_or(result: Result<Ratio, String>, fallback: Ratio) -> Ratio {
+    match result {
+        ok(value) => value,
+        err(_) => fallback,
+    }
+}
+
+// Why a fallible call refused, or `fallback` when it did not.
+fn reason_or(result: Result<Ratio, String>, fallback: String) -> String {
+    match result {
+        ok(_) => fallback,
+        err(why) => why,
+    }
+}
+
+// The text a percentage call produced, or `fallback` when it refused.
+fn percent_or(result: Result<String, String>, fallback: String) -> String {
+    match result {
+        ok(shown) => shown,
+        err(_) => fallback,
+    }
+}
+
+// Why a percentage call refused, or `fallback` when it did not.
+fn percent_reason_or(result: Result<String, String>, fallback: String) -> String {
+    match result {
+        ok(_) => fallback,
+        err(why) => why,
+    }
+}
+
+test "a ratio is stored in lowest terms" {
+    let half = value_or(ratio(2, 4), zero())
+    assert half.top == 1
+    assert half.bottom == 2
+}
+
+test "two ways of writing the same ratio are the same value" {
+    // The reason `simplified` exists. Equality here is structural and total,
+    // so this is the language's own `==` rather than a comparison function.
+    assert ratio(2, 4) == ratio(1, 2)
+    assert ratio(1, 0 - 2) == ratio(0 - 1, 2)
+    assert ratio(3, 9) == ratio(1, 3)
+}
+
+test "a denominator of zero is refused rather than guessed at" {
+    let why = reason_or(ratio(1, 0), "it did not refuse")
+    assert why == "a ratio has no denominator of zero"
+}
+
+test "arithmetic stays exact" {
+    let third = simplified(1, 3)
+    let sixth = simplified(1, 6)
+
+    assert added(third, sixth) == simplified(1, 2)
+    assert subtracted(third, sixth) == sixth
+    assert multiplied(third, sixth) == simplified(1, 18)
+    assert added(third, added(third, third)) == whole(1)
+}
+
+test "a third of a third of a third is still exact" {
+    // The property a float cannot keep. Three thirds multiplied and divided
+    // back lands on exactly one, with no tolerance anywhere in the assertion.
+    let third = simplified(1, 3)
+    let small = multiplied(multiplied(third, third), third)
+
+    assert value_or(divided(whole(1), small), zero()) == whole(27)
+}
+
+test "dividing by zero is refused" {
+    let why = reason_or(divided(whole(1), zero()), "it did not refuse")
+    assert why == "a ratio cannot be divided by zero"
+}
+
+test "ratios can be ordered" {
+    let third = simplified(1, 3)
+    let half = simplified(1, 2)
+    let minus_half = simplified(0 - 1, 2)
+
+    assert is_below(third, half)
+    assert !is_below(half, third)
+    assert !is_below(half, half)
+    assert is_below(minus_half, third)
+    assert is_above(half, minus_half)
+    assert smaller(third, half) == third
+    assert larger(third, half) == half
+}
+
+test "the whole part truncates towards zero" {
+    assert truncated(simplified(7, 2)) == 3
+    assert truncated(simplified(0 - 7, 2)) == 0 - 3
+    assert truncated(whole(4)) == 4
+}
+
+test "scaling rounds half away from zero, which truncation would not" {
+    // The one place a rounding policy is chosen. `7/2` scaled by one is `3.5`,
+    // and the two directions have to be symmetric or a report's negative rows
+    // would round differently from its positive ones.
+    assert scaled(simplified(7, 2), 1) == 4
+    assert scaled(simplified(0 - 7, 2), 1) == 0 - 4
+    assert scaled(simplified(2, 3), 100) == 67
+    assert scaled(whole(5), 3) == 15
+    assert power_of_ten(0) == 1
+    assert power_of_ten(3) == 1000
+    assert zero_padded("7", 3) == "007"
+    assert zero_padded("1234", 2) == "1234"
+}
+
+test "rendering rounds half away from zero" {
+    let two_thirds = simplified(2, 3)
+    assert text(two_thirds, 0) == "1"
+    assert text(two_thirds, 1) == "0.7"
+    assert text(two_thirds, 3) == "0.667"
+
+    assert text(simplified(1, 2), 0) == "1"
+    assert text(simplified(0 - 1, 2), 0) == "-1"
+    assert text(simplified(0 - 2, 3), 3) == "-0.667"
+}
+
+test "a rendering keeps the places it was asked for" {
+    // The zero padding half. `1/8` is `0.125`, and asking for four places has
+    // to say `0.1250` rather than `0.125`.
+    assert text(simplified(1, 8), 4) == "0.1250"
+    assert text(whole(3), 2) == "3.00"
+    assert text(zero(), 2) == "0.00"
+    assert text(simplified(1, 3), 0 - 2) == "0"
+}
+
+test "a percentage is a ratio that became text at the end" {
+    assert percent_or(percent_text(2, 3, 1), "it refused") == "66.7"
+    assert percent_or(percent_text(1, 200, 1), "it refused") == "0.5"
+    assert percent_or(percent_text(1, 4, 0), "it refused") == "25"
+
+    let why = percent_reason_or(percent_text(1, 0, 1), "it did not refuse")
+    assert why == "a ratio has no denominator of zero"
+}
+
+test "the divisor walk settles for numbers that need the most steps" {
+    // Consecutive Fibonacci numbers are Euclid's worst case, so this is the
+    // input the bound in `euclid_steps` was chosen against. The bound is
+    // asserted here as well: a walk that ran out of turns would give a wrong
+    // divisor rather than fail, which is the failure this number prevents and
+    // the reason it is not a round guess.
+    assert euclid_steps() > 92
+    assert greatest_common_divisor(6765, 4181) == 1
+    assert greatest_common_divisor(0, 5) == 5
+    assert greatest_common_divisor(0, 0) == 0
+    assert greatest_common_divisor(0 - 12, 18) == 6
+}
+
+test "zero and sign read the way they are written" {
+    assert is_zero(zero())
+    assert is_zero(simplified(0, 5))
+    assert !is_zero(whole(1))
+    assert is_negative(simplified(0 - 1, 2))
+    assert !is_negative(zero())
+    assert negated(simplified(1, 2)) == simplified(0 - 1, 2)
+    assert negated(negated(simplified(1, 2))) == simplified(1, 2)
+    assert absolute(0 - 7) == 7
+    assert absolute(7) == 7
+    assert absolute(0) == 0
+}
