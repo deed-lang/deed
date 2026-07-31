@@ -104,7 +104,7 @@ jobs:
           path: mutants.out
 
   wasm-size:
-    name: wasm size budget
+    name: wasm artifact
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -121,6 +121,11 @@ jobs:
       # ships as.
       - name: cargo build --profile wasm
         run: cargo build --profile wasm --target wasm32-unknown-unknown -p deed-wasm --locked
+
+      # #776: building it and weighing it is not running it. The crate's own
+      # tests run on the host, where this target's failures cannot happen.
+      - name: the artifact answers
+        run: node crates/deed-wasm/smoke.mjs target/wasm32-unknown-unknown/wasm/deed_wasm.wasm
 
       - name: the artifact is inside its budget
         run: |

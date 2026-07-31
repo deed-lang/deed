@@ -35,7 +35,46 @@ pub use shipped::{shipped_for, shipped_modules, shipped_source, take_shipped};
 pub use wit::wit_world_for;
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use clock::{since, started};
+
+/// Where the check pipeline reads a clock, on a target that has one.
+///
+/// `Instant::now` panics on `wasm32-unknown-unknown`. There is no clock there
+/// to read, and every verb a page calls goes through `check_all`, so the
+/// wasm artifact trapped on any input at all rather than on some of it.
+///
+/// Zero is the honest answer on a target that cannot measure. Nothing decides
+/// anything with these numbers; they are printed by `--timings` and read by
+/// the benchmarks, and neither runs where this returns zero.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+mod clock {
+    use std::time::{Duration, Instant};
+
+    pub(crate) type Started = Instant;
+
+    pub(crate) fn started() -> Started {
+        Instant::now()
+    }
+
+    pub(crate) fn since(start: Started) -> Duration {
+        start.elapsed()
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod clock {
+    use std::time::Duration;
+
+    pub(crate) type Started = ();
+
+    pub(crate) fn started() -> Started {}
+
+    pub(crate) fn since(_: Started) -> Duration {
+        Duration::ZERO
+    }
+}
 
 use deed_ast::{Item, Module, Outcome};
 use deed_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
@@ -229,13 +268,13 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
         .map(|file| {
             let text = sources.file(*file).text();
 
-            let start = Instant::now();
+            let start = started();
             let lexed = deed_lexer::tokenize(*file, text);
-            let lex = start.elapsed();
+            let lex = since(start);
 
-            let start = Instant::now();
+            let start = started();
             let parsed = deed_parser::parse(*file, &lexed.tokens);
-            let parse = start.elapsed();
+            let parse = since(start);
 
             Parsed {
                 file: *file,
@@ -282,9 +321,9 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
     let resolutions: Vec<_> = parsed
         .iter()
         .map(|entry| {
-            let start = Instant::now();
+            let start = started();
             let resolved = deed_resolve::resolve(entry.file, &entry.module, &universe);
-            (resolved, start.elapsed())
+            (resolved, since(start))
         })
         .collect();
 
@@ -368,11 +407,11 @@ fn check_parsed(
     } = parsed;
     timings.resolve = resolve_time;
 
-    let start = Instant::now();
+    let start = started();
     let checked = deed_typeck::check(file, &module, &resolved.resolutions, world);
-    timings.typeck = start.elapsed();
+    timings.typeck = since(start);
 
-    let start = Instant::now();
+    let start = started();
     let analysed = deed_effects::analyse(
         file,
         &module,
@@ -380,7 +419,7 @@ fn check_parsed(
         checked.types.row_required(),
         &checked.types.function_rows(),
     );
-    timings.effects = start.elapsed();
+    timings.effects = since(start);
 
     let mut diagnostics = Vec::new();
     diagnostics.append(&mut collected);
