@@ -1,0 +1,5 @@
+module conformance/case_unbound
+
+fn nothing<T>() -> T {
+    nothing()
+}

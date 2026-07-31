@@ -1,0 +1,4 @@
+mode: run
+expect: run
+stdout: 10
+stdout: 0

@@ -1,0 +1,6 @@
+module conformance/case_typefirst
+
+fn count() -> Int {
+    Int n = 3
+    n
+}

@@ -1,0 +1,46 @@
+module conformance/case_scope
+
+effect Counter {
+    fn bump() -> ()
+    fn total() -> Int
+}
+
+handler InMemory implements Counter {
+    state count: Int
+
+    fn bump() -> () {
+        count = count + 1
+    }
+
+    fn total() -> Int {
+        count
+    }
+}
+
+fn twice() -> Int
+  uses
+    Counter.bump,
+    Counter.total,
+{
+    Counter.bump()
+    Counter.bump()
+    Counter.total()
+}
+
+fn main(sys: System) -> ()
+  uses
+    Io.write,
+{
+    Io.write(
+        sys.console,
+        to_string(with InMemory { count: 0 } {
+            twice()
+        }),
+    )
+    Io.write(
+        sys.console,
+        to_string(with InMemory { count: 0 } {
+            twice()
+        }),
+    )
+}

@@ -1,0 +1,25 @@
+module conformance/case_equality
+
+record Point {
+    x: Int,
+    y: Int,
+}
+
+// `to_string` takes an `Int`, so a boolean becomes text the only way the
+// language offers: a branch.
+fn shown(answer: Bool) -> String {
+    if answer {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+fn main(sys: System) -> ()
+  uses
+    Io.write,
+{
+    Io.write(sys.console, shown(Point { x: 1, y: 2 } == Point { x: 1, y: 2 }))
+    Io.write(sys.console, shown([1, 2] == [1, 2]))
+    Io.write(sys.console, shown([1, 2] == [2, 1]))
+}

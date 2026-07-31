@@ -1,0 +1,13 @@
+module conformance/case_refuses
+
+fn halve(n: Int) -> Int
+  where
+    n >= 0,
+{
+    n / 2
+}
+
+test "a broken precondition is refused rather than answered" {
+    assert refuses halve(0 - 5)
+    assert halve(10) == 5
+}

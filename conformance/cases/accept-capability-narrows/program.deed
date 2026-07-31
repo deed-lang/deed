@@ -1,0 +1,15 @@
+module conformance/case_capability
+
+fn greet(out: Console, name: String) -> ()
+  uses
+    Io.write,
+{
+    Io.write(out, name)
+}
+
+fn main(sys: System) -> ()
+  uses
+    Io.write,
+{
+    greet(sys.console, "world")
+}

@@ -1,0 +1,16 @@
+module conformance/case_ensures
+
+fn twice(n: Int) -> Int
+  where
+    n < 1000,
+    n > 0 - 1000,
+  ensures
+    ok  => result == n + n,
+{
+    n + n
+}
+
+test "the promise holds" {
+    assert twice(21) == 42
+    assert twice(0) == 0
+}

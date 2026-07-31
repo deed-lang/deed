@@ -1,0 +1,14 @@
+module conformance/case_alternatives
+
+choice Grade {
+    Low,
+    Middling,
+    High,
+}
+
+fn passing(mark: Grade) -> Bool {
+    match mark {
+        Middling | High => true,
+        Low => false,
+    }
+}

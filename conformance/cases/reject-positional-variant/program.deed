@@ -1,0 +1,5 @@
+module conformance/case_positional
+
+choice Shape {
+    Circle(Int),
+}

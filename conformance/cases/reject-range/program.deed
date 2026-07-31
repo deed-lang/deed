@@ -1,0 +1,7 @@
+module conformance/case_range
+
+fn count() -> Int {
+    for i in 0..10 with total = 0 {
+        total + i
+    }
+}

@@ -1,0 +1,15 @@
+module conformance/case_walk
+
+fn total(numbers: List<Int>) -> Int {
+    for n in numbers with sum = 0 {
+        sum + n
+    }
+}
+
+fn main(sys: System) -> ()
+  uses
+    Io.write,
+{
+    Io.write(sys.console, to_string(total([1, 2, 3, 4])))
+    Io.write(sys.console, to_string(total([])))
+}
