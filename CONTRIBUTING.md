@@ -209,6 +209,37 @@ the refusal section empty. At release time, rename `Unreleased` to the version
 number and date; the release workflow publishes that section as the GitHub
 release notes.
 
+## Fuzzing
+
+The fuzz target is `check`: it runs arbitrary text through the full check
+pipeline and fails on any panic. The corpus lives in
+`crates/deed-driver/fuzz/corpus/check/` and is replayed on every build by
+`crates/deed-driver/tests/fuzz_corpus.rs` (no fuzzer needed, stable toolchain).
+The corpus grows automatically: the scheduled workflow in `.github/workflows/fuzz.yml`
+runs a bounded 30-minute fuzz session every Sunday and commits any new inputs
+it discovers.
+
+To run the corpus replay without the fuzzer:
+
+```
+cargo test -p deed-driver --test fuzz_corpus
+```
+
+To run the fuzzer locally (nightly toolchain and `cargo-fuzz` required):
+
+```
+cargo install cargo-fuzz
+cd crates/deed-driver
+cargo +nightly fuzz run check -- -max_total_time=60
+```
+
+If the fuzzer finds a crash, add the reproducer to the corpus so it is
+replayed on every future build:
+
+```
+cp fuzz/artifacts/check/crash-<hash> fuzz/corpus/check/
+```
+
 ## Design changes
 
 Anything touching `design/` goes through a PR with the reasoning in the description. Include

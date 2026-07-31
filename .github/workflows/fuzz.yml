@@ -1,0 +1,100 @@
+name: Fuzz
+
+# Corpus replay runs on every push inside the regular CI job (ci.yml).
+# This job runs the fuzzer itself: a longer, coverage-guided run that adds to
+# the corpus. It is on a schedule rather than on push so that it never runs
+# alongside the timing-sensitive scaling and LSP cost tests in CI.
+#
+# A crash input is added to the corpus automatically. The next regular CI run
+# will replay it, making the regression test permanent.
+on:
+  schedule:
+    # Sundays at 03:00 UTC. A weekday run would compete with review activity;
+    # a late-night Sunday run is quiet, and any crash shows up first thing
+    # Monday.
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: fuzz the check pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # cargo-fuzz requires the nightly toolchain for sanitiser support.
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The fuzz crate is its own workspace, so cache it separately.
+          workspaces: crates/deed-driver/fuzz
+
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      # Thirty minutes. Long enough to find shallow bugs without making the
+      # scheduled slot a sink for machine time.
+      - name: cargo fuzz run check
+        id: fuzz
+        working-directory: crates/deed-driver
+        run: |
+          cargo fuzz run check -- -max_total_time=1800
+        continue-on-error: true
+
+      # Crash and timeout inputs become corpus entries. The replay test in
+      # fuzz_corpus.rs will exercise them on every future build, so the fix
+      # for a crash is a permanent regression test, not just a CI artifact.
+      - name: add any crash inputs to the corpus
+        run: |
+          artifacts=crates/deed-driver/fuzz/artifacts/check
+          corpus=crates/deed-driver/fuzz/corpus/check
+          if [ -d "$artifacts" ]; then
+            count=0
+            for f in "$artifacts"/crash-* "$artifacts"/timeout-* "$artifacts"/oom-*; do
+              [ -f "$f" ] || continue
+              cp "$f" "$corpus/"
+              count=$((count + 1))
+            done
+            echo "$count crash input(s) moved to corpus"
+          fi
+
+      # Upload the full artifacts directory so a developer can reproduce any
+      # crash locally with `cargo fuzz run check <input-file>`.
+      - name: upload crash reproducers
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fuzz-artifacts
+          path: crates/deed-driver/fuzz/artifacts/
+          retention-days: 90
+          if-no-files-found: ignore
+
+      # Commit whatever the fuzzer added to the corpus (both new coverage
+      # inputs and any crash inputs moved above). The next regular CI run
+      # will replay them all as the fast, deterministic fuzz_corpus test.
+      - name: commit new corpus entries
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add crates/deed-driver/fuzz/corpus/check/
+          if git diff --cached --quiet; then
+            echo "no new corpus entries"
+          else
+            git commit -m "fuzz: add corpus entries from scheduled run"
+            git push
+          fi
+
+      # Re-surface the fuzz failure after saving artifacts and corpus entries.
+      # Without this the job always shows green, which would hide a finding.
+      - name: fail if the fuzzer found a crash
+        if: steps.fuzz.outcome == 'failure'
+        run: |
+          echo "cargo fuzz found a crash; the reproducer is in the fuzz-artifacts artifact above" >&2
+          exit 1

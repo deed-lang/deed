@@ -1,0 +1,23 @@
+[package]
+name = "deed-driver-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# Required for cargo-fuzz to recognise this as a fuzz crate.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+deed-diagnostics = { path = "../../deed-diagnostics" }
+deed-driver = { path = ".." }
+
+[[bin]]
+name = "check"
+path = "fuzz_targets/check.rs"
+doc = false
+
+# cargo-fuzz requires a self-contained workspace so stable `cargo build` at the
+# repository root does not try to build nightly-only sanitiser targets.
+[workspace]

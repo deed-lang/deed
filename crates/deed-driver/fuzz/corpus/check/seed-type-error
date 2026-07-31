@@ -1,0 +1,5 @@
+module foo
+
+fn wrong() -> String {
+    42
+}

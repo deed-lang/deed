@@ -1,0 +1,2 @@
+# Crashes are uploaded as GitHub Actions artifacts and do not belong in git.
+artifacts/
