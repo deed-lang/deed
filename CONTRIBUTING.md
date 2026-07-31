@@ -205,6 +205,12 @@ Keep the agent's trailer. It wrote the code and the history should say so. The r
 is the one that is easy to lose, and it is the one that matters, because review is the
 expensive half of the work here and a commit naming only the agent has recorded the cheap half.
 
+The commits that predate this rule keep their authorship. Thirty-eight of them name only the
+agent, and the temptation is to rewrite them, but reassigning an author would state something
+false about who wrote the code, and rewriting the history to add a trailer would break every
+commit link in every issue and PR here to buy an appearance. Neither is worth it. This rule
+only governs the next one.
+
 ## Changelog
 
 `CHANGELOG.md` is written per change, not assembled at release time.
