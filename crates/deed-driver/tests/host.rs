@@ -8,8 +8,13 @@
 //! So a compiled Deed program's import section is its capability
 //! requirements, written down where a host can read them before running
 //! anything. That is worth checking rather than assuming.
+//!
+//! The two tests added for issue #629 prove the enforcement is structural,
+//! not just claimed. [`Host`] links a module against a specific offer list and
+//! refuses anything not on it. A module without an import has no index in its
+//! own index space to call it through, so a host that offers it cannot help.
 
-use deed_codegen::{Trap, Value, call, compile};
+use deed_codegen::{Host, Trap, Value, call, compile};
 use deed_diagnostics::SourceMap;
 use deed_driver::check_all;
 
@@ -130,4 +135,70 @@ fn running_a_program_that_needs_a_host_says_which_operation_it_wanted() {
         panic!("it should say what it wanted, not {stopped}");
     };
     assert!(what.starts_with("deed:"), "{what}");
+}
+
+/// A component whose row does not mention writing cannot write, even when the
+/// host offers it.
+///
+/// This is enforcement by absence: the operation's function index does not
+/// exist in the module's index space, so there is no index to call it
+/// through. A host that offers write cannot hand that capability to a module
+/// that never imported it.
+#[test]
+fn what_the_row_does_not_name_is_not_reachable() {
+    // A component whose row does not mention writing: pure arithmetic.
+    let module = module_for("module a\n\nfn answer() -> Int { 2 + 2 }\n");
+
+    // The host offers write. The module has not imported it.
+    let mut host = Host::new();
+    host.offer("deed:io", "write", |_| {
+        unreachable!("write is not in this module's import section")
+    });
+
+    // Linking succeeds: the module has no imports, so all of them (vacuously)
+    // are satisfied. Offering write changes nothing about what the module can
+    // call.
+    let linked = host.link(&module).expect("a pure module links to any host");
+
+    // Write is not in the import section. There is no function index for it
+    // inside this module's index space.
+    assert!(
+        !module.imports.iter().any(|i| i.name == "write"),
+        "a program that does not use Io.write should not import it"
+    );
+
+    // The module runs correctly. The host's write was never dispatched,
+    // because there was no import to dispatch through.
+    let result = linked
+        .call("answer", &[])
+        .expect("arithmetic runs under any host");
+    assert_eq!(result, Some(Value::I64(4)));
+}
+
+/// A component whose row mentions writing is refused at link time when the
+/// host does not offer it.
+///
+/// Refused before a single instruction runs: the import section declares what
+/// the module needs, and a host that cannot satisfy every entry refuses the
+/// module rather than waiting for the missing call.
+#[test]
+fn a_component_asking_for_what_the_host_does_not_offer_is_refused_at_load() {
+    // A component whose row mentions writing.
+    let module = module_for(WRITING);
+
+    // A host that offers nothing.
+    let host = Host::new();
+
+    // The module needs write (and the console narrowing). The host has
+    // neither, so it refuses the module at link time.
+    let err = host
+        .link(&module)
+        .expect_err("a writing component is refused by a host that cannot write");
+
+    // The error names the specific import that was not satisfied.
+    assert!(
+        err.module.starts_with("deed:"),
+        "the unsatisfied import is from a deed namespace: {}",
+        err.module
+    );
 }

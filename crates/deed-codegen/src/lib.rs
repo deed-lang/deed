@@ -19,6 +19,6 @@ pub mod validate;
 pub mod wasm;
 
 pub use compile::{Unsupported, compile};
-pub use run::{Outcome, Trap, Value, call, call_measured};
+pub use run::{Host, LinkError, Linked, Outcome, Trap, Value, call, call_measured};
 pub use validate::{Invalid, validate};
 pub use wasm::Module;

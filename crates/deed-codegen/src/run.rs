@@ -8,6 +8,13 @@
 //! does not implement the instructions nothing here produces, and it is not
 //! the thing a released `deed build` would ship. It is a test oracle that
 //! happens to run.
+//!
+//! [`Host`] is the part that proves the capability model is enforced by
+//! structure rather than by check. It offers a specific set of imports and
+//! refuses, at link time, any module whose import section asks for something
+//! the host does not offer. What the module does not import it cannot call,
+//! because the function index for an unimported operation does not exist in
+//! the module's index space.
 
 use crate::wasm::{Ins, Module, ValType};
 
@@ -107,6 +114,161 @@ impl std::fmt::Display for Trap {
 /// already applies to the scaling test.
 const BUDGET: u64 = 5_000_000;
 
+/// The type of a host-provided import implementation.
+type HostFn = Box<dyn Fn(&[Value]) -> Option<Value>>;
+
+/// A host that provides implementations for a specific, named set of imports.
+///
+/// Where [`call`] stops with [`Trap::NeedsAHost`] when it reaches an import,
+/// a `Host` actually answers those calls -- with exactly the set it declares
+/// and no wider. [`Host::link`] checks that the module's import section is
+/// fully covered before anything runs. A module that imports something the
+/// host does not offer is refused at link time, the way a real engine refuses
+/// to instantiate rather than running until the first missing call.
+///
+/// # What this proves
+///
+/// Deed's capability row names the operations a function may use. The compiler
+/// turns that row into the module's import section. A host that offers a
+/// narrow set enforces the row by structure:
+///
+/// - A component whose row does not mention an operation does not import it.
+///   The operation's function index does not exist in the module's index space,
+///   so the module cannot call it regardless of what the host offers.
+///
+/// - A component whose row does mention an operation that the host cannot
+///   satisfy is refused at link time, before a single byte of the module runs.
+pub struct Host {
+    offers: Vec<HostOffer>,
+}
+
+struct HostOffer {
+    module: String,
+    name: String,
+    func: HostFn,
+}
+
+/// An import the module declares that this host does not offer.
+///
+/// Returned by [`Host::link`]. The module is refused before it runs, which is
+/// the "refused at load time" property the capability model requires.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LinkError {
+    /// The WASM namespace the module asked for (`"deed:io"`, for example).
+    pub module: String,
+    /// The operation name within that namespace (`"write"`, for example).
+    pub name: String,
+}
+
+impl std::fmt::Display for LinkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the host does not offer `{}.{}`", self.module, self.name)
+    }
+}
+
+/// A module that has been linked to a [`Host`]: every import is satisfied.
+///
+/// Running this does not stop at a [`Trap::NeedsAHost`]. The host answers
+/// every import the module declares, and the module cannot reach anything the
+/// host did not include in its offer list.
+pub struct Linked<'a> {
+    host: &'a Host,
+    module: &'a Module,
+}
+
+impl std::fmt::Debug for Linked<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Linked")
+            .field("imports", &self.module.imports.len())
+            .field("offers", &self.host.offers.len())
+            .finish()
+    }
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Host {
+    /// A host that offers nothing.
+    pub fn new() -> Self {
+        Self { offers: Vec::new() }
+    }
+
+    /// Offer an implementation for one import.
+    ///
+    /// The module and name match what the WASM binary section declares:
+    /// `"deed:io"` and `"write"` for `Io.write`, for example.
+    pub fn offer(
+        &mut self,
+        module: &str,
+        name: &str,
+        func: impl Fn(&[Value]) -> Option<Value> + 'static,
+    ) -> &mut Self {
+        self.offers.push(HostOffer {
+            module: module.to_string(),
+            name: name.to_string(),
+            func: Box::new(func),
+        });
+        self
+    }
+
+    fn implementation_for(&self, module: &str, name: &str) -> Option<&HostFn> {
+        self.offers
+            .iter()
+            .find(|o| o.module == module && o.name == name)
+            .map(|o| &o.func)
+    }
+
+    /// Try to link a module against this host.
+    ///
+    /// Every import in the module's section must be on this host's offer list.
+    /// A module that imports something the host does not offer is refused here,
+    /// before a single instruction runs.
+    pub fn link<'a>(&'a self, module: &'a Module) -> Result<Linked<'a>, LinkError> {
+        for import in &module.imports {
+            if self
+                .implementation_for(&import.module, &import.name)
+                .is_none()
+            {
+                return Err(LinkError {
+                    module: import.module.clone(),
+                    name: import.name.clone(),
+                });
+            }
+        }
+        Ok(Linked { host: self, module })
+    }
+}
+
+impl Linked<'_> {
+    /// Call an exported function, dispatching host imports to the offer list.
+    pub fn call(&self, name: &str, args: &[Value]) -> Result<Option<Value>, Trap> {
+        if let Err(crate::validate::Invalid(reason)) = crate::validate::validate(self.module) {
+            return Err(Trap::Invalid(reason));
+        }
+        let index = self
+            .module
+            .exports
+            .iter()
+            .find(|(exported, _)| exported == name)
+            .map(|(_, index)| *index)
+            .ok_or_else(|| Trap::Unimplemented(format!("no export named {name}")))?;
+        let mut run = Run {
+            module: self.module,
+            fuel: BUDGET,
+            memory: memory_of(self.module),
+            host: Some(self.host),
+        };
+        match run.call(index, args) {
+            Err(Trap::Unreachable) => Err(run.why().unwrap_or(Trap::Unreachable)),
+            other => other,
+        }
+    }
+}
+
 /// Calls an exported function.
 ///
 /// Validates the whole module first, the way a real engine would refuse to
@@ -135,6 +297,7 @@ pub fn call_measured(module: &Module, name: &str, args: &[Value]) -> Result<Outc
         module,
         fuel: BUDGET,
         memory: memory_of(module),
+        host: None,
     };
     let before = run.bump();
     match run.call(index, args) {
@@ -167,6 +330,7 @@ struct Run<'a> {
     module: &'a Module,
     fuel: u64,
     memory: Vec<u8>,
+    host: Option<&'a Host>,
 }
 
 /// What a block ended with: fell off the end, or jumped out of one.
@@ -237,6 +401,11 @@ impl Run<'_> {
     fn call(&mut self, index: u32, args: &[Value]) -> Result<Option<Value>, Trap> {
         let Some(at) = (index as usize).checked_sub(self.module.imports.len()) else {
             let import = &self.module.imports[index as usize];
+            if let Some(host) = self.host {
+                if let Some(func) = host.implementation_for(&import.module, &import.name) {
+                    return Ok(func(args));
+                }
+            }
             return Err(Trap::NeedsAHost(format!(
                 "{}.{}",
                 import.module, import.name
