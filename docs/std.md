@@ -12,4 +12,4 @@ These pages are generated from the shipped module declarations under `std/` and 
 
 ## User modules
 
-The same treatment is possible for user modules in principle. The compiler already has the same parse tree, contract, row and mention table when it checks a set of user files together; these pages are published only for shipped modules because those sources are always present beside the compiler.
+`deed doc <path>...` writes the same page for any module, to standard output. There are no visibility modifiers here, so every declaration is API and there is nothing to decide about what belongs on a page. These pages are checked in only for the shipped modules, because those are the ones a reader has without having written them.

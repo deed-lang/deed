@@ -14,6 +14,7 @@ Usage:
   deed test  [options] <path>...
   deed run   [options] <path>... [-- <argument>...]
   deed build [options] <path>...
+  deed doc   <path>...
   deed fmt   [--check] <path>...
   deed fix   [--check] <path>...
   deed explain <code>
@@ -59,6 +60,11 @@ beside the source. The component's exported interface is every function the
 module declares. A function is its own export; there is no `main`. Functions
 whose signatures contain a capability have no world-level type in WIT and are
 refused with an explanation. Tests are not part of the interface.
+`deed doc` writes the API reference a module carries to standard output, as
+Markdown. There are no visibility modifiers here, so every declaration is API
+and there is nothing to decide about what belongs on the page: the signature,
+the row, the contract, the comment above it, and the lines of its own tests
+that name it.
 `deed fmt` has no options for the output. There is one canonical form.
 `deed fix` applies the fixes that are certain and leaves the guesses alone.
 `deed explain` prints the page for one diagnostic code. The argument may be the
@@ -96,6 +102,8 @@ pub enum Mode {
     Fix,
     /// Compile to a WebAssembly module rather than running it.
     Build,
+    /// Write the API reference a module carries to standard output.
+    Doc,
 }
 
 #[derive(Debug)]
@@ -196,6 +204,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "fmt" => Mode::Fmt,
         "fix" => Mode::Fix,
         "build" => Mode::Build,
+        "doc" => Mode::Doc,
         other => {
             return Err(format!(
                 "unknown command `{other}`, the choices are `check`, `test`, `run`, `build`, `fmt`, `fix`, `explain` and `lsp`"
@@ -284,6 +293,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 Mode::Fmt => "fmt",
                 Mode::Fix => "fix",
                 Mode::Build => "build",
+                Mode::Doc => "doc",
             }
         ));
     }
