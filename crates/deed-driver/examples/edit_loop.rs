@@ -33,13 +33,17 @@ const ROUNDS: usize = 5;
 
 /// The constant recorded in `design/01-principles.md` from the latest release
 /// measurement.
+#[cfg(test)]
 const RECORDED_PER_FILE_MICROS: u64 = 59;
 /// P9's edit-loop budget.
+#[cfg(test)]
 const P9_BUDGET_MICROS: u64 = 100_000;
 /// The first whole-workspace size where `RECORDED_PER_FILE_MICROS` misses
 /// `P9_BUDGET_MICROS`.
+#[cfg(test)]
 const CACHE_TRIGGER_FILES: usize = 1_695;
 /// The same budget, if one request grows a second full workspace pass.
+#[cfg(test)]
 const DOUBLE_PASS_TRIGGER_FILES: usize = 848;
 
 fn main() {
