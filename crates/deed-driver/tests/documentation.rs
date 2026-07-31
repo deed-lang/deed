@@ -536,7 +536,13 @@ fn public_docs() -> Vec<String> {
             .filter_map(Result::ok)
         {
             let path = entry.path();
-            if path.file_name().is_some_and(|name| name == ".github") {
+            let hidden_or_generated = path.file_name().is_some_and(|name| {
+                name == ".git"
+                    || name == ".github"
+                    || name == "target"
+                    || name.to_string_lossy().starts_with("mutants.out")
+            });
+            if hidden_or_generated {
                 continue;
             }
             if path.is_dir() {
