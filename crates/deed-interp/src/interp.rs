@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use deed_ast::{
     BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item, Module, Outcome,
@@ -219,6 +220,28 @@ pub struct Run {
     pub output: Vec<String>,
     /// `Err` when the program failed, which includes a contract it broke.
     pub result: Result<Value, Box<Diagnostic>>,
+    /// Runtime profile, when one was requested.
+    pub profile: Option<RuntimeProfile>,
+}
+
+/// How one function contributed to runtime.
+#[derive(Clone, Debug)]
+pub struct FunctionProfile {
+    pub module: String,
+    pub function: String,
+    pub calls: u64,
+    pub contract_checks: u64,
+    pub handler_calls: u64,
+    pub total: Duration,
+    pub contract: Duration,
+    pub handler: Duration,
+}
+
+/// Runtime profile for one `main` run.
+#[derive(Clone, Debug)]
+pub struct RuntimeProfile {
+    pub total: Duration,
+    pub functions: Vec<FunctionProfile>,
 }
 
 /// Runs `main`, handing it the one `System` capability that exists.
@@ -234,6 +257,26 @@ pub struct Run {
 /// so nothing about how the compiler was invoked can leak into the program it
 /// is running.
 pub fn run_main(program: &Program, file: FileId, root: &Path, arguments: &[String]) -> Option<Run> {
+    run_main_with_profile(program, file, root, arguments, false)
+}
+
+/// Runs `main` and records where runtime went.
+pub fn run_main_profiled(
+    program: &Program,
+    file: FileId,
+    root: &Path,
+    arguments: &[String],
+) -> Option<Run> {
+    run_main_with_profile(program, file, root, arguments, true)
+}
+
+fn run_main_with_profile(
+    program: &Program,
+    file: FileId,
+    root: &Path,
+    arguments: &[String],
+    profile: bool,
+) -> Option<Run> {
     let main = program
         .module(file)?
         .items
@@ -244,6 +287,9 @@ pub fn run_main(program: &Program, file: FileId, root: &Path, arguments: &[Strin
         })?;
 
     let mut interp = Interp::new(program, file);
+    if profile {
+        interp.profile = Some(ProfileState::new());
+    }
     interp.root = sandbox::root(root).ok().map(Rc::from);
     interp.arguments = arguments
         .iter()
@@ -259,9 +305,11 @@ pub fn run_main(program: &Program, file: FileId, root: &Path, arguments: &[Strin
         .collect();
 
     let result = interp.call_from_outside(main, args, span);
+    let profile = interp.runtime_profile();
     Some(Run {
         output: interp.output.clone(),
         result,
+        profile,
     })
 }
 
@@ -544,6 +592,39 @@ pub(crate) struct Interp<'a> {
     /// answer depended on how the test runner was invoked would be a test of
     /// the test runner.
     arguments: Vec<Rc<str>>,
+    profile: Option<ProfileState>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ProfileKey {
+    module: String,
+    function: String,
+}
+
+#[derive(Default)]
+struct FunctionTotals {
+    calls: u64,
+    contract_checks: u64,
+    handler_calls: u64,
+    total: Duration,
+    contract: Duration,
+    handler: Duration,
+}
+
+struct ProfileState {
+    started: Instant,
+    stack: Vec<ProfileKey>,
+    functions: HashMap<ProfileKey, FunctionTotals>,
+}
+
+impl ProfileState {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            stack: Vec::new(),
+            functions: HashMap::new(),
+        }
+    }
 }
 
 impl<'a> Interp<'a> {
@@ -573,7 +654,72 @@ impl<'a> Interp<'a> {
             ticks: 0,
             root: None,
             arguments: Vec::new(),
+            profile: None,
         }
+    }
+
+    fn runtime_profile(&self) -> Option<RuntimeProfile> {
+        let profile = self.profile.as_ref()?;
+        let functions = profile
+            .functions
+            .iter()
+            .map(|(key, totals)| FunctionProfile {
+                module: key.module.clone(),
+                function: key.function.clone(),
+                calls: totals.calls,
+                contract_checks: totals.contract_checks,
+                handler_calls: totals.handler_calls,
+                total: totals.total,
+                contract: totals.contract,
+                handler: totals.handler,
+            })
+            .collect();
+        Some(RuntimeProfile {
+            total: profile.started.elapsed(),
+            functions,
+        })
+    }
+
+    fn enter_profiled_call(&mut self, function: &FnDecl) -> Option<(ProfileKey, Instant)> {
+        let key = ProfileKey {
+            module: self.here().to_string(),
+            function: function.sig.name.name.clone(),
+        };
+        let profile = self.profile.as_mut()?;
+        profile.stack.push(key.clone());
+        Some((key, Instant::now()))
+    }
+
+    fn finish_profiled_call(&mut self, started: Option<(ProfileKey, Instant)>, is_handler: bool) {
+        let Some((key, start)) = started else {
+            return;
+        };
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        let elapsed = start.elapsed();
+
+        let totals = profile.functions.entry(key.clone()).or_default();
+        totals.calls += 1;
+        totals.total += elapsed;
+        if is_handler {
+            totals.handler_calls += 1;
+            totals.handler += elapsed;
+        }
+
+        profile.stack.pop();
+    }
+
+    fn add_contract_time(&mut self, elapsed: Duration) {
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        let Some(key) = profile.stack.last().cloned() else {
+            return;
+        };
+        let totals = profile.functions.entry(key).or_default();
+        totals.contract_checks += 1;
+        totals.contract += elapsed;
     }
 
     // -- the module the running frame belongs to ---------------------------
@@ -1125,7 +1271,11 @@ impl<'a> Interp<'a> {
     /// the contract's, which is the same question with less to go on.
     fn in_a_contract<T>(&mut self, run: impl FnOnce(&mut Self) -> T) -> T {
         self.in_contract += 1;
+        let started = self.profile.as_ref().map(|_| Instant::now());
         let result = run(self);
+        if let Some(started) = started {
+            self.add_contract_time(started.elapsed());
+        }
         self.in_contract -= 1;
         result
     }
@@ -1942,6 +2092,7 @@ impl<'a> Interp<'a> {
         call_file: FileId,
         handler: Option<usize>,
     ) -> Eval<Value> {
+        let profile_call = self.enter_profiled_call(function);
         let plan = self.plan_of(function);
 
         let mut frame = Frame::default();
@@ -1970,6 +2121,7 @@ impl<'a> Interp<'a> {
         }
         self.rows.pop();
         self.frames.pop();
+        self.finish_profiled_call(profile_call, handler.is_some());
         result
     }
 
@@ -2330,7 +2482,12 @@ impl<'a> Interp<'a> {
 
         // The predicate talks about `value`, which is not in scope anywhere
         // else, so it is bound here.
-        if self.eval_predicate(refinement, predicate, &value)? {
+        let started = self.profile.as_ref().map(|_| Instant::now());
+        let passes = self.eval_predicate(refinement, predicate, &value)?;
+        if let Some(started) = started {
+            self.add_contract_time(started.elapsed());
+        }
+        if passes {
             return Ok(());
         }
 

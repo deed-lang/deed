@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use deed_diagnostics::{SourceMap, render_human};
 use deed_driver::{Checked, ObligationReport};
-use deed_interp::{Program, PropertyConfig};
+use deed_interp::{Program, PropertyConfig, RuntimeProfile};
 use deed_typeck::Tier;
 
 use crate::args::{CheckArgs, Command, Format, Mode, USAGE};
@@ -141,6 +141,10 @@ fn run_check(args: CheckArgs) -> ExitCode {
     if args.mode == Mode::Fix {
         return run_fix(&files, args.check_only);
     }
+    if args.runtime_profile && args.mode != Mode::Run {
+        eprintln!("error: `--profile-runtime` is only for `deed run`");
+        return ExitCode::from(EXIT_USAGE);
+    }
 
     // What was named is the subject; what an import needed is context. So the
     // library a program uses is compiled alongside it and checked, and its
@@ -223,6 +227,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
             subject,
             args.dir.as_deref(),
             &args.arguments,
+            args.runtime_profile,
         ) {
             Ok(Some(true)) => {}
             Ok(Some(false)) => return ExitCode::FAILURE,
@@ -461,6 +466,7 @@ fn run_main(
     subject: usize,
     dir: Option<&Path>,
     arguments: &[String],
+    runtime_profile: bool,
 ) -> io::Result<Option<bool>> {
     let root = match dir {
         Some(dir) => dir.to_path_buf(),
@@ -476,7 +482,12 @@ fn run_main(
     // Only the files that were named. A library pulled in because an import
     // needed it is not an answer to "which program did you mean".
     for checked in &checks[..subject.min(checks.len())] {
-        if let Some(run) = deed_interp::run_main(&program, checked.file, &root, arguments) {
+        let run = if runtime_profile {
+            deed_interp::run_main_profiled(&program, checked.file, &root, arguments)
+        } else {
+            deed_interp::run_main(&program, checked.file, &root, arguments)
+        };
+        if let Some(run) = run {
             runs.push((sources.file(checked.file).name().to_string(), run));
         }
     }
@@ -495,6 +506,9 @@ fn run_main(
     for line in &run.output {
         writeln!(out, "{line}")?;
     }
+    if runtime_profile && let Some(profile) = &run.profile {
+        report_runtime_profile(out, profile)?;
+    }
     match run.result {
         Ok(_) => Ok(Some(true)),
         Err(failure) => {
@@ -502,6 +516,37 @@ fn run_main(
             Ok(Some(false))
         }
     }
+}
+
+fn report_runtime_profile(out: &mut impl Write, profile: &RuntimeProfile) -> io::Result<()> {
+    writeln!(
+        out,
+        "runtime profile: {:.2}ms total",
+        profile.total.as_secs_f64() * 1000.0
+    )?;
+    writeln!(
+        out,
+        "  {:<28} {:>5} {:>10} {:>10} {:>10}",
+        "function", "calls", "total", "contract", "handler"
+    )?;
+
+    let mut functions: Vec<_> = profile.functions.iter().collect();
+    functions.sort_by_key(|function| std::cmp::Reverse(function.total));
+
+    for function in functions {
+        let name = format!("{}/{}", function.module, function.function);
+        writeln!(
+            out,
+            "  {:<28} {:>5} {:>8.2}ms {:>8.2}ms {:>8.2}ms",
+            name,
+            function.calls,
+            function.total.as_secs_f64() * 1000.0,
+            function.contract.as_secs_f64() * 1000.0,
+            function.handler.as_secs_f64() * 1000.0
+        )?;
+    }
+
+    Ok(())
 }
 
 /// Runs every test in every file that was named. Returns whether they all
