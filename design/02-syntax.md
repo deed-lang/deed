@@ -158,17 +158,26 @@ different answer under the same spelling, and a bound would be a different answe
 per call site. Either would have to say why the type checker should stop being able to read
 a comparison on sight.
 
-The prelude carries one function for measuring, `length`, which counts a `String` in
-characters rather than bytes. Otherwise a refinement written against it would mean something
-different depending on which letters turned up. It is in the prelude because a `String` you
-cannot measure is a `String` you cannot check, and the prelude stays small enough that every
-entry can be argued for.
+The runtime holds a `String` as UTF-8 text. That means bytes in memory, but bytes are not
+the unit the language counts or splits on: `length` and `split(s, "")` are both defined on
+Unicode scalar values, the same values a Unicode escape names. So `length("gün")` is three,
+`length("e\u{301}")` is two, and `split("e\u{301}", "")` is `["e", "\u{301}"]`. That
+keeps a refinement over string length honest: `where length(value) <= 10` means ten Unicode
+scalar values, not ten bytes and not ten grapheme clusters. The separate question in #656,
+whether the language should grow a first-class character or code-point operation, stays
+separate from this one: the unit `length` counts is settled here before any such type exists.
+
+The prelude carries one function for measuring, `length`, which counts a `String` in Unicode
+scalar values rather than bytes. Otherwise a refinement written against it would mean
+something different depending on which letters turned up. It is in the prelude because a
+`String` you cannot measure is a `String` you cannot check, and the prelude stays small
+enough that every entry can be argued for.
 
 It carries four more for taking a string apart and putting one back together:
 
 ```deed
 split("a,b,c", ",")      // ["a", "b", "c"]
-split("gÃ¼n", "")         // ["g", "Ã¼", "n"]
+split("gün", "")         // ["g", "ü", "n"]
 join(["a", "b"], ",")    // "a,b"
 to_string(0 - 12)        // "-12"
 to_int("41")             // ok(41)
@@ -182,9 +191,9 @@ input, print a count, or write a file back out.
 `split` and `join` stay inverses in the corners as well as the middle, which is the only
 property either of them has: a separator at the edges leaves an empty piece rather than being
 tidied away, and splitting something with no separator in it gives one piece rather than
-none. An empty separator gives the characters. The alternatives are an error the return type
-cannot express, or an empty string between every pair of characters, and this way walking a
-string costs the prelude no second name.
+none. An empty separator gives the Unicode scalar values. The alternatives are an error the
+return type cannot express, or an empty string between every pair of scalar values, and this
+way walking a string costs the prelude no second name.
 
 `to_int` hands back a `Result`. Text that is not a number usually came from a file or an
 argument, so it is not a mistake in the caller and there is nothing to trap about.

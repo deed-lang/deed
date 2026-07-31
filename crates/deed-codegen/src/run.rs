@@ -168,7 +168,8 @@ impl Run<'_> {
     }
 
     /// The string whose address is in this word, read the way every string
-    /// in a compiled module is laid out: a length, then the bytes.
+    /// in a compiled module is laid out: a character count, a byte count,
+    /// then the bytes.
     fn string_at(&self, word: u32) -> Option<String> {
         let address = u64::from_le_bytes(
             self.memory
@@ -179,9 +180,13 @@ impl Run<'_> {
         if address == 0 {
             return None;
         }
-        let length =
-            u64::from_le_bytes(self.memory.get(address..address + 8)?.try_into().ok()?) as usize;
-        let bytes = self.memory.get(address + 8..address + 8 + length)?;
+        let length = u64::from_le_bytes(
+            self.memory
+                .get(address + 8..address + 16)?
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let bytes = self.memory.get(address + 16..address + 16 + length)?;
         String::from_utf8(bytes.to_vec()).ok()
     }
 

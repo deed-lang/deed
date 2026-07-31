@@ -155,6 +155,12 @@ fn programs() -> Vec<Agreed> {
             expect: 0,
         },
         Agreed {
+            name: "a string length counts unicode scalar values",
+            source: "module a\n\nfn answer() -> Int { length(\"e\\u{301}\") }\n\ntest \"a decomposed character counts as two scalar values\" {\n    assert answer() == 2\n}\n",
+            call: "answer",
+            expect: 2,
+        },
+        Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
             call: "answer",
