@@ -168,6 +168,33 @@ fn imports_are_named_with_no_wildcard_form() {
 }
 
 #[test]
+fn a_module_may_declare_its_edition() {
+    let parsed = parse_ok("module a edition 2025\n\nfn f() -> Int { 0 }\n");
+    assert_eq!(parsed.module.edition.as_ref().map(|e| e.year), Some(2025));
+}
+
+#[test]
+fn a_use_semicolon_is_edition_gated() {
+    let (_, parsed_2024) = parse_source("module a edition 2024\n\nuse b.{Thing};\n");
+    assert!(
+        codes_of(&parsed_2024.diagnostics).contains(&codes::UNEXPECTED_TOKEN),
+        "edition 2024 should reject `use ...;`"
+    );
+
+    let parsed_2025 = parse_ok("module a edition 2025\n\nuse b.{Thing};\n");
+    assert_eq!(parsed_2025.module.uses.len(), 1);
+}
+
+#[test]
+fn an_edition_nobody_declared_is_named_rather_than_guessed_at() {
+    let (_, parsed) = parse_source("module a edition 2099\n\nfn f() -> Int { 0 }\n");
+    assert!(
+        codes_of(&parsed.diagnostics).contains(&codes::UNKNOWN_EDITION),
+        "edition 2099 does not exist and should be refused by name"
+    );
+}
+
+#[test]
 fn a_refinement_is_part_of_the_type_alias() {
     let parsed = parse_ok("module a\n\ntype Positive = Int where value > 0\n");
     match &parsed.module.items[0] {

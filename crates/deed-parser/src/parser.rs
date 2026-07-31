@@ -11,10 +11,10 @@
 //! function from being parsed, because each hidden error costs a round trip.
 
 use deed_ast::{
-    Accumulator, BinaryOp, Block, ChoiceDecl, Contract, EffectDecl, EffectRef, Ensures, Expr,
-    FieldDecl, FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module, ModulePath,
-    Outcome, Param, Pattern, PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias, UnaryOp,
-    Use, Variant,
+    Accumulator, BinaryOp, Block, ChoiceDecl, Contract, EditionDecl, EffectDecl, EffectRef,
+    Ensures, Expr, FieldDecl, FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module,
+    ModulePath, Outcome, Param, Pattern, PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias,
+    UnaryOp, Use, Variant,
 };
 use deed_diagnostics::{Applicability, Diagnostic, FileId, Span, SuggestedEdit};
 use deed_lexer::{Keyword, Token, TokenKind};
@@ -131,6 +131,25 @@ fn clause_rank(kw: Keyword) -> u8 {
 enum TypesRequired {
     Yes,
     No,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Edition {
+    E2024,
+    E2025,
+}
+
+impl Edition {
+    fn from_decl(edition: Option<&EditionDecl>) -> Self {
+        match edition.map(|decl| decl.year) {
+            Some(2025) => Edition::E2025,
+            _ => Edition::E2024,
+        }
+    }
+
+    fn allows_use_semicolon(self) -> bool {
+        matches!(self, Edition::E2025)
+    }
 }
 
 /// Words the language spells differently, and words it does not have.
@@ -418,6 +437,8 @@ impl<'a> Parser<'a> {
             );
             None
         };
+        let edition = self.parse_edition_decl();
+        let language = Edition::from_decl(edition.as_ref());
 
         let mut uses = Vec::new();
         while self.at_kw(Keyword::Use) {
@@ -426,6 +447,23 @@ impl<'a> Parser<'a> {
             match self.parse_use() {
                 Some(item) => uses.push(item),
                 None => self.synchronize_item(),
+            }
+            if self.at(&TokenKind::Semi) {
+                let semi = self.bump();
+                if !language.allows_use_semicolon() {
+                    self.emit(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            self.file,
+                            semi.span,
+                            "a `use` declaration cannot end with `;` in this edition",
+                        )
+                        .with_primary_label("remove `;`")
+                        .with_note(
+                            "`edition 2025` accepts `;` after a `use`; earlier editions do not",
+                        ),
+                    );
+                }
             }
             if self.pos == before {
                 self.bump();
@@ -448,12 +486,58 @@ impl<'a> Parser<'a> {
         Parsed {
             module: Module {
                 name,
+                edition,
                 uses,
                 items,
                 span: start.to(end),
             },
             diagnostics: self.diagnostics,
         }
+    }
+
+    fn parse_edition_decl(&mut self) -> Option<EditionDecl> {
+        if !self.eat_named("edition") {
+            return None;
+        }
+
+        let span = self.span();
+        let TokenKind::Int(year) = self.kind() else {
+            self.emit(
+                Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    self.file,
+                    span,
+                    format!(
+                        "expected an edition year after `edition`, found {}",
+                        self.kind().describe()
+                    ),
+                )
+                .with_primary_label("expected an edition year")
+                .with_note("supported editions are `2024` and `2025`"),
+            );
+            return None;
+        };
+
+        let year = *year;
+        let token = self.bump();
+        if matches!(year, 2024 | 2025) {
+            return Some(EditionDecl {
+                year: year as u32,
+                span: token.span,
+            });
+        }
+
+        self.emit(
+            Diagnostic::error(
+                codes::UNKNOWN_EDITION,
+                self.file,
+                token.span,
+                format!("unknown edition `{year}`"),
+            )
+            .with_primary_label("unknown edition")
+            .with_note("supported editions are `2024` and `2025`"),
+        );
+        None
     }
 
     fn parse_module_path(&mut self, context: &str) -> Option<ModulePath> {

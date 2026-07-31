@@ -176,8 +176,15 @@ impl Printer<'_> {
             self.line_start();
             self.push("module ");
             self.push(&name.to_string_path());
+            if let Some(edition) = &module.edition {
+                self.push(" edition ");
+                self.push(&edition.year.to_string());
+            }
             self.newline();
-            self.last_end = name.span.end;
+            self.last_end = module
+                .edition
+                .as_ref()
+                .map_or(name.span.end, |e| e.span.end);
         }
 
         for use_decl in &module.uses {
