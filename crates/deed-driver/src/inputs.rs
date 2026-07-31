@@ -65,36 +65,24 @@ where
         }
     }
 
-    // Call `find` in rounds until nothing new comes back. Each new source may
-    // import more, so the loop continues as long as any round adds something.
-    loop {
-        let pending = std::mem::take(&mut wanted);
-        let mut any = false;
+    // Walk the queue with a cursor. Each source may append its own imports;
+    // missing sources simply append nothing and therefore cannot make a
+    // no-progress round spin forever.
+    let mut next = 0;
+    while next < wanted.len() {
+        let module = wanted[next].clone();
+        next += 1;
 
-        for module in pending {
-            if have.contains(&module) {
-                continue;
-            }
-
-            match find(&module) {
-                Some((name, text)) => {
-                    if let Some((m, uses)) = crate::imports_of(&text) {
-                        have.insert(m);
-                        wanted.extend(uses);
-                    }
-                    extras.push((name, text));
-                    any = true;
-                }
-                None => {
-                    // Not available from this caller. The shipped-module table
-                    // below will be checked next, and the resolver will report
-                    // DEED3007 for anything neither provides.
-                }
-            }
+        if have.contains(&module) {
+            continue;
         }
 
-        if !any {
-            break;
+        if let Some((name, text)) = find(&module) {
+            if let Some((m, uses)) = crate::imports_of(&text) {
+                have.insert(m);
+                wanted.extend(uses);
+            }
+            extras.push((name, text));
         }
     }
 
@@ -109,4 +97,50 @@ where
     let shipped = crate::shipped_for(all_texts);
 
     (extras, shipped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_inputs;
+
+    #[test]
+    fn follows_a_transitive_source_chain_once() {
+        let mut asked = Vec::new();
+        let (extras, shipped) = resolve_inputs(["module a\nuse b.{value}\n"], |module| {
+            asked.push(module.to_string());
+            match module {
+                "b" => Some((
+                    "b.deed".to_string(),
+                    "module b\nuse c.{value}\n".to_string(),
+                )),
+                "c" => Some((
+                    "c.deed".to_string(),
+                    "module c\nfn value() -> Int { 1 }\n".to_string(),
+                )),
+                _ => None,
+            }
+        });
+
+        assert_eq!(asked, ["b", "c"]);
+        assert_eq!(
+            extras
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["b.deed", "c.deed"]
+        );
+        assert!(shipped.is_empty());
+    }
+
+    #[test]
+    fn a_missing_source_is_asked_for_once() {
+        let mut asked = 0;
+        let (extras, _) = resolve_inputs(["module a\nuse missing.{value}\n"], |_| {
+            asked += 1;
+            None
+        });
+
+        assert_eq!(asked, 1);
+        assert!(extras.is_empty());
+    }
 }

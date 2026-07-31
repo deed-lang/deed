@@ -2,6 +2,7 @@
 
 mod args;
 
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -931,7 +932,9 @@ fn resolve_imports(
 ) -> io::Result<()> {
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut component_roots: Vec<PathBuf> = Vec::new();
+    let mut known_roots: HashSet<PathBuf> = HashSet::new();
     let mut new_files: Vec<PathBuf> = Vec::new();
+    let mut known_files: HashSet<PathBuf> = files.iter().cloned().collect();
 
     // Read the texts of the initially named files. Two things come from this:
     // the seed texts for resolve_inputs, and the roots that the find closure
@@ -941,7 +944,7 @@ fn resolve_imports(
         let text = std::fs::read_to_string(path).unwrap_or_default();
         if let Some((module, _)) = deed_driver::imports_of(&text) {
             if let Some(root) = root_of(path, &module) {
-                if !roots.contains(&root) {
+                if known_roots.insert(root.clone()) {
                     read_manifest(&root, &mut component_roots, manifests);
                     roots.push(root);
                 }
@@ -974,7 +977,7 @@ fn resolve_imports(
 
                 // A file already in the named set or found this run counts as
                 // resolved even if we do not add it again.
-                if files.contains(&candidate) || new_files.contains(&candidate) {
+                if known_files.contains(&candidate) {
                     // Return a non-None to prevent the shipped-module table
                     // from being tried for a module that lives on disk.
                     let text = std::fs::read_to_string(&candidate).unwrap_or_default();
@@ -986,12 +989,13 @@ fn resolve_imports(
                 };
                 if let Some((m, _)) = deed_driver::imports_of(&text) {
                     if let Some(new_root) = root_of(&candidate, &m) {
-                        if !roots.contains(&new_root) {
+                        if known_roots.insert(new_root.clone()) {
                             read_manifest(&new_root, &mut component_roots, manifests);
                             roots.push(new_root);
                         }
                     }
                 }
+                known_files.insert(candidate.clone());
                 new_files.push(candidate.clone());
                 return Some((display_path(&candidate), text));
             }
