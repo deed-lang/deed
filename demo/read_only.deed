@@ -1,0 +1,20 @@
+// One clause in a signature is the difference between two components.
+//
+// This function reads a file. The signature says exactly what it can touch:
+// the filesystem, for reading. Nothing else. Compiled to WebAssembly, the
+// module's import section contains one operation from the host:
+//
+//   deed:io  read
+//
+// A host inspects that list before running a single instruction. It decides
+// whether to supply each import. A host that provides Io.read but not
+// Io.save can run this component without restriction.
+
+module demo/read_only
+
+fn process(files: Dir, name: String) -> Result<String, String>
+  uses
+    Io.read,
+{
+    Io.read(files, name)
+}
