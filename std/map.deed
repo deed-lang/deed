@@ -1,0 +1,590 @@
+// A red-black tree, written in Deed.
+//
+// A self-balancing keyed map, generic in key and value, with a comparator
+// passed as a function value. The comparator is `Fn(K, K) -> Int`: negative
+// when the first key is smaller, zero when they are equal, positive when the
+// first is larger.
+//
+// Balancing follows Okasaki's "Purely Functional Data Structures". After each
+// recursive insert the tree calls `balance` (cases where the left child is
+// red) and `balance_right` (cases where the right child is red) to restore
+// the red-black invariant. The root is then set to Black by `insert`, which
+// calls `make_black`.
+//
+// Walls hit during this implementation, documented as promised:
+//
+//   FIELD PATTERNS DO NOT FILTER. The interpreter's `matches` function for
+//   `Pattern::Record` checks only the variant name, not any field sub-
+//   patterns. Writing `Node { color: Red, ... }` in a match arm does not
+//   select only Red nodes; it accepts any Node. The field patterns in record
+//   arms are used only by `bind`, which populates local names. Every color
+//   check in `balance` and `balance_right` therefore uses `node_color` to
+//   extract the color field and an explicit nested `match` on the result.
+//   The classical Okasaki four-case nested field match (used in Haskell and
+//   Koka) cannot be written in Deed today.
+//
+//   DIVERGE ON ALL RECURSIVE PATHS. `insert`, `get`, `size`, and `entries`
+//   are all recursive; each declares `Diverge`. `insert` also calls
+//   `insert_node`, which carries `Diverge`, so `insert` inherits it even
+//   though it is not itself recursive.
+//
+//   NO NATURAL LOOP FOR IN-ORDER WALK. `entries` converts the tree to a list
+//   by recursion rather than a `for` loop, because `for` walks a list and a
+//   tree has no built-in iteration order. A list built by `concat` works but
+//   is not as efficient as an iterative or continuation-based walk would be.
+
+module std/map
+
+use std/list.{concat}
+
+// The color of a node, determining the tree's balance invariant.
+choice Color {
+    Red,
+    Black,
+}
+
+// A key-value pair, as returned by `entries`.
+record Entry<K, V> {
+    key: K,
+    value: V,
+}
+
+// A red-black tree, generic in key type K and value type V.
+choice Map<K, V> {
+    Empty,
+    Node { color: Color, key: K, value: V, left: Map<K, V>, right: Map<K, V> },
+}
+
+// The color of the root node. An empty tree is considered Black, which is
+// consistent with the red-black invariant that empty children are Black.
+fn node_color<K, V>(map: Map<K, V>) -> Color {
+    match map {
+        Empty => Black,
+        Node { color } => color,
+    }
+}
+
+// The same tree with its root color set to Black. Called by `insert` to
+// ensure the root is always Black after a full insertion.
+fn make_black<K, V>(map: Map<K, V>) -> Map<K, V> {
+    match map {
+        Empty => Empty,
+        Node { key: k, value: v, left: l, right: r } => {
+            Node { color: Black, key: k, value: v, left: l, right: r }
+        },
+    }
+}
+
+// Rebalance a Black node whose left child is Red and may have a Red grandchild.
+//
+// Checks cases 1 and 2 of Okasaki's four-case balance function:
+//
+//   Case 1: B (R (R a x b) y c) z d   =>  R (B a x b) y (B c z d)
+//   Case 2: B (R a x (R b y c)) z d   =>  R (B a x b) y (B c z d)
+//
+// When neither applies, delegates to `balance_right` for cases 3 and 4.
+//
+// NOTE: field patterns in match arms do not filter by field value in the
+// current Deed interpreter. Colors are checked via explicit `match` on the
+// value returned by `node_color` rather than via field-pattern guards.
+fn balance<K, V>(color: Color, left: Map<K, V>, key: K, value: V, right: Map<K, V>)
+    -> Map<K, V>
+{
+    match color {
+        Red => Node { color: Red, key: key, value: value, left: left, right: right },
+        Black => {
+            let lc = node_color(left)
+            match lc {
+                Red => {
+                    match left {
+                        Empty => balance_right(left, key, value, right),
+                        Node { key: lk, value: lv, left: ll, right: lr } => {
+                            let llc = node_color(ll)
+                            match llc {
+                                Red => {
+                                    // Case 1: left-left grandchild is Red.
+                                    match ll {
+                                        Empty => balance_right(left, key, value, right),
+                                        Node { key: llk, value: llv, left: lla, right: llb } => {
+                                            Node {
+                                                color: Red,
+                                                key: lk,
+                                                value: lv,
+                                                left: Node {
+                                                    color: Black,
+                                                    key: llk,
+                                                    value: llv,
+                                                    left: lla,
+                                                    right: llb,
+                                                },
+                                                right: Node {
+                                                    color: Black,
+                                                    key: key,
+                                                    value: value,
+                                                    left: lr,
+                                                    right: right,
+                                                },
+                                            }
+                                        },
+                                    }
+                                },
+                                Black => {
+                                    let lrc = node_color(lr)
+                                    match lrc {
+                                        Red => {
+                                            // Case 2: left-right grandchild is Red.
+                                            match lr {
+                                                Empty => balance_right(left, key, value, right),
+                                                Node { key: lrk, value: lrv, left: lrl, right: lrr } => {
+                                                    Node {
+                                                        color: Red,
+                                                        key: lrk,
+                                                        value: lrv,
+                                                        left: Node {
+                                                            color: Black,
+                                                            key: lk,
+                                                            value: lv,
+                                                            left: ll,
+                                                            right: lrl,
+                                                        },
+                                                        right: Node {
+                                                            color: Black,
+                                                            key: key,
+                                                            value: value,
+                                                            left: lrr,
+                                                            right: right,
+                                                        },
+                                                    }
+                                                },
+                                            }
+                                        },
+                                        Black => balance_right(left, key, value, right),
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+                Black => balance_right(left, key, value, right),
+            }
+        },
+    }
+}
+
+// Rebalance a Black node whose right child is Red and may have a Red grandchild.
+//
+// Checks cases 3 and 4 of Okasaki's four-case balance function:
+//
+//   Case 3: B a x (R (R b y c) z d)   =>  R (B a x b) y (B c z d)
+//   Case 4: B a x (R b y (R c z d))   =>  R (B a x b) y (B c z d)
+//
+// When neither applies, returns a plain Black node unchanged.
+fn balance_right<K, V>(left: Map<K, V>, key: K, value: V, right: Map<K, V>) -> Map<K, V> {
+    let rc = node_color(right)
+    match rc {
+        Black => Node { color: Black, key: key, value: value, left: left, right: right },
+        Red => {
+            match right {
+                Empty => Node { color: Black, key: key, value: value, left: left, right: right },
+                Node { key: rk, value: rv, left: rl, right: rr } => {
+                    let rlc = node_color(rl)
+                    match rlc {
+                        Red => {
+                            // Case 3: right-left grandchild is Red.
+                            match rl {
+                                Empty => Node {
+                                    color: Black,
+                                    key: key,
+                                    value: value,
+                                    left: left,
+                                    right: right,
+                                },
+                                Node { key: rlk, value: rlv, left: rll, right: rlr } => {
+                                    Node {
+                                        color: Red,
+                                        key: rlk,
+                                        value: rlv,
+                                        left: Node {
+                                            color: Black,
+                                            key: key,
+                                            value: value,
+                                            left: left,
+                                            right: rll,
+                                        },
+                                        right: Node {
+                                            color: Black,
+                                            key: rk,
+                                            value: rv,
+                                            left: rlr,
+                                            right: rr,
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                        Black => {
+                            let rrc = node_color(rr)
+                            match rrc {
+                                Red => {
+                                    // Case 4: right-right grandchild is Red.
+                                    match rr {
+                                        Empty => Node {
+                                            color: Black,
+                                            key: key,
+                                            value: value,
+                                            left: left,
+                                            right: right,
+                                        },
+                                        Node { key: rrk, value: rrv, left: rrl, right: rrr } => {
+                                            Node {
+                                                color: Red,
+                                                key: rk,
+                                                value: rv,
+                                                left: Node {
+                                                    color: Black,
+                                                    key: key,
+                                                    value: value,
+                                                    left: left,
+                                                    right: rl,
+                                                },
+                                                right: Node {
+                                                    color: Black,
+                                                    key: rrk,
+                                                    value: rrv,
+                                                    left: rrl,
+                                                    right: rrr,
+                                                },
+                                            }
+                                        },
+                                    }
+                                },
+                                Black => Node {
+                                    color: Black,
+                                    key: key,
+                                    value: value,
+                                    left: left,
+                                    right: right,
+                                },
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+// Insert a key-value pair into the tree, internal recursive form.
+//
+// Returns a tree that satisfies all red-black invariants except that the root
+// may be Red. `insert` wraps this and calls `make_black` to fix the root.
+fn insert_node<K, V>(map: Map<K, V>, key: K, value: V, cmp: Fn(K, K) -> Int) -> Map<K, V>
+  uses
+    Diverge,
+{
+    match map {
+        Empty => Node { color: Red, key: key, value: value, left: Empty, right: Empty },
+        Node { color: c, key: k, value: v, left: l, right: r } => {
+            let order = cmp(key, k)
+            if order < 0 {
+                balance(c, insert_node(l, key, value, cmp), k, v, r)
+            } else if order > 0 {
+                balance(c, l, k, v, insert_node(r, key, value, cmp))
+            } else {
+                Node { color: c, key: k, value: value, left: l, right: r }
+            }
+        },
+    }
+}
+
+// Insert a key-value pair into the map, replacing any existing value for
+// that key. The root is always Black after this call.
+//
+// If the key is already there, the value is replaced. Inserting the same key
+// twice with the same value is the same as inserting it once.
+fn insert<K, V>(map: Map<K, V>, key: K, value: V, cmp: Fn(K, K) -> Int) -> Map<K, V>
+  uses
+    Diverge,
+{
+    make_black(insert_node(map, key, value, cmp))
+}
+
+// What is stored under this key, or an error if there is nothing.
+fn get<K, V>(map: Map<K, V>, key: K, cmp: Fn(K, K) -> Int) -> Result<V, String>
+  uses
+    Diverge,
+{
+    match map {
+        Empty => err("no such key"),
+        Node { key: k, value: v, left: l, right: r } => {
+            let order = cmp(key, k)
+            if order < 0 {
+                get(l, key, cmp)
+            } else if order > 0 {
+                get(r, key, cmp)
+            } else {
+                ok(v)
+            }
+        },
+    }
+}
+
+// The number of key-value pairs in the map.
+fn size<K, V>(map: Map<K, V>) -> Int
+  uses
+    Diverge,
+{
+    match map {
+        Empty => 0,
+        Node { left: l, right: r } => 1 + size(l) + size(r),
+    }
+}
+
+// All key-value pairs, in the order the comparator puts them (ascending).
+//
+// In-order traversal of a red-black tree visits the left subtree, then the
+// root, then the right subtree, which produces a sorted sequence when the
+// tree was built with a consistent comparator.
+//
+// There is no natural `for`-loop walk over a tree. This function builds the
+// sorted list by recursion and concatenation, which is correct but less
+// efficient than an iterative approach would be.
+fn entries<K, V>(map: Map<K, V>) -> List<Entry<K, V>>
+  uses
+    Diverge,
+{
+    match map {
+        Empty => [],
+        Node { key: k, value: v, left: l, right: r } => {
+            concat(concat(entries(l), [Entry { key: k, value: v }]), entries(r))
+        },
+    }
+}
+
+// A comparator for integers. Negative when a < b, zero when equal, positive
+// when a > b. Pass to `insert` and `get` for an integer-keyed map.
+fn cmp_int(a: Int, b: Int) -> Int {
+    if a < b {
+        0 - 1
+    } else if a == b {
+        0
+    } else {
+        1
+    }
+}
+
+// A comparator for strings, by the same three-way convention.
+fn cmp_string(a: String, b: String) -> Int {
+    if a < b {
+        0 - 1
+    } else if a == b {
+        0
+    } else {
+        1
+    }
+}
+
+test "node_color returns Black for Empty and the stored color for a Node" {
+    let empty: Map<Int, Int> = Empty
+    assert node_color(empty) == Black
+    let red = Node { color: Red, key: 1, value: 1, left: Empty, right: Empty }
+    let black = Node { color: Black, key: 1, value: 1, left: Empty, right: Empty }
+    assert node_color(red) == Red
+    assert node_color(black) == Black
+}
+
+test "make_black leaves Empty alone and turns a Red root to Black" {
+    let empty: Map<Int, Int> = Empty
+    assert make_black(empty) == Empty
+    let red = Node { color: Red, key: 1, value: 1, left: Empty, right: Empty }
+    assert node_color(make_black(red)) == Black
+    let black = Node { color: Black, key: 2, value: 2, left: Empty, right: Empty }
+    assert make_black(black) == black
+}
+
+test "balance case 1 fixes a black node with a left-leaning red chain" {
+    // B (R (R a x b) y c) z d  =>  R (B a x b) y (B c z d)
+    let ll = Node { color: Red, key: 1, value: 10, left: Empty, right: Empty }
+    let left = Node { color: Red, key: 2, value: 20, left: ll, right: Empty }
+    let result = balance(Black, left, 3, 30, Empty)
+    assert node_color(result) == Red
+    assert get(result, 1, cmp_int) == ok(10)
+    assert get(result, 2, cmp_int) == ok(20)
+    assert get(result, 3, cmp_int) == ok(30)
+}
+
+test "balance case 2 fixes a black node with an inner left red child" {
+    // B (R a x (R b y c)) z d  =>  R (B a x b) y (B c z d)
+    let lr = Node { color: Red, key: 2, value: 20, left: Empty, right: Empty }
+    let left = Node { color: Red, key: 1, value: 10, left: Empty, right: lr }
+    let result = balance(Black, left, 3, 30, Empty)
+    assert node_color(result) == Red
+    assert get(result, 1, cmp_int) == ok(10)
+    assert get(result, 2, cmp_int) == ok(20)
+    assert get(result, 3, cmp_int) == ok(30)
+}
+
+test "balance leaves a Red parent alone regardless of children" {
+    let left = Node { color: Red, key: 1, value: 10, left: Empty, right: Empty }
+    let result = balance(Red, left, 2, 20, Empty)
+    assert node_color(result) == Red
+}
+
+test "balance_right case 3 fixes a black node with a right-leaning inner red chain" {
+    // B a x (R (R b y c) z d)  =>  R (B a x b) y (B c z d)
+    let rl = Node { color: Red, key: 3, value: 30, left: Empty, right: Empty }
+    let right = Node { color: Red, key: 4, value: 40, left: rl, right: Empty }
+    let result = balance_right(Empty, 2, 20, right)
+    assert node_color(result) == Red
+    assert get(result, 2, cmp_int) == ok(20)
+    assert get(result, 3, cmp_int) == ok(30)
+    assert get(result, 4, cmp_int) == ok(40)
+}
+
+test "balance_right case 4 fixes a black node with a right-leaning outer red chain" {
+    // B a x (R b y (R c z d))  =>  R (B a x b) y (B c z d)
+    let rr = Node { color: Red, key: 5, value: 50, left: Empty, right: Empty }
+    let right = Node { color: Red, key: 4, value: 40, left: Empty, right: rr }
+    let result = balance_right(Empty, 3, 30, right)
+    assert node_color(result) == Red
+    assert get(result, 3, cmp_int) == ok(30)
+    assert get(result, 4, cmp_int) == ok(40)
+    assert get(result, 5, cmp_int) == ok(50)
+}
+
+test "balance_right leaves a Black right child alone" {
+    let right = Node { color: Black, key: 4, value: 40, left: Empty, right: Empty }
+    let result = balance_right(Empty, 3, 30, right)
+    assert node_color(result) == Black
+}
+
+test "insert_node inserts into an empty tree with a Red root" {
+    let t = insert_node(Empty, 1, "one", cmp_int)
+    assert node_color(t) == Red
+    assert get(t, 1, cmp_int) == ok("one")
+}
+
+test "an empty map holds nothing" {
+    let m: Map<Int, String> = Empty
+    assert get(m, 1, cmp_int) == err("no such key")
+    assert size(m) == 0
+    assert entries(m) == []
+}
+
+test "an inserted key can be retrieved" {
+    let m = insert(Empty, 1, "one", cmp_int)
+    assert get(m, 1, cmp_int) == ok("one")
+    assert get(m, 2, cmp_int) == err("no such key")
+    assert size(m) == 1
+    assert node_color(m) == Black
+}
+
+test "inserting a key that is there replaces the value" {
+    let m = insert(insert(Empty, 1, "one", cmp_int), 1, "ONE", cmp_int)
+    assert get(m, 1, cmp_int) == ok("ONE")
+    assert size(m) == 1
+}
+
+test "multiple keys go in and come back out" {
+    let m = insert(
+        insert(insert(Empty, 2, "two", cmp_int), 1, "one", cmp_int),
+        3,
+        "three",
+        cmp_int,
+    )
+    assert get(m, 1, cmp_int) == ok("one")
+    assert get(m, 2, cmp_int) == ok("two")
+    assert get(m, 3, cmp_int) == ok("three")
+    assert get(m, 4, cmp_int) == err("no such key")
+    assert size(m) == 3
+}
+
+test "entries come back in sorted order" {
+    let m = insert(
+        insert(insert(Empty, 2, "two", cmp_int), 1, "one", cmp_int),
+        3,
+        "three",
+        cmp_int,
+    )
+    let es = entries(m)
+    assert es == [
+        Entry { key: 1, value: "one" },
+        Entry { key: 2, value: "two" },
+        Entry { key: 3, value: "three" },
+    ]
+}
+
+test "the root is always Black after insert" {
+    let m1 = insert(Empty, 1, "one", cmp_int)
+    let m2 = insert(m1, 2, "two", cmp_int)
+    let m3 = insert(m2, 3, "three", cmp_int)
+    assert node_color(m1) == Black
+    assert node_color(m2) == Black
+    assert node_color(m3) == Black
+}
+
+test "inserting keys in ascending order stays balanced" {
+    let m = insert(
+        insert(
+            insert(
+                insert(insert(Empty, 1, "a", cmp_int), 2, "b", cmp_int),
+                3,
+                "c",
+                cmp_int,
+            ),
+            4,
+            "d",
+            cmp_int,
+        ),
+        5,
+        "e",
+        cmp_int,
+    )
+    assert size(m) == 5
+    assert get(m, 1, cmp_int) == ok("a")
+    assert get(m, 3, cmp_int) == ok("c")
+    assert get(m, 5, cmp_int) == ok("e")
+    let es = entries(m)
+    assert length(es) == 5
+}
+
+test "string keys work the same way" {
+    let m = insert(
+        insert(insert(Empty, "b", 2, cmp_string), "a", 1, cmp_string),
+        "c",
+        3,
+        cmp_string,
+    )
+    assert get(m, "a", cmp_string) == ok(1)
+    assert get(m, "b", cmp_string) == ok(2)
+    assert get(m, "c", cmp_string) == ok(3)
+    assert get(m, "d", cmp_string) == err("no such key")
+    let es = entries(m)
+    assert es == [
+        Entry { key: "a", value: 1 },
+        Entry { key: "b", value: 2 },
+        Entry { key: "c", value: 3 },
+    ]
+}
+
+test "size counts each key once even when the same key is inserted twice" {
+    let m = insert(
+        insert(insert(Empty, 1, "a", cmp_int), 1, "b", cmp_int),
+        2,
+        "c",
+        cmp_int,
+    )
+    assert size(m) == 2
+}
+
+test "cmp_int gives negative for less, zero for equal, positive for greater" {
+    assert cmp_int(1, 2) < 0
+    assert cmp_int(2, 2) == 0
+    assert cmp_int(3, 2) > 0
+}
+
+test "cmp_string gives negative for less, zero for equal, positive for greater" {
+    assert cmp_string("a", "b") < 0
+    assert cmp_string("b", "b") == 0
+    assert cmp_string("c", "b") > 0
+}

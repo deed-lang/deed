@@ -70,7 +70,7 @@ examples/transfer.deed
 That number used to be 102. Seven of those tests are in `std/table` now, because the table
 library stopped living under `examples/` and a module that ships with the compiler is context
 rather than subject, so the corpus does not run its tests any more. Nothing was deleted: the
-modules that ship carry forty-four tests of their own, and
+modules that ship carry sixty-four tests of their own, and
 `crates/deed-driver/tests/shipped.rs` runs every one of them on every commit.
 
 ```
