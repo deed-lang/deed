@@ -272,6 +272,15 @@ pub enum Reason {
     /// The condition is not `and`, `or`, `not`, or a comparison the interval
     /// machinery understands, so there is nothing here to evaluate at all.
     NotAShapeTheCheckerReasonsAbout,
+    /// Nothing attempted this one.
+    ///
+    /// The others are the checker having looked and come back without an
+    /// answer. This is the checker not having looked, which is a different
+    /// thing to tell a reader and was previously told by saying nothing at
+    /// all. An `ensures` clause is the case: it is checked on every call, so
+    /// its floor is `Guarded` whatever the body looks like, and no pass tries
+    /// to settle one ahead of time.
+    NothingTriesToProveThis,
 }
 
 impl Reason {
@@ -286,6 +295,9 @@ impl Reason {
             }
             Reason::NotAShapeTheCheckerReasonsAbout => {
                 "this predicate is not the shape the checker reasons about"
+            }
+            Reason::NothingTriesToProveThis => {
+                "nothing tries to prove this one ahead of time, so it is checked on every call"
             }
         }
     }
