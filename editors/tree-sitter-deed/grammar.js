@@ -1,6 +1,7 @@
 const KEYWORDS = [
   "module",
   "use",
+  "deprecated",
   "type",
   "record",
   "choice",
