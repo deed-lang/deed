@@ -1,0 +1,7 @@
+module conformance/case_library
+
+use std/list.{map}
+
+fn doubled(numbers: List<Int>) -> List<Int> {
+    map(numbers, |n: Int| n * 2)
+}

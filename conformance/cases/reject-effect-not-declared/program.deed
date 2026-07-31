@@ -1,0 +1,9 @@
+module conformance/case_toonarrow
+
+effect Log {
+    fn note(entry: String) -> ()
+}
+
+fn shout(entry: String) -> () {
+    Log.note(entry)
+}

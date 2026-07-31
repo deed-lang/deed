@@ -1,0 +1,12 @@
+module conformance/case_precondition
+
+fn halve(n: Int) -> Int
+  where
+    n >= 0,
+{
+    n / 2
+}
+
+fn answer() -> Int {
+    halve(0 - 5)
+}

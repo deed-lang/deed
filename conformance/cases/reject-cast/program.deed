@@ -1,0 +1,5 @@
+module conformance/case_cast
+
+fn shown(n: Int) -> String {
+    n as String
+}

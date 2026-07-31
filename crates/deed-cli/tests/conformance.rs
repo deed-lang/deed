@@ -196,7 +196,33 @@ fn error_codes(output: &Output) -> Vec<String> {
 
 #[test]
 fn external_conformance_cases_hold_for_the_cli() {
-    for case in load_cases() {
+    let cases = load_cases();
+
+    // A suite that walked an empty directory would satisfy every assertion
+    // below without running anything, which is this repository's oldest way of
+    // passing for free.
+    assert!(
+        cases.len() >= 20,
+        "only {} cases; a suite this small says almost nothing about an implementation",
+        cases.len()
+    );
+
+    let mut accepted = 0;
+    let mut rejected = 0;
+    let mut ran = 0;
+    for case in &cases {
+        match case.expect {
+            Expectation::Accept => accepted += 1,
+            Expectation::Reject { .. } => rejected += 1,
+            Expectation::Run { .. } => ran += 1,
+        }
+    }
+    assert!(
+        accepted > 0 && rejected > 0 && ran > 0,
+        "a conformance suite needs all three kinds: {accepted} accept, {rejected} reject, {ran} run"
+    );
+
+    for case in cases {
         let path = case.program.to_string_lossy().to_string();
 
         match case.expect {

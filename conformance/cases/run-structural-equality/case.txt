@@ -1,0 +1,5 @@
+mode: run
+expect: run
+stdout: true
+stdout: true
+stdout: false

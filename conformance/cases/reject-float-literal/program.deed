@@ -1,0 +1,5 @@
+module conformance/case_float
+
+fn rate() -> Int {
+    1.5
+}

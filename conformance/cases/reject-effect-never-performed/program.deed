@@ -1,0 +1,12 @@
+module conformance/case_toowide
+
+effect Log {
+    fn note(entry: String) -> ()
+}
+
+fn quiet(entry: String) -> ()
+  uses
+    Log.note,
+{
+    ()
+}

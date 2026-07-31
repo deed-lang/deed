@@ -1,0 +1,13 @@
+module conformance/case_catchall
+
+choice Grade {
+    Low,
+    High,
+}
+
+fn describe(mark: Grade) -> String {
+    match mark {
+        Low => "low",
+        _ => "something else",
+    }
+}

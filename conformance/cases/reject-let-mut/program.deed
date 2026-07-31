@@ -1,0 +1,6 @@
+module conformance/case_mutable
+
+fn count() -> Int {
+    let mut n = 1
+    n
+}

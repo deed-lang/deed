@@ -1,0 +1,2 @@
+mode: check
+expect: accept

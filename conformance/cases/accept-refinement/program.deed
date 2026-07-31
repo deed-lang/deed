@@ -1,0 +1,10 @@
+module conformance/case_refinement
+
+type Positive = Int where value > 0
+
+fn keep(n: Int) -> Positive
+  where
+    n > 0,
+{
+    n
+}

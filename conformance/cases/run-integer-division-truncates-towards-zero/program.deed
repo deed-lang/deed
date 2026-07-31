@@ -1,0 +1,10 @@
+module conformance/case_division
+
+fn main(sys: System) -> ()
+  uses
+    Io.write,
+{
+    Io.write(sys.console, to_string((0 - 7) / 2))
+    Io.write(sys.console, to_string(7 / 2))
+    Io.write(sys.console, to_string(1 / 2))
+}

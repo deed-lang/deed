@@ -1,0 +1,11 @@
+module conformance/case_generic
+
+fn first_of<T>(items: List<T>, fallback: T) -> T {
+    for item in items with found = fallback {
+        found
+    }
+}
+
+fn kept(items: List<Int>) -> Int {
+    first_of(items, 0)
+}
