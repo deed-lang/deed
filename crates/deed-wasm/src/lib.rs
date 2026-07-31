@@ -621,6 +621,26 @@ mod tests {
         assert_eq!(of("=="), "punctuation");
     }
 
+    /// Two arms cargo-mutants could delete without a test noticing, and both
+    /// are things a page can see: text the lexer could not read should look
+    /// unread, and end-of-file is not a thing on screen.
+    #[test]
+    fn what_the_lexer_could_not_read_says_so_and_the_end_of_file_is_not_drawn() {
+        let source = "module a\n\nfn f() -> Int {\n    1 @ 2\n}\n";
+        let found = classes(source);
+
+        assert!(
+            found
+                .iter()
+                .any(|(start, end, class)| class == "error" && &source[*start..*end] == "@"),
+            "a character the lexer could not read should be classed error: {found:?}"
+        );
+        assert!(
+            found.iter().all(|(start, end, _)| start < end),
+            "an empty range draws nothing and is a page's problem to skip: {found:?}"
+        );
+    }
+
     /// A highlighter that coloured `Console` differently would be claiming
     /// something no pass has concluded at this point: to the lexer a capital
     /// letter is a letter.
