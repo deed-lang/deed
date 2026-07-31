@@ -185,27 +185,52 @@ says:
 
 ```text
 files    cold      recheck   per file   unchanged
-1        0.1ms     0.1ms     56us       0%
-8        0.7ms     0.6ms     69us       87%
-32       2.1ms     2.1ms     67us       97%
-128      8.2ms     9.2ms     72us       99%
-512      37.8ms    35.8ms    70us       100%
+1        0.1ms     0.1ms     55us       3%
+8        0.5ms     0.5ms     59us       86%
+32       1.9ms     1.8ms     56us       96%
+128      7.2ms     7.3ms     57us       99%
+512      30.1ms    30.1ms    59us       100%
 ```
 
-Three things fall out of it, and they are worth having written down.
+Six things fall out of it, and they are worth having written down.
 
-**It is linear, and the constant is about 70 microseconds per file.** Flat across two orders
+**It is linear, and the constant is about 59 microseconds per file.** Flat across two orders
 of magnitude, which says there is no accidental quadratic behaviour hiding in the boundary
 between modules, and that is the failure this measurement was most likely to find.
 
-**The target holds today and the shape says when it stops.** At 512 files a keystroke costs
-about 38ms, inside the 100ms budget. A few thousand files is where it leaves. Nobody has
-written a few thousand files of Deed and the honest reading is that this is fine now.
+**The target holds today and the trigger is written down.** At 512 files a keystroke costs
+about 30ms, inside the 100ms budget. At today's constant, `100ms / 59us = 1695`, so a
+workspace recheck crosses P9's budget at about 1,700 files. That is the number at which the
+answer changes: once a realistic checked workspace, including dependencies, is around that
+size, the cache is warranted rather than merely tempting.
+
+**A second full pass halves the trigger.** `crates/deed-lsp/tests/cost.rs` exists because one
+extra `check_workspace` call was already visible in hover. If a hot request needs two whole
+workspace checks rather than one, the same budget is gone at about 850 files instead. So what
+changes the answer is either the per-file constant moving or the number of full passes per
+request moving.
 
 **Essentially all of the work is repeated.** Past a handful of files, 99% of a recheck is
 spent on files that did not change. So a cache would take almost all of it off, and that is
 the number that says a cache is worth writing when the size arrives, rather than a feeling
 that it might be.
+
+**What the cache would have to invalidate is not only the edited file.** `check_all` lexes and
+parses every file, builds a `Universe` from every `module` line, lowers every module's
+exported surface into one `World`, then resolves, typechecks and analyses effects per file.
+So a cache would need to discard the changed file's own lexing, parse tree, surface and
+checked result; any file whose `module` line or `use` list changed the import graph; and every
+downstream file whose name resolution, exported types, declared rows or diagnostics depend on
+the changed file's exported surface. A text cache is not enough. The invalidation key has to
+include module membership and exported facts.
+
+**The current architecture could accept one, but not invisibly.** The passes already have the
+shape Salsa and rust-analyzer want: per-file inputs, an explicit world built from exported
+facts, and per-file results with no hidden mutable compiler state. What the architecture does
+not yet have is persistent workspace state. `check_workspace` rebuilds the `SourceMap`,
+`Universe` and `World` from scratch on every request, so a cache would mean hoisting those
+tables and the dependency graph out of one call to `check_all` and into long-lived workspace
+state.
 
 What is deliberately not done is the cache. A cache justified by a number is a different
 thing from a cache justified by a feeling, and the number says there is time.
@@ -223,9 +248,10 @@ times as much to check. A file full of unresolved names is the normal state of a
 edited, which is exactly when this principle is about something. Suggestions are budgeted
 now, in source order so the output stays the same every time.
 
-**What would falsify this:** a realistic codebase where a full check is slow enough that the
-absence of incremental checking stops being a footnote, or a change that makes the scaling
-test pass while the constant factor grows enough to miss the target anyway.
+**What would falsify this:** a re-measurement that moves the per-file constant enough to move
+the 1,700-file trigger, a hot request that needs two full workspace checks and therefore hits
+the budget at about 850 files, or a change that makes the scaling test pass while the
+constant factor grows enough to miss the target anyway.
 
 ---
 
