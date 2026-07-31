@@ -35,8 +35,8 @@ use std::path::Path;
 
 use deed_fetch::sha256::{hex as shared_hex, sha256 as shared_sha256};
 
-fn digest_matches(actual: &[u8; 32], expected: &[u8; 32]) -> bool {
-    actual == expected
+fn digest_differs(actual: &[u8; 32], expected: &[u8; 32]) -> bool {
+    actual != expected
 }
 
 /// Returns the SHA-256 digest of `data`.
@@ -152,7 +152,7 @@ pub fn verify(entries: &[Entry]) -> Result<(), String> {
                 )
             })?;
             let actual = sha256(source.as_bytes());
-            if !digest_matches(&actual, &entry.digest) {
+            if digest_differs(&actual, &entry.digest) {
                 return Err(format!(
                     "shipped module `{module}` has changed since the lock was written \
                      (compiler version may have changed)"
@@ -167,7 +167,7 @@ pub fn verify(entries: &[Entry]) -> Result<(), String> {
                 )
             })?;
             let actual = sha256(&content);
-            if !digest_matches(&actual, &entry.digest) {
+            if digest_differs(&actual, &entry.digest) {
                 return Err(format!(
                     "{}: content has changed since the lock was written (run without --locked to update)",
                     entry.path
@@ -187,12 +187,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn digest_match_requires_every_byte_to_agree() {
+    fn digest_difference_requires_at_least_one_changed_byte() {
         let exact = [7u8; 32];
         let mut changed = exact;
         changed[31] = 8;
-        assert!(digest_matches(&exact, &exact));
-        assert!(!digest_matches(&changed, &exact));
+        assert!(!digest_differs(&exact, &exact));
+        assert!(digest_differs(&changed, &exact));
     }
 
     /// The SHA-256 of an empty string is well-known.
