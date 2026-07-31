@@ -186,6 +186,15 @@ fn a_use_semicolon_is_edition_gated() {
 }
 
 #[test]
+fn an_edition_nobody_declared_is_named_rather_than_guessed_at() {
+    let (_, parsed) = parse_source("module a edition 2099\n\nfn f() -> Int { 0 }\n");
+    assert!(
+        codes_of(&parsed.diagnostics).contains(&codes::UNKNOWN_EDITION),
+        "edition 2099 does not exist and should be refused by name"
+    );
+}
+
+#[test]
 fn a_refinement_is_part_of_the_type_alias() {
     let parsed = parse_ok("module a\n\ntype Positive = Int where value > 0\n");
     match &parsed.module.items[0] {

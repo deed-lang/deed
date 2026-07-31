@@ -11,7 +11,7 @@ This rule is the point of editions. If editions split module interop, they split
 A module may declare an edition on its `module` line:
 
 ```deed
-module payments/transfer edition 2025
+module payments/ledger edition 2025
 ```
 
 If omitted, the module is in edition `2024`.
