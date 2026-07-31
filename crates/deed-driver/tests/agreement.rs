@@ -15,11 +15,11 @@
 use deed_codegen::{Trap, Value, call, compile};
 use deed_diagnostics::SourceMap;
 use deed_driver::check_all;
+use deed_interp::codes;
 use deed_interp::{
     Program as Interpreted, PropertyConfig, Value as InterpretedValue, generate_inputs, run_main,
     run_tests, shrink_inputs,
 };
-use deed_interp::codes;
 
 /// A program, the function to call in it, and what it should come back with.
 struct Agreed {
