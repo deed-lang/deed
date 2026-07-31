@@ -12,6 +12,7 @@
 //! has no dependencies, and the part of each format a compiler needs is
 //! small.
 
+pub mod abi;
 pub mod compile;
 pub mod layout;
 pub mod run;
