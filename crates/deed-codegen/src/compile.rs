@@ -558,20 +558,18 @@ impl<'a> Builder<'a> {
                 let failure = self.failure_instructions(ARITHMETIC_CODE, ARITHMETIC_MESSAGE);
                 self.instructions.push(Ins::If {
                     result: None,
-                    then: {
-                        let mut then = Vec::new();
-                        then.push(Ins::LocalGet(product));
-                        then.push(Ins::LocalGet(left_slot));
-                        then.push(Ins::I64DivS);
-                        then.push(Ins::LocalGet(right_slot));
-                        then.push(Ins::I64Ne);
-                        then.push(Ins::If {
+                    then: vec![
+                        Ins::LocalGet(product),
+                        Ins::LocalGet(left_slot),
+                        Ins::I64DivS,
+                        Ins::LocalGet(right_slot),
+                        Ins::I64Ne,
+                        Ins::If {
                             result: None,
                             then: failure,
                             otherwise: Vec::new(),
-                        });
-                        then
-                    },
+                        },
+                    ],
                     otherwise: Vec::new(),
                 });
 
