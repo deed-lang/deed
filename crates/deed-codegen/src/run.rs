@@ -74,6 +74,15 @@ pub enum Trap {
     Invalid(String),
 }
 
+/// The result of running an exported function, with memory usage.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Outcome {
+    /// What the function answered with, if it returns a value.
+    pub value: Option<Value>,
+    /// How many bytes were allocated while this call was running.
+    pub allocated: u64,
+}
+
 impl std::fmt::Display for Trap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -106,6 +115,11 @@ const BUDGET: u64 = 5_000_000;
 /// here rather than by somebody outside this workspace (see
 /// [`crate::validate`], and #567 for the shape of the gap this closes).
 pub fn call(module: &Module, name: &str, args: &[Value]) -> Result<Option<Value>, Trap> {
+    Ok(call_measured(module, name, args)?.value)
+}
+
+/// Calls an exported function and reports what it allocated.
+pub fn call_measured(module: &Module, name: &str, args: &[Value]) -> Result<Outcome, Trap> {
     if let Err(crate::validate::Invalid(reason)) = crate::validate::validate(module) {
         return Err(Trap::Invalid(reason));
     }
@@ -122,12 +136,17 @@ pub fn call(module: &Module, name: &str, args: &[Value]) -> Result<Option<Value>
         fuel: BUDGET,
         memory: memory_of(module),
     };
+    let before = run.bump();
     match run.call(index, args) {
         // A trap that left something behind says what it was. Read here
         // rather than where the trap is raised, because the two words are
         // in memory and memory is what this owns.
         Err(Trap::Unreachable) => Err(run.why().unwrap_or(Trap::Unreachable)),
-        other => other,
+        Err(other) => Err(other),
+        Ok(value) => Ok(Outcome {
+            value,
+            allocated: run.bump().saturating_sub(before),
+        }),
     }
 }
 
@@ -159,6 +178,15 @@ enum Flow {
 }
 
 impl Run<'_> {
+    /// Where the bump pointer sits now, or zero when no memory is declared.
+    fn bump(&self) -> u64 {
+        self.memory
+            .get(crate::layout::BUMP as usize..crate::layout::BUMP as usize + 8)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u64::from_le_bytes)
+            .unwrap_or(0)
+    }
+
     /// What the program left in memory about why it stopped, if anything.
     fn why(&self) -> Option<Trap> {
         Some(Trap::Failed {
