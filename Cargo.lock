@@ -72,6 +72,10 @@ name = "deed-explain"
 version = "0.1.0"
 
 [[package]]
+name = "deed-fetch"
+version = "0.1.0"
+
+[[package]]
 name = "deed-fmt"
 version = "0.1.0"
 dependencies = [

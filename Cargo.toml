@@ -8,6 +8,7 @@ members = [
     "crates/deed-driver",
     "crates/deed-effects",
     "crates/deed-explain",
+    "crates/deed-fetch",
     "crates/deed-fmt",
     "crates/deed-interp",
     "crates/deed-lexer",
