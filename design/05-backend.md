@@ -360,3 +360,50 @@ outer handler's state is intact and still searchable, which is the same property
 needs after a resumption completes inside a nested context. The second checks that a handler
 operation can perform into a co-installed handler across the frame boundary, which is the
 cross-frame search a suspended operation relies on when it is resumed.
+
+## The host enforces the row, and the enforcement is structural rather than checked
+
+The sentence in the first section about WASM's import model making Deed's capability promise
+"enforceable by something outside the compiler, not only by it" was true in principle and
+unproven in the repository. `run.rs` stopped at `NeedsAHost` when any import was called,
+which says which import was missing but proves nothing about whether a real host would have
+enforced anything.
+
+#629 adds `Host` to `deed-codegen/src/run.rs`. It is not a third-party runtime and does not
+add a dependency: it implements exactly the two properties that make WASM's import model an
+enforcement mechanism rather than a naming convention, using the same module representation
+the rest of the codebase already has.
+
+**Why not an external runtime.** Adding `wasmtime`, `wasmi`, or similar as a dev-dependency
+would confirm that the bytes this backend emits are accepted by a conformant engine, which is
+useful but separate from the enforcement claim. The claim is about structure: a module that
+does not import an operation has no function index to call it through. That structural fact
+is confirmed by inspecting the import section, not by running the bytes. An external engine
+would run the bytes and stop at the missing import the same way `Host` does, without adding
+information about why the stopping happens. The dependency would be the cost and the
+structural argument would be the gain, and the gain is already here without it.
+
+**What `Host` does.** `Host` holds an offer list: a named set of (module, operation) pairs
+with implementations. `Host::link` checks every entry in the module's import section against
+that list before a single instruction runs. If any import is unsatisfied, `link` returns
+`Err(LinkError { ... })` naming the missing entry. Only a module whose entire import section
+is covered gets a `Linked` back. `Linked::call` dispatches import calls to the offer list
+rather than stopping with `NeedsAHost`.
+
+**The two tests in `deed-driver/tests/host.rs` that prove the enforcement.**
+
+`what_the_row_does_not_name_is_not_reachable`: a component whose row does not mention
+writing (`fn answer() -> Int { 2 + 2 }`) is compiled and linked to a host that offers
+write. Linking succeeds because the module has no imports. Write is confirmed absent from
+the import section. The module runs correctly under the write-offering host, and the host's
+write implementation is never called: there is no import index to dispatch through.
+
+`a_component_asking_for_what_the_host_does_not_offer_is_refused_at_load`: a component
+whose row does mention writing (the `WRITING` fixture) is linked to an empty host. `link`
+returns an error before the module runs, naming the unsatisfied import. The module is
+refused at load time rather than failing mid-run.
+
+These two together are the enforcement the introductory section promised: absence from the
+row means absence from the import section means the operation is structurally unreachable,
+and presence in the row with an unsatisfying host means refusal at load rather than at
+runtime.
