@@ -33,8 +33,8 @@
 
 use std::path::{Path, PathBuf};
 
-use deed_ast::{BinaryOp, Item};
-use deed_diagnostics::SourceMap;
+use deed_ast::{BinaryOp, FnDecl, Item, TestDecl};
+use deed_diagnostics::{SourceMap, Span};
 use deed_interp::{Program, PropertyConfig, run_properties, run_tests};
 use deed_resolve::{IO_OPERATIONS, PRELUDE};
 
@@ -191,6 +191,300 @@ fn spelled(n: usize) -> &'static str {
     WORDS
         .get(n)
         .unwrap_or_else(|| panic!("{n} is past what these documents spell out"))
+}
+
+fn std_api_index() -> String {
+    let modules: Vec<&str> = deed_driver::shipped_modules().collect();
+    let listed: String = modules
+        .iter()
+        .map(|module| {
+            let name = module.trim_start_matches("std/");
+            format!("- [`{module}`](std/{name}.md)\n")
+        })
+        .collect();
+
+    format!(
+        "# Standard library API\n\n\
+         These pages are generated from the shipped module declarations under `std/` and the module tests that name each function. Each page records the declaration the compiler ships, the row variables and declared row it carries, and the example lines those tests exercise.\n\n\
+         ## Pages\n\n\
+         {listed}\n\
+         ## User modules\n\n\
+         The same treatment is possible for user modules in principle. The compiler already has the same parse tree, contract, row and mention table when it checks a set of user files together; these pages are published only for shipped modules because those sources are always present beside the compiler.\n"
+    )
+}
+
+fn std_api_path(module: &str) -> String {
+    format!(
+        "docs/std/{}.md",
+        module
+            .strip_prefix("std/")
+            .expect("shipped modules under std/")
+    )
+}
+
+fn line_start(text: &str, offset: usize) -> usize {
+    text[..offset].rfind('\n').map_or(0, |at| at + 1)
+}
+
+fn line_end(text: &str, offset: usize) -> usize {
+    text[offset..]
+        .find('\n')
+        .map_or(text.len(), |at| offset + at)
+}
+
+fn file_header_comment(text: &str) -> String {
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            if lines.is_empty() {
+                continue;
+            }
+            lines.push(String::new());
+            continue;
+        }
+        let Some(comment) = trimmed.strip_prefix("//") else {
+            break;
+        };
+        lines.push(comment.strip_prefix(' ').unwrap_or(comment).to_string());
+    }
+
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n").trim().to_string()
+}
+
+fn comment_block_before(text: &str, span: Span) -> String {
+    let mut found = Vec::new();
+    let mut in_block = false;
+
+    for line in text[..span.start as usize].lines().rev() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            if in_block {
+                break;
+            }
+            continue;
+        }
+        let Some(comment) = trimmed.trim_start().strip_prefix("//") else {
+            break;
+        };
+        in_block = true;
+        found.push(comment.strip_prefix(' ').unwrap_or(comment).to_string());
+    }
+
+    found.reverse();
+    found.join("\n").trim().to_string()
+}
+
+fn effect_ref(effect: &deed_ast::EffectRef) -> String {
+    if effect.all {
+        return format!("{}.*", effect.effect.name);
+    }
+    match &effect.operation {
+        Some(operation) => format!("{}.{}", effect.effect.name, operation.name),
+        None => effect.effect.name.clone(),
+    }
+}
+
+fn example_lines(text: &str, mentions: &[Span]) -> String {
+    let mut lines = Vec::new();
+    for span in mentions {
+        let start = line_start(text, span.start as usize);
+        let end = line_end(text, span.end as usize);
+        let line = text[start..end].trim().to_string();
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+    lines.join("\n")
+}
+
+fn render_function_docs(checked: &deed_driver::Checked, text: &str, function: &FnDecl) -> String {
+    let comment = comment_block_before(text, function.sig.span);
+    assert!(
+        !comment.is_empty(),
+        "`{}` in `{}` needs a comment block above it so the generated std API page can say what it does",
+        function.sig.name.name,
+        checked
+            .module
+            .name
+            .as_ref()
+            .expect("shipped module has a name")
+            .to_string_path()
+    );
+
+    let def = checked
+        .resolutions
+        .resolution(function.sig.name.span)
+        .expect("declared function should resolve to itself");
+
+    let tests: Vec<&TestDecl> = checked
+        .module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Test(test) => Some(test),
+            _ => None,
+        })
+        .collect();
+
+    let mentions: Vec<Span> = checked
+        .resolutions
+        .names()
+        .filter_map(|(span, mention)| (mention == def).then_some(span))
+        .collect();
+    let mut mentions = mentions;
+    mentions.sort_by_key(|span| (span.start, span.end));
+
+    let mut examples = String::new();
+    let mut documented = 0;
+    for test in tests {
+        let inside: Vec<Span> = mentions
+            .iter()
+            .copied()
+            .filter(|span| span.start >= test.span.start && span.end <= test.span.end)
+            .collect();
+        if inside.is_empty() {
+            continue;
+        }
+
+        let lines = example_lines(text, &inside);
+        examples.push_str(&format!(
+            "#### `{}`\n\n```deed\n{}\n```\n\n",
+            test.name, lines
+        ));
+        documented += 1;
+    }
+    assert!(
+        documented > 0,
+        "`{}` should be named by one of its tests before it reaches the std API page",
+        function.sig.name.name
+    );
+
+    let signature = text[function.sig.span.as_range()].trim();
+    let row_variables = if function.sig.rows.is_empty() {
+        "none".to_string()
+    } else {
+        function
+            .sig
+            .rows
+            .iter()
+            .map(|row| row.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let declared_row = if function.contract.uses.is_empty() {
+        "pure".to_string()
+    } else {
+        function
+            .contract
+            .uses
+            .iter()
+            .map(effect_ref)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let contract = text[function.sig.span.end as usize..function.body.span.start as usize]
+        .trim()
+        .to_string();
+    let contract = if contract.is_empty() {
+        "pure".to_string()
+    } else {
+        contract
+    };
+
+    format!(
+        "## `{}`\n\n\
+         ### Behavior and limits\n\n\
+         {}\n\n\
+         ### Signature\n\n\
+         ```deed\n{}\n```\n\n\
+         ### Row variables\n\n\
+         `{}`\n\n\
+         ### Declared row\n\n\
+         `{}`\n\n\
+         ### Contract\n\n\
+         ```deed\n{}\n```\n\n\
+         ### Examples from `{}.deed`\n\n\
+         {}",
+        function.sig.name.name,
+        comment,
+        signature,
+        row_variables,
+        declared_row,
+        contract,
+        checked
+            .module
+            .name
+            .as_ref()
+            .expect("shipped module has a name")
+            .to_string_path(),
+        examples.trim_end()
+    )
+}
+
+fn render_module_page(checked: &deed_driver::Checked, text: &str) -> String {
+    let module = checked
+        .module
+        .name
+        .as_ref()
+        .expect("shipped module has a name")
+        .to_string_path();
+    let summary = file_header_comment(text);
+    assert!(
+        !summary.is_empty(),
+        "`{module}` needs a file header comment so the generated page can introduce it"
+    );
+
+    let functions: Vec<String> = checked
+        .module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(render_function_docs(checked, text, function)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !functions.is_empty(),
+        "`{module}` declares no function, so there is nothing to document"
+    );
+
+    format!(
+        "# `{module}`\n\n\
+         _Generated from `/std/{}.deed` and the module's own tests._\n\n\
+         ## Module\n\n\
+         {}\n\n\
+         {}\n",
+        module.trim_start_matches("std/"),
+        summary,
+        functions.join("\n\n")
+    )
+}
+
+fn shipped_std_api_pages() -> Vec<(String, String)> {
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+    for module in deed_driver::shipped_modules() {
+        let text = deed_driver::shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
+    }
+
+    deed_driver::check_all(&sources, &ids)
+        .into_iter()
+        .map(|checked| {
+            let module = checked
+                .module
+                .name
+                .as_ref()
+                .expect("shipped module has a name")
+                .to_string_path();
+            let text = sources.file(checked.file).text().to_string();
+            (std_api_path(&module), render_module_page(&checked, &text))
+        })
+        .collect()
 }
 
 fn examples() -> Vec<String> {
@@ -858,6 +1152,52 @@ fn the_documents_that_work_through_the_running_example_are_the_ones_that_do() {
             header.contains(&format!("design/{name}")),
             "design/{name} works through transfer.deed and the header does not name it"
         );
+    }
+}
+
+/// The generated API reference for the shipped standard library modules.
+///
+/// The source of truth is the shipped module itself: the declaration, the row
+/// and contract it carries, the comment block explaining what it does, and the
+/// tests in that same file that name it. A checked-in page is still useful,
+/// because it is what GitHub renders, but if that page drifts from the module
+/// the point of having a generated reference is gone.
+#[test]
+fn the_std_api_pages_match_the_shipped_modules_the_compiler_ships() {
+    let expected_index = std_api_index();
+    let actual_index = read("docs/std.md");
+    assert_eq!(
+        actual_index, expected_index,
+        "docs/std.md should match the generated shipped-module index"
+    );
+
+    let pages = shipped_std_api_pages();
+    assert!(
+        !pages.is_empty(),
+        "nothing ships inside the compiler, so there is no std API page to read"
+    );
+
+    for (path, expected) in pages {
+        let actual = read(&path);
+        assert_eq!(
+            actual, expected,
+            "{path} should match the generated API reference for its shipped module"
+        );
+    }
+}
+
+#[test]
+#[ignore = "writes docs/std.md and docs/std/*.md from the shipped modules"]
+fn regenerate_the_std_api_pages() {
+    let docs = root().join("docs").join("std");
+    std::fs::create_dir_all(&docs).expect("docs/std should be writable");
+    std::fs::write(root().join("docs/std.md"), std_api_index())
+        .expect("docs/std.md should be writable");
+
+    for (path, page) in shipped_std_api_pages() {
+        let absolute = root().join(path);
+        std::fs::write(&absolute, page)
+            .unwrap_or_else(|_| panic!("{} should be writable", absolute.display()));
     }
 }
 

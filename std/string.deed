@@ -61,10 +61,16 @@ fn index_of(text: String, needle: String) -> Int {
     }
 }
 
+// Whether `text` begins with `prefix`.
+//
+// An empty prefix matches everything. A prefix longer than the text does not.
 fn starts_with(text: String, prefix: String) -> Bool {
     slice(text, 0, length(prefix)) == prefix
 }
 
+// Whether `text` ends with `suffix`.
+//
+// An empty suffix matches everything. A suffix longer than the text does not.
 fn ends_with(text: String, suffix: String) -> Bool {
     slice(text, length(text) - length(suffix), length(text)) == suffix
 }
@@ -99,6 +105,9 @@ fn pad_left(text: String, width: Int) -> String {
     join(repeat(" ", width - length(text)), "") + text
 }
 
+// The same padding, on the right instead of the left.
+//
+// Wider is still quiet: text already past `width` is returned unchanged.
 fn pad_right(text: String, width: Int) -> String {
     text + join(repeat(" ", width - length(text)), "")
 }
@@ -114,6 +123,10 @@ record LeadingSpaces {
     counting: Bool,
 }
 
+// `text` with the whitespace at the front gone.
+//
+// The whitespace table is the same four characters `trim` uses: space, tab,
+// carriage return and line feed, not Unicode whitespace.
 fn trim_start(text: String) -> String {
     let counted = for ch in split(text, "") with state = LeadingSpaces { count: 0, counting: true } {
         if state.counting && (ch == " " || ch == "\t" || ch == "\r" || ch == "\n") {
