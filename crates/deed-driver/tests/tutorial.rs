@@ -97,7 +97,7 @@ fn checked(name: &str) -> deed_driver::Checked {
     let mut sources = SourceMap::new();
     let checked = check_text(
         &mut sources,
-        &format!("tutorial/{name}.deed"),
+        format!("tutorial/{name}.deed"),
         &snippet.source,
     );
     assert!(
@@ -114,7 +114,7 @@ fn every_tutorial_snippet_checks_or_fails_as_marked() {
         let mut sources = SourceMap::new();
         let checked = check_text(
             &mut sources,
-            &format!("tutorial/{}.deed", snippet.name),
+            format!("tutorial/{}.deed", snippet.name),
             &snippet.source,
         );
 
@@ -172,7 +172,16 @@ fn the_final_tutorial_program_shows_all_three_tiers() {
         .filter(|obligation| obligation.tier == Tier::Guarded)
         .count();
 
-    assert!(proven > 0, "the final snippet should include a proven obligation");
-    assert!(tested > 0, "the final snippet should include a tested obligation");
-    assert!(guarded > 0, "the final snippet should include a guarded obligation");
+    assert!(
+        proven > 0,
+        "the final snippet should include a proven obligation"
+    );
+    assert!(
+        tested > 0,
+        "the final snippet should include a tested obligation"
+    );
+    assert!(
+        guarded > 0,
+        "the final snippet should include a guarded obligation"
+    );
 }
