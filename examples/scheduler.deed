@@ -1,0 +1,157 @@
+// A cooperative round-robin scheduler, written entirely in Deed.
+//
+// The question this file answers is from deed-lang/deed#606: can a scheduler be
+// written in Deed, or does something in the handler design prevent it?
+//
+// The short answer is: yes, with one constraint on how tasks are written.
+//
+// OCaml's version captures the current continuation when a task yields, puts it
+// in the queue, and picks up the next one. Deed handlers are one-shot -- there
+// is no continuation to capture -- so that form is not directly available.
+//
+// What is available is the same structure the compiler already uses for loops:
+// a task that wants to yield splits itself into a step that runs now and a
+// closure for the rest, then forks the closure before it yields. The scheduler
+// never resumes a suspended computation; it just calls the next closure in the
+// queue. The tasks here write that split out explicitly.
+//
+// The concern from deed-lang/deed#292 was about closures inside a handler
+// operation capturing the handler's own state. That is not what happens here.
+// The closures are written outside the handler entirely and passed in through
+// `Schedule.fork`; the handler only stores and calls them. That pattern works
+// cleanly.
+//
+// The three parts that do need to be in the language:
+//   - handler state that holds function values (it does)
+//   - function values that perform fewer effects than their declared type allows
+//     (they do: `a_step2` only uses `Log.note` but satisfies the queue element
+//     type which also names `Schedule.fork` and `Schedule.yield`)
+//   - a standalone recursive function to drain the queue (ordinary `Diverge`)
+//
+// Nothing about the scheduler is language machinery.
+
+module examples/scheduler
+
+use std/list.{first, drop}
+
+effect Log {
+    fn note(message: String) -> ()
+    fn messages() -> List<String>
+}
+
+handler Recorder implements Log {
+    state log: List<String>
+
+    fn note(message) -> () {
+        log = push(log, message)
+    }
+
+    fn messages() -> List<String> {
+        log
+    }
+}
+
+effect Schedule {
+    fn fork(task: Fn() uses Schedule.fork, Schedule.yield, Log.note -> ()) -> ()
+    fn yield() -> ()
+    fn more() -> Bool
+}
+
+handler RoundRobin implements Schedule {
+    state queue: List<Fn() uses Schedule.fork, Schedule.yield, Log.note -> ()>
+
+    fn fork(task) -> () {
+        queue = push(queue, task)
+    }
+
+    fn yield() -> ()
+      uses
+        Schedule.fork,
+        Schedule.yield,
+        Log.note,
+    {
+        match first(queue) {
+            ok(task) => {
+                queue = drop(queue, 1)
+                task()
+            },
+            err(_) => (),
+        }
+    }
+
+    fn more() -> Bool {
+        length(queue) > 0
+    }
+}
+
+// Drain the queue. Each call to `Schedule.yield` runs one task, which may
+// fork new tasks, so the loop continues until there is nothing left.
+fn run() -> ()
+  uses
+    Schedule.more,
+    Schedule.yield,
+    Diverge,
+{
+    if Schedule.more() {
+        Schedule.yield()
+        run()
+    }
+}
+
+// Two tasks split into steps. Each step logs that it ran, forks the next step
+// for itself, and yields so the other task can proceed.
+
+fn a_step2() -> ()
+  uses
+    Log.note,
+{
+    Log.note("A2")
+}
+
+fn a_step1() -> ()
+  uses
+    Schedule.fork,
+    Schedule.yield,
+    Log.note,
+{
+    Log.note("A1")
+    Schedule.fork(a_step2)
+    Schedule.yield()
+}
+
+fn b_step2() -> ()
+  uses
+    Log.note,
+{
+    Log.note("B2")
+}
+
+fn b_step1() -> ()
+  uses
+    Schedule.fork,
+    Schedule.yield,
+    Log.note,
+{
+    Log.note("B1")
+    Schedule.fork(b_step2)
+    Schedule.yield()
+}
+
+test "two tasks interleave round-robin" {
+    with Recorder { log: [] }, RoundRobin { queue: [] } {
+        Schedule.fork(a_step1)
+        Schedule.fork(b_step1)
+        run()
+        assert Log.messages() == ["A1", "B1", "A2", "B2"]
+    }
+}
+
+test "tasks queued before run is called are all run" {
+    with Recorder { log: [] }, RoundRobin { queue: [] } {
+        Schedule.fork(a_step1)
+        Schedule.fork(b_step1)
+        assert Log.messages() == []
+        run()
+        assert Log.messages() == ["A1", "B1", "A2", "B2"]
+    }
+}
