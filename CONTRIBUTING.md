@@ -215,9 +215,9 @@ Anything touching `design/` goes through a PR with the reasoning in the descript
 what the change rules out, not only what it enables. A principle that never rejects anything
 is decoration.
 
-Large proposals and decisions live in `design/decisions/`. Start from
-`design/decisions/TEMPLATE.md`. Every record requires `Drawbacks`, `Rejected Ideas` and
-`Open Questions`.
+Large proposals and decisions live in [design/decisions/](design/decisions/). Start from
+[design/decisions/TEMPLATE.md](design/decisions/TEMPLATE.md). Every record requires
+`Drawbacks`, `Rejected Ideas` and `Open Questions`.
 
 If a decision changes later, update the original record in the same PR: set status to
 `Superseded` and add a `Superseded by` link to the replacement record.

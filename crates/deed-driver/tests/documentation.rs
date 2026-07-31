@@ -31,7 +31,8 @@
 //! the modules that ship inside the compiler, and those are names this crate
 //! does hold, so that one is checked below.
 
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
 
 use deed_ast::{BinaryOp, FnDecl, Item, TestDecl};
 use deed_diagnostics::{SourceMap, Span};
@@ -48,6 +49,31 @@ fn root() -> PathBuf {
 fn read(relative: &str) -> String {
     let path = root().join(relative);
     std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} should be there", path.display()))
+}
+
+fn normalize(path: PathBuf) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+            Component::RootDir => out.push(component.as_os_str()),
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+        }
+    }
+    out
+}
+
+fn relative_to_root(path: &Path) -> String {
+    let root = normalize(root());
+    let path = normalize(path.to_path_buf());
+    path.strip_prefix(root)
+        .unwrap_or(path.as_path())
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// The text between two markers, so a check names the paragraph it is about.
@@ -503,6 +529,85 @@ fn examples() -> Vec<String> {
     found
 }
 
+fn public_docs() -> Vec<String> {
+    fn walk(at: &Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(at)
+            .unwrap_or_else(|_| panic!("{} should be there", at.display()))
+            .filter_map(Result::ok)
+        {
+            let path = entry.path();
+            if path.file_name().is_some_and(|name| name == ".github") {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                found.push(relative_to_root(&path));
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    walk(&root(), &mut found);
+    found.sort();
+    assert!(
+        !found.is_empty(),
+        "no public markdown files found under the repository root"
+    );
+    found
+}
+
+fn indexed_public_docs() -> Vec<String> {
+    public_docs()
+        .into_iter()
+        .filter(|doc| {
+            !doc.starts_with("design/decisions/") || doc == "design/decisions/README.md"
+        })
+        .collect()
+}
+
+fn markdown_links(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find("](") {
+        rest = &rest[open + 2..];
+        let Some(close) = rest.find(')') else { break };
+        let target = &rest[..close];
+        let target = target.split('#').next().unwrap_or("");
+        if !target.is_empty() && !target.starts_with('#') && !target.contains("://") && !target.starts_with("mailto:") {
+            found.push(target.to_string());
+        }
+        rest = &rest[close + 1..];
+    }
+    found
+}
+
+fn resolved_from(doc: &str, target: &str) -> PathBuf {
+    let base = root()
+        .join(doc)
+        .parent()
+        .expect("a document should have a parent")
+        .to_path_buf();
+    normalize(base.join(target))
+}
+
+fn named_paths(text: &str, prefix: &str, extension: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(prefix) {
+        rest = &rest[at..];
+        let end = rest
+            .find(|c: char| !(c.is_alphanumeric() || matches!(c, '/' | '_' | '-' | '.')))
+            .unwrap_or(rest.len());
+        let path = &rest[..end];
+        if path.ends_with(extension) && !found.iter().any(|seen| seen == path) {
+            found.push(path.to_string());
+        }
+        rest = &rest[end..];
+    }
+    found
+}
+
 /// The one paragraph that writes out the whole prelude, in order.
 ///
 /// It carries the names, the built-in effect, its operations and the second
@@ -832,6 +937,104 @@ fn the_documents_these_read_are_all_there() {
     ] {
         let path: &Path = &root().join(name);
         assert!(path.is_file(), "{name} should be there");
+    }
+}
+
+/// Public documentation should not point at files that are gone.
+///
+/// The design documents are already held to concrete names and counts, but new
+/// public prose can still grow broken links without touching one of the checks
+/// above. That is a quieter version of the same failure mode: the sentence was
+/// right when it was written, the repository moved, and nothing reading it had
+/// reason to look back. Relative links are the objective part, so those are
+/// what fail here.
+#[test]
+fn the_public_documents_link_to_things_that_are_there() {
+    for doc in public_docs() {
+        for target in markdown_links(&read(&doc)) {
+            let path = resolved_from(&doc, &target);
+            assert!(
+                path.exists(),
+                "{doc} links to {target:?}, which resolves to {} and is not there",
+                relative_to_root(&path)
+            );
+        }
+    }
+}
+
+/// Public documentation that lands should be findable from other public prose.
+///
+/// The existing ratchets only hold documents once some earlier document already
+/// points at them. A new README under a public directory can therefore land and
+/// then quietly drift because nothing names it, which is the same as a missing
+/// chapter in an index: the file exists, but a reader is not led to it and no
+/// future edit has to pass by it. What counts as indexed here is deliberately
+/// narrow and mechanical: another public document has a relative markdown link
+/// to it, either directly or by linking the directory that carries its README.
+#[test]
+fn the_public_documents_are_indexed_somewhere() {
+    let docs = indexed_public_docs();
+    let public: BTreeSet<String> = docs.iter().cloned().collect();
+    let mut indexed: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for doc in &docs {
+        for target in markdown_links(&read(doc)) {
+            let path = resolved_from(doc, &target);
+            let targets: Vec<String> = if path.is_dir() {
+                let readme = path.join("README.md");
+                if readme.is_file() {
+                    vec![relative_to_root(&readme)]
+                } else {
+                    Vec::new()
+                }
+            } else if path.is_file() {
+                vec![relative_to_root(&path)]
+            } else {
+                Vec::new()
+            };
+
+            for indexed_doc in targets {
+                if indexed_doc != *doc && public.contains(&indexed_doc) {
+                    indexed.entry(indexed_doc).or_default().push(doc.clone());
+                }
+            }
+        }
+    }
+
+    for doc in docs {
+        if doc == "README.md" {
+            continue;
+        }
+        assert!(
+            indexed.contains_key(&doc),
+            "{doc} is public documentation and no other public document links to it"
+        );
+    }
+}
+
+/// File paths in public prose should still name files that exist.
+///
+/// Markdown links are not the only place a document can go stale. The example
+/// corpus is also cited in plain prose and transcripts, and those references
+/// are exactly the kind that survive a rename because nothing reading them has
+/// to touch the sentence. This only checks paths a reader could independently
+/// verify from the tree: example and shipped-library `.deed` files, and other
+/// markdown documents named by path.
+#[test]
+fn the_public_documents_name_files_that_are_there() {
+    for doc in public_docs() {
+        let text = read(&doc);
+        for path in named_paths(&text, "examples/", ".deed")
+            .into_iter()
+            .chain(named_paths(&text, "std/", ".deed"))
+            .chain(named_paths(&text, "design/", ".md"))
+        {
+            let full = root().join(&path);
+            assert!(
+                full.is_file(),
+                "{doc} names `{path}` and no such file exists"
+            );
+        }
     }
 }
 

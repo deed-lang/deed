@@ -7,7 +7,7 @@ stdout, which is all any of these editors want.
 
 |  | highlighting | language server |
 | --- | --- | --- |
-| VS Code | yes, `editors/vscode` | not yet |
+| VS Code | yes, [editors/vscode](vscode) | not yet |
 | Helix | no | yes |
 | Neovim | no | yes |
 | anything else that speaks LSP | no | yes |

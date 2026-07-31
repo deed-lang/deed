@@ -25,6 +25,8 @@ machine from [releases](https://github.com/deed-lang/deed/releases), unpack it, 
 There is nothing else to install: the compiler, the formatter, the test runner and the
 language server are all in that one file.
 
+Start with the [tutorial](TUTORIAL.md) if you want one program built up one step at a time.
+
 ```
 $ tar xzf deed-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
 $ ./deed-v0.1.0-x86_64-unknown-linux-gnu/deed --version
@@ -98,6 +100,9 @@ There is no REPL. A Deed input is a module of declarations, and `deed run` enter
 `main` rather than evaluating a top-level expression. For quick experiments, use a scratch
 `.deed` file with `deed check`, `deed test` or `deed run`. The right browser answer is a
 playground that edits and runs a whole program in that same shape.
+
+There is also a small [conformance suite](conformance/README.md) for checks that should hold
+across implementations.
 
 ## The idea
 
