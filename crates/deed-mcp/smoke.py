@@ -68,12 +68,22 @@ def lines(answer):
     return out
 
 
+def field(obj, *names):
+    """The client SDK renamed these between majors; the protocol did not."""
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    raise AssertionError(f"none of {names} on {type(obj).__name__}")
+
+
 async def main(binary: str) -> int:
     params = StdioServerParameters(command=binary, args=["mcp"])
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             info = await session.initialize()
-            print(f"{info.serverInfo.name} {info.serverInfo.version}, {info.protocolVersion}")
+            server = field(info, "server_info", "serverInfo")
+            version = field(info, "protocol_version", "protocolVersion")
+            print(f"{server.name} {server.version}, {version}")
 
             assert info.instructions, "an agent arrives with no idea what Deed is"
             assert "deed_check" in info.instructions, "the instructions do not name the tool to start with"
@@ -82,7 +92,7 @@ async def main(binary: str) -> int:
             offered = {t.name: t for t in listed.tools}
             assert set(offered) == set(WANTED), f"tools are {sorted(offered)}"
             for name, argument in WANTED.items():
-                schema = offered[name].inputSchema or {}
+                schema = field(offered[name], "input_schema", "inputSchema") or {}
                 assert schema.get("required") == [argument], f"{name} requires {schema.get('required')}"
                 assert offered[name].description, f"{name} arrives undescribed"
 
