@@ -104,6 +104,9 @@ playground that edits and runs a whole program in that same shape.
 There is also a small [conformance suite](conformance/README.md) for checks that should hold
 across implementations.
 
+User-visible language, diagnostics, library and tool changes are recorded in
+[CHANGELOG.md](CHANGELOG.md), including programs that used to compile and no longer do.
+
 ## The idea
 
 Most of the code being written today is not typed out by a person. That changes which
