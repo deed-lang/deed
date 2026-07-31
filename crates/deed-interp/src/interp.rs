@@ -1233,7 +1233,12 @@ impl<'a> Interp<'a> {
                 Ok(Value::Bool(before == now))
             }
 
-            Expr::With { handlers, body, .. } => {
+            Expr::With {
+                handlers,
+                body,
+                finally,
+                ..
+            } => {
                 let base = self.handlers.len();
                 let mut installed = Ok(());
                 for handler in handlers {
@@ -1242,7 +1247,7 @@ impl<'a> Interp<'a> {
                         break;
                     }
                 }
-                let result = match installed {
+                let body_result = match installed {
                     Ok(()) => self.eval_block(body),
                     Err(signal) => Err(signal),
                 };
@@ -1253,7 +1258,18 @@ impl<'a> Interp<'a> {
                 // resource a handler acquired is always released.
                 let result = self.run_finally_blocks(base, result);
                 self.handlers.truncate(base);
-                result
+
+                // Run the `finally` clause on every exit: normal completion,
+                // contract failure, and abandonment all pass through here.
+                // If the `finally` clause itself raises a signal that takes
+                // priority over what the body raised.
+                match finally {
+                    Some(finally_block) => match self.eval_block(finally_block) {
+                        Ok(_) | Err(Signal::Return(_)) => body_result,
+                        Err(signal) => Err(signal),
+                    },
+                    None => body_result,
+                }
             }
 
             Expr::Error(span) => Err(self.not_runnable(*span, "code that did not compile")),
@@ -2775,6 +2791,22 @@ impl<'a> Interp<'a> {
                 };
                 Err(Signal::Return(value))
             }
+
+            // `abandon` unwinds the computation unconditionally.
+            //
+            // The abandoned computation does not receive a return value from
+            // the effect operation; instead the stack unwinds through any
+            // `finally` clauses on `with` blocks. `assert refuses` cannot
+            // catch this because DEED6011 is not a contract failure.
+            Stmt::Abandon { span } => Err(self.fail(
+                Diagnostic::error(
+                    codes::ABANDONED,
+                    self.file(),
+                    *span,
+                    "this computation was abandoned by its handler",
+                )
+                .with_primary_label("abandoned here"),
+            )),
 
             Stmt::Assert { condition, span } => {
                 if self.condition(condition)? {

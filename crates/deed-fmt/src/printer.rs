@@ -748,16 +748,27 @@ impl Printer<'_> {
             Expr::Old { expr, .. } => format!("old({})", self.expr(expr)),
             Expr::Unchanged { effect, .. } => format!("unchanged({})", effect_ref(effect)),
 
-            Expr::With { handlers, body, .. } => {
+            Expr::With {
+                handlers,
+                body,
+                finally,
+                ..
+            } => {
                 let rendered: Vec<String> = handlers.iter().map(|h| self.expr(h)).collect();
                 let head = rendered.join(", ");
                 let block = self.rendered_block(body);
-                if head.contains('\n') {
+                let with_part = if head.contains('\n') {
                     // A handler that had to break already ends in a `}`, and a
                     // second `{` tacked onto that line is unreadable.
                     format!("with {head}\n{}{block}", INDENT.repeat(self.indent))
                 } else {
                     format!("with {head} {block}")
+                };
+                if let Some(finally) = finally {
+                    let finally_block = self.rendered_block(finally);
+                    format!("{with_part} finally {finally_block}")
+                } else {
+                    with_part
                 }
             }
 
@@ -903,6 +914,7 @@ impl Printer<'_> {
                 Some(value) => format!("return {}", self.with_prefix(7, value)),
                 None => "return".to_string(),
             },
+            Stmt::Abandon { .. } => "abandon".to_string(),
             Stmt::Assert { condition, .. } => {
                 format!("assert {}", self.with_prefix(7, condition))
             }

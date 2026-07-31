@@ -2472,7 +2472,7 @@ impl<'a> Checker<'a> {
         let mut diverges = false;
         for stmt in &block.stmts {
             self.check_stmt(stmt);
-            if matches!(stmt, Stmt::Return { .. }) {
+            if matches!(stmt, Stmt::Return { .. } | Stmt::Abandon { .. }) {
                 diverges = true;
             }
         }
@@ -2589,7 +2589,7 @@ impl<'a> Checker<'a> {
         let mut diverges = false;
         for stmt in &block.stmts {
             self.check_stmt(stmt);
-            if matches!(stmt, Stmt::Return { .. }) {
+            if matches!(stmt, Stmt::Return { .. } | Stmt::Abandon { .. }) {
                 diverges = true;
             }
         }
@@ -2724,6 +2724,10 @@ impl<'a> Checker<'a> {
                 self.infer(subject);
                 self.refuting = outer;
             }
+            // `abandon` is a diverging statement, like `return`. No type to
+            // check: it never produces a value and the block it lives in is
+            // marked diverging by `check_block_against`.
+            Stmt::Abandon { .. } => {}
             Stmt::Expr(expr) => {
                 let ty = self.infer(expr);
                 self.discarded(&ty, expr);
@@ -3119,11 +3123,22 @@ impl<'a> Checker<'a> {
             Expr::Old { expr, .. } => self.infer(expr),
             Expr::Unchanged { .. } => Ty::Bool,
 
-            Expr::With { handlers, body, .. } => {
+            Expr::With {
+                handlers,
+                body,
+                finally,
+                ..
+            } => {
                 for handler in handlers {
                     self.infer(handler);
                 }
-                self.check_block(body)
+                let ty = self.check_block(body);
+                // The `finally` clause runs for its side effects; its type is
+                // not the type of the `with` expression.
+                if let Some(finally) = finally {
+                    self.check_block(finally);
+                }
+                ty
             }
         }
     }

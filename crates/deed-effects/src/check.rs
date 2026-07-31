@@ -366,6 +366,7 @@ impl<'a> Checker<'a> {
                 }
                 Stmt::Assert { condition, .. } => self.calls_in(condition, found),
                 Stmt::Refuses { subject, .. } => self.calls_in(subject, found),
+                Stmt::Abandon { .. } => {}
                 Stmt::Expr(expr) => self.calls_in(expr, found),
             }
         }
@@ -452,11 +453,19 @@ impl<'a> Checker<'a> {
                 }
                 self.calls_in_block(body, found);
             }
-            Expr::With { handlers, body, .. } => {
+            Expr::With {
+                handlers,
+                body,
+                finally,
+                ..
+            } => {
                 for handler in handlers {
                     self.calls_in(handler, found);
                 }
                 self.calls_in_block(body, found);
+                if let Some(finally) = finally {
+                    self.calls_in_block(finally, found);
+                }
             }
             Expr::Int { .. }
             | Expr::Str { .. }
@@ -875,6 +884,7 @@ impl<'a> Checker<'a> {
             // Asserting that something breaks its contract still runs it, so
             // what it performs is performed.
             Stmt::Refuses { subject, .. } => self.infer_expr(subject),
+            Stmt::Abandon { .. } => Row::new(),
             Stmt::Expr(expr) => self.infer_expr(expr),
         }
     }
@@ -1023,7 +1033,12 @@ impl<'a> Checker<'a> {
             Expr::Old { expr, .. } if self.in_contract => row.extend(&self.infer_expr(expr)),
             Expr::Old { .. } | Expr::Unchanged { .. } => {}
 
-            Expr::With { handlers, body, .. } => {
+            Expr::With {
+                handlers,
+                body,
+                finally,
+                ..
+            } => {
                 let mut handled: HashSet<DefId> = HashSet::new();
                 let mut handles_everything = false;
                 // What the handlers themselves perform, kept with the body's
@@ -1050,6 +1065,13 @@ impl<'a> Checker<'a> {
                             row.insert(item.clone());
                         }
                     }
+                }
+
+                // The `finally` clause runs after the body and may perform
+                // effects too; they are charged to whoever installed the
+                // handler.
+                if let Some(finally) = finally {
+                    row.extend(&self.infer_block(finally));
                 }
             }
         }

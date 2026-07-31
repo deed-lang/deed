@@ -699,6 +699,37 @@ fn a_run_that_went_too_deep_says_how_deep_it_was_willing_to_go() {
     .says("this call went more than 128 deep");
 }
 
+// -- DEED6011, abandoned computation ---------------------------------------
+
+/// `abandon` in a handler operation names the handler's position and says
+/// the computation was abandoned, not that a contract was broken.
+#[test]
+fn an_abandoned_computation_says_it_was_abandoned() {
+    message(
+        "module a\n\
+         \n\
+         effect Gate {\n\
+         \x20   fn enter() -> Int\n\
+         }\n\
+         \n\
+         handler Closed implements Gate {\n\
+         \x20   fn enter() -> Int {\n\
+         \x20       abandon\n\
+         \x20   }\n\
+         }\n\
+         \n\
+         fn ask() -> Int uses Gate.enter { Gate.enter() }\n\
+         \n\
+         test \"t\" {\n\
+         \x20   with Closed {\n\
+         \x20       ask()\n\
+         \x20   }\n\
+         }\n",
+    )
+    .under(codes::ABANDONED)
+    .says("abandoned by its handler");
+}
+
 // -- what nothing can reach ------------------------------------------------
 
 /// Two arms are unreachable, and both are kept.

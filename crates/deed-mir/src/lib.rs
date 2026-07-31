@@ -32,6 +32,8 @@ pub mod codes {
     /// Something the run could not do, which is where a match running out of
     /// arms lands.
     pub const NOT_RUNNABLE: &str = "DEED6006";
+    /// A computation was abandoned by its handler via `abandon`.
+    pub const ABANDONED: &str = "DEED6011";
 }
 
 /// The types a value can have at this level.

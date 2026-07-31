@@ -1527,6 +1527,11 @@ impl<'a> Parser<'a> {
             };
         }
 
+        if self.at_kw(Keyword::Abandon) {
+            let span = self.bump().span;
+            return Stmt::Abandon { span };
+        }
+
         if self.at_kw(Keyword::Assert) {
             let start = self.bump().span;
 
@@ -2444,10 +2449,21 @@ impl<'a> Parser<'a> {
         self.struct_lit = saved;
 
         let body = self.parse_block();
+
+        // Optional `finally { ... }` clause after the body.
+        let finally = if self.at_kw(Keyword::Finally) {
+            self.bump();
+            Some(self.parse_block())
+        } else {
+            None
+        };
+
+        let end = finally.as_ref().map_or(body.span, |f| f.span);
         Expr::With {
-            span: start.to(body.span),
+            span: start.to(end),
             handlers,
             body,
+            finally,
         }
     }
 

@@ -2549,6 +2549,7 @@ fn collect_stmt_spans(offset: u32, stmt: &Stmt, spans: &mut Vec<Span>) -> bool {
         Stmt::Refuses { subject, .. } => {
             collect_expr_spans(offset, subject, spans);
         }
+        Stmt::Abandon { .. } => {}
         Stmt::Expr(expr) => {
             collect_expr_spans(offset, expr, spans);
         }
@@ -2655,12 +2656,22 @@ fn collect_expr_spans(offset: u32, expr: &Expr, spans: &mut Vec<Span>) -> bool {
         Expr::Closure { body, .. } => {
             collect_expr_spans(offset, body, spans);
         }
-        Expr::With { handlers, body, .. } => {
+        Expr::With {
+            handlers,
+            body,
+            finally,
+            ..
+        } => {
             let found = handlers
                 .iter()
                 .any(|h| collect_expr_spans(offset, h, spans));
             if !found {
-                collect_block_spans(offset, body, spans);
+                let in_body = collect_block_spans_checked(offset, body, spans);
+                if !in_body {
+                    if let Some(finally) = finally {
+                        collect_block_spans(offset, finally, spans);
+                    }
+                }
             }
         }
         Expr::Old { expr, .. } => {

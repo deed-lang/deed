@@ -906,6 +906,7 @@ fn names_in_block(block: &ast::Block, out: &mut Vec<Span>) {
                 }
             }
             ast::Stmt::Refuses { .. } => {}
+            ast::Stmt::Abandon { .. } => {}
         }
     }
     if let Some(tail) = &block.tail {
@@ -1239,6 +1240,18 @@ impl Lowering<'_> {
                             Some(value) => self.expr(value)?,
                             None => Expr::Unit,
                         },
+                    });
+                }
+                ast::Stmt::Abandon { span } => {
+                    // `abandon` lowers to a contract-style failure with its
+                    // own code. The compiled backend emits an `unreachable`
+                    // the same way it does for any `Stmt::Fail`.
+                    stmts.push(Stmt::Fail {
+                        code: crate::codes::ABANDONED.to_string(),
+                        message: format!(
+                            "this computation was abandoned by its handler at {}",
+                            span.start
+                        ),
                     });
                 }
                 ast::Stmt::Assign {
@@ -1651,8 +1664,9 @@ impl Lowering<'_> {
             ast::Expr::With {
                 handlers,
                 body,
+                finally,
                 span,
-            } => self.install(handlers, body, *span)?,
+            } => self.install(handlers, body, finally.as_ref(), *span)?,
             other => {
                 return Err(unlowered("this expression", other.span()));
             }
@@ -1664,10 +1678,17 @@ impl Lowering<'_> {
     /// Several nest, and the one written last is the innermost, so a program
     /// naming two handlers of the same effect gets the second. That falls
     /// out of the search `Perform` does rather than being arranged here.
+    ///
+    /// When there is a `finally` clause the install expression is wrapped in
+    /// a `Block` that runs the clause after the body completes. In the
+    /// compiled backend this means the clause runs inline on normal exit; a
+    /// trap (`abandon` or a contract failure) bypasses it, which the design
+    /// decision documents as an acceptable limitation.
     fn install(
         &mut self,
         handlers: &[ast::Expr],
         body: &ast::Block,
+        finally: Option<&ast::Block>,
         span: Span,
     ) -> Result<Expr, Unlowered> {
         let mut installations = Vec::new();
@@ -1728,6 +1749,28 @@ impl Lowering<'_> {
                 ty: Box::new(ty.clone()),
             };
         }
+
+        // When there is a `finally` clause, wrap the install expression in a
+        // block that runs it afterwards. On normal exit the clause runs
+        // inline; a trap skips it (see doc comment above).
+        if let Some(finally_block) = finally {
+            let finally_mir = self.block(finally_block)?;
+            let result_local = self.function.add_local(ty.clone());
+            let mut wrapper_stmts = vec![Stmt::Assign {
+                local: result_local,
+                value: inner,
+            }];
+            wrapper_stmts.extend(finally_mir.stmts);
+            // Discard the finally block's tail value (it is run for effects).
+            if finally_mir.value != Expr::Unit {
+                wrapper_stmts.push(Stmt::Discard(finally_mir.value));
+            }
+            inner = Expr::Block(Box::new(Block {
+                stmts: wrapper_stmts,
+                value: Expr::Local(result_local),
+            }));
+        }
+
         Ok(inner)
     }
 
