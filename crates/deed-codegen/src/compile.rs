@@ -277,7 +277,8 @@ impl Strings {
         }
 
         let at = self.next;
-        let mut bytes = (text.len() as i64).to_le_bytes().to_vec();
+        let mut bytes = (text.chars().count() as i64).to_le_bytes().to_vec();
+        bytes.extend_from_slice(&(text.len() as i64).to_le_bytes());
         bytes.extend_from_slice(text.as_bytes());
         while bytes.len() % layout::WORD as usize != 0 {
             bytes.push(0);

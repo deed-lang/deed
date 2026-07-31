@@ -165,11 +165,14 @@ fn splitting_something_with_no_separator_in_it_gives_one_piece() {
 
 #[test]
 fn an_empty_separator_gives_the_characters() {
-    // Characters, not bytes, the same as `length`. Otherwise the two would
-    // disagree about what a string is made of.
+    // Unicode scalar values, not bytes and not grapheme clusters, the same as
+    // `length`. Otherwise the two would disagree about what a string is made
+    // of.
     expect_pass(
         "\x20 assert split(\"gün\", \"\") == [\"g\", \"ü\", \"n\"]\n\
          \x20 assert length(split(\"gün\", \"\")) == length(\"gün\")\n\
+         \x20 assert split(\"e\\u{301}\", \"\") == [\"e\", \"\\u{301}\"]\n\
+         \x20 assert length(\"e\\u{301}\") == 2\n\
          \x20 assert split(\"\", \"\") == []",
     );
 }

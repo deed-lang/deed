@@ -240,6 +240,29 @@ fn the_number_of_prelude_names_is_the_number_it_says() {
     );
 }
 
+/// The string paragraph answers the question this issue was about: what a
+/// string contains, what `length` counts, and what `split(s, "")` walks.
+#[test]
+fn the_syntax_document_states_what_string_length_means() {
+    let syntax = read("design/02-syntax.md");
+    let paragraph = between(
+        &syntax,
+        "The runtime holds a `String` as UTF-8 text.",
+        "It carries four more for taking a string apart and putting one back together:",
+    );
+
+    assert!(paragraph.contains("UTF-8 text"), "{paragraph}");
+    assert!(paragraph.contains("Unicode scalar values"), "{paragraph}");
+    assert!(
+        paragraph.contains("not ten bytes and not ten grapheme clusters"),
+        "{paragraph}"
+    );
+    assert!(
+        paragraph.contains("`split(s, \"\")`"),
+        "the paragraph should name the empty-separator split directly:\n{paragraph}"
+    );
+}
+
 /// The capability document lists the operations a second time, which is a
 /// second place to go stale and did.
 #[test]

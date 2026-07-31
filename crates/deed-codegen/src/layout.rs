@@ -16,7 +16,8 @@
 //! - an aggregate is `[tag][field 0][field 1]...`, with the tag left out when
 //!   the layout has one variant, since there is nothing to tell apart
 //! - a list is `[length][element 0][element 1]...`
-//! - a string is `[length in bytes][the bytes, padded to eight]`
+//! - a string is `[length in characters][length in bytes][the bytes, padded to
+//!   eight]`
 //!
 //! Allocation is a bump pointer living at address 0, so the module needs no
 //! global section and no import. Nothing is ever freed. That is not a
@@ -93,7 +94,7 @@ pub fn element_offset(index: usize) -> u32 {
 /// How many bytes a string of this many bytes takes, rounded up so that
 /// whatever is allocated next still starts on a word.
 pub fn string_size(bytes: usize) -> u32 {
-    WORD + (bytes as u32).div_ceil(WORD) * WORD
+    2 * WORD + (bytes as u32).div_ceil(WORD) * WORD
 }
 
 #[cfg(test)]
@@ -120,9 +121,9 @@ mod tests {
     /// word still has to leave the next allocation on one.
     #[test]
     fn a_string_rounds_up_to_a_word() {
-        assert_eq!(string_size(0), 8);
-        assert_eq!(string_size(1), 16);
-        assert_eq!(string_size(8), 16);
-        assert_eq!(string_size(9), 24);
+        assert_eq!(string_size(0), 16);
+        assert_eq!(string_size(1), 24);
+        assert_eq!(string_size(8), 24);
+        assert_eq!(string_size(9), 32);
     }
 }
