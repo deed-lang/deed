@@ -2,7 +2,6 @@
 
 mod args;
 
-use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -920,95 +919,89 @@ fn plural(count: usize, noun: &str) -> String {
 /// a module means; it can only say where to look.
 ///
 /// One thing is not under a root: a module that ships inside the compiler.
-/// Those are looked at only after every root has been asked, which is
-/// [`deed_driver::take_shipped`] and is the same call the language server
-/// makes, so a file called `std/string.deed` sitting under somebody's own root
-/// is the one that wins. Nobody should have to know which is which, and the
-/// one that is right there is the one they can read.
+/// Those are looked at only after every root has been asked. [`deed_driver::
+/// resolve_inputs`] is the rule shared with the language server and future
+/// dependency resolution: a file called `std/string.deed` sitting under
+/// somebody's own root is the one that wins. Nobody should have to know which
+/// is which, and the one that is right there is the one they can read.
 fn resolve_imports(
     files: &mut Vec<PathBuf>,
     shipped: &mut Vec<&'static str>,
     manifests: &mut Vec<(String, String, Vec<deed_diagnostics::Diagnostic>)>,
 ) -> io::Result<()> {
     let mut roots: Vec<PathBuf> = Vec::new();
-    // Component roots added by manifests, searched after named roots.
     let mut component_roots: Vec<PathBuf> = Vec::new();
-    let mut have: HashSet<String> = HashSet::new();
-    let mut wanted: Vec<String> = Vec::new();
+    let mut new_files: Vec<PathBuf> = Vec::new();
 
-    let mut next = 0usize;
-    loop {
-        // Read what has arrived since the last pass, which on the first pass
-        // is everything that was named.
-        while next < files.len() {
-            let path = files[next].clone();
-            next += 1;
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Some((module, uses)) = deed_driver::imports_of(&text) else {
-                continue;
-            };
-
-            if let Some(root) = root_of(&path, &module) {
+    // Read the texts of the initially named files. Two things come from this:
+    // the seed texts for resolve_inputs, and the roots that the find closure
+    // will use to locate imports on disk.
+    let mut seed_texts: Vec<String> = Vec::new();
+    for path in files.iter() {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if let Some((module, _)) = deed_driver::imports_of(&text) {
+            if let Some(root) = root_of(path, &module) {
                 if !roots.contains(&root) {
-                    // Read the manifest from this root, if one exists.
                     read_manifest(&root, &mut component_roots, manifests);
                     roots.push(root);
                 }
             }
-            have.insert(module);
-            wanted.extend(uses);
         }
+        seed_texts.push(text);
+    }
 
-        let mut added = false;
-        let mut unanswered: Vec<String> = Vec::new();
-        for module in std::mem::take(&mut wanted) {
-            if have.contains(&module) {
-                continue;
-            }
-            let mut found = false;
-            // Named roots first, then component roots from the manifest.
-            for root in roots.iter().chain(component_roots.iter()) {
-                let mut candidate = root.clone();
+    // The finder: look for each needed module on disk, under every root the
+    // seeds have established. When a new file is found, its own root may extend
+    // the search for its own imports in the next round.
+    let (_, found_shipped) = deed_driver::resolve_inputs(
+        seed_texts.iter().map(String::as_str),
+        |module: &str| -> Option<(String, String)> {
+            let search_roots: Vec<PathBuf> = roots
+                .iter()
+                .chain(component_roots.iter())
+                .cloned()
+                .collect();
+            for root in search_roots {
+                let mut candidate = root;
                 for segment in module.split('/') {
                     candidate.push(segment);
                 }
                 candidate.set_extension("deed");
 
-                // Already picked up counts as found. Two files asking for the
-                // same module put its name in this list twice, and the second
-                // ask used to fall through to the compiler's table and add a
-                // second copy of a module that was already there.
-                if candidate.is_file() {
-                    if !files.contains(&candidate) {
-                        files.push(candidate);
-                        added = true;
-                    }
-                    found = true;
-                    break;
+                if !candidate.is_file() {
+                    continue;
                 }
+
+                // A file already in the named set or found this run counts as
+                // resolved even if we do not add it again.
+                if files.contains(&candidate) || new_files.contains(&candidate) {
+                    // Return a non-None to prevent the shipped-module table
+                    // from being tried for a module that lives on disk.
+                    let text = std::fs::read_to_string(&candidate).unwrap_or_default();
+                    return Some((display_path(&candidate), text));
+                }
+
+                let Ok(text) = std::fs::read_to_string(&candidate) else {
+                    continue;
+                };
+                if let Some((m, _)) = deed_driver::imports_of(&text) {
+                    if let Some(new_root) = root_of(&candidate, &m) {
+                        if !roots.contains(&new_root) {
+                            read_manifest(&new_root, &mut component_roots, manifests);
+                            roots.push(new_root);
+                        }
+                    }
+                }
+                new_files.push(candidate.clone());
+                return Some((display_path(&candidate), text));
             }
+            None
+        },
+    );
 
-            if !found {
-                unanswered.push(module);
-            }
-        }
-
-        // Last, once every root has had its turn. What those modules import in
-        // turn comes back in `wanted`, so the roots get asked about those too
-        // before the compiler's table is.
-        wanted = unanswered;
-        if deed_driver::take_shipped(&mut have, &mut wanted, shipped) {
-            added = true;
-        }
-
-        // A `use` naming a module that is nowhere is left alone. The resolver
-        // has the message for that, and it can point at the line.
-        if !added {
-            return Ok(());
-        }
-    }
+    files.extend(new_files);
+    *shipped = found_shipped;
+    Ok(())
 }
 
 /// Reads a `deed.manifest` from `root`, if one exists, adding its component

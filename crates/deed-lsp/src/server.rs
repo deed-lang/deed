@@ -1888,7 +1888,19 @@ impl Server {
             ));
         }
 
-        for module in deed_driver::shipped_for(pending.iter().map(|(_, _, text)| text.as_str())) {
+        for module in {
+            // One resolution rule, shared with `deed check` and future
+            // dependency resolution. The language server passes `|_| None`
+            // because the whole workspace is already in `pending`: it cannot
+            // fetch missing modules without blocking a keystroke on the
+            // network, and it does not try. A module that is neither in the
+            // workspace nor shipped is left for the resolver to report.
+            let (_, shipped) = deed_driver::resolve_inputs(
+                pending.iter().map(|(_, _, text)| text.as_str()),
+                |_| None,
+            );
+            shipped
+        } {
             let Some(text) = deed_driver::shipped_source(module) else {
                 continue;
             };
