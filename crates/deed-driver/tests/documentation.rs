@@ -560,9 +560,7 @@ fn public_docs() -> Vec<String> {
 fn indexed_public_docs() -> Vec<String> {
     public_docs()
         .into_iter()
-        .filter(|doc| {
-            !doc.starts_with("design/decisions/") || doc == "design/decisions/README.md"
-        })
+        .filter(|doc| !doc.starts_with("design/decisions/") || doc == "design/decisions/README.md")
         .collect()
 }
 
@@ -574,7 +572,11 @@ fn markdown_links(text: &str) -> Vec<String> {
         let Some(close) = rest.find(')') else { break };
         let target = &rest[..close];
         let target = target.split('#').next().unwrap_or("");
-        if !target.is_empty() && !target.starts_with('#') && !target.contains("://") && !target.starts_with("mailto:") {
+        if !target.is_empty()
+            && !target.starts_with('#')
+            && !target.contains("://")
+            && !target.starts_with("mailto:")
+        {
             found.push(target.to_string());
         }
         rest = &rest[close + 1..];
