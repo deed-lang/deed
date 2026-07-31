@@ -387,9 +387,15 @@ The list is longer than I would like, and this is the least settled document her
   separate entry in the row. Holding a `Clock` says nothing about which of the two a function
   may do, which is the same split `read` and `save` get about the same `Dir`, applied to
   something other than authority: a signature saying `uses Io.epoch` is a function whose
-  output can change between two runs of the same program. What is still missing is anything
-  above milliseconds since 1970. A calendar is a library rather than a capability, and the
-  language has no way to write one yet.
+  output can change between two runs of the same program. A calendar on top of that is a
+  library rather than a capability, and `examples/calendar.deed` is one: integer arithmetic
+  and a record turn milliseconds into a civil date, with no new syntax and nothing added to
+  the prelude. This document said the language had no way to write one, which is what that
+  file was written to find out, and it is no longer true. Two things still are. Nothing
+  above milliseconds ships, so a program that wants a date writes one or copies that. And
+  `/` truncates toward zero rather than flooring (`-7 / 2` is `-3`), which is the division
+  `civil_from_days` needs the other of for a negative day count, so the example handles only
+  forward from 1970.
 
 ## A page is a host too
 
