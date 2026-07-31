@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use deed_codegen::compile;
 use deed_diagnostics::SourceMap;
-use deed_driver::{check_all, shipped_modules, shipped_source};
+use deed_driver::{check_all, imports_of, shipped_modules, shipped_source};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -75,11 +75,22 @@ fn walked() -> Vec<Outcome> {
 
     for (name, text) in sources() {
         let mut map = SourceMap::new();
-        let mut ids = vec![map.add(name.clone(), text)];
+        let mut ids = vec![map.add(name.clone(), text.clone())];
+
+        // What module this file declares, so that the shipped copy of the
+        // same module is not added alongside it.  A file under `std/` is the
+        // canonical source of a shipped module, so handing both to `check_all`
+        // would be a real collision rather than a useful test.
+        let declared = imports_of(&text).map(|(module, _)| module);
 
         // A file that imports something needs it alongside, the same way the
         // command line hands the compiler both.
         for module in shipped_modules() {
+            if declared.as_deref() == Some(module) {
+                // This corpus file IS the shipped module; skip the embedded
+                // copy to avoid a spurious module-path collision.
+                continue;
+            }
             if let Some(source) = shipped_source(module) {
                 ids.push(map.add(format!("<shipped>/{module}.deed"), source.to_string()));
             }

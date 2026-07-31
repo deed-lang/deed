@@ -138,11 +138,34 @@ fn two_files_cannot_claim_one_module() {
     ];
 
     let checks = check_all(&sources, &ids);
+    // Both files are reported, not only the later one.
+    for checked in &checks {
+        assert!(
+            codes_of(&checked.diagnostics).contains(&deed_resolve::codes::AMBIGUOUS_MODULE),
+            "{}",
+            rendered(&sources, &checked.diagnostics)
+        );
+    }
+}
+
+#[test]
+fn a_module_collision_points_from_each_file_to_the_other() {
+    // The diagnostic on each file names the other one, so a reader at either
+    // end can find where the conflict came from without knowing the full set.
+    let mut sources = SourceMap::new();
+    let ids = vec![
+        sources.add("one.deed", "module same\n\nfn f() -> Int { 0 }\n"),
+        sources.add("two.deed", "module same\n\nfn g() -> Int { 1 }\n"),
+    ];
+
+    let checks = check_all(&sources, &ids);
     let text: String = checks
         .iter()
         .map(|checked| rendered(&sources, &checked.diagnostics))
         .collect();
-    assert!(text.contains("already declares"), "{text}");
+    // Each rendered diagnostic names both files.
+    assert!(text.contains("one.deed"), "{text}");
+    assert!(text.contains("two.deed"), "{text}");
 }
 
 #[test]
