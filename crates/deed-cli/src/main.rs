@@ -166,6 +166,9 @@ fn run_check(args: CheckArgs) -> ExitCode {
     if args.mode == Mode::Fix {
         return run_fix(&files, args.check_only);
     }
+    if args.mode == Mode::Doc {
+        return run_doc(&files);
+    }
     if args.runtime_profile && args.mode != Mode::Run {
         eprintln!("error: `--profile-runtime` is only for `deed run`");
         return ExitCode::from(EXIT_USAGE);
@@ -700,11 +703,56 @@ fn collect_layouts(
 ///
 /// Files are rewritten in place only when the content actually changes, so a
 /// no-op run does not touch mtimes and trigger every watcher on the machine.
+/// Writes the API reference the named modules carry, as Markdown.
+///
+/// Checked rather than only parsed, because the examples come from the
+/// resolver's mention table: a name inside a string or a comment is not an
+/// example of anything, and only a checked module can tell the difference. A
+/// module with errors still gets a page, since a reader asking what a module
+/// offers is not asking whether it compiles, and the diagnostics go to stderr
+/// so that the page on stdout can be redirected into a file on its own.
+fn run_doc(files: &[PathBuf]) -> ExitCode {
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+
+    for path in files {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("error: {}: {error}", path.display());
+                return ExitCode::from(EXIT_USAGE);
+            }
+        };
+        ids.push(sources.add(display_path(path), text));
+    }
+
+    let checks = deed_driver::check_all(&sources, &ids);
+    let mut first = true;
+    for checked in &checks {
+        for diagnostic in &checked.diagnostics {
+            if diagnostic.is_error() {
+                eprintln!("{}", render_human(&sources, diagnostic));
+            }
+        }
+
+        let name = sources.file(checked.file).name().to_string();
+        let text = sources.file(checked.file).text().to_string();
+        let page = deed_driver::docs::ModuleDocs::of(checked, &text);
+
+        if !first {
+            println!();
+        }
+        first = false;
+        print!("{}", page.to_markdown(&name));
+    }
+
+    ExitCode::SUCCESS
+}
+
 fn run_fmt(files: &[PathBuf], check_only: bool) -> ExitCode {
     let mut sources = SourceMap::new();
     let mut unformatted = Vec::new();
     let mut failed = false;
-
     for path in files {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,

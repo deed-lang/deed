@@ -18,6 +18,7 @@
 //! and `deed-typeck` asserting exactly that.
 
 pub mod codes;
+pub mod docs;
 pub mod fix;
 mod imports;
 mod inputs;

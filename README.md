@@ -112,6 +112,9 @@ effects and capabilities, formatting, backend compilation, and editor setup.
 
 The shipped library API is indexed separately in [docs/std.md](docs/std.md), with one
 page per module and every exported function held there by a documentation ratchet.
+`deed doc <path>...` writes the same page for any module of your own. There are no
+visibility modifiers here, so every declaration is API and a page is the signature,
+the row, the contract and the lines of its own tests that name it.
 
 There is no REPL. A Deed input is a module of declarations, and `deed run` enters through
 `main` rather than evaluating a top-level expression. For quick experiments, use a scratch
