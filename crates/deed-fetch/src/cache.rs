@@ -129,6 +129,14 @@ fn home_dir() -> Result<PathBuf, io::Error> {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn home_directory_comes_from_home() {
+        let expected = std::env::var("HOME").expect("the test runner should set HOME");
+        assert!(!expected.is_empty());
+        assert_eq!(home_dir().unwrap(), PathBuf::from(expected));
+    }
+
     /// A freshly created cache does not contain anything.
     #[test]
     fn empty_cache_contains_nothing() {

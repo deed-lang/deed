@@ -101,9 +101,13 @@ pub fn sha256(input: &[u8]) -> [u8; 32] {
     padded.push(0x80);
     // Pad with zeros until the length in bytes is 56 mod 64 (eight bytes short
     // of a full block), so the 8-byte length fits at the end of the block.
-    while padded.len() % 64 != 56 {
-        padded.push(0);
-    }
+    let remainder = padded.len() & 63;
+    let zeroes = if remainder <= 56 {
+        56 - remainder
+    } else {
+        120 - remainder
+    };
+    padded.resize(padded.len() + zeroes, 0);
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
     // Process each 64-byte (512-bit) block.
@@ -208,6 +212,18 @@ mod tests {
         assert_eq!(
             hex(&digest),
             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        );
+    }
+
+    #[test]
+    fn sha256_padding_boundary_uses_one_block_then_two() {
+        assert_eq!(
+            hex(&sha256(&[b'a'; 55])),
+            "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"
+        );
+        assert_eq!(
+            hex(&sha256(&[b'a'; 56])),
+            "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"
         );
     }
 
