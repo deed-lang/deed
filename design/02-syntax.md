@@ -272,6 +272,13 @@ and the language did not change to get it: a ratio is two `Int`s in a record, ke
 terms so that structural equality means what it says, and the rounding happens in one named
 place where the program can see it.
 
+A calendar is there too, and it used to be an example. `std/date` has `days_since_epoch`, `date_of`, `civil_of`, `is_leap_year`, `days_in_month`, `padded`, `text` and `text_of`.
+[04-capabilities.md](04-capabilities.md) once said the language had no way to write one; an
+example was written to find out whether that was still true, and it was not. What that file
+could not do was ship, so a program elsewhere that wanted a date had to copy it, which is the
+same thing that moved `std/list` and `std/table` out of `examples/`. `Io.epoch` hands back
+milliseconds and stops there, and everything above that is arithmetic rather than authority.
+
 ## A library that ships with the compiler
 
 A module named `std/x` lives inside the compiler.
@@ -292,8 +299,8 @@ were not anywhere. `trim` stays in the prelude because it cannot be written.
 The other thing that goes here is a library that was already written and had nowhere to be.
 `std/list` and `std/table` were both under `examples/`, which made their names paths into
 this repository, so a program elsewhere could not import them and had to copy the files
-instead. Five modules ship today,
-`std/string`, `std/list`, `std/table`, `std/map` and `std/ratio`, and `crates/deed-driver/src/shipped.rs` is the
+instead. Six modules ship today,
+`std/string`, `std/list`, `std/table`, `std/map`, `std/ratio` and `std/date`, and `crates/deed-driver/src/shipped.rs` is the
 table.
 
 ## Lists

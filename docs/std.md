@@ -9,6 +9,7 @@ These pages are generated from the shipped module declarations under `std/` and 
 - [`std/table`](std/table.md)
 - [`std/map`](std/map.md)
 - [`std/ratio`](std/ratio.md)
+- [`std/date`](std/date.md)
 
 ## User modules
 

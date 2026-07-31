@@ -388,7 +388,7 @@ The list is longer than I would like, and this is the least settled document her
   may do, which is the same split `read` and `save` get about the same `Dir`, applied to
   something other than authority: a signature saying `uses Io.epoch` is a function whose
   output can change between two runs of the same program. A calendar on top of that is a
-  library rather than a capability, and `examples/calendar.deed` is one: integer arithmetic
+  library rather than a capability, and `std/date` is one: integer arithmetic
   and a record turn milliseconds into a civil date, with no new syntax and nothing added to
   the prelude. This document said the language had no way to write one, which is what that
   file was written to find out, and it is no longer true. Two things still are. Nothing

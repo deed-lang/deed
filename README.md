@@ -65,13 +65,13 @@ examples/transfer.deed
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-139 passed, 0 failed
+136 passed, 0 failed
 ```
 
 That number used to be 102. Seven of those tests are in `std/table` now, because the table
 library stopped living under `examples/` and a module that ships with the compiler is context
 rather than subject, so the corpus does not run its tests any more. Nothing was deleted: the
-modules that ship carry seventy-eight tests of their own, and
+modules that ship carry eighty-five tests of their own, and
 `crates/deed-driver/tests/shipped.rs` runs every one of them on every commit.
 
 ```
@@ -326,7 +326,7 @@ The examples are [transfer.deed](examples/transfer.deed),
 [generics.deed](examples/generics.deed),
 [generic_types.deed](examples/generic_types.deed),
 [using_list.deed](examples/using_list.deed), [calculator.deed](examples/calculator.deed),
-[calendar.deed](examples/calendar.deed), [ranking.deed](examples/ranking.deed),
+[ranking.deed](examples/ranking.deed),
 [kv_store.deed](examples/kv_store.deed), [json.deed](examples/json.deed),
 [stack_machine.deed](examples/stack_machine.deed), [tic_tac_toe.deed](examples/tic_tac_toe.deed),
 [markdown.deed](examples/markdown.deed), [scheduler.deed](examples/scheduler.deed),
