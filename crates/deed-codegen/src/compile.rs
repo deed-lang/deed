@@ -130,6 +130,10 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
     // The bump pointer starts past every literal the data section placed.
     let mut placed = strings.data;
     placed.push((layout::BUMP, (strings.next as i64).to_le_bytes().to_vec()));
+    placed.push((
+        layout::FRAME_BUMP,
+        (layout::FRAME_START as i64).to_le_bytes().to_vec(),
+    ));
     module.data = placed;
 
     Ok(module)
@@ -800,6 +804,38 @@ impl<'a> Builder<'a> {
         self.instructions.push(Ins::I64Store(0));
     }
 
+    /// Reserves `size` bytes of frame stack, leaving the address in `into`.
+    ///
+    /// Separate from [`Self::allocate`] because this one is given back. The
+    /// bound is checked here rather than left to run into the value heap:
+    /// frames sit below it, so overflowing quietly would write a handler frame
+    /// over somebody's list.
+    fn allocate_frame(&mut self, size: u32, into: u32) {
+        self.instructions
+            .push(Ins::I32Const(layout::FRAME_BUMP as i32));
+        self.instructions.push(Ins::I64Load(0));
+        self.instructions.push(Ins::LocalSet(into));
+
+        self.instructions.push(Ins::LocalGet(into));
+        self.instructions.push(Ins::I64Const(size as i64));
+        self.instructions.push(Ins::I64Add);
+        self.instructions
+            .push(Ins::I64Const(layout::HEAP_START as i64));
+        self.instructions.push(Ins::I64GtS);
+        self.instructions.push(Ins::If {
+            result: None,
+            then: vec![Ins::Unreachable],
+            otherwise: Vec::new(),
+        });
+
+        self.instructions
+            .push(Ins::I32Const(layout::FRAME_BUMP as i32));
+        self.instructions.push(Ins::LocalGet(into));
+        self.instructions.push(Ins::I64Const(size as i64));
+        self.instructions.push(Ins::I64Add);
+        self.instructions.push(Ins::I64Store(0));
+    }
+
     /// Writes one word at `address + offset`, where what to write is pushed
     /// by instructions rather than lowered from an expression.
     fn write(&mut self, address: u32, offset: u32, value: impl FnOnce(&mut Vec<Ins>)) {
@@ -944,12 +980,14 @@ impl<'a> Builder<'a> {
                 self.instructions.push(Ins::LocalSet(held));
 
                 let frame = self.temporary(ValType::I64);
-                self.allocate(layout::frame_size(operations.len()), frame);
+                self.allocate_frame(layout::frame_size(operations.len()), frame);
 
                 // The frame under this one, so ending the block is a matter
-                // of putting back what was there. Nothing is popped: the
-                // frame stays allocated and unreachable, which is what every
-                // allocation in this backend does.
+                // of putting back what was there. The frame itself is given
+                // back too: its lifetime is exactly this block, and nothing
+                // in the program can hold one, so the frame stack rewinds to
+                // where it was. Values allocated by the body cannot be given
+                // back the same way, because the body's value is one of them.
                 self.write(frame, 0, |body| {
                     body.push(Ins::I32Const(layout::HANDLERS as i32));
                     body.push(Ins::I64Load(0));
@@ -981,6 +1019,12 @@ impl<'a> Builder<'a> {
                 self.instructions.push(Ins::LocalGet(frame));
                 self.instructions.push(Ins::I32WrapI64);
                 self.instructions.push(Ins::I64Load(0));
+                self.instructions.push(Ins::I64Store(0));
+
+                // And the frame stack goes back to where this block found it.
+                self.instructions
+                    .push(Ins::I32Const(layout::FRAME_BUMP as i32));
+                self.instructions.push(Ins::LocalGet(frame));
                 self.instructions.push(Ins::I64Store(0));
             }
             Expr::Perform {
@@ -1761,7 +1805,7 @@ mod tests {
         let placed = module
             .data
             .iter()
-            .filter(|(at, _)| *at != layout::BUMP)
+            .filter(|(at, _)| *at != layout::BUMP && *at != layout::FRAME_BUMP)
             .count();
         assert_eq!(placed, 1, "one literal, placed once");
 

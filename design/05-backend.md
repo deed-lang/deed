@@ -112,10 +112,13 @@ And an operation is reached the same way a closure body is, through the table th
 already has, so handlers cost the backend no mechanism that closures had not already paid
 for.
 
-The one thing arranged on purpose is that a frame is never freed. That is what every
-allocation in this backend does, and the note in `crates/deed-codegen/src/layout.rs` about
-when that stops being acceptable applies here with a number attached: a `with` inside a walk
-allocates once per turn.
+The one thing arranged on purpose is that a frame *is* freed, and it is the only thing in
+this backend that is. A frame's lifetime is exactly its block, nothing in a program can hold
+one, and blocks nest, so frames live on their own stack and a `with` rewinds it on the way
+out. Values do not follow, for a reason that fits in a line: a block's value outlives the
+block. The note in `crates/deed-codegen/src/layout.rs` about when monotonic allocation stops
+being acceptable still applies to everything else, and
+`design/decisions/2026-07-31-compiled-memory-reclamation.md` has the numbers.
 
 ## A capability is a handle, and everything it reaches is an import
 A WebAssembly module cannot open a file, write a line or read a clock. It says what it wants
