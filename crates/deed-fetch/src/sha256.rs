@@ -11,6 +11,10 @@ fn xor3(first: u32, second: u32, third: u32) -> u32 {
     first ^ second ^ third
 }
 
+fn xor2(first: u32, second: u32) -> u32 {
+    first ^ second
+}
+
 /// Computes the SHA-256 digest of `input` and returns the 32-byte result.
 pub fn sha256(input: &[u8]) -> [u8; 32] {
     // Initial hash values: the first 32 bits of the fractional parts of the
@@ -144,7 +148,7 @@ pub fn sha256(input: &[u8]) -> [u8; 32] {
         // 64 rounds.
         for i in 0..64 {
             let s1 = xor3(e.rotate_right(6), e.rotate_right(11), e.rotate_right(25));
-            let ch = (e & f) ^ ((!e) & g);
+            let ch = xor2(e & f, (!e) & g);
             let temp1 = hh
                 .wrapping_add(s1)
                 .wrapping_add(ch)
@@ -198,6 +202,7 @@ mod tests {
 
     #[test]
     fn xor_cancels_overlapping_bits_in_each_position() {
+        assert_eq!(xor2(0b11, 0b11), 0);
         assert_eq!(xor3(0b11, 0b10, 0b01), 0);
     }
 
