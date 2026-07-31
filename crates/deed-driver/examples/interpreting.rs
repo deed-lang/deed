@@ -751,17 +751,25 @@ test \"inserting\" {{
 /// being involved in the number.
 fn real_program() {
     let logs = read("logs.deed");
-    // The table it counts with ships inside the compiler, so it comes from
-    // there rather than from a path, the same way it reaches a program.
-    let table = deed_driver::shipped_source("std/table")
-        .expect("a module that ships has a source")
-        .to_string();
+    // The modules it counts with ship inside the compiler, so they come from
+    // there rather than from a path, the same way they reach a program. Asked
+    // for rather than named: naming one by hand is how this stopped compiling
+    // the day `logs.deed` imported a second one.
+    let shipped: Vec<(String, String)> = deed_driver::shipped_for([logs.as_str()])
+        .into_iter()
+        .map(|module| {
+            let text = deed_driver::shipped_source(module)
+                .expect("a module that ships has a source")
+                .to_string();
+            (format!("<shipped>/{module}.deed"), text)
+        })
+        .collect();
     let files = |bench: String| {
-        vec![
-            ("bench.deed", bench),
-            ("logs.deed", logs.clone()),
-            ("<shipped>/std/table.deed", table.clone()),
-        ]
+        let mut files = vec![("bench.deed", bench), ("logs.deed", logs.clone())];
+        for (name, text) in &shipped {
+            files.push((name.as_str(), text.clone()));
+        }
+        files
     };
 
     println!("examples/logs.deed, the whole report");
