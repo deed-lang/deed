@@ -184,6 +184,27 @@ One PR, one concern. Link the issue it closes. If a PR changes behaviour that a 
 document describes, update the document in the same PR, because a design that lags the code
 is worse than no design at all.
 
+## Merging a coding agent's PR
+
+These land like anything else, with one extra step at the merge.
+
+A squash commit takes its author from the branch, so a PR an agent wrote alone lands with the
+agent as the author and nothing in it naming the person who asked for the work and read the
+result. And the default squash body is the branch's commit messages, which for an agent is a
+list that opens with `Initial plan` and records scaffolding rather than history.
+
+Both of those are defaults, and both are worth overriding. Write the squash message yourself,
+and end it with a co-author line for whoever reviewed the change:
+
+```
+Co-authored-by: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>
+Co-authored-by: A Reviewer <reviewer@example.com>
+```
+
+Keep the agent's trailer. It wrote the code and the history should say so. The reviewer's line
+is the one that is easy to lose, and it is the one that matters, because review is the
+expensive half of the work here and a commit naming only the agent has recorded the cheap half.
+
 ## Changelog
 
 `CHANGELOG.md` is written per change, not assembled at release time.
