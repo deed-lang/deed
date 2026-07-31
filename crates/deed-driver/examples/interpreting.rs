@@ -51,6 +51,8 @@ const ROUNDS: usize = 5;
 fn main() {
     per_turn();
     println!();
+    per_operation();
+    println!();
     per_argument();
     println!();
     per_push();
@@ -195,6 +197,127 @@ test \"walking\" {{
     let here = Holding {{ n: 1 }}
     {work}
     assert {claim}
+}}
+"
+    )
+}
+
+// -- what a handler operation costs ------------------------------------------
+
+/// A handler operation against an equivalent plain call.
+///
+/// An operation is a call dispatched through Deed's effect system: the
+/// runtime finds the nearest enclosing `with` block for the matching effect,
+/// then calls the handler's body. The overhead over a plain call is that
+/// search plus one extra call level. The two data rows measure a stateless
+/// handler (no state fields at all) and a stateful one that reads a field,
+/// since state access could add a lookup on top.
+///
+/// Both are compared against the same plain-call baseline rather than
+/// against each other, so the two `added` numbers say the same thing: what
+/// an operation costs over a call that does the same work.
+fn per_operation() {
+    println!("{TURNS} turns, a handler operation against a plain call");
+    println!("                              total      per turn   added");
+    println!("-----------------------------------------------------------");
+
+    struct OpRow {
+        name: &'static str,
+        body: &'static str,
+        claim: &'static str,
+        /// The expression handed to `with`, or `""` for a plain call.
+        install: &'static str,
+        /// Which row this is one thing more than.
+        over: Option<usize>,
+    }
+
+    let rows = [
+        OpRow {
+            name: "a call taking nothing",
+            body: "sum + nothing()",
+            claim: "got == turns",
+            install: "",
+            over: None,
+        },
+        OpRow {
+            name: "  + a stateless operation",
+            body: "sum + Nop.value()",
+            claim: "got == 0",
+            install: "NopHandler",
+            over: Some(0),
+        },
+        OpRow {
+            name: "  + reads state instead",
+            body: "sum + Reading.value()",
+            claim: "got == turns",
+            install: "ReaderOne { one: 1 }",
+            over: Some(0),
+        },
+    ];
+
+    let mut taken: Vec<Duration> = Vec::new();
+    for row in &rows {
+        let elapsed = time(
+            &[(
+                "bench.deed",
+                operation_source(row.body, row.claim, row.install),
+            )],
+            0,
+        );
+        let added = match row.over {
+            Some(i) => nanos(elapsed.saturating_sub(taken[i]) / TURNS as u32),
+            None => String::new(),
+        };
+        println!(
+            "{:<29} {:<10} {:<10} {added}",
+            row.name,
+            millis(elapsed),
+            nanos(elapsed / TURNS as u32),
+        );
+        taken.push(elapsed);
+    }
+}
+
+fn operation_source(body: &str, claim: &str, install: &str) -> String {
+    let work = format!("let got = for n in xs with sum = 0 {{ {body} }}");
+
+    // When a handler is needed the `for` runs inside a `with` block, so the
+    // handler is installed for every turn. The `let` and the `assert` are
+    // both inside the block because a `let` inside a block is not visible
+    // outside it.
+    let test_inner = if install.is_empty() {
+        format!("    {work}\n    assert {claim}")
+    } else {
+        format!("    with {install} {{\n        {work}\n        assert {claim}\n    }}")
+    };
+
+    format!(
+        "module bench
+
+fn nothing() -> Int {{ 1 }}
+
+effect Nop {{
+    fn value() -> Int
+}}
+
+handler NopHandler implements Nop {{
+    fn value() -> Int {{ 0 }}
+}}
+
+effect Reading {{
+    fn value() -> Int
+}}
+
+handler ReaderOne implements Reading {{
+    state one: Int
+
+    fn value() -> Int {{ one }}
+}}
+
+test \"measuring\" {{
+    let turns = {TURNS}
+    let xs = repeat(1, turns)
+{test_inner}
 }}
 "
     )
@@ -661,7 +784,22 @@ fn notes() {
     println!("removes. A call taking nothing is down among them, so what a call");
     println!("costs is its arguments: an argument list, a binding, and a name read.");
     println!();
-    println!("The second table says which of those three it is. An argument is");
+    println!("The operation table is the second one. A stateless operation and a");
+    println!("state-reading one are both compared against the same plain-call");
+    println!("baseline, so their `added` numbers say what effect dispatch costs");
+    println!("over a call. State access is a field read on top of that, and the");
+    println!("field-read row in the first table says what a field read costs, so");
+    println!("the two numbers together say whether state adds anything beyond what");
+    println!("the first table already shows.");
+    println!();
+    println!("All ten operations across the six effects in the examples corpus");
+    println!("tail-resume: each handler body returns immediately without capturing");
+    println!("or discarding the continuation. Koka compiles tail-resuming operations");
+    println!("to something close to a virtual call by avoiding the general");
+    println!("continuation machinery. Whether the same distinction is worth having");
+    println!("in Deed's compiler is what design/decisions/ records.");
+    println!();
+    println!("The third table says which of those three it is. An argument is");
     println!("around 55ns and the name read inside it is under 15ns, which is about");
     println!("what a field read costs. So a name is not the expensive small thing;");
     println!("the argument list and the binding are, and they are what a slot per");
