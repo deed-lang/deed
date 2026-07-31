@@ -34,7 +34,7 @@ use std::cell::Cell;
 use std::path::Path;
 
 use deed_ast::Item;
-use deed_diagnostics::{SourceMap, render_json};
+use deed_diagnostics::{SourceMap, json_string, render_json};
 use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
 use deed_interp::{Program, run_main, run_tests};
 
@@ -226,12 +226,12 @@ pub fn test_source(source: &str) -> String {
     for outcome in run_tests(&program, subject.file) {
         match outcome.failure {
             None => out.push_str(&format!(
-                "{{\"kind\":\"test\",\"name\":\"{}\",\"passed\":true}}\n",
-                outcome.name
+                "{{\"kind\":\"test\",\"name\":{},\"passed\":true}}\n",
+                json_string(&outcome.name)
             )),
             Some(failure) => out.push_str(&format!(
-                "{{\"kind\":\"test\",\"name\":\"{}\",\"passed\":false,\"diagnostic\":{}}}\n",
-                outcome.name,
+                "{{\"kind\":\"test\",\"name\":{},\"passed\":false,\"diagnostic\":{}}}\n",
+                json_string(&outcome.name),
                 render_json(&sources, &failure)
             )),
         }
@@ -254,7 +254,8 @@ pub fn run_source(source: &str) -> String {
         let mut out = String::new();
         for message in refused {
             out.push_str(&format!(
-                "{{\"kind\":\"capability\",\"message\":\"{message}\"}}\n"
+                "{{\"kind\":\"capability\",\"message\":{}}}\n",
+                json_string(&message)
             ));
         }
         return out;
@@ -277,7 +278,10 @@ pub fn run_source(source: &str) -> String {
 
     let mut out = String::new();
     for line in &run.output {
-        out.push_str(&format!("{{\"kind\":\"output\",\"line\":\"{line}\"}}\n"));
+        out.push_str(&format!(
+            "{{\"kind\":\"output\",\"line\":{}}}\n",
+            json_string(line)
+        ));
     }
     match run.result {
         Ok(_) => out.push_str("{\"kind\":\"result\",\"ok\":true}\n"),
@@ -507,6 +511,72 @@ mod tests {
         assert_eq!(
             json,
             "{\"kind\":\"capability\",\"message\":\"this page does not offer `Io.save` yet\"}\n"
+        );
+    }
+
+    /// Reads `"<key>":"..."` out of one JSON line the way `JSON.parse` would,
+    /// which is the only reader this boundary actually has.
+    ///
+    /// Comparing against a hand-built string would agree with whatever this
+    /// module emits, including something no page could read.
+    fn json_field(line: &str, key: &str) -> String {
+        let needle = format!("\"{key}\":\"");
+        let start = line
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{line:?} has no {key}"))
+            + needle.len();
+        let mut out = String::new();
+        let mut chars = line[start..].chars();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' => return out,
+                '\\' => match chars.next().expect("an escape needs a character after it") {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'u' => {
+                        let hex: String = chars.by_ref().take(4).collect();
+                        let code =
+                            u32::from_str_radix(&hex, 16).expect("`\\u` takes four hex digits");
+                        out.push(char::from_u32(code).expect("a Unicode scalar value"));
+                    }
+                    other => panic!("{line:?} contains the unknown escape `\\{other}`"),
+                },
+                c => out.push(c),
+            }
+        }
+        panic!("{line:?} never closed its {key} string")
+    }
+
+    #[test]
+    fn what_a_program_prints_survives_the_trip_through_json() {
+        let json = run_source(
+            "module main\n\nfn main(sys: System) -> Int\n  uses\n    Io.write,\n{\n    Io.write(sys.console, \"he said \\\"hi\\\" \\\\ then stopped\")\n    0\n}\n",
+        );
+        let printed: Vec<&str> = json
+            .lines()
+            .filter(|line| line.contains("\"kind\":\"output\""))
+            .collect();
+        assert_eq!(printed.len(), 1, "one write is one line, got {json:?}");
+        assert_eq!(
+            json_field(printed[0], "line"),
+            "he said \"hi\" \\ then stopped"
+        );
+    }
+
+    #[test]
+    fn a_newline_a_program_prints_does_not_become_a_second_line() {
+        let json = run_source(
+            "module main\n\nfn main(sys: System) -> Int\n  uses\n    Io.write,\n{\n    Io.write(sys.console, \"over\\ntwo\")\n    0\n}\n",
+        );
+        // One `Io.write` and one result: a newline inside the text must not
+        // add a line, because the caller splits this on newlines.
+        assert_eq!(json.lines().count(), 2, "got {json:?}");
+        assert_eq!(
+            json_field(json.lines().next().unwrap(), "line"),
+            "over\ntwo"
         );
     }
 }
