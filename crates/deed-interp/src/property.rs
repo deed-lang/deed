@@ -61,6 +61,16 @@ impl PropertyOutcome {
     }
 }
 
+/// Inputs generated for one function.
+pub struct GeneratedInputs {
+    /// Inputs that satisfied the function's preconditions.
+    pub cases: Vec<Vec<Value>>,
+    /// Inputs discarded because they violated a `where` clause or failed while
+    /// being exercised for generation.
+    pub rejected: usize,
+    pub seed: u64,
+}
+
 /// Whether a function's contract can be exercised by generated inputs.
 ///
 /// Pure, has something to prove, and every parameter has a type the generator
@@ -98,6 +108,89 @@ pub fn run_properties<'a>(
         })
         .map(|function| run_property(program, file, module, resolutions, function, config))
         .collect()
+}
+
+/// Generates inputs for one function, using the same generator and precondition
+/// filtering as property tests.
+pub fn generate_inputs<'a>(
+    program: &Program<'a>,
+    file: FileId,
+    module: &'a Module,
+    resolutions: &'a Resolutions,
+    function: &'a FnDecl,
+    config: PropertyConfig,
+) -> GeneratedInputs {
+    let types = TypeIndex::new(module, resolutions);
+    let mut rng = Rng::new(config.seed);
+    let mut interp = Interp::make(program, file);
+    let mut cases = Vec::new();
+    let mut rejected = 0usize;
+    let budget = config.cases * 20;
+
+    for _ in 0..budget {
+        if cases.len() >= config.cases {
+            break;
+        }
+        let Some(args) = generate_arguments(&types, &mut rng, function, &mut interp) else {
+            rejected += 1;
+            continue;
+        };
+        match attempt(&mut interp, function, &args) {
+            Attempt::Passed => cases.push(args),
+            Attempt::Rejected | Attempt::Failed(_) => rejected += 1,
+        }
+    }
+
+    GeneratedInputs {
+        cases,
+        rejected,
+        seed: config.seed,
+    }
+}
+
+/// Shrinks a failing generated input with the existing property shrinker.
+///
+/// `still_failing` should return true exactly when the candidate still
+/// reproduces the finding being shrunk.
+pub fn shrink_inputs<'a, F>(
+    program: &Program<'a>,
+    file: FileId,
+    module: &'a Module,
+    resolutions: &'a Resolutions,
+    mut args: Vec<Value>,
+    mut still_failing: F,
+) -> Vec<Value>
+where
+    F: FnMut(&[Value]) -> bool,
+{
+    if !still_failing(&args) {
+        return args;
+    }
+
+    let types = TypeIndex::new(module, resolutions);
+    let mut interp = Interp::make(program, file);
+    let simpler = Simpler::of(&types, &mut interp);
+    let mut budget = 300usize;
+
+    'outer: while budget > 0 {
+        for index in 0..args.len() {
+            for candidate in simpler.smaller(&args[index]) {
+                budget = budget.saturating_sub(1);
+                if budget == 0 {
+                    break 'outer;
+                }
+                let mut attempt = args.clone();
+                attempt[index] = candidate;
+                if still_failing(&attempt) {
+                    args = attempt;
+                    continue 'outer;
+                }
+            }
+        }
+        break;
+    }
+
+    args
 }
 
 fn run_property<'a>(
