@@ -38,6 +38,14 @@ fn xor3(first: u32, second: u32, third: u32) -> u32 {
     first ^ second ^ third
 }
 
+fn xor2(first: u32, second: u32) -> u32 {
+    first ^ second
+}
+
+fn digest_matches(actual: &[u8; 32], expected: &[u8; 32]) -> bool {
+    actual == expected
+}
+
 // ---------------------------------------------------------------------------
 // SHA-256
 // ---------------------------------------------------------------------------
@@ -171,7 +179,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
         for i in 0..64 {
             let s1 = xor3(e.rotate_right(6), e.rotate_right(11), e.rotate_right(25));
-            let ch = (e & f) ^ (!e & g);
+            let ch = xor2(e & f, !e & g);
             let t1 = hh
                 .wrapping_add(s1)
                 .wrapping_add(ch)
@@ -320,7 +328,7 @@ pub fn verify(entries: &[Entry]) -> Result<(), String> {
                 )
             })?;
             let actual = sha256(source.as_bytes());
-            if actual != entry.digest {
+            if !digest_matches(&actual, &entry.digest) {
                 return Err(format!(
                     "shipped module `{module}` has changed since the lock was written \
                      (compiler version may have changed)"
@@ -335,7 +343,7 @@ pub fn verify(entries: &[Entry]) -> Result<(), String> {
                 )
             })?;
             let actual = sha256(&content);
-            if actual != entry.digest {
+            if !digest_matches(&actual, &entry.digest) {
                 return Err(format!(
                     "{}: content has changed since the lock was written (run without --locked to update)",
                     entry.path
@@ -356,7 +364,17 @@ mod tests {
 
     #[test]
     fn xor_cancels_overlapping_bits() {
+        assert_eq!(xor2(0b11, 0b11), 0);
         assert_eq!(xor3(0b11, 0b10, 0b01), 0);
+    }
+
+    #[test]
+    fn digest_match_requires_every_byte_to_agree() {
+        let exact = [7u8; 32];
+        let mut changed = exact;
+        changed[31] = 8;
+        assert!(digest_matches(&exact, &exact));
+        assert!(!digest_matches(&changed, &exact));
     }
 
     /// The SHA-256 of an empty string is well-known.
