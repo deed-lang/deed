@@ -31,6 +31,17 @@ const SIZES: [usize; 5] = [1, 8, 32, 128, 512];
 /// decide the answer.
 const ROUNDS: usize = 5;
 
+/// The constant recorded in `design/01-principles.md` from the latest release
+/// measurement.
+const RECORDED_PER_FILE_MICROS: u64 = 59;
+/// P9's edit-loop budget.
+const P9_BUDGET_MICROS: u64 = 100_000;
+/// The first whole-workspace size where `RECORDED_PER_FILE_MICROS` misses
+/// `P9_BUDGET_MICROS`.
+const CACHE_TRIGGER_FILES: usize = 1_695;
+/// The same budget, if one request grows a second full workspace pass.
+const DOUBLE_PASS_TRIGGER_FILES: usize = 848;
+
 fn main() {
     // A benchmark that is quietly measuring the error path is a benchmark
     // measuring the wrong thing, and the generated modules are easy to break
@@ -210,4 +221,40 @@ fn millis(duration: Duration) -> String {
 
 fn micros(duration: Duration) -> String {
     format!("{:.0}us", duration.as_secs_f64() * 1_000_000.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CACHE_TRIGGER_FILES, DOUBLE_PASS_TRIGGER_FILES, P9_BUDGET_MICROS, RECORDED_PER_FILE_MICROS,
+    };
+
+    fn estimated_recheck_micros(files: usize, passes: usize) -> u64 {
+        files as u64 * passes as u64 * RECORDED_PER_FILE_MICROS
+    }
+
+    #[test]
+    fn the_written_threshold_is_where_one_pass_hits_p9s_budget() {
+        assert!(
+            estimated_recheck_micros(CACHE_TRIGGER_FILES - 1, 1) < P9_BUDGET_MICROS,
+            "the file before the written threshold should still fit under P9's budget"
+        );
+        assert!(
+            estimated_recheck_micros(CACHE_TRIGGER_FILES, 1) >= P9_BUDGET_MICROS,
+            "the written threshold should be the first one that misses P9's budget"
+        );
+    }
+
+    #[test]
+    fn a_second_full_pass_halves_the_threshold() {
+        let half_budget = P9_BUDGET_MICROS / 2;
+        assert!(
+            estimated_recheck_micros(DOUBLE_PASS_TRIGGER_FILES - 1, 1) < half_budget,
+            "the file before the double-pass threshold should still fit under half the budget"
+        );
+        assert!(
+            estimated_recheck_micros(DOUBLE_PASS_TRIGGER_FILES, 1) >= half_budget,
+            "the written double-pass threshold should be the first one that misses half the budget"
+        );
+    }
 }
