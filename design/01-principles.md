@@ -185,28 +185,34 @@ says:
 
 ```text
 files    cold      recheck   per file   unchanged
-1        0.1ms     0.1ms     55us       3%
-8        0.5ms     0.5ms     59us       86%
-32       1.9ms     1.8ms     56us       96%
-128      7.2ms     7.3ms     57us       99%
-512      30.1ms    30.1ms    59us       100%
+1        0.1ms     0.1ms     60us       0%
+8        0.7ms     0.6ms     78us       90%
+32       2.4ms     2.5ms     80us       96%
+128      9.2ms     10.4ms    81us       99%
+512      41.6ms    41.9ms    82us       100%
 ```
 
 Six things fall out of it, and they are worth having written down.
 
-**It is linear, and the constant is about 59 microseconds per file.** Flat across two orders
+**It is linear, and the constant is about 82 microseconds per file.** Flat across two orders
 of magnitude, which says there is no accidental quadratic behaviour hiding in the boundary
 between modules, and that is the failure this measurement was most likely to find.
 
 **The target holds today and the trigger is written down.** At 512 files a keystroke costs
-about 30ms, inside the 100ms budget. At today's constant, `100ms / 59us = 1695`, so a
-workspace recheck crosses P9's budget at about 1,700 files. That is the number at which the
+about 42ms, inside the 100ms budget. At today's constant, `100ms / 82us = 1219`, so a
+workspace recheck crosses P9's budget at about 1,200 files. That is the number at which the
 answer changes: once a realistic checked workspace, including dependencies, is around that
 size, the cache is warranted rather than merely tempting.
 
+The table above is re-run rather than quoted. It read 30.1ms and 59us when it was first
+written down, which put the trigger at about 1,700 files; two shipped modules and a larger
+corpus later it reads 42ms and 82us, and the trigger has come down by a third. The shape did
+not move and the conclusion did not either, but the margin is smaller than the sentence used
+to say, which is exactly what a number nobody re-runs hides.
+
 **A second full pass halves the trigger.** `crates/deed-lsp/tests/cost.rs` exists because one
 extra `check_workspace` call was already visible in hover. If a hot request needs two whole
-workspace checks rather than one, the same budget is gone at about 850 files instead. So what
+workspace checks rather than one, the same budget is gone at about 600 files instead. So what
 changes the answer is either the per-file constant moving or the number of full passes per
 request moving.
 
