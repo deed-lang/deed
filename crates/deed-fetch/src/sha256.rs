@@ -7,6 +7,10 @@
 //! The output is 32 bytes. To compare against a user-supplied hex digest,
 //! encode those 32 bytes with [`hex`].
 
+fn xor3(first: u32, second: u32, third: u32) -> u32 {
+    first ^ second ^ third
+}
+
 /// Computes the SHA-256 digest of `input` and returns the 32-byte result.
 pub fn sha256(input: &[u8]) -> [u8; 32] {
     // Initial hash values: the first 32 bits of the fractional parts of the
@@ -118,8 +122,16 @@ pub fn sha256(input: &[u8]) -> [u8; 32] {
             w[i] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         }
         for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            let s0 = xor3(
+                w[i - 15].rotate_right(7),
+                w[i - 15].rotate_right(18),
+                w[i - 15] >> 3,
+            );
+            let s1 = xor3(
+                w[i - 2].rotate_right(17),
+                w[i - 2].rotate_right(19),
+                w[i - 2] >> 10,
+            );
             w[i] = w[i - 16]
                 .wrapping_add(s0)
                 .wrapping_add(w[i - 7])
@@ -131,15 +143,15 @@ pub fn sha256(input: &[u8]) -> [u8; 32] {
 
         // 64 rounds.
         for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let s1 = xor3(e.rotate_right(6), e.rotate_right(11), e.rotate_right(25));
             let ch = (e & f) ^ ((!e) & g);
             let temp1 = hh
                 .wrapping_add(s1)
                 .wrapping_add(ch)
                 .wrapping_add(K[i])
                 .wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let s0 = xor3(a.rotate_right(2), a.rotate_right(13), a.rotate_right(22));
+            let maj = xor3(a & b, a & c, b & c);
             let temp2 = s0.wrapping_add(maj);
 
             hh = g;
@@ -183,6 +195,11 @@ pub fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xor_cancels_overlapping_bits_in_each_position() {
+        assert_eq!(xor3(0b11, 0b10, 0b01), 0);
+    }
 
     /// The empty-string SHA-256 is a well-known constant.
     #[test]
