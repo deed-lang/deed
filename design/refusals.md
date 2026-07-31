@@ -208,12 +208,41 @@ concurrency cover the case.
 
 ## Checked against the compiler
 
-The float, trait, range, `while`/`break`/`continue`, and detached-spawn refusals are each
-read by an existing test that keeps this page's claims tied to the parser's and prelude's
-actual behaviour rather than to a description of it that can go stale. The first four are
-read by `crates/deed-driver/tests/documentation.rs`; the spawn refusal is held by
-`crates/deed-parser/tests/parsing.rs` and `crates/deed-cli/tests/conformance.rs`. The rest
+Two different things on this page can go stale, and they need different checks.
+
+**The refusals.** The float, trait, range, `while`/`break`/`continue`, and detached-spawn
+refusals are each read by an existing test that keeps this page's claims tied to the parser's
+and prelude's actual behaviour rather than to a description of it that can go stale. The
+first four are read by `crates/deed-driver/tests/documentation.rs`; the spawn refusal is held
+by `crates/deed-parser/tests/parsing.rs` and `crates/deed-cli/tests/conformance.rs`. The rest
 are structural claims about the type checker and the backend that do not have a single
 number to check against; they are read against the reasoning in `design/02-syntax.md`,
 `design/04-capabilities.md` and `design/01-principles.md`, which is where each one was
 first written down in full.
+
+**The thresholds.** Every "What would change the answer" paragraph is a condition under
+which a decision here should be reopened, and for a long time nothing watched any of them.
+A refusal going stale is loud, because a `trait` keyword appearing would fail a test. A
+threshold going quietly true is silent, and leaves this page saying a question is settled
+after the thing that would unsettle it has happened.
+
+`crates/deed-driver/tests/thresholds.rs` watches the three that a test can watch, and fails
+when the decision should be reopened rather than when something regressed:
+
+- the trait threshold, by sorting and rendering `Ratio` and `Date` with passed functions, so
+  that a passed function ceasing to be enough is what fails
+- the fractional threshold's second half, by counting the contract clauses in `std/ratio`,
+  which is zero and is why the proof model was never asked anything
+- the `Result`/`List` threshold's second half, by checking that `for` still walks a list and
+  nothing else
+
+Three are conditions somebody would have to build rather than conditions that become true on
+their own: a session model for the REPL, a program scoped concurrency cannot express, and a
+realistic codebase large enough that a full check is slow. A test for those would be a test
+that watches nothing. The last one has the closest thing to a watch anyway, in
+`crates/deed-driver/tests/scaling.rs`, which guards the shape of the curve rather than the
+clock, and the incremental-checking decision names a change in that curve as half its
+threshold.
+
+The count of thresholds is itself pinned, so a seventh arriving is a decision about whether
+it can be watched rather than something nobody looked at.
