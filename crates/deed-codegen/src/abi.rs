@@ -218,16 +218,7 @@ fn size_aggregate(id: LayoutId, layouts: &[Layout]) -> Result<usize, Unsupported
 
 fn align_aggregate(id: LayoutId, layouts: &[Layout]) -> Result<usize, Unsupported> {
     let layout = &layouts[id.0];
-    if !layout.is_tagged() {
-        let mut a = 1;
-        for field in &layout.variants[0].fields {
-            a = a.max(align_of(&field.ty, layouts)?);
-        }
-        Ok(a)
-    } else {
-        let max_ca = max_variant_align(&layout.variants, layouts)?;
-        Ok(discriminant_size(layout.variants.len()).max(max_ca))
-    }
+    max_variant_align(&layout.variants, layouts)
 }
 
 fn max_variant_align(variants: &[Variant], layouts: &[Layout]) -> Result<usize, Unsupported> {
@@ -441,21 +432,34 @@ fn lower_flat(
         (Val::List(elements), Ty::List(element_ty)) => {
             lower_list(elements, element_ty, layouts, memory)
         }
-        (Val::Record(fields), Ty::Aggregate(id)) if !layouts[id.0].is_tagged() => {
-            lower_record_flat(fields, *id, layouts, memory)
-        }
-        (
-            Val::Variant {
-                discriminant,
-                fields,
-            },
-            Ty::Aggregate(id),
-        ) if layouts[id.0].is_tagged() => {
-            lower_variant_flat(*discriminant, fields, *id, flat_types, layouts, memory)
-        }
+        (val, Ty::Aggregate(id)) => lower_aggregate_flat(val, *id, flat_types, layouts, memory),
         (_, Ty::Closure) => Err(Error::from(Unsupported::Closure)),
         (_, Ty::Capability) => Err(Error::from(Unsupported::Capability)),
         _ => Err(Error::TypeMismatch),
+    }
+}
+
+fn lower_aggregate_flat(
+    val: &Val,
+    id: LayoutId,
+    flat_types: &[FlatType],
+    layouts: &[Layout],
+    memory: &mut Memory,
+) -> Result<Vec<FlatArg>, Error> {
+    if layouts[id.0].is_tagged() {
+        let Val::Variant {
+            discriminant,
+            fields,
+        } = val
+        else {
+            return Err(Error::TypeMismatch);
+        };
+        lower_variant_flat(*discriminant, fields, id, flat_types, layouts, memory)
+    } else {
+        let Val::Record(fields) = val else {
+            return Err(Error::TypeMismatch);
+        };
+        lower_record_flat(fields, id, layouts, memory)
     }
 }
 
@@ -595,40 +599,53 @@ fn lower_to_memory(
             memory.write_bytes(offset, &ptr.to_le_bytes())?;
             memory.write_bytes(offset + 4, &(elements.len() as u32).to_le_bytes())?;
         }
-        (Val::Record(fields), Ty::Aggregate(id)) if !layouts[id.0].is_tagged() => {
-            let layout = &layouts[id.0];
-            let field_defs = &layout.variants[0].fields;
-            let mut off = offset;
-            for (fval, fdef) in fields.iter().zip(field_defs.iter()) {
-                off = align_up(off, align_of(&fdef.ty, layouts)?);
-                lower_to_memory(fval, &fdef.ty, layouts, memory, off)?;
-                off += size_of(&fdef.ty, layouts)?;
-            }
+        (val, Ty::Aggregate(id)) => {
+            lower_aggregate_to_memory(val, *id, layouts, memory, offset)?;
         }
-        (
-            Val::Variant {
-                discriminant,
-                fields,
-            },
-            Ty::Aggregate(id),
-        ) if layouts[id.0].is_tagged() => {
-            let layout = &layouts[id.0];
-            let variant_def = &layout.variants[*discriminant];
-            let ds = discriminant_size(layout.variants.len());
-            // Write the discriminant (little-endian, truncated to ds bytes).
-            let disc_bytes = (*discriminant as u32).to_le_bytes();
-            memory.write_bytes(offset, &disc_bytes[..ds])?;
-            // Payload starts at offset + disc rounded up to max case alignment.
-            let max_ca = max_variant_align(&layout.variants, layouts)?;
-            let payload_base = offset + align_up(ds, max_ca);
-            let mut poff = payload_base;
-            for (fval, fdef) in fields.iter().zip(variant_def.fields.iter()) {
-                poff = align_up(poff, align_of(&fdef.ty, layouts)?);
-                lower_to_memory(fval, &fdef.ty, layouts, memory, poff)?;
-                poff += size_of(&fdef.ty, layouts)?;
-            }
-        }
+        (_, Ty::Closure) => return Err(Error::from(Unsupported::Closure)),
+        (_, Ty::Capability) => return Err(Error::from(Unsupported::Capability)),
         _ => return Err(Error::TypeMismatch),
+    }
+    Ok(())
+}
+
+fn lower_aggregate_to_memory(
+    val: &Val,
+    id: LayoutId,
+    layouts: &[Layout],
+    memory: &mut Memory,
+    offset: usize,
+) -> Result<(), Error> {
+    let layout = &layouts[id.0];
+    if layout.is_tagged() {
+        let Val::Variant {
+            discriminant,
+            fields,
+        } = val
+        else {
+            return Err(Error::TypeMismatch);
+        };
+        let variant_def = &layout.variants[*discriminant];
+        let ds = discriminant_size(layout.variants.len());
+        let disc_bytes = (*discriminant as u32).to_le_bytes();
+        memory.write_bytes(offset, &disc_bytes[..ds])?;
+        let max_ca = max_variant_align(&layout.variants, layouts)?;
+        let mut field_offset = offset + align_up(ds, max_ca);
+        for (field_value, field) in fields.iter().zip(variant_def.fields.iter()) {
+            field_offset = align_up(field_offset, align_of(&field.ty, layouts)?);
+            lower_to_memory(field_value, &field.ty, layouts, memory, field_offset)?;
+            field_offset += size_of(&field.ty, layouts)?;
+        }
+    } else {
+        let Val::Record(fields) = val else {
+            return Err(Error::TypeMismatch);
+        };
+        let mut field_offset = offset;
+        for (field_value, field) in fields.iter().zip(layout.variants[0].fields.iter()) {
+            field_offset = align_up(field_offset, align_of(&field.ty, layouts)?);
+            lower_to_memory(field_value, &field.ty, layouts, memory, field_offset)?;
+            field_offset += size_of(&field.ty, layouts)?;
+        }
     }
     Ok(())
 }
@@ -1502,6 +1519,12 @@ mod tests {
                 fields: vec![],
             })
         );
+
+        memory.write_bytes(0, &257u16.to_le_bytes()).unwrap();
+        assert_eq!(
+            lift_from_memory(&ty, &layouts, &memory, 0),
+            Err(Error::InvalidDiscriminant { got: 257, max: 256 })
+        );
     }
 
     #[test]
@@ -1527,5 +1550,119 @@ mod tests {
             lower_to_memory(&Val::Int(1), &Ty::Bool, &[], &mut memory, 0),
             Err(Error::TypeMismatch)
         );
+    }
+
+    #[test]
+    fn empty_record_and_aggregate_shapes_are_distinct() {
+        let record = record_layout("Empty", vec![]);
+        let choice = choice_layout("Choice", vec![("A", vec![]), ("B", vec![])]);
+        assert_eq!(
+            size_of(&Ty::Aggregate(LayoutId(0)), std::slice::from_ref(&record)),
+            Ok(0)
+        );
+        assert_eq!(
+            align_of(&Ty::Aggregate(LayoutId(0)), std::slice::from_ref(&record)),
+            Ok(1)
+        );
+
+        let mut memory = Memory::new();
+        assert_eq!(
+            lower(
+                &Val::Variant {
+                    discriminant: 0,
+                    fields: vec![],
+                },
+                &Ty::Aggregate(LayoutId(0)),
+                std::slice::from_ref(&record),
+                &mut memory,
+            ),
+            Err(Error::TypeMismatch)
+        );
+        assert_eq!(
+            lower(
+                &Val::Record(vec![]),
+                &Ty::Aggregate(LayoutId(0)),
+                std::slice::from_ref(&choice),
+                &mut memory,
+            ),
+            Err(Error::TypeMismatch)
+        );
+    }
+
+    #[test]
+    fn list_memory_descriptor_and_stride_are_exact() {
+        let ty = Ty::List(Box::new(Ty::Int));
+        let value = Val::List(vec![Val::Int(11), Val::Int(22), Val::Int(33)]);
+        let mut memory = Memory::new();
+        assert_eq!(memory.alloc(8, 4), Ok(0));
+        lower_to_memory(&value, &ty, &[], &mut memory, 0).unwrap();
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&8u32.to_le_bytes());
+        expected.extend_from_slice(&3u32.to_le_bytes());
+        expected.extend_from_slice(&11i64.to_le_bytes());
+        expected.extend_from_slice(&22i64.to_le_bytes());
+        expected.extend_from_slice(&33i64.to_le_bytes());
+        assert_eq!(memory.next, 32);
+        assert_eq!(&memory.bytes[..32], expected.as_slice());
+        assert_eq!(lift_from_memory(&ty, &[], &memory, 0), Ok(value));
+    }
+
+    #[test]
+    fn multi_field_choice_has_exact_flat_and_memory_forms() {
+        let layouts = vec![choice_layout(
+            "Message",
+            vec![
+                ("Empty", vec![]),
+                (
+                    "Data",
+                    vec![("ready", Ty::Bool), ("number", Ty::Int), ("text", Ty::Str)],
+                ),
+            ],
+        )];
+        let ty = Ty::Aggregate(LayoutId(0));
+        let value = Val::Variant {
+            discriminant: 1,
+            fields: vec![
+                Val::Bool(true),
+                Val::Int(0x0102_0304_0506_0708),
+                Val::Str("xy".to_string()),
+            ],
+        };
+        assert_eq!(size_of(&ty, &layouts), Ok(32));
+        assert_eq!(align_of(&ty, &layouts), Ok(8));
+
+        let flat = vec![
+            FlatArg::I32(1),
+            FlatArg::I32(1),
+            FlatArg::I64(0x0102_0304_0506_0708),
+            FlatArg::I32(0),
+            FlatArg::I32(2),
+        ];
+        let mut flat_memory = Memory::new();
+        assert_eq!(
+            lower(&value, &ty, &layouts, &mut flat_memory),
+            Ok(flat.clone())
+        );
+        assert_eq!(&flat_memory.bytes[..2], b"xy");
+        assert_eq!(lift(&flat, &ty, &layouts, &flat_memory), Ok(value.clone()));
+
+        let mut expected = vec![0u8; 34];
+        expected[0] = 1;
+        expected[8] = 1;
+        expected[16..24].copy_from_slice(&0x0102_0304_0506_0708i64.to_le_bytes());
+        expected[24..28].copy_from_slice(&32u32.to_le_bytes());
+        expected[28..32].copy_from_slice(&2u32.to_le_bytes());
+        expected[32..34].copy_from_slice(b"xy");
+
+        let mut memory = Memory::new();
+        assert_eq!(memory.alloc(32, 8), Ok(0));
+        lower_to_memory(&value, &ty, &layouts, &mut memory, 0).unwrap();
+        assert_eq!(memory.next, 34);
+        assert_eq!(&memory.bytes[..34], expected.as_slice());
+
+        let mut authored = Memory::new();
+        authored.write_bytes(0, &expected).unwrap();
+        assert_eq!(lift_from_memory(&ty, &layouts, &authored, 0), Ok(value));
     }
 }
