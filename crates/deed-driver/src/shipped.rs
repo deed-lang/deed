@@ -48,6 +48,7 @@ const SHIPPED: &[(&str, &str)] = &[
     ("std/table", include_str!("../../../std/table.deed")),
     ("std/map", include_str!("../../../std/map.deed")),
     ("std/ratio", include_str!("../../../std/ratio.deed")),
+    ("std/date", include_str!("../../../std/date.deed")),
 ];
 
 /// Every module that ships, in the order they are declared.

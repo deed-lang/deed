@@ -202,7 +202,6 @@ fn the_backend_still_compiles_what_it_used_to() {
     compiled.sort_unstable();
 
     let mut expected = vec![
-        "calendar.deed",
         // The capability example: a program that reads a file it was given
         // access to and cannot read one it was not.
         "config.deed",
