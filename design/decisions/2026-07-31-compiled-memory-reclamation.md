@@ -47,6 +47,24 @@ Compiled programs that allocate in long-running loops still exhaust linear memor
 - Which representation and ownership metadata are needed to stage reference counting and in-place reuse incrementally.
 - Whether handler frames should move to a separate reclaimed stack before full value-level reclamation lands.
 
+## Update: handler frames are reclaimed
+
+The third open question is answered, and the answer is yes.
+
+Handler frames now live on their own stack (`layout::FRAME_BUMP`, with the region between `FRAME_START` and `HEAP_START`) and a `with` block rewinds it on the way out. This is not the reference counting the option list rejected, and it needs none of the machinery that rejection was about: no layout metadata, no root discovery, no runtime.
+
+What makes it safe is a rule the language already has rather than an analysis. A frame's lifetime is exactly its `with` block; `design/05-backend.md` already described the exit as the block "putting back what was there". Nothing in a program can hold a frame: the source never names one, and a frame holds the *address* of its state rather than the state. Blocks nest, so the frames in flight are a stack.
+
+Values cannot follow, and the reason is one line: a block's value outlives the block, so rewinding the value bump pointer at the end of a `with` would free what the caller is about to read. That is the difference between the two pointers and the whole of why there are two.
+
+Measured, in `crates/deed-driver/tests/compiled_memory.rs`:
+
+- a walk installing one handler a turn used to allocate 48 bytes a turn and now allocates 16
+- twenty thousand turns of it used to exhaust linear memory and now completes
+- the frame stack is bounded, and exceeding it traps rather than writing a frame over the value heap, which is checked by a nest deep enough to do it
+
+The sixteen bytes still leaking per turn are the handler's state cell and the unit its operation answers with. The state cell is the interesting one: `DEED4030` already refuses a closure over handler state, so its lifetime is the block as well, and it could go the same way for the same reason. That is the next step and it is deliberately not taken here, because it needs the state's address to stop being a heap address and every operation call reads it.
+
 ## References
 
 - `crates/deed-codegen/src/layout.rs`

@@ -20,11 +20,16 @@
 //!   eight]`
 //!
 //! Allocation is a bump pointer living at address 0, so the module needs no
-//! global section and no import. Nothing is ever freed. That is not a
+//! global section and no import. Values are never freed. That is not a
 //! garbage collector's absence being ignored: values in this language are
 //! immutable and a compiled `test` block runs once, so the first program
 //! that outlives its memory is the one that motivates writing one, and it
 //! will have a number attached.
+//!
+//! Handler frames are the exception, and they are an exception the language
+//! decides rather than an optimisation. A frame's lifetime is exactly its
+//! `with` block, nothing in the program can name one, and nested blocks nest,
+//! so frames are a stack and are reclaimed like one. See [`FRAME_BUMP`].
 
 /// Where the bump pointer lives.
 pub const BUMP: u32 = 0;
@@ -40,8 +45,34 @@ pub const BUMP: u32 = 0;
 /// matches. See `design/05-backend.md`.
 pub const HANDLERS: u32 = 8;
 
-/// Where allocation starts, leaving room for the words above.
-pub const HEAP_START: u32 = 32;
+/// Where the top of the handler frame stack lives.
+///
+/// Frames are the one thing this backend reclaims, and the reason is a rule
+/// the language already has rather than an analysis. `with` installs a handler
+/// for exactly its block; `design/05-backend.md` puts it as the block "putting
+/// back what was there". Nothing in a program can hold a frame: the source
+/// never names one, a frame holds the *address* of its state rather than the
+/// state itself, and blocks nest, so the frames in flight are a stack.
+///
+/// Values cannot be reclaimed the same way, which is why they are not. A
+/// block's value outlives the block, so rewinding the value bump pointer at
+/// the end of a `with` would free something the caller is about to read.
+pub const FRAME_BUMP: u32 = 32;
+
+/// Where the handler frame stack starts.
+pub const FRAME_START: u32 = 40;
+
+/// How much room the frame stack gets.
+///
+/// A frame is five words for a one-operation effect, so this is room for on
+/// the order of a thousand `with` blocks open at once. Exceeding it traps
+/// rather than running into the value heap: a silently corrupted heap is the
+/// one outcome worse than stopping, and a program nesting a thousand handlers
+/// is not one this bound is stopping by accident.
+pub const FRAME_BYTES: u32 = 8192;
+
+/// Where value allocation starts, above the words and the frame stack.
+pub const HEAP_START: u32 = FRAME_START + FRAME_BYTES;
 
 /// Where the code of the contract that failed is left, as the address of a
 /// string, or zero when nothing has failed.
