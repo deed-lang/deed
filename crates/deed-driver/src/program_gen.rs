@@ -216,10 +216,10 @@ fn generate_program(rng: &mut Rng) -> GeneratedProgram {
 
 fn generate_fn(rng: &mut Rng, index: usize) -> GeneratedFn {
     let name = fn_name(index);
-    let param_count = (rng.next() % 3) as usize;
+    let param_count = count_below_three(rng.next());
     let params: Vec<_> = (0..param_count).map(param_name).collect();
 
-    let stmt_count = (rng.next() % 3) as usize;
+    let stmt_count = count_below_three(rng.next());
     let mut stmts = Vec::new();
     let mut scope: Vec<String> = params.clone();
     for i in 0..stmt_count {
@@ -237,6 +237,14 @@ fn generate_fn(rng: &mut Rng, index: usize) -> GeneratedFn {
         params,
         stmts,
         tail,
+    }
+}
+
+fn count_below_three(value: u64) -> usize {
+    match value.to_le_bytes()[0] {
+        0..=84 => 0,
+        85..=169 => 1,
+        _ => 2,
     }
 }
 
@@ -308,20 +316,17 @@ fn shrink_program<F>(mut program: GeneratedProgram, fails: F, budget: usize) -> 
 where
     F: Fn(&str) -> bool,
 {
-    let mut budget = budget;
+    let mut remaining = budget;
 
     'outer: loop {
-        if budget == 0 {
-            break;
-        }
         for candidate in smaller_programs(&program) {
-            budget = budget.saturating_sub(1);
+            let Some(next) = remaining.checked_sub(1) else {
+                break 'outer;
+            };
+            remaining = next;
             if fails(&print_program(&candidate)) {
                 program = candidate;
                 continue 'outer;
-            }
-            if budget == 0 {
-                break 'outer;
             }
         }
         break;
@@ -423,7 +428,7 @@ fn smaller_expr(expr: &GeneratedExpr) -> Vec<GeneratedExpr> {
             if abs > 1 {
                 let half = GeneratedExpr::Int(n / 2);
                 out.push(half.clone());
-                let step = GeneratedExpr::Int(if *n > 0 { n - 1 } else { n + 1 });
+                let step = GeneratedExpr::Int(n - n.signum());
                 if step != half {
                     out.push(step);
                 }
@@ -563,8 +568,8 @@ impl Rng {
 mod tests {
     use super::{
         GeneratedExpr, GeneratedFn, GeneratedProgram, GeneratedStmt, ProgramFuzzConfig, Rng,
-        find_program_failure, generate_program, print_program, replace_name, shrink_program,
-        smaller_expr, smaller_fn, smaller_programs,
+        count_below_three, find_program_failure, generate_program, print_program, replace_name,
+        shrink_program, smaller_expr, smaller_fn, smaller_programs,
     };
 
     fn one_fn_program(name: &str, tail: GeneratedExpr) -> GeneratedProgram {
@@ -614,6 +619,17 @@ mod tests {
     }
 
     #[test]
+    fn small_counts_cover_three_bounded_partitions() {
+        assert_eq!(count_below_three(0), 0);
+        assert_eq!(count_below_three(84), 0);
+        assert_eq!(count_below_three(85), 1);
+        assert_eq!(count_below_three(169), 1);
+        assert_eq!(count_below_three(170), 2);
+        assert_eq!(count_below_three(255), 2);
+        assert!((0..=u8::MAX).all(|value| count_below_three(u64::from(value)) < 3));
+    }
+
+    #[test]
     fn generated_programs_and_rng_have_an_exact_snapshot() {
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
         let mut bytes = 0;
@@ -632,7 +648,7 @@ mod tests {
         }
         assert_eq!(
             (hash, bytes, functions, statements),
-            (0x0a3e_d6ae_35d6_8ed1, 25_363, 161, 156,)
+            (0xd853_01cc_718d_7de3, 26_924, 161, 169,)
         );
 
         let mut next_rng = Rng::new(42);
@@ -862,6 +878,8 @@ mod tests {
 
     #[test]
     fn shrink_budget_counts_candidate_evaluations_exactly() {
+        use std::cell::Cell;
+
         let original = one_fn_program("f", GeneratedExpr::Int(100));
         assert_eq!(
             print_program(&shrink_program(original.clone(), |_| true, 0)),
@@ -871,6 +889,18 @@ mod tests {
             print_program(&shrink_program(original, |_| true, 1)),
             print_program(&one_fn_program("f", GeneratedExpr::Int(0)))
         );
+
+        let calls = Cell::new(0);
+        let unchanged = shrink_program(
+            one_fn_program("f", GeneratedExpr::Int(100)),
+            |_| {
+                calls.set(calls.get() + 1);
+                false
+            },
+            1,
+        );
+        assert_eq!(calls.get(), 1);
+        assert_eq!(unchanged.fns[0].tail, GeneratedExpr::Int(100));
     }
 
     // -- end-to-end --------------------------------------------------------
