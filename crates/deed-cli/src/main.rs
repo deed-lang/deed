@@ -531,7 +531,7 @@ fn report_runtime_profile(out: &mut impl Write, profile: &RuntimeProfile) -> io:
     )?;
 
     let mut functions: Vec<_> = profile.functions.iter().collect();
-    functions.sort_by(|a, b| b.total.cmp(&a.total));
+    functions.sort_by_key(|function| std::cmp::Reverse(function.total));
 
     for function in functions {
         let name = format!("{}/{}", function.module, function.function);

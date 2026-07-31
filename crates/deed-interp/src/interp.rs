@@ -707,11 +707,7 @@ impl<'a> Interp<'a> {
             totals.handler += elapsed;
         }
 
-        if profile.stack.last() == Some(&key) {
-            profile.stack.pop();
-        } else if let Some(index) = profile.stack.iter().rposition(|found| *found == key) {
-            profile.stack.remove(index);
-        }
+        profile.stack.pop();
     }
 
     fn add_contract_time(&mut self, elapsed: Duration) {
