@@ -65,7 +65,7 @@ examples/transfer.deed
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-130 passed, 0 failed
+132 passed, 0 failed
 ```
 
 That number used to be 102. Seven of those tests are in `std/table` now, because the table

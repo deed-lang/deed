@@ -72,7 +72,7 @@ element type needs its own effect declaration.
     resumable effects changes the interpreter model, the type system, and
     the effect row semantics. That is a separate, larger decision.
 
-- Option: ship `std/generator.deed` as a standard library module.
+- Option: ship a generator helper as a standard library module.
   - Rejected because: effects cannot be generic, so a shipped module would
     only cover one element type. The pattern is simple enough that each
     program can declare its own effect for its element type.
