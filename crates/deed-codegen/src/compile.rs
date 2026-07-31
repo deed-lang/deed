@@ -1316,6 +1316,66 @@ mod tests {
     }
 
     #[test]
+    fn marked_offsets_follow_nested_wasm_encoding() {
+        let program = adding();
+        let function = program.function(program.find("add").expect("add is there"));
+        let mut strings = Strings::new();
+        let mut builder = Builder::new(&program, function, &mut strings, Vec::new(), Vec::new(), 0);
+        let spans = [
+            Span::new(1, 2),
+            Span::new(3, 4),
+            Span::new(5, 6),
+            Span::new(7, 8),
+            Span::new(9, 10),
+        ];
+        let sites: Vec<u32> = spans
+            .iter()
+            .map(|span| builder.site(*span, SpanRole::Call))
+            .collect();
+        let marked = |site, inner| Ins::Marked {
+            site,
+            inner: Box::new(inner),
+        };
+        let body = vec![
+            marked(sites[0], Ins::I64Const(0)),
+            Ins::Block {
+                result: None,
+                body: vec![
+                    marked(sites[1], Ins::I32Const(0)),
+                    Ins::Loop {
+                        result: None,
+                        body: vec![marked(sites[2], Ins::I64Const(1))],
+                    },
+                ],
+            },
+            Ins::If {
+                result: None,
+                then: vec![marked(sites[3], Ins::I32Const(0))],
+                otherwise: vec![marked(sites[4], Ins::I64Const(0))],
+            },
+        ];
+
+        let mapped = builder.finish_sites(7, &body);
+        assert_eq!(mapped.function, 7);
+        assert_eq!(
+            mapped
+                .sites
+                .iter()
+                .map(|site| site.offset)
+                .collect::<Vec<_>>(),
+            [0, 4, 8, 14, 17]
+        );
+        assert_eq!(
+            mapped
+                .sites
+                .iter()
+                .map(|site| site.span)
+                .collect::<Vec<_>>(),
+            spans
+        );
+    }
+
+    #[test]
     fn the_signed_minimum_cannot_be_negated_by_binary_arithmetic() {
         let multiply = binary("multiply", BinaryOp::MulInt);
         assert_arithmetic_failure(&multiply, "multiply", [-1, i64::MIN]);

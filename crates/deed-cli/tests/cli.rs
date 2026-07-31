@@ -680,9 +680,14 @@ fn two_mains_is_a_question_not_a_choice() {
         "module two\n\nfn main(sys: System) -> Int { 0 }\n",
     );
 
-    let output = run(&["run", scratch.path().to_str().unwrap()]);
-    assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("more than one `main`"));
+    for arguments in [
+        vec!["run", scratch.path().to_str().unwrap()],
+        vec!["run", "--compiled", scratch.path().to_str().unwrap()],
+    ] {
+        let output = run(&arguments);
+        assert_eq!(code(&output), 2);
+        assert!(stderr(&output).contains("more than one `main`"));
+    }
 }
 
 #[test]

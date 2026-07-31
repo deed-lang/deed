@@ -514,25 +514,11 @@ impl Run<'_> {
                     let count = self.arity(*index)?;
                     let at = stack.len() - count;
                     let args: Vec<Value> = stack.split_off(at);
-                    let call_site = site
-                        .and_then(|site| self.site(function, site))
-                        .and_then(|mapped| (mapped.role == SpanRole::Call).then_some(mapped.span));
-                    if let Some(result) = self.call(*index, &args).map_err(|trap| match trap {
-                        Trap::Failed {
-                            code,
-                            message,
-                            span,
-                            blame_caller,
-                        } if code == deed_mir::codes::PRECONDITION_FAILED && blame_caller => {
-                            Trap::Failed {
-                                code,
-                                message,
-                                span: call_site.or(span),
-                                blame_caller: false,
-                            }
-                        }
-                        other => other,
-                    })? {
+                    let call_site = call_span(site.and_then(|site| self.site(function, site)));
+                    if let Some(result) = self
+                        .call(*index, &args)
+                        .map_err(|trap| blame_call_site(trap, call_site))?
+                    {
                         stack.push(result);
                     }
                 }
@@ -542,25 +528,11 @@ impl Run<'_> {
                     let count = self.arity(index)?;
                     let at = stack.len() - count;
                     let args: Vec<Value> = stack.split_off(at);
-                    let call_site = site
-                        .and_then(|site| self.site(function, site))
-                        .and_then(|mapped| (mapped.role == SpanRole::Call).then_some(mapped.span));
-                    if let Some(result) = self.call(index, &args).map_err(|trap| match trap {
-                        Trap::Failed {
-                            code,
-                            message,
-                            span,
-                            blame_caller,
-                        } if code == deed_mir::codes::PRECONDITION_FAILED && blame_caller => {
-                            Trap::Failed {
-                                code,
-                                message,
-                                span: call_site.or(span),
-                                blame_caller: false,
-                            }
-                        }
-                        other => other,
-                    })? {
+                    let call_site = call_span(site.and_then(|site| self.site(function, site)));
+                    if let Some(result) = self
+                        .call(index, &args)
+                        .map_err(|trap| blame_call_site(trap, call_site))?
+                    {
                         stack.push(result);
                     }
                 }
@@ -680,6 +652,29 @@ fn pop(stack: &mut Vec<Value>) -> Result<Value, Trap> {
     stack.pop().ok_or(Trap::Unreachable)
 }
 
+fn call_span(mapped: Option<InstructionSpan>) -> Option<Span> {
+    mapped
+        .filter(|mapped| mapped.role == SpanRole::Call)
+        .map(|mapped| mapped.span)
+}
+
+fn blame_call_site(trap: Trap, call_site: Option<Span>) -> Trap {
+    match trap {
+        Trap::Failed {
+            code,
+            message,
+            span,
+            blame_caller,
+        } if code == deed_mir::codes::PRECONDITION_FAILED && blame_caller => Trap::Failed {
+            code,
+            message,
+            span: call_site.or(span),
+            blame_caller: false,
+        },
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,6 +773,66 @@ mod tests {
             .implementation_for("deed:io", "write")
             .expect("the exact offer should match");
         assert_eq!(implementation(&[]), Some(Value::I64(3)));
+    }
+
+    #[test]
+    fn only_call_sites_are_candidates_for_caller_blame() {
+        let span = Span::new(10, 20);
+        assert_eq!(
+            call_span(Some(InstructionSpan {
+                offset: 7,
+                span,
+                role: SpanRole::Call,
+            })),
+            Some(span)
+        );
+        assert_eq!(
+            call_span(Some(InstructionSpan {
+                offset: 7,
+                span,
+                role: SpanRole::Trap,
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn only_an_unassigned_precondition_moves_to_the_call_site() {
+        let callee = Span::new(1, 2);
+        let caller = Span::new(10, 20);
+        let failed = |code: &str, blame_caller| Trap::Failed {
+            code: code.to_string(),
+            message: "failed".to_string(),
+            span: Some(callee),
+            blame_caller,
+        };
+
+        assert_eq!(
+            blame_call_site(
+                failed(deed_mir::codes::PRECONDITION_FAILED, true),
+                Some(caller)
+            ),
+            Trap::Failed {
+                code: deed_mir::codes::PRECONDITION_FAILED.to_string(),
+                message: "failed".to_string(),
+                span: Some(caller),
+                blame_caller: false,
+            }
+        );
+        assert_eq!(
+            blame_call_site(
+                failed(deed_mir::codes::PRECONDITION_FAILED, false),
+                Some(caller)
+            ),
+            failed(deed_mir::codes::PRECONDITION_FAILED, false)
+        );
+        assert_eq!(
+            blame_call_site(
+                failed(deed_mir::codes::ASSERTION_FAILED, true),
+                Some(caller)
+            ),
+            failed(deed_mir::codes::ASSERTION_FAILED, true)
+        );
     }
 
     /// This runner does not validate on its own, but [`crate::call`] runs
