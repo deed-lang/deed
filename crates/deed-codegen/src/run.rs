@@ -267,7 +267,7 @@ impl Linked<'_> {
             host: Some(self.host),
         };
         match run.call(index, args) {
-            Err(Trap::Unreachable) => Err(run.why().unwrap_or(Trap::Unreachable)),
+            Err(Trap::Unreachable) => Err(run.why(None).unwrap_or(Trap::Unreachable)),
             other => other,
         }
     }
