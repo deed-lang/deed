@@ -250,3 +250,51 @@ fn finally_without_state() {
          \x20   }\n\
          }\n");
 }
+
+#[test]
+fn finally_runs_exactly_when_the_inner_handler_leaves() {
+    ran("module a\n\
+         \n\
+         effect Audit {\n\
+         \x20   fn mark() -> ()\n\
+         \x20   fn count() -> Int\n\
+         }\n\
+         \n\
+         handler Counted implements Audit {\n\
+         \x20   state marks: Int\n\
+         \x20   fn mark() -> () { marks = marks + 1 }\n\
+         \x20   fn count() -> Int { marks }\n\
+         }\n\
+         \n\
+         effect Resource { fn touch() -> () }\n\
+         handler Clean implements Resource {\n\
+         \x20   fn touch() -> () {}\n\
+         \x20   finally { Audit.mark() }\n\
+         }\n\
+         \n\
+         test \"cleanup is observable outside the inner handler\" {\n\
+         \x20   with Counted { marks: 0 } {\n\
+         \x20       with Clean { Resource.touch() }\n\
+         \x20       assert Audit.count() == 1\n\
+         \x20   }\n\
+         }\n");
+}
+
+#[test]
+fn a_finally_failure_replaces_a_successful_body() {
+    ran("module a\n\
+         \n\
+         effect Resource { fn touch() -> Int }\n\
+         handler Broken implements Resource {\n\
+         \x20   state value: Int\n\
+         \x20   fn touch() -> Int { 1 }\n\
+         \x20   finally { require_positive(value) }\n\
+         }\n\
+         \n\
+         fn require_positive(n: Int) -> Int where n > 0, { n }\n\
+         fn use_resource(n: Int) -> Int { with Broken { value: n } { Resource.touch() } }\n\
+         \n\
+         test \"cleanup failure is returned\" {\n\
+         \x20   assert refuses use_resource(0 - 1)\n\
+         }\n");
+}
