@@ -95,6 +95,46 @@ fn read_write_imports_read_and_save() {
     );
 }
 
+/// The README prints each module's import section, and that listing is the
+/// whole demonstration: one clause in, one line out.
+///
+/// It was typed. A new effect anywhere in either signature changes the import
+/// section, and nothing would have noticed the file no longer matching. This
+/// reads the listing back out of the prose and compares it to the modules
+/// (#783).
+#[test]
+fn the_readme_lists_the_imports_the_modules_actually_have() {
+    let readme = std::fs::read_to_string(root().join("demo").join("README.md"))
+        .expect("demo/README.md should be there");
+
+    for name in ["read_only", "read_write"] {
+        let heading = format!("{name}.wasm imports:");
+        let after = readme
+            .split_once(&heading)
+            .unwrap_or_else(|| panic!("the README should list {name}'s imports"))
+            .1;
+
+        // The listing is the indented lines that follow, `deed:io  read`, up
+        // to the first line that is not one.
+        let listed: Vec<String> = after
+            .lines()
+            .skip(1)
+            .take_while(|line| line.starts_with("  ") && !line.trim().is_empty())
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join("."))
+            .collect();
+
+        let mut actual = imports_of(&module_for(&format!("{name}.deed")));
+        actual.sort();
+        let mut listed_sorted = listed.clone();
+        listed_sorted.sort();
+
+        assert_eq!(
+            listed_sorted, actual,
+            "demo/README.md says {name} imports {listed:?}, the module imports {actual:?}"
+        );
+    }
+}
+
 // -- the host's behaviour ---------------------------------------------------
 
 /// A host that provides only Io.read refuses the read-write component.
