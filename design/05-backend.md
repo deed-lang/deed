@@ -129,6 +129,21 @@ Narrowing `System` down to the console it carries becomes `deed:sys.console`, be
 narrowing is something only the host can do and a compiled program reaching into its own
 memory for it would be a program widening its own authority.
 
+The decision for #660 is explicit:
+
+- **Can Deed call outside Deed?** Yes, by calling host-provided imports only.
+- **What must the signature say?** The row names the operation (`uses Io.write`), and the
+  arguments carry the capability value it acts on (`Console`, `Dir`, `Clock`, or `System`).
+- **What does the capability claim become?** A function can do only what its signature names
+  *and* what the host actually provides under those names.
+- **How does an ecosystem exist without ambient extern calls?** Through hosts and embedders
+  shipping imports and libraries that are reached as capability operations, not by letting a
+  module declare arbitrary process-level calls.
+
+This is why there is still no user-declared `extern` escape hatch in the language. The set of
+operations a module may request is the one the compiler already type-checks (`Io` plus capability
+narrowing imports), and a host may deny any of them by not providing the import.
+
 A capability itself is a handle: a number the host gave out and the program hands back. It
 is not a pointer into the program's memory, so there is nothing inside one to look at, and
 the program cannot make one up. What a program may do with a handle is decided by the effect
@@ -150,9 +165,11 @@ deciding what `Io.write` does would be a program taking authority nobody granted
 and names the operation instead, which is also the most useful thing it could say about a
 module on its way to a real embedder.
 
-**What would change this:** a WASI target. `deed:io.read` and `wasi:filesystem` want the same
-things, and a program compiled against the names here would need a shim. That is a mapping
-rather than a redesign, and it is worth writing when somebody has a host to run it on.
+**What would change this:** adopting the component/import declarations sketched in
+`design/04-capabilities.md` would let modules name additional host imports in source, but only if
+those imports are still capability-row entries with explicit capability arguments and host refusal
+at instantiation time. A WASI target is one likely first mapping (`deed:io.read` to
+`wasi:filesystem`), not a reason to add ambient `extern` calls.
 
 ## Monomorphization is affordable, and here is the number
 
@@ -275,5 +292,4 @@ own transcription of a published algorithm rather than finding a different class
 and it is the one dependency this backend has spent every other design decision in this
 document avoiding. The number that would change this: a bug reaches a released `deed build`
 that validation here missed and a real engine would have caught. None has, yet.
-
 
