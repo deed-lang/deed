@@ -243,6 +243,12 @@ The keyed collection is there too. `std/table` has `holds`, `get`, `set`, `or_el
 a program does when it wants to count by key. It came out of `examples/` for the same reason
 the list library did.
 
+The self-balancing keyed map is there too. `std/map` has `node_color`, `make_black`, `balance`,
+`balance_right`, `insert_node`, `insert`, `get`, `size`, `entries`, `cmp_int` and `cmp_string`,
+built on Okasaki's red-black tree. It takes a comparator so that any key type works, which is
+the same answer `examples/tree.deed` gave for an unbalanced BST and the one this file gives
+for a balanced one.
+
 ## A library that ships with the compiler
 
 A module named `std/x` lives inside the compiler.
@@ -263,8 +269,8 @@ were not anywhere. `trim` stays in the prelude because it cannot be written.
 The other thing that goes here is a library that was already written and had nowhere to be.
 `std/list` and `std/table` were both under `examples/`, which made their names paths into
 this repository, so a program elsewhere could not import them and had to copy the files
-instead. Three modules ship today,
-`std/string`, `std/list` and `std/table`, and `crates/deed-driver/src/shipped.rs` is the
+instead. Four modules ship today,
+`std/string`, `std/list`, `std/table` and `std/map`, and `crates/deed-driver/src/shipped.rs` is the
 table.
 
 ## Lists

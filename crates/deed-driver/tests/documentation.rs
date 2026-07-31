@@ -115,7 +115,7 @@ fn enumerated(text: &str) -> Vec<String> {
 /// that outgrows it should be read as a sign that whatever is being counted is
 /// no longer the kind of thing to state in a sentence.
 fn spelled(n: usize) -> &'static str {
-    const WORDS: [&str; 54] = [
+    const WORDS: [&str; 71] = [
         "zero",
         "one",
         "two",
@@ -170,6 +170,23 @@ fn spelled(n: usize) -> &'static str {
         "fifty-one",
         "fifty-two",
         "fifty-three",
+        "fifty-four",
+        "fifty-five",
+        "fifty-six",
+        "fifty-seven",
+        "fifty-eight",
+        "fifty-nine",
+        "sixty",
+        "sixty-one",
+        "sixty-two",
+        "sixty-three",
+        "sixty-four",
+        "sixty-five",
+        "sixty-six",
+        "sixty-seven",
+        "sixty-eight",
+        "sixty-nine",
+        "seventy",
     ];
     WORDS
         .get(n)
