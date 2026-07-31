@@ -76,7 +76,7 @@ The following words are contextual: they lex as ordinary identifiers and are rea
 parser in specific positions only. A variable may still be named any of them.
 
 ```
-soft-keyword  ::=  "at"  |  "err"  |  "ok"  |  "refuses"  |  "state"  |  "while"
+soft-keyword  ::=  "at"  |  "err"  |  "finally"  |  "ok"  |  "refuses"  |  "state"  |  "while"
 ```
 
 ### Integer literals
@@ -200,12 +200,18 @@ An effect declares operation signatures only; it has no bodies.
 
 ```
 handler-decl    ::=  "handler" ident "implements" ident "{" handler-member* "}"
-handler-member  ::=  state-field | fn-decl
+handler-member  ::=  state-field | fn-decl | finally-block
 state-field     ::=  "state" ident ":" type
+finally-block   ::=  "finally" block
 ```
 
 `state` is a soft keyword: it introduces a mutable field in exactly this position and is an
 ordinary name everywhere else.
+
+`finally` is a soft keyword: it introduces the cleanup block in exactly this position and is an
+ordinary name everywhere else. A handler may have at most one `finally` block. It runs whenever
+the `with` block that installed the handler exits, whether the body returned normally, returned
+early, or a contract failed. The block can read and write handler state.
 
 #### Function
 

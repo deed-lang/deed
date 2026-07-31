@@ -1246,6 +1246,12 @@ impl<'a> Interp<'a> {
                     Ok(()) => self.eval_block(body),
                     Err(signal) => Err(signal),
                 };
+                // Run `finally` blocks for every installed handler that has
+                // one, from the most recently installed to the least recently
+                // installed. This runs whether the body returned normally,
+                // via `return`, or via a contract failure so that any
+                // resource a handler acquired is always released.
+                let result = self.run_finally_blocks(base, result);
                 self.handlers.truncate(base);
                 result
             }
@@ -2664,6 +2670,76 @@ impl<'a> Interp<'a> {
             Some(tail) => self.eval(tail),
             None => Ok(Value::Unit),
         }
+    }
+
+    /// Runs the `finally` block of each handler installed at or after `base`,
+    /// in reverse order (most recently installed first).
+    ///
+    /// `finally` always runs, regardless of whether the body succeeded,
+    /// returned early, or failed. This is what makes it safe for a handler
+    /// to acquire a resource: whatever ends the `with` block, the `finally`
+    /// block will release it.
+    ///
+    /// When the incoming result is already a `Fail`, that failure is kept.
+    /// If the body did not fail but a `finally` block fails, that failure is
+    /// returned. A resource the body could see but `finally` could not clean
+    /// up is still a problem worth reporting.
+    fn run_finally_blocks(&mut self, base: usize, incoming: Eval<Value>) -> Eval<Value> {
+        // Walk from the most recently installed handler back to `base`.
+        let top = self.handlers.len();
+        if base == top {
+            return incoming;
+        }
+
+        // Whether the incoming outcome is already a hard failure. If it is,
+        // any failure in a `finally` block is secondary and is dropped so the
+        // original reason the body stopped is what the caller sees.
+        let body_failed = matches!(incoming, Err(Signal::Fail(_)));
+
+        let mut outcome = incoming;
+
+        for index in (base..top).rev() {
+            let home = self.handlers[index].module;
+            let handler_def = self.handlers[index].handler;
+
+            let Some(declaration) = self.modules[home].handler_decls.get(&handler_def).copied()
+            else {
+                continue;
+            };
+            let Some(finally) = &declaration.finally else {
+                continue;
+            };
+
+            // Run the `finally` block in the handler's module with the
+            // handler's state accessible. A fresh frame holds any bindings
+            // made inside the block.
+            let caller = self.current;
+            self.current = home;
+            self.frames.push(Frame::default());
+            self.rows.push(RowFrame {
+                handled: self.handlers.len(),
+                handler: Some(index),
+                promise: None,
+            });
+            self.inside_handler.push(index);
+
+            let finally_result = self.eval_block(finally);
+
+            self.inside_handler.pop();
+            self.rows.pop();
+            self.frames.pop();
+            self.current = caller;
+
+            // Keep the original failure; only replace a non-failing outcome
+            // with a `finally` failure.
+            if !body_failed {
+                if let Err(signal) = finally_result {
+                    outcome = Err(signal);
+                }
+            }
+        }
+
+        outcome
     }
 
     fn exec(&mut self, stmt: &'a Stmt) -> Eval<()> {
