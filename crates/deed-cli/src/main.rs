@@ -3,6 +3,7 @@
 mod args;
 
 use std::collections::HashSet;
+use std::fmt::Write as FmtWrite;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -277,7 +278,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     if args.mode == Mode::Build {
-        match build(&mut out, &files, &checks, subject) {
+        match build(&mut out, &files, &checks, subject, args.component) {
             Ok(true) => {}
             Ok(false) => return ExitCode::FAILURE,
             Err(error) => {
@@ -290,7 +291,8 @@ fn run_check(args: CheckArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Compiles each named file to a WebAssembly module beside it.
+/// Compiles each named file to a WebAssembly module beside it, or to a
+/// component (module plus WIT world) when `component` is true.
 ///
 /// Only the files somebody named. A module that came in because an import
 /// wanted it is context, and compiling it would write a file nobody asked
@@ -304,7 +306,12 @@ fn build(
     files: &[PathBuf],
     checks: &[Checked],
     subject: usize,
+    component: bool,
 ) -> io::Result<bool> {
+    if component {
+        return build_component(out, files, checks, subject);
+    }
+
     let mut wrote = false;
 
     for (path, checked) in files.iter().zip(checks).take(subject) {
@@ -336,7 +343,308 @@ fn build(
     Ok(true)
 }
 
-/// Rewrites files into canonical form, or reports which are not.
+/// Compiles each named file to a WebAssembly module and a WIT world file.
+///
+/// A component has an interface rather than a `main`. Every function the
+/// module declares is part of that interface; tests are not. A module that
+/// declares `main` is a program, not a component, and is refused here with
+/// a message pointing at `deed build` instead.
+///
+/// Functions whose signatures include a capability have no world-level type
+/// in WIT and are refused too, with a per-function explanation. Anything the
+/// regular backend cannot compile is refused on the same terms as `deed build`.
+///
+/// On success, two files are written beside the source: `<name>.wasm` holds
+/// the module, `<name>.wit` holds the WIT world that describes its interface.
+fn build_component(
+    out: &mut impl Write,
+    files: &[PathBuf],
+    checks: &[Checked],
+    subject: usize,
+) -> io::Result<bool> {
+    let mut wrote = false;
+
+    for (path, checked) in files.iter().zip(checks).take(subject) {
+        // Step 1: Lower to MIR. The same pass `deed build` does; refusing here
+        // rather than after avoids writing a WIT for a module that cannot compile.
+        let lowered = match deed_mir::lower(&checked.module, &checked.resolutions, &checked.types) {
+            Ok(lowered) => lowered,
+            Err(why) => {
+                writeln!(out, "{}: {why}", path.display())?;
+                continue;
+            }
+        };
+
+        // Step 2: A module with `main` is a program. Components have an
+        // interface instead.
+        let has_main = checked.module.items.iter().any(|item| {
+            if let Item::Function(f) = item {
+                f.sig.name.name.as_str() == "main"
+            } else {
+                false
+            }
+        });
+        if has_main {
+            writeln!(
+                out,
+                "{}: declares `main`, which is a program entry point; \
+                 a component has an interface instead of a `main`; \
+                 use `deed build` for programs",
+                path.display()
+            )?;
+            continue;
+        }
+
+        // Step 3: Check every function signature for types that have no
+        // world-level counterpart in WIT.
+        let mut refused = false;
+        for function in &lowered.functions {
+            for (i, param_ty) in function.params.iter().enumerate() {
+                if let Some(why) = wit_incompatible(param_ty) {
+                    writeln!(
+                        out,
+                        "{}: `{}` parameter {} is {why}, which has no world-level type in WIT",
+                        path.display(),
+                        function.name,
+                        i,
+                    )?;
+                    refused = true;
+                }
+            }
+            if let Some(why) = wit_incompatible(&function.ret) {
+                writeln!(
+                    out,
+                    "{}: `{}` returns {why}, which has no world-level type in WIT",
+                    path.display(),
+                    function.name,
+                )?;
+                refused = true;
+            }
+        }
+        if refused {
+            continue;
+        }
+
+        // Step 4: Compile to WebAssembly; the same step as `deed build`.
+        let module = match deed_codegen::compile(&lowered) {
+            Ok(module) => module,
+            Err(why) => {
+                writeln!(out, "{}: {why}", path.display())?;
+                continue;
+            }
+        };
+
+        // Step 5: Generate the WIT world.
+        let module_name = component_name(&checked.module);
+        let wit = generate_wit(&module_name, &lowered);
+
+        // Step 6: Write both files.
+        let wasm_target = path.with_extension("wasm");
+        let wit_target = path.with_extension("wit");
+        std::fs::write(&wasm_target, module.encode())?;
+        std::fs::write(&wit_target, wit.as_bytes())?;
+        writeln!(out, "{}", wasm_target.display())?;
+        writeln!(out, "{}", wit_target.display())?;
+        wrote = true;
+    }
+
+    if !wrote {
+        writeln!(out, "nothing was compiled")?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Returns a human-readable description of why this type has no WIT
+/// world-level counterpart, or `None` if it maps cleanly.
+fn wit_incompatible(ty: &deed_mir::Ty) -> Option<&'static str> {
+    match ty {
+        deed_mir::Ty::Capability => Some("a capability"),
+        deed_mir::Ty::Closure => Some("a function value"),
+        deed_mir::Ty::List(elem) => wit_incompatible(elem),
+        _ => None,
+    }
+}
+
+/// Maps a MIR type to its WIT spelling.
+///
+/// Caller must have already checked [`wit_incompatible`] and knows the type
+/// is representable; panics on `Capability` and `Closure`.
+fn to_wit_type(ty: &deed_mir::Ty, program: &deed_mir::Program) -> String {
+    match ty {
+        deed_mir::Ty::Unit => "unit".to_string(),
+        deed_mir::Ty::Bool => "bool".to_string(),
+        deed_mir::Ty::Int => "s64".to_string(),
+        deed_mir::Ty::Str => "string".to_string(),
+        deed_mir::Ty::List(elem) => format!("list<{}>", to_wit_type(elem, program)),
+        deed_mir::Ty::Aggregate(id) => to_kebab(&program.layout(*id).name),
+        deed_mir::Ty::Capability | deed_mir::Ty::Closure => {
+            unreachable!("incompatible types are caught before this point")
+        }
+    }
+}
+
+/// Converts snake_case to kebab-case, as WIT identifiers require.
+fn to_kebab(s: &str) -> String {
+    s.replace('_', "-").to_lowercase()
+}
+
+/// The module declaration name, or a fallback derived from the first segment.
+///
+/// WIT package names use `namespace:name`, so `deed` is the namespace and the
+/// module path becomes the name. Slashes separate segments in a module path
+/// (`my/module`) and are replaced with hyphens in the WIT name (`deed:my-module`),
+/// since WIT uses hyphens as the segment separator within a package name.
+fn component_name(module: &deed_ast::Module) -> String {
+    match &module.name {
+        Some(path) => path.to_string_path().replace(['/', '_'], "-"),
+        None => "unnamed".to_string(),
+    }
+}
+
+/// Generates a WIT world file describing the module's exported interface.
+///
+/// Every function the module declares (excluding `main`, which was already
+/// refused) becomes an export in the `component` world. Record and choice
+/// types that appear in signatures are declared before the world.
+fn generate_wit(module_name: &str, program: &deed_mir::Program) -> String {
+    let mut out = String::new();
+
+    // Package declaration.
+    let _ = writeln!(out, "package deed:{module_name};");
+    let _ = writeln!(out);
+
+    // Collect layouts that appear in any function signature, in the order
+    // they are first encountered, so the output is deterministic.
+    let mut needed: Vec<deed_mir::LayoutId> = Vec::new();
+    for function in &program.functions {
+        for ty in function.params.iter().chain(std::iter::once(&function.ret)) {
+            collect_layouts(ty, program, &mut needed);
+        }
+    }
+
+    // Emit type definitions before the world block that uses them.
+    for id in &needed {
+        let layout = program.layout(*id);
+        let is_record = layout.variants.len() == 1 && layout.variants[0].name == layout.name;
+        if is_record {
+            let variant = &layout.variants[0];
+            let _ = writeln!(out, "record {} {{", to_kebab(&layout.name));
+            for field in &variant.fields {
+                let _ = writeln!(
+                    out,
+                    "    {}: {},",
+                    to_kebab(&field.name),
+                    to_wit_type(&field.ty, program)
+                );
+            }
+            let _ = writeln!(out, "}}");
+        } else {
+            // Choice type: emit auxiliary records for variants with multiple
+            // fields, then the variant itself.
+            for variant in &layout.variants {
+                if variant.fields.len() > 1 {
+                    let aux = format!("{}-{}", to_kebab(&layout.name), to_kebab(&variant.name));
+                    let _ = writeln!(out, "record {aux} {{");
+                    for field in &variant.fields {
+                        let _ = writeln!(
+                            out,
+                            "    {}: {},",
+                            to_kebab(&field.name),
+                            to_wit_type(&field.ty, program)
+                        );
+                    }
+                    let _ = writeln!(out, "}}");
+                }
+            }
+            let _ = writeln!(out, "variant {} {{", to_kebab(&layout.name));
+            for variant in &layout.variants {
+                match variant.fields.len() {
+                    0 => {
+                        let _ = writeln!(out, "    {},", to_kebab(&variant.name));
+                    }
+                    1 => {
+                        let _ = writeln!(
+                            out,
+                            "    {}({}),",
+                            to_kebab(&variant.name),
+                            to_wit_type(&variant.fields[0].ty, program)
+                        );
+                    }
+                    _ => {
+                        let aux = format!("{}-{}", to_kebab(&layout.name), to_kebab(&variant.name));
+                        let _ = writeln!(out, "    {}({aux}),", to_kebab(&variant.name));
+                    }
+                }
+            }
+            let _ = writeln!(out, "}}");
+        }
+        let _ = writeln!(out);
+    }
+
+    // World block with one export per function.
+    let _ = writeln!(out, "world component {{");
+    for function in &program.functions {
+        // Synthetic parameter names: WIT requires names, but the MIR does not
+        // preserve them. `p0`, `p1`, ... are unambiguous and stable.
+        let params: Vec<String> = function
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, ty)| !matches!(ty, deed_mir::Ty::Unit))
+            .map(|(i, ty)| format!("p{i}: {}", to_wit_type(ty, program)))
+            .collect();
+        let params_str = params.join(", ");
+
+        match &function.ret {
+            deed_mir::Ty::Unit => {
+                let _ = writeln!(
+                    out,
+                    "    export {}: func({params_str});",
+                    to_kebab(&function.name)
+                );
+            }
+            ret => {
+                let ret_str = to_wit_type(ret, program);
+                let _ = writeln!(
+                    out,
+                    "    export {}: func({params_str}) -> {ret_str};",
+                    to_kebab(&function.name)
+                );
+            }
+        }
+    }
+    let _ = writeln!(out, "}}");
+
+    out
+}
+
+/// Collects [`deed_mir::LayoutId`]s that appear in a type, in encounter order,
+/// without duplicates.
+fn collect_layouts(
+    ty: &deed_mir::Ty,
+    program: &deed_mir::Program,
+    out: &mut Vec<deed_mir::LayoutId>,
+) {
+    match ty {
+        deed_mir::Ty::Aggregate(id) => {
+            if !out.contains(id) {
+                // Recurse into field types before adding this layout, so
+                // dependencies are declared before the type that uses them.
+                let layout = program.layout(*id);
+                for variant in &layout.variants {
+                    for field in &variant.fields {
+                        collect_layouts(&field.ty, program, out);
+                    }
+                }
+                out.push(*id);
+            }
+        }
+        deed_mir::Ty::List(elem) => collect_layouts(elem, program, out),
+        _ => {}
+    }
+}
+
 ///
 /// Files are rewritten in place only when the content actually changes, so a
 /// no-op run does not touch mtimes and trigger every watcher on the machine.
@@ -1275,6 +1583,158 @@ mod manifest_tests {
             deed_driver::codes::MISSING_COMPONENT_PATH
         );
         std::fs::remove_dir_all(root).ok();
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    use deed_mir::{Field, Function, Layout, Program, Ty, Variant};
+
+    fn record(name: &str, fields: Vec<(&str, Ty)>) -> Layout {
+        Layout {
+            name: name.to_string(),
+            variants: vec![Variant {
+                name: name.to_string(),
+                fields: fields
+                    .into_iter()
+                    .map(|(name, ty)| Field {
+                        name: name.to_string(),
+                        ty,
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn wit_incompatibility_walks_nested_lists() {
+        assert_eq!(wit_incompatible(&Ty::Closure), Some("a function value"));
+        assert_eq!(wit_incompatible(&Ty::Capability), Some("a capability"));
+        assert_eq!(
+            wit_incompatible(&Ty::List(Box::new(Ty::List(Box::new(Ty::Closure))))),
+            Some("a function value")
+        );
+        assert_eq!(wit_incompatible(&Ty::List(Box::new(Ty::Int))), None);
+    }
+
+    #[test]
+    fn generated_wit_has_an_exact_nested_wire_interface() {
+        let mut program = Program::new();
+        let inner = program.add_layout(record("Inner_Record", vec![("flag_value", Ty::Bool)]));
+        let outcome = program.add_layout(Layout {
+            name: "Outcome_Type".to_string(),
+            variants: vec![
+                Variant {
+                    name: "None".to_string(),
+                    fields: vec![],
+                },
+                Variant {
+                    name: "One".to_string(),
+                    fields: vec![Field {
+                        name: "value".to_string(),
+                        ty: Ty::Int,
+                    }],
+                },
+                Variant {
+                    name: "Pair".to_string(),
+                    fields: vec![
+                        Field {
+                            name: "text_value".to_string(),
+                            ty: Ty::Str,
+                        },
+                        Field {
+                            name: "inner".to_string(),
+                            ty: Ty::Aggregate(inner),
+                        },
+                    ],
+                },
+            ],
+        });
+        let outer = program.add_layout(record(
+            "Outer_Record",
+            vec![
+                ("nested", Ty::Aggregate(inner)),
+                ("outcomes", Ty::List(Box::new(Ty::Aggregate(outcome)))),
+            ],
+        ));
+        program.add_function(Function::new(
+            "do_work",
+            vec![Ty::Aggregate(outer), Ty::Unit],
+            Ty::Aggregate(outcome),
+        ));
+        program.add_function(Function::new("ping", vec![], Ty::Unit));
+
+        let mut needed = Vec::new();
+        collect_layouts(&Ty::Aggregate(outer), &program, &mut needed);
+        collect_layouts(&Ty::Aggregate(outcome), &program, &mut needed);
+        assert_eq!(needed, [inner, outcome, outer]);
+
+        assert_eq!(
+            generate_wit("demo-module", &program),
+            concat!(
+                "package deed:demo-module;\n",
+                "\n",
+                "record inner-record {\n",
+                "    flag-value: bool,\n",
+                "}\n",
+                "\n",
+                "record outcome-type-pair {\n",
+                "    text-value: string,\n",
+                "    inner: inner-record,\n",
+                "}\n",
+                "variant outcome-type {\n",
+                "    none,\n",
+                "    one(s64),\n",
+                "    pair(outcome-type-pair),\n",
+                "}\n",
+                "\n",
+                "record outer-record {\n",
+                "    nested: inner-record,\n",
+                "    outcomes: list<outcome-type>,\n",
+                "}\n",
+                "\n",
+                "world component {\n",
+                "    export do-work: func(p0: outer-record) -> outcome-type;\n",
+                "    export ping: func();\n",
+                "}\n",
+            )
+        );
+    }
+
+    #[test]
+    fn one_variant_with_a_different_name_is_still_a_choice() {
+        let mut program = Program::new();
+        let only = program.add_layout(Layout {
+            name: "Solo_Choice".to_string(),
+            variants: vec![Variant {
+                name: "Only".to_string(),
+                fields: vec![Field {
+                    name: "value".to_string(),
+                    ty: Ty::Int,
+                }],
+            }],
+        });
+        program.add_function(Function::new(
+            "choose",
+            vec![Ty::Aggregate(only)],
+            Ty::Aggregate(only),
+        ));
+
+        assert_eq!(
+            generate_wit("solo", &program),
+            concat!(
+                "package deed:solo;\n",
+                "\n",
+                "variant solo-choice {\n",
+                "    only(s64),\n",
+                "}\n",
+                "\n",
+                "world component {\n",
+                "    export choose: func(p0: solo-choice) -> solo-choice;\n",
+                "}\n",
+            )
+        );
     }
 }
 
