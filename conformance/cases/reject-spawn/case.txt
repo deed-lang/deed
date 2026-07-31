@@ -1,0 +1,3 @@
+mode: check
+expect: reject
+code: DEED2014

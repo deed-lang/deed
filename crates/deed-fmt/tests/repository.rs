@@ -231,6 +231,11 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
             if name == "target" || name == ".git" {
                 continue;
             }
+            // Conformance case programs are test data, not source, and may
+            // contain programs that are intentionally invalid.
+            if name == "cases" && path.parent().is_some_and(|p| p.ends_with("conformance")) {
+                continue;
+            }
             collect(&path, out);
         } else if path.extension().is_some_and(|ext| ext == "deed") {
             out.push(path);

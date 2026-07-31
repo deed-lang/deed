@@ -461,6 +461,21 @@ fn a_cast_to_any_other_type_lists_the_available_conversions() {
         .says("`to_string` and `to_int` are the conversions the prelude has");
 }
 
+// -- DEED2014, a detached spawn ----------------------------------------------
+
+/// `spawn(f())` used to be answered as an unknown name `spawn` or a runtime
+/// failure. The structured-concurrency decision is stated instead.
+///
+/// Sentence: "there is no detached spawn in this language"
+#[test]
+fn a_detached_spawn_names_the_decision() {
+    only_error("module a\n\nfn f() -> () {}\n\nfn g() -> () {\n  spawn(f())\n}\n")
+        .under(codes::NO_DETACHED_SPAWN)
+        .says("there is no detached spawn in this language")
+        .says("no such construct")
+        .says("tied to the block that started it");
+}
+
 // -- recovery ----------------------------------------------------------------
 //
 // P7: a single root cause produces a single diagnostic. The tests below verify

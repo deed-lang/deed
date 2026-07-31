@@ -81,3 +81,14 @@ pub const NO_CAST: &str = "DEED2012";
 /// Editions are accepted per module, and an unknown one should fail at the
 /// declaration line with a list of the versions that exist.
 pub const UNKNOWN_EDITION: &str = "DEED2013";
+
+/// `spawn(f())`. A detached spawn, which this language does not have.
+///
+/// Deed uses structured concurrency: a task is tied to the block that started
+/// it and cannot outlive it. A detached spawn leaves a task running after the
+/// block that created it exits, with no clear owner and no scoped lifetime.
+/// That shape is refused rather than allowed to leak.
+///
+/// The pattern is detected at `spawn(expr)` where `spawn` is an identifier at
+/// statement level followed by an argument list on the same line.
+pub const NO_DETACHED_SPAWN: &str = "DEED2014";

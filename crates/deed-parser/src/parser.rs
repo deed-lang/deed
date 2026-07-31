@@ -1680,6 +1680,19 @@ impl<'a> Parser<'a> {
             };
         }
 
+        // `spawn(f())`. `spawn` stays an ordinary name, so the pattern to
+        // intercept is an identifier spelled `spawn` followed by `(` on the
+        // same line. Detached spawn is not in this language: a task is tied to
+        // the block that started it and cannot outlive it, which is the same
+        // scoping shape as `with`. Two names in a row are never anything else
+        // here, so the shape is safe to read as a single mistake.
+        if matches!(self.kind(), TokenKind::Ident(name) if name == "spawn")
+            && self.nth_kind(1) == &TokenKind::LParen
+            && !self.nth(1).starts_line
+        {
+            return self.no_such_detached_spawn();
+        }
+
         Stmt::Expr(self.parse_expr())
     }
 
@@ -1869,6 +1882,40 @@ impl<'a> Parser<'a> {
         self.emit(diagnostic);
 
         Expr::Error(lhs.span().to(ty.span()))
+    }
+
+    /// Reports `spawn(f())` and reads the argument list it was given.
+    ///
+    /// `spawn` is an ordinary name, so the pattern detected is the identifier
+    /// spelled `spawn` followed by `(` on the same line. A detached spawn is
+    /// not in this language: a task is tied to the block that started it and
+    /// cannot outlive it. The argument list is parsed and discarded so the
+    /// statement after `spawn(...)` is still a statement.
+    fn no_such_detached_spawn(&mut self) -> Stmt {
+        let spawn_span = self.span();
+        self.bump(); // consume `spawn`
+        let (_, end) = self.parse_call_args();
+        let full_span = spawn_span.to(end);
+
+        self.emit(
+            Diagnostic::error(
+                codes::NO_DETACHED_SPAWN,
+                self.file,
+                full_span,
+                "there is no detached spawn in this language",
+            )
+            .with_primary_label("no such construct")
+            .with_note(
+                "a task in Deed is tied to the block that started it and cannot outlive \
+                 it, which is the same scoping shape as `with`",
+            )
+            .with_note(
+                "when concurrency arrives, tasks will be started and joined inside a \
+                 `with` block rather than left running after the block exits",
+            ),
+        );
+
+        Stmt::Expr(Expr::Error(full_span))
     }
 
     fn parse_unary(&mut self) -> Expr {

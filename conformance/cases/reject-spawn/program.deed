@@ -1,0 +1,7 @@
+module a
+
+fn child() -> () {}
+
+fn parent() -> () {
+    spawn(child())
+}
