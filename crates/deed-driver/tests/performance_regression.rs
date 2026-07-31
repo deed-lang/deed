@@ -414,18 +414,30 @@ fn fastest_sample(rounds: usize, mut run: impl FnMut() -> Sample) -> Sample {
 
 fn measure_logs_report() -> RuntimeMetrics {
     let logs = read_example("logs.deed");
-    let table = deed_driver::shipped_source("std/table")
-        .expect("a module that ships has a source")
-        .to_string();
 
     let points = LOG_BLOCKS
         .into_iter()
         .map(|blocks| {
-            let files = vec![
-                ("bench.deed", logs_driver_source(blocks)),
-                ("logs.deed", logs.clone()),
-                ("<shipped>/std/table.deed", table.clone()),
+            let driver = logs_driver_source(blocks);
+
+            // Asked for rather than listed. This used to name `std/table` by
+            // hand, and the day `logs.deed` imported a second shipped module
+            // the benchmark stopped compiling while every other test passed.
+            let mut files = vec![
+                ("bench.deed".to_string(), driver.clone()),
+                ("logs.deed".to_string(), logs.clone()),
             ];
+            for module in deed_driver::shipped_for([logs.as_str(), driver.as_str()]) {
+                let text =
+                    deed_driver::shipped_source(module).expect("a module that ships has a source");
+                files.push((format!("<shipped>/{module}.deed"), text.to_string()));
+            }
+
+            let files: Vec<(&str, String)> = files
+                .iter()
+                .map(|(name, text)| (name.as_str(), text.clone()))
+                .collect();
+
             runtime_sample(&files, 0);
             let sample = fastest_sample(ROUNDS, || runtime_sample(&files, 0));
             ((blocks * LOG_SAMPLE.len()) as f64, sample)

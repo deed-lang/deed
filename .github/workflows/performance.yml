@@ -3,12 +3,16 @@ name: Performance
 on:
   push:
     branches: [main]
+  # On pull requests too. This only ran on main, so when a benchmark stopped
+  # compiling the branch went green, merged, and main went red: eight commits
+  # in a row before anyone looked at the commit list.
+  pull_request:
   schedule:
     - cron: '0 6 * * 1'
   workflow_dispatch:
 
 concurrency:
-  group: performance-ratchet
+  group: performance-ratchet-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
