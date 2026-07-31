@@ -33,6 +33,7 @@ pub use report::json_report;
 pub use shipped::{shipped_for, shipped_modules, shipped_source, take_shipped};
 pub use wit::wit_world_for;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use deed_ast::{Item, Module, Outcome};
@@ -254,13 +255,22 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
         .collect();
 
     let mut universe = Universe::new();
-    let mut duplicates = Vec::new();
+    // Track the first source file to claim each module path, so that when a
+    // second claims the same path both are reported rather than only the one
+    // that arrived later.  The precedence rule in one sentence: a user file
+    // always beats a shipped module with the same path; between two user files
+    // that claim the same path, neither wins and the compiler reports both.
+    let mut first_claims: HashMap<String, (FileId, Span)> = HashMap::new();
+    // (first_file, first_span, second_file, second_span, path)
+    let mut collisions: Vec<(FileId, Span, FileId, Span, String)> = Vec::new();
     for entry in &parsed {
-        if universe.add(&entry.module).is_some() {
-            // Two files claiming one module is not something to pick a winner
-            // for. Whichever one lost would be silently unreachable.
-            if let Some(name) = &entry.module.name {
-                duplicates.push((entry.file, name.span, name.to_string_path()));
+        universe.add(&entry.module);
+        if let Some(name) = &entry.module.name {
+            let path = name.to_string_path();
+            if let Some(&(first_file, first_span)) = first_claims.get(&path) {
+                collisions.push((first_file, first_span, entry.file, name.span, path));
+            } else {
+                first_claims.insert(path, (entry.file, name.span));
             }
         }
     }
@@ -300,25 +310,31 @@ pub fn check_all(sources: &SourceMap, files: &[FileId]) -> Vec<Checked> {
         .map(|(entry, (resolved, resolve_time))| {
             let text = sources.file(entry.file).text();
             let mut checked = check_parsed(entry, resolved, resolve_time, &world, text);
-            for (file, span, path) in &duplicates {
-                if *file == checked.file {
-                    checked.diagnostics.push(
-                        Diagnostic::error(
-                            deed_resolve::codes::DUPLICATE_DEFINITION,
-                            *file,
-                            *span,
-                            format!("another file already declares `module {path}`"),
-                        )
-                        .with_primary_label("declared twice")
-                        .with_note(
-                            "a module is named by its `module` line, so two files with the \
-                             same one cannot both be imported",
-                        ),
-                    );
-                    checked
-                        .diagnostics
-                        .sort_by_key(|diagnostic| diagnostic.primary.span.start);
-                }
+            for (file_a, span_a, file_b, span_b, path) in &collisions {
+                let (this_span, other_file, other_span) = if *file_a == checked.file {
+                    (*span_a, *file_b, *span_b)
+                } else if *file_b == checked.file {
+                    (*span_b, *file_a, *span_a)
+                } else {
+                    continue;
+                };
+                checked.diagnostics.push(
+                    Diagnostic::error(
+                        deed_resolve::codes::AMBIGUOUS_MODULE,
+                        checked.file,
+                        this_span,
+                        format!("two files both declare `module {path}`"),
+                    )
+                    .with_primary_label("declared here")
+                    .with_secondary_in(other_file, other_span, "also declared here")
+                    .with_note(
+                        "a module is identified by its path, so two files with the same \
+                         module path cannot both be imported; give one of them a different path",
+                    ),
+                );
+                checked
+                    .diagnostics
+                    .sort_by_key(|diagnostic| diagnostic.primary.span.start);
             }
             checked
         })

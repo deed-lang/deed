@@ -57,3 +57,15 @@ pub const BINDING_IN_AN_ALTERNATIVE: &str = "DEED3010";
 /// The declaration still exists for now, so this is a warning, but the warning
 /// carries the replacement and may carry a machine-applicable fix.
 pub const DEPRECATED_DECLARATION: &str = "DEED3011";
+
+/// Two source files in the same compile both declare the same module path.
+///
+/// A module is identified by its path, not by the file that contains it, so
+/// two files with the same `module` line cannot both be imported: any `use`
+/// that names the path is ambiguous between them. The fix is to give one of
+/// the files a different path.
+///
+/// A user file whose path matches a shipped module is not a collision. The
+/// user file wins, because the file a person can read is the file they can
+/// change.
+pub const AMBIGUOUS_MODULE: &str = "DEED3012";
