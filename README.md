@@ -65,7 +65,7 @@ examples/transfer.deed
   ok    refuses to overdraw and leaves the ledger alone
   ok    refuses a currency mismatch and leaves the ledger alone
 
-132 passed, 0 failed
+137 passed, 0 failed
 ```
 
 That number used to be 102. Seven of those tests are in `std/table` now, because the table
@@ -303,11 +303,12 @@ The examples are [transfer.deed](examples/transfer.deed),
 [kv_store.deed](examples/kv_store.deed), [json.deed](examples/json.deed),
 [stack_machine.deed](examples/stack_machine.deed), [tic_tac_toe.deed](examples/tic_tac_toe.deed),
 [markdown.deed](examples/markdown.deed), [scheduler.deed](examples/scheduler.deed),
-[tree.deed](examples/tree.deed), [generator.deed](examples/generator.deed), and the three that see
+[tree.deed](examples/tree.deed), [generator.deed](examples/generator.deed),
+[workers.deed](examples/workers.deed), and the three that see
 each other: [names.deed](examples/names.deed), [sink.deed](examples/sink.deed) and
 [greeting.deed](examples/greeting.deed). All are checked by every pass on every commit,
-`hello.deed`, `config.deed`, `todo.deed`, `journal.deed` and `logs.deed` have a `main`, and
-the rest run their own tests.
+`hello.deed`, `config.deed`, `todo.deed`, `journal.deed`, `logs.deed` and `workers.deed`
+have a `main`, and the rest run their own tests.
 
 `todo.deed` is the one written to find out what is missing rather than to show what is there.
 It reads a list of tasks out of a directory it was handed, adds one or marks one done if it
@@ -417,6 +418,17 @@ row on the same `Clock`. `uses Io.now` cannot reach it and it cannot reach `uses
 and what that buys is not narrower authority: a signature saying `uses Io.epoch` is a
 function whose output can change between two runs of the same program, and that is now
 something you can see without reading the body.
+
+`workers.deed` is the one written to find out what concurrency cannot say. Several workers
+read different directories and one collector writes a report. The workers declare
+`uses Io.list, Io.read` and the collector declares `uses Io.save`, and neither can do the
+other's job: a worker that was never handed `Io.save` cannot write, and a collector that
+was never handed `Io.list` or `Io.read` cannot list or read, whatever `Dir` they happen to
+hold. Both of those facts are checked rather than stated in a comment. What the program
+cannot say is what the walls produced: there is no spawn, so the workers run one after
+another even though their authorities are disjoint; there is no channel, so a worker cannot
+push results to the collector as it runs; and the type system cannot prove that two `Dir`
+values name directories that do not overlap.
 
 `proven.deed` is the one that argues with itself. Every function in it either proves its
 postcondition or explains, in a comment, why the checker cannot, and the file is written so
