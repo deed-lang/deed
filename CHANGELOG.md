@@ -28,6 +28,35 @@ release notes.
 
 ### Tools
 
+- None yet.
+
+### Measurements
+
+- None yet.
+
+## 0.2.1 (2026-07-31)
+
+One fix, and it is the whole release: 0.2.0's WebAssembly artifact did not
+work. Nothing else changed, so there is nothing here to be careful about.
+
+### Programs that used to compile and no longer do
+
+- None.
+
+### Language
+
+- None.
+
+### Diagnostics
+
+- None.
+
+### Standard library
+
+- None.
+
+### Tools
+
 - The wasm artifact answers instead of trapping. Every verb went through
   `check_all`, which read a clock, and `wasm32-unknown-unknown` has none, so
   0.2.0's artifact aborted on any input at all. CI now runs the artifact
@@ -35,7 +64,7 @@ release notes.
 
 ### Measurements
 
-- None yet.
+- None.
 
 ## 0.2.0 (2026-07-31)
 
