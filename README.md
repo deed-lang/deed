@@ -158,6 +158,7 @@ The longer version, including the cost model this is all based on, is in
 | [06-grammar.md](design/06-grammar.md) | The grammar, checked against the parser both ways |
 | [07-checker-semantics.md](design/07-checker-semantics.md) | The checker rules the implementation enforces |
 | [07-editions.md](design/07-editions.md) | How a breaking change ships without splitting the ecosystem |
+| [fractional-values.md](design/fractional-values.md) | The decision on fractional values and money |
 | [refusals.md](design/refusals.md) | Everything deliberately left out, and why |
 | [07-versioning.md](design/07-versioning.md) | Compatibility policy for language, diagnostics, and `std/` |
 

@@ -1,4 +1,4 @@
-// The running example, and two of the twelve design documents work through it:
+// The running example, and two of the thirteen design documents work through it:
 // design/02-syntax.md and design/03-effects.md.
 //
 // It lexes, parses, resolves, type checks, has its effect row checked against
