@@ -1013,6 +1013,14 @@ impl Resolver<'_> {
         for operation in &handler.operations {
             self.resolve_fn(operation);
         }
+        // `finally` is inside the handler's scope and can see state names,
+        // the same as an operation body. Unlike a closure written inside an
+        // operation, a `finally` block is structural and only ever runs from
+        // the `with` block that installed the handler, so it is part of the
+        // handler in the same way an operation is.
+        if let Some(finally) = &handler.finally {
+            self.resolve_block(finally);
+        }
         self.pop_scope();
     }
 

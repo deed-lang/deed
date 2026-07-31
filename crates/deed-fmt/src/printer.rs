@@ -402,6 +402,16 @@ impl Printer<'_> {
             self.last_end = op.span.end;
         }
 
+        if let Some(finally) = &decl.finally {
+            self.blank_line();
+            self.comments_before(finally.span.start);
+            self.line_start();
+            self.push("finally ");
+            self.block(finally);
+            self.newline();
+            self.last_end = finally.span.end;
+        }
+
         self.indent -= 1;
         self.line_start();
         self.push("}");

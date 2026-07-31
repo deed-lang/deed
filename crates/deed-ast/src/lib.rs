@@ -187,6 +187,9 @@ pub struct HandlerDecl {
     pub effect: Ident,
     pub state: Vec<FieldDecl>,
     pub operations: Vec<FnDecl>,
+    /// Cleanup block that runs whenever the `with` block that installed this
+    /// handler exits, whether normally or because a contract failed.
+    pub finally: Option<Block>,
     pub span: Span,
 }
 

@@ -7,6 +7,7 @@ const KEYWORDS = [
   "choice",
   "effect",
   "handler",
+  "finally",
   "implements",
   "fn",
   "where",

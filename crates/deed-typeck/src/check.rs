@@ -2046,6 +2046,12 @@ impl<'a> Checker<'a> {
                         let declared = self.operation_signature(handler, operation);
                         self.check_fn_against(operation, declared);
                     }
+                    // `finally` is part of the handler and can read and write
+                    // state. Its value is discarded, so it is checked like a
+                    // test body: any type is fine.
+                    if let Some(finally) = &handler.finally {
+                        self.check_block(finally);
+                    }
                     self.check_handler_is_whole(handler);
                 }
                 Item::Test(test) => {

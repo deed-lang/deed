@@ -40,7 +40,7 @@
     },
     "declaration": {
       "name": "keyword.declaration.deed",
-      "match": "\\b(module|use|type|record|choice|effect|handler|implements|fn|deprecated|test|let|state)\\b"
+      "match": "\\b(module|use|type|record|choice|effect|handler|implements|fn|deprecated|test|let|state|finally)\\b"
     },
     "control": {
       "name": "keyword.control.deed",

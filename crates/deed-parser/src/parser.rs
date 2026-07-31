@@ -72,7 +72,7 @@ impl Parsed {
 /// matches that shape. The test in `crates/deed-parser/tests/grammar.rs`
 /// walks alternation groups, so a word that is coloured by shape rather than
 /// by name is neither missing from the grammar nor invented by it.
-pub const SOFT_KEYWORDS: [&str; 6] = ["state", "at", "while", "refuses", "ok", "err"];
+pub const SOFT_KEYWORDS: [&str; 7] = ["state", "at", "while", "refuses", "ok", "err", "finally"];
 
 /// Parses a token stream. Always produces a module, possibly containing error nodes.
 pub fn parse(file: FileId, tokens: &[Token]) -> Parsed {
@@ -942,13 +942,15 @@ impl<'a> Parser<'a> {
 
         let mut state = Vec::new();
         let mut operations = Vec::new();
+        let mut finally = None;
 
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
-            // A name rather than a keyword. `state` means something here and
-            // nowhere else, and the only other thing a member can start with
-            // is `fn`, so there is nothing to disambiguate and no reason to
-            // reserve the word for the rest of the language.
+            // A name rather than a keyword. `state` and `finally` mean
+            // something here and nowhere else, and the only other thing a
+            // member can start with is `fn`, so there is nothing to
+            // disambiguate and no reason to reserve the words for the rest
+            // of the language.
             if self.eat_named("state") {
                 if let Some(field_name) = self.expect_ident("handler state") {
                     if self.expect(TokenKind::Colon, "handler state").is_some() {
@@ -960,6 +962,8 @@ impl<'a> Parser<'a> {
                         });
                     }
                 }
+            } else if self.eat_named("finally") {
+                finally = Some(self.parse_block());
             } else if self.at_kw(Keyword::Fn) {
                 if let Some(function) = self.parse_fn(TypesRequired::No) {
                     operations.push(function);
@@ -972,9 +976,9 @@ impl<'a> Parser<'a> {
                         codes::UNEXPECTED_TOKEN,
                         self.file,
                         span,
-                        format!("expected `state` or `fn` in a handler, found {found}"),
+                        format!("expected `state`, `fn` or `finally` in a handler, found {found}"),
                     )
-                    .with_primary_label("expected `state` or `fn`"),
+                    .with_primary_label("expected `state`, `fn` or `finally`"),
                 );
                 break;
             }
@@ -990,6 +994,7 @@ impl<'a> Parser<'a> {
             effect,
             state,
             operations,
+            finally,
             span: start.to(end),
         })
     }
