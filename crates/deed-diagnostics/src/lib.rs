@@ -17,6 +17,6 @@ pub mod span;
 
 pub use diagnostic::{Applicability, Diagnostic, Fix, Label, Severity, SuggestedEdit};
 pub use hashing::ByNumber;
-pub use render::{render_human, render_json};
+pub use render::{json_string, render_human, render_json};
 pub use source::{FileId, Location, SourceFile, SourceMap};
 pub use span::Span;

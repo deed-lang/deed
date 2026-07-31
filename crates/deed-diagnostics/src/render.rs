@@ -270,7 +270,12 @@ fn json_array(items: &[String]) -> String {
     format!("[{}]", items.join(","))
 }
 
-fn json_string(value: &str) -> String {
+/// Quotes and escapes `value` as a JSON string, delimiters included.
+///
+/// Public because this crate is not the only thing that writes this format:
+/// `deed-wasm` hands a page the same shape, and a second implementation of
+/// the escaping rules is a second place for them to be wrong.
+pub fn json_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for ch in value.chars() {
