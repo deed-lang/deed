@@ -1,0 +1,108 @@
+// A generator pattern over a Yield effect.
+//
+// `for` walks a list that already exists. A generator is the other shape:
+// a producer that computes elements one at a time, handing each to the consumer
+// before computing the next. The consumer decides how many it wants.
+//
+// The mechanism is a Yield effect. The producer calls Yield.item for each
+// element. The handler's return value is the signal back: true means keep
+// going, false means stop. The producer's for loop reads that signal through
+// the accumulator, so stopping is one iteration check away, and the elements
+// the handler refused to take are never computed.
+//
+// This is the push direction: the producer drives and the handler receives.
+// The pull direction, where the consumer asks and the producer resumes, needs
+// resumable effects, which are not in the language yet. That decision is open
+// and tracked separately.
+//
+// Effects cannot be generic in Deed, so Yield carries Int here. A program
+// that needs a different element type writes its own effect. The pattern is
+// the same.
+
+module examples/generator
+
+// The producer calls item() for each element it wants to yield. The return
+// value is the handler's answer to "should I keep going?". True means yes,
+// false means the producer should stop after this element.
+//
+// collected() hands back what the handler kept, so a test can check the result
+// without the handler writing to a side channel.
+effect Yield {
+    fn item(element: Int) -> Bool
+    fn collected() -> List<Int>
+}
+
+// Accept every element the producer yields.
+handler Collect implements Yield {
+    state items: List<Int>
+
+    fn item(element) -> Bool {
+        items = push(items, element)
+        true
+    }
+
+    fn collected() -> List<Int> {
+        items
+    }
+}
+
+// Accept at most the first `limit` elements and then signal the producer to
+// stop. The producer stops after handing over the element that reached the
+// limit, so the handler gets exactly `limit` elements and the rest are never
+// computed.
+handler TakeFirst implements Yield {
+    state limit: Int
+    state items: List<Int>
+
+    fn item(element) -> Bool {
+        if length(items) < limit {
+            items = push(items, element)
+            length(items) < limit
+        } else {
+            false
+        }
+    }
+
+    fn collected() -> List<Int> {
+        items
+    }
+}
+
+// Yields the squares of 0, 1, ..., count-1, one at a time.
+//
+// The squares are computed as needed rather than built into a list first.
+// If the handler stops the producer early, the remaining squares are never
+// computed. The loop uses the index from repeat() rather than the element
+// itself, which is the idiom for a count-driven walk in Deed.
+//
+// Returns true if every square was yielded, false if the handler stopped it
+// before the count was reached.
+fn squares(count: Int) -> Bool
+  uses
+    Yield.item,
+{
+    for _zero at i in repeat(0, count) with going = true while going {
+        Yield.item(i * i)
+    }
+}
+
+test "the producer yields every square when the consumer accepts all of them" {
+    with Collect { items: [] } {
+        assert squares(5) == true
+        assert Yield.collected() == [0, 1, 4, 9, 16]
+    }
+}
+
+test "the consumer stops the producer after taking what it needs" {
+    with TakeFirst { limit: 3, items: [] } {
+        assert squares(10) == false
+        assert Yield.collected() == [0, 1, 4]
+    }
+}
+
+test "a limit larger than the count yields everything" {
+    with TakeFirst { limit: 100, items: [] } {
+        assert squares(5) == true
+        assert Yield.collected() == [0, 1, 4, 9, 16]
+    }
+}
