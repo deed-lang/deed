@@ -34,6 +34,10 @@
 use std::io;
 use std::path::Path;
 
+fn xor3(first: u32, second: u32, third: u32) -> u32 {
+    first ^ second ^ third
+}
+
 // ---------------------------------------------------------------------------
 // SHA-256
 // ---------------------------------------------------------------------------
@@ -130,9 +134,13 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     let bit_len = (data.len() as u64).wrapping_mul(8);
     let mut padded = data.to_vec();
     padded.push(0x80);
-    while padded.len() % 64 != 56 {
-        padded.push(0);
-    }
+    let remainder = padded.len() & 63;
+    let zeroes = if remainder <= 56 {
+        56 - remainder
+    } else {
+        120 - remainder
+    };
+    padded.resize(padded.len() + zeroes, 0);
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
     // Process each 512-bit (64-byte) block.
@@ -143,8 +151,16 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
             w[i] = u32::from_be_bytes(chunk.try_into().unwrap());
         }
         for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            let s0 = xor3(
+                w[i - 15].rotate_right(7),
+                w[i - 15].rotate_right(18),
+                w[i - 15] >> 3,
+            );
+            let s1 = xor3(
+                w[i - 2].rotate_right(17),
+                w[i - 2].rotate_right(19),
+                w[i - 2] >> 10,
+            );
             w[i] = w[i - 16]
                 .wrapping_add(s0)
                 .wrapping_add(w[i - 7])
@@ -154,15 +170,15 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         // Compression.
         let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
         for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let s1 = xor3(e.rotate_right(6), e.rotate_right(11), e.rotate_right(25));
             let ch = (e & f) ^ (!e & g);
             let t1 = hh
                 .wrapping_add(s1)
                 .wrapping_add(ch)
                 .wrapping_add(K[i])
                 .wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let s0 = xor3(a.rotate_right(2), a.rotate_right(13), a.rotate_right(22));
+            let maj = xor3(a & b, a & c, b & c);
             let t2 = s0.wrapping_add(maj);
             hh = g;
             g = f;
@@ -272,9 +288,10 @@ fn parse(text: &str) -> Result<Vec<Entry>, String> {
         }
         let mut digest = [0u8; 32];
         for (j, pair) in hex_part.as_bytes().chunks_exact(2).enumerate() {
-            let hi = from_hex(pair[0]).ok_or_else(|| format!("line {}: invalid hex", i + 2))?;
-            let lo = from_hex(pair[1]).ok_or_else(|| format!("line {}: invalid hex", i + 2))?;
-            digest[j] = (hi << 4) | lo;
+            let pair =
+                std::str::from_utf8(pair).map_err(|_| format!("line {}: invalid hex", i + 2))?;
+            digest[j] =
+                u8::from_str_radix(pair, 16).map_err(|_| format!("line {}: invalid hex", i + 2))?;
         }
         entries.push(Entry {
             digest,
@@ -282,15 +299,6 @@ fn parse(text: &str) -> Result<Vec<Entry>, String> {
         });
     }
     Ok(entries)
-}
-
-fn from_hex(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
 }
 
 /// Verifies that every entry in the lock file matches its current content.
@@ -346,6 +354,11 @@ pub fn verify(entries: &[Entry]) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn xor_cancels_overlapping_bits() {
+        assert_eq!(xor3(0b11, 0b10, 0b01), 0);
+    }
+
     /// The SHA-256 of an empty string is well-known.
     #[test]
     fn sha256_of_empty_string() {
@@ -368,6 +381,18 @@ mod tests {
         let digest = sha256(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
         let expected = "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1";
         assert_eq!(hex(&digest), expected);
+    }
+
+    #[test]
+    fn sha256_padding_boundary_uses_one_block_then_two() {
+        assert_eq!(
+            hex(&sha256(&[b'a'; 55])),
+            "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"
+        );
+        assert_eq!(
+            hex(&sha256(&[b'a'; 56])),
+            "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"
+        );
     }
 
     /// A lock file round-trips through write and read.
@@ -414,5 +439,38 @@ mod tests {
     fn truncated_hash_is_rejected() {
         let err = parse("deed lock v1\nsha256:abc  x.deed\n").unwrap_err();
         assert!(err.contains("64 hex digits"), "{err}");
+    }
+
+    #[test]
+    fn uppercase_hex_is_parsed_to_exact_bytes() {
+        let parsed = parse(
+            "deed lock v1\nsha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF  x.deed\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed[0].digest,
+            [
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67,
+                0x89, 0xab, 0xcd, 0xef,
+            ]
+        );
+    }
+
+    #[test]
+    fn verify_accepts_exact_content_and_rejects_a_change() {
+        let path = std::env::temp_dir().join(format!(
+            "deed-lock-verify-{}-{:?}.deed",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, b"before").unwrap();
+        let entry = entry_for_file(&path, path.to_str().unwrap()).unwrap();
+        assert_eq!(verify(std::slice::from_ref(&entry)), Ok(()));
+
+        std::fs::write(&path, b"after").unwrap();
+        let error = verify(&[entry]).expect_err("changed content must be refused");
+        assert!(error.contains("content has changed"), "{error}");
+        std::fs::remove_file(path).ok();
     }
 }
