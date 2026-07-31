@@ -1,11 +1,11 @@
 //! The editor grammar knows the same words the parser does.
 //!
-//! `editors/vscode/syntaxes/deed.tmLanguage.json` is a second copy of the
-//! keyword set living outside the compiler, in a file no Rust code reads and
-//! no test would otherwise open. A keyword added to the lexer and not to the
-//! grammar is a word that stops being coloured, which nobody notices until
-//! they are reading a program and one word is the wrong colour for a reason
-//! they cannot see.
+//! `editors/vscode/syntaxes/deed.tmLanguage.json` and
+//! `editors/tree-sitter-deed/grammar.js` are second copies of the keyword set
+//! living outside the compiler, in files no Rust code reads and no test would
+//! otherwise open. A keyword added to the lexer and not to either grammar is a
+//! word that stops being coloured, which nobody notices until they are reading
+//! a program and one word is the wrong colour for a reason they cannot see.
 //!
 //! Two sets are held rather than one. `Keyword::ALL` is what the lexer
 //! reserves and `SOFT_KEYWORDS` is what the parser reads by name in a single
@@ -62,7 +62,7 @@ fn coloured_words(grammar: &str) -> BTreeSet<&str> {
     found
 }
 
-fn grammar() -> String {
+fn vscode_grammar() -> String {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../editors/vscode/syntaxes/deed.tmLanguage.json"
@@ -70,45 +70,100 @@ fn grammar() -> String {
     std::fs::read_to_string(path).expect("the editor grammar should be there")
 }
 
-#[test]
-fn the_grammar_colours_every_keyword() {
-    let grammar = grammar();
-    let coloured = coloured_words(&grammar);
+fn tree_sitter_coloured_words(grammar: &str) -> BTreeSet<&str> {
+    let open = "const KEYWORDS = [";
+    let close = "];";
+    let start = grammar
+        .find(open)
+        .expect("tree-sitter grammar should declare KEYWORDS");
+    let after_open = &grammar[start + open.len()..];
+    let end = after_open
+        .find(close)
+        .expect("tree-sitter grammar KEYWORDS should close");
+    let list = &after_open[..end];
 
-    let missing: Vec<&str> = Keyword::ALL
+    let mut found = BTreeSet::new();
+    for line in list.lines() {
+        let token = line.trim().trim_end_matches(',');
+        if let Some(word) = token.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            found.insert(word);
+        }
+    }
+
+    assert!(
+        !found.is_empty(),
+        "no keywords found in tree-sitter KEYWORDS list"
+    );
+    found
+}
+
+fn tree_sitter_grammar() -> String {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../editors/tree-sitter-deed/grammar.js"
+    );
+    std::fs::read_to_string(path).expect("the tree-sitter grammar should be there")
+}
+
+fn known_words() -> BTreeSet<&'static str> {
+    Keyword::ALL
         .iter()
         .map(|kw| kw.as_str())
         .chain(SOFT_KEYWORDS)
+        .collect()
+}
+
+fn assert_colours_every_keyword(coloured: &BTreeSet<&str>, grammar_name: &str) {
+    let missing: Vec<&str> = known_words()
+        .into_iter()
         .filter(|word| !coloured.contains(word))
         .collect();
 
     assert!(
         missing.is_empty(),
-        "the parser knows these and the grammar does not colour them: {}",
+        "{grammar_name} does not colour these parser words: {}",
         missing.join(", ")
     );
 }
 
-#[test]
-fn the_grammar_colours_nothing_else() {
-    let grammar = grammar();
-    let known: BTreeSet<&str> = Keyword::ALL
-        .iter()
-        .map(|kw| kw.as_str())
-        .chain(SOFT_KEYWORDS)
-        .collect();
-
-    let invented: Vec<&str> = coloured_words(&grammar)
+fn assert_colours_nothing_else(coloured: BTreeSet<&str>, grammar_name: &str) {
+    let known = known_words();
+    let invented: Vec<&str> = coloured
         .into_iter()
         .filter(|word| !known.contains(word))
         .collect();
 
-    // A word coloured as a keyword and not read as one is worse than a missing
-    // colour: it tells a reader the compiler cares about a name it has never
-    // heard of.
     assert!(
         invented.is_empty(),
-        "the grammar colours these and the parser does not know them: {}",
+        "{grammar_name} colours these words the parser does not know: {}",
         invented.join(", ")
     );
+}
+
+#[test]
+fn vscode_grammar_colours_every_keyword() {
+    let grammar = vscode_grammar();
+    let coloured = coloured_words(&grammar);
+    assert_colours_every_keyword(&coloured, "vscode grammar");
+}
+
+#[test]
+fn vscode_grammar_colours_nothing_else() {
+    let grammar = vscode_grammar();
+    let coloured = coloured_words(&grammar);
+    assert_colours_nothing_else(coloured, "vscode grammar");
+}
+
+#[test]
+fn tree_sitter_grammar_colours_every_keyword() {
+    let grammar = tree_sitter_grammar();
+    let coloured = tree_sitter_coloured_words(&grammar);
+    assert_colours_every_keyword(&coloured, "tree-sitter grammar");
+}
+
+#[test]
+fn tree_sitter_grammar_colours_nothing_else() {
+    let grammar = tree_sitter_grammar();
+    let coloured = tree_sitter_coloured_words(&grammar);
+    assert_colours_nothing_else(coloured, "tree-sitter grammar");
 }

@@ -8,14 +8,15 @@ stdout, which is all any of these editors want.
 |  | highlighting | language server |
 | --- | --- | --- |
 | VS Code | yes, [editors/vscode](vscode) | not yet |
-| Helix | no | yes |
-| Neovim | no | yes |
+| Helix | yes, [editors/tree-sitter-deed](tree-sitter-deed) | yes |
+| Neovim | yes, [editors/tree-sitter-deed](tree-sitter-deed) | yes |
 | anything else that speaks LSP | no | yes |
 
-The split is not an accident. VS Code takes a TextMate grammar, which is a
-data file this repo can carry and hold to the compiler with a test. Helix and
-Neovim highlight with tree-sitter, which needs a grammar written in a
-different language and built as a shared library, and there is not one yet.
+The split is still not an accident. VS Code takes a TextMate grammar, and
+Helix and Neovim take tree-sitter. Both grammar files now live in this repo
+and are held to the compiler in `crates/deed-parser/tests/grammar.rs`:
+`editors/vscode/syntaxes/deed.tmLanguage.json` and
+`editors/tree-sitter-deed/grammar.js`.
 
 The other half is the reverse. Helix and Neovim start a language server from
 a few lines of configuration, and VS Code needs an extension with code in it.
@@ -45,7 +46,8 @@ file-types = ["deed"]
 language-servers = ["deed"]
 ```
 
-`hx --health deed` says whether it found the binary.
+`hx --health deed` says whether it found the binary. For highlighting, point
+Helix's tree-sitter configuration at `editors/tree-sitter-deed`.
 
 ## Neovim
 
@@ -66,7 +68,8 @@ vim.api.nvim_create_autocmd("FileType", {
 })
 ```
 
-No plugin. `vim.lsp.start` is in the editor.
+No plugin. `vim.lsp.start` is in the editor. For highlighting, point Neovim's
+tree-sitter parser configuration at `editors/tree-sitter-deed`.
 
 ## Anything else
 
@@ -118,7 +121,7 @@ can have and one for a name that came from another module. That the tier is the
 terminal's answer and not a second one is held by
 `crates/deed-cli/tests/agreement.rs`, which runs the real binary and an
 in-process server over the same file and compares them position by position.
-The keywords the VS Code grammar paints are compared with the lexer's in
+The keywords both editor grammars paint are compared with the lexer's in
 `crates/deed-parser/tests/grammar.rs`. The module named in `use std/list` above
 is checked against the ones that really ship in
 `crates/deed-driver/tests/documentation.rs`, whose header says why these checks
