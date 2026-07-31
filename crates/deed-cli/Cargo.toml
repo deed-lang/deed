@@ -22,6 +22,7 @@ deed-mir = { path = "../deed-mir" }
 deed-fmt = { path = "../deed-fmt" }
 deed-interp = { path = "../deed-interp" }
 deed-lsp = { path = "../deed-lsp" }
+deed-mcp = { path = "../deed-mcp" }
 deed-typeck = { path = "../deed-typeck" }
 
 [lints]

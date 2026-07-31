@@ -13,6 +13,7 @@ members = [
     "crates/deed-interp",
     "crates/deed-lexer",
     "crates/deed-lsp",
+    "crates/deed-mcp",
     "crates/deed-mir",
     "crates/deed-parser",
     "crates/deed-resolve",

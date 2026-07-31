@@ -86,6 +86,14 @@ For an editor, see [`editors`](editors). VS Code now carries both syntax
 highlighting and a language-server client, while Helix and Neovim start the
 language server from a few lines of configuration and no plugin.
 
+For a coding agent, `deed mcp` speaks the Model Context Protocol on stdin and
+stdout, so the machine writing the code can ask the compiler the same questions
+an editor does rather than scraping them out of terminal output. It holds no
+capability: a program arrives as text, the answer leaves as text, and a program
+whose row reaches a file is refused before it runs.
+[how-to/let-an-agent-use-the-compiler.md](how-to/let-an-agent-use-the-compiler.md)
+has the six tools and the one line worth reading.
+
 ## Demo
 
 One clause in a function signature is the difference between two components.

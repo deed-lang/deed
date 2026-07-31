@@ -42,7 +42,7 @@ use std::cell::Cell;
 use std::path::Path;
 
 use deed_ast::Item;
-use deed_diagnostics::{SourceMap, json_string, render_json};
+use deed_diagnostics::{Diagnostic, SourceMap, json_string, render_json};
 use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
 use deed_fmt::format as format_source;
 use deed_interp::{Program, run_main, run_tests};
@@ -149,6 +149,16 @@ pub fn check_source(source: &str) -> String {
     // it are context, the same distinction `deed check` draws between a named
     // file and what it imports.
     json_report(&sources, &checks[..1], true)
+}
+
+/// What [`check_source`] found, as diagnostics rather than as JSON.
+///
+/// `deed_driver::fix::fix` wants to re-check text between rounds and reads
+/// diagnostics, not a report. Rendering to JSON and parsing it back would be
+/// the same answer with a round trip in the middle.
+pub fn diagnostics_of(source: &str) -> Vec<Diagnostic> {
+    let (_, mut checks) = checked_of(source);
+    checks.swap_remove(0).diagnostics
 }
 
 /// Parses and checks `source` plus whatever it imports from the shipped

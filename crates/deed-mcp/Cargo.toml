@@ -1,0 +1,18 @@
+[package]
+name = "deed-mcp"
+description = "The boundary an agent calls across: one program's text in, the compiler's answer out"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-driver = { path = "../deed-driver" }
+deed-explain = { path = "../deed-explain" }
+deed-lsp = { path = "../deed-lsp" }
+deed-wasm = { path = "../deed-wasm" }
+
+[lints]
+workspace = true

@@ -18,6 +18,7 @@ Usage:
   deed fix   [--check] <path>...
   deed explain <code>
   deed lsp
+  deed mcp
 
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
@@ -64,6 +65,10 @@ refused with an explanation. Tests are not part of the interface.
 code identifier (`DEED4025`) or the constant name (`BROKEN_PRECONDITION`).
 `deed lsp` speaks the language server protocol on stdin and stdout. It is for an
 editor to start, not for a person to type.
+`deed mcp` speaks the Model Context Protocol on stdin and stdout, so an agent can
+ask the compiler the same questions an editor does. It holds no capability: a
+program arrives as text and the answer leaves as text, and nothing it runs can
+reach a file.
 There is no REPL. A Deed input is a module of declarations, and `deed run`
 enters through `main` rather than evaluating a top-level expression. For quick
 experiments, use a scratch `.deed` file with `deed check`, `deed test` or
@@ -134,6 +139,8 @@ pub enum Command {
     Explain(String),
     /// Speak the language server protocol on stdin and stdout.
     Lsp,
+    /// Speak the Model Context Protocol on stdin and stdout.
+    Mcp,
     Help,
     Version,
 }
@@ -167,6 +174,12 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             return match args.next() {
                 None => Ok(Command::Lsp),
                 Some(extra) => Err(format!("`deed lsp` takes no arguments, found `{extra}`")),
+            };
+        }
+        "mcp" => {
+            return match args.next() {
+                None => Ok(Command::Mcp),
+                Some(extra) => Err(format!("`deed mcp` takes no arguments, found `{extra}`")),
             };
         }
         "explain" => {

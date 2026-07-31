@@ -9,6 +9,7 @@ These pages answer questions the corpus already answers in code.
 - [How do I format code?](format-code.md)
 - [How do I check what the backend compiles today?](check-what-the-backend-compiles.md)
 - [How do I use Deed in an editor?](use-deed-in-an-editor.md)
+- [How do I let an agent use the compiler?](let-an-agent-use-the-compiler.md)
 
 Each page points at code that is already in this repository, already exercised by
 the test suite, and short enough to read before opening the full example.

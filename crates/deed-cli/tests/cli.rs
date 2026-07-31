@@ -436,6 +436,55 @@ fn lsp_takes_no_arguments() {
     );
 }
 
+// -- the agent surface -----------------------------------------------------
+
+#[test]
+fn mcp_speaks_the_protocol_on_stdin_and_stdout() {
+    // Same shape as the language server test above and for the same reason:
+    // the crate has the session tests, this one is about the wiring. The
+    // framing is different, though, and that difference is the point of
+    // checking it here. MCP is one JSON message a line, so a stray
+    // `Content-Length` header would be a client that reads nothing.
+    let initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}";
+    let list = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}";
+    let input = format!("{initialize}\n{list}\n");
+
+    let mut child = Command::new(DEED)
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the deed binary should run");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("it should finish");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(!text.starts_with("Content-Length"), "{text}");
+    assert_eq!(text.lines().count(), 2, "one answer a line: {text}");
+    assert!(text.contains("\"serverInfo\""), "{text}");
+    assert!(text.contains("\"deed_check\""), "{text}");
+}
+
+#[test]
+fn mcp_takes_no_arguments() {
+    let output = run(&["mcp", EXAMPLE]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("takes no arguments"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 // -- explain ---------------------------------------------------------------
 
 #[test]
