@@ -1,6 +1,7 @@
 //! The `deed` command line tool.
 
 mod args;
+mod lock;
 
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
@@ -159,6 +160,24 @@ fn run_check(args: CheckArgs) -> ExitCode {
         return ExitCode::from(EXIT_USAGE);
     }
 
+    // If --locked was given, verify every input matches the recorded hash
+    // before touching anything. A changed or missing file exits here rather
+    // than producing an artifact whose provenance is unknown.
+    if let Some(lock_path) = &args.locked {
+        match lock::read(lock_path) {
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(EXIT_USAGE);
+            }
+            Ok(entries) => {
+                if let Err(e) = lock::verify(&entries) {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    }
+
     let mut sources = SourceMap::new();
     let mut ids = Vec::new();
 
@@ -285,6 +304,17 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 eprintln!("error: {error}");
                 return ExitCode::from(EXIT_USAGE);
             }
+        }
+    }
+
+    // After a successful build/check, write the lock file if requested.
+    // Written last so the lock records what actually compiled, not what was
+    // planned to compile but may have failed.
+    if let Some(lock_path) = &args.lock {
+        let entries = build_lock_entries(&files, &shipped);
+        if let Err(error) = lock::write(lock_path, &entries) {
+            eprintln!("error: {}: {error}", lock_path.display());
+            return ExitCode::from(EXIT_USAGE);
         }
     }
 
@@ -1504,6 +1534,36 @@ fn root_of(path: &Path, module: &str) -> Option<PathBuf> {
 /// Forward slashes everywhere, so output does not depend on the platform.
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// Builds the list of lock entries for a completed compilation.
+///
+/// Local file entries are hashed from disk using the display path. Shipped
+/// module entries are hashed from the embedded source text. The order is
+/// local files first (sorted, as they were compiled), then shipped modules.
+fn build_lock_entries(files: &[PathBuf], shipped: &[&'static str]) -> Vec<lock::Entry> {
+    let mut entries = Vec::new();
+
+    for path in files {
+        let display = display_path(path);
+        match lock::entry_for_file(path, &display) {
+            Ok(entry) => entries.push(entry),
+            Err(_) => {
+                // The file was readable during compilation, so this path is
+                // only reached if it disappears in the window between. Skip
+                // it: the lock will not list it, and a subsequent --locked
+                // check will find it missing from the file system.
+            }
+        }
+    }
+
+    for module in shipped {
+        if let Some(source) = deed_driver::shipped_source(module) {
+            entries.push(lock::entry_for_shipped(module, source));
+        }
+    }
+
+    entries
 }
 
 fn collect(path: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {

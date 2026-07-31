@@ -17,6 +17,7 @@ deed-diagnostics = { path = "../deed-diagnostics" }
 deed-codegen = { path = "../deed-codegen" }
 deed-driver = { path = "../deed-driver" }
 deed-explain = { path = "../deed-explain" }
+deed-fetch = { path = "../deed-fetch" }
 deed-mir = { path = "../deed-mir" }
 deed-fmt = { path = "../deed-fmt" }
 deed-interp = { path = "../deed-interp" }
