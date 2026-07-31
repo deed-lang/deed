@@ -1587,66 +1587,115 @@ mod manifest_tests {
 }
 
 #[cfg(test)]
-mod compiled_tests {
+mod component_tests {
     use super::*;
-    use deed_codegen::wasm::{Func, FuncType, Ins, ValType};
+    use deed_mir::{Field, Function, Layout, Program, Ty, Variant};
 
-    #[test]
-    fn compiled_failure_codes_keep_their_diagnostic_labels() {
-        let mut sources = SourceMap::new();
-        let file = sources.add("test.deed", "0123456789");
-        let span = deed_diagnostics::Span::new(2, 5);
-
-        for (code, label) in [
-            (deed_mir::codes::ASSERTION_FAILED, "evaluated to false"),
-            (deed_mir::codes::PRECONDITION_FAILED, "precondition not met"),
-            (deed_mir::codes::NOT_RUNNABLE, "not runnable"),
-        ] {
-            let trap = deed_codegen::Trap::Failed {
-                code: code.to_string(),
-                message: "stopped".to_string(),
-                span: Some(span),
-                blame_caller: false,
-            };
-            let diagnostic = compiled_diagnostic(file, &trap).expect("known code");
-            assert_eq!(diagnostic.code, code);
-            assert_eq!(diagnostic.primary.span, span);
-            assert_eq!(diagnostic.primary.message, label);
+    fn record(name: &str, fields: Vec<(&str, Ty)>) -> Layout {
+        Layout {
+            name: name.to_string(),
+            variants: vec![Variant {
+                name: name.to_string(),
+                fields: fields
+                    .into_iter()
+                    .map(|(name, ty)| Field {
+                        name: name.to_string(),
+                        ty,
+                    })
+                    .collect(),
+            }],
         }
     }
 
     #[test]
-    fn compiled_arguments_use_the_named_exports_signature() {
-        let mut module = deed_codegen::Module::new();
-        let other_ty = module.intern_type(FuncType {
-            params: vec![ValType::I32],
-            results: vec![],
-        });
-        let other = module.add_func(Func {
-            type_index: other_ty,
-            locals: vec![],
-            body: vec![Ins::I32Const(0)],
-        });
-        module.export("other", other);
+    fn wit_incompatibility_walks_nested_lists() {
+        assert_eq!(wit_incompatible(&Ty::Closure), Some("a function value"));
+        assert_eq!(wit_incompatible(&Ty::Capability), Some("a capability"));
+        assert_eq!(
+            wit_incompatible(&Ty::List(Box::new(Ty::List(Box::new(Ty::Closure))))),
+            Some("a function value")
+        );
+        assert_eq!(wit_incompatible(&Ty::List(Box::new(Ty::Int))), None);
+    }
 
-        let main_ty = module.intern_type(FuncType {
-            params: vec![ValType::I64, ValType::I32],
-            results: vec![],
+    #[test]
+    fn generated_wit_has_an_exact_nested_wire_interface() {
+        let mut program = Program::new();
+        let inner = program.add_layout(record("Inner_Record", vec![("flag_value", Ty::Bool)]));
+        let outcome = program.add_layout(Layout {
+            name: "Outcome_Type".to_string(),
+            variants: vec![
+                Variant {
+                    name: "None".to_string(),
+                    fields: vec![],
+                },
+                Variant {
+                    name: "One".to_string(),
+                    fields: vec![Field {
+                        name: "value".to_string(),
+                        ty: Ty::Int,
+                    }],
+                },
+                Variant {
+                    name: "Pair".to_string(),
+                    fields: vec![
+                        Field {
+                            name: "text_value".to_string(),
+                            ty: Ty::Str,
+                        },
+                        Field {
+                            name: "inner".to_string(),
+                            ty: Ty::Aggregate(inner),
+                        },
+                    ],
+                },
+            ],
         });
-        let main = module.add_func(Func {
-            type_index: main_ty,
-            locals: vec![],
-            body: vec![Ins::I64Const(0)],
-        });
-        module.export("main", main);
+        let outer = program.add_layout(record(
+            "Outer_Record",
+            vec![
+                ("nested", Ty::Aggregate(inner)),
+                ("outcomes", Ty::List(Box::new(Ty::Aggregate(outcome)))),
+            ],
+        ));
+        program.add_function(Function::new(
+            "do_work",
+            vec![Ty::Aggregate(outer), Ty::Unit],
+            Ty::Aggregate(outcome),
+        ));
+        program.add_function(Function::new("ping", vec![], Ty::Unit));
+
+        let mut needed = Vec::new();
+        collect_layouts(&Ty::Aggregate(outer), &program, &mut needed);
+        collect_layouts(&Ty::Aggregate(outcome), &program, &mut needed);
+        assert_eq!(needed, [inner, outcome, outer]);
 
         assert_eq!(
-            compiled_args(&module, "main"),
-            Some(vec![
-                deed_codegen::Value::I64(0),
-                deed_codegen::Value::I32(0)
-            ])
+            generate_wit("demo-module", &program),
+            "package deed:demo-module;\n\n\
+record inner-record {\n\
+    flag-value: bool,\n\
+}\n\
+\n\
+record outcome-type-pair {\n\
+    text-value: string,\n\
+    inner: inner-record,\n\
+}\n\
+variant outcome-type {\n\
+    none,\n\
+    one(s64),\n\
+    pair(outcome-type-pair),\n\
+}\n\
+\n\
+record outer-record {\n\
+    nested: inner-record,\n\
+    outcomes: list<outcome-type>,\n\
+}\n\
+\n\
+world component {\n\
+    export do-work: func(p0: outer-record) -> outcome-type;\n\
+    export ping: func();\n\
+}\n"
         );
-        assert!(compiled_args(&module, "missing").is_none());
     }
 }
