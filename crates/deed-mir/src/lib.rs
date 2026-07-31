@@ -12,7 +12,7 @@
 
 pub mod lower;
 
-pub use lower::{Unlowered, lower};
+pub use lower::{Unlowered, lower, lower_with_tests};
 
 /// The diagnostic codes a compiled program can stop with.
 ///
@@ -141,6 +141,26 @@ pub struct Effect {
 
 /// A whole program, ready to compile.
 ///
+/// A test block lowered for the compiled path.
+///
+/// Each test block becomes a body function that runs its regular assertions.
+/// Each `assert refuses` expression becomes a separate probe function. The
+/// test runner calls the body and, for each probe, calls it and expects a
+/// contract-failure trap.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TestBlock {
+    /// The name string from the `test "..."` declaration.
+    pub name: String,
+    /// The exported name of the function that runs every assertion in the
+    /// block except `assert refuses`. Takes no arguments, returns nothing.
+    /// A trap from this function means the test failed.
+    pub body: String,
+    /// The exported name of one probe function per `assert refuses` in the
+    /// block, in source order. The test runner calls each probe and passes
+    /// only when it gets back a contract-failure trap.
+    pub refuses: Vec<String>,
+}
+
 /// Self-contained on purpose: nothing here points back at a syntax tree, a
 /// `SourceMap` or a resolution table. What a backend needs is in here, or it
 /// was not lowered.
@@ -151,6 +171,13 @@ pub struct Program {
     pub functions: Vec<Function>,
     /// Which function `deed run` calls, when the program has one.
     pub entry: Option<FuncId>,
+    /// Test blocks, when the lowering was asked to include them.
+    ///
+    /// Empty when the module has no test blocks or when the lowering failed
+    /// to lower any of them. A test block that fails to lower is skipped
+    /// rather than failing the whole lowering, because the backend compiles
+    /// a subset of the language on purpose.
+    pub tests: Vec<TestBlock>,
 }
 
 impl Program {

@@ -8,7 +8,7 @@
 
 use deed_diagnostics::SourceMap;
 use deed_lexer::tokenize;
-use deed_mir::{Ty, lower};
+use deed_mir::{Ty, lower, lower_with_tests};
 use deed_parser::parse;
 use deed_resolve::{Universe, resolve};
 
@@ -31,6 +31,35 @@ fn lowered(source: &str) -> Result<deed_mir::Program, String> {
     );
 
     lower(&parsed.module, &resolved.resolutions, &checked.types).map_err(|why| why.to_string())
+}
+
+fn lowered_with_test_blocks(source: &str) -> deed_mir::Program {
+    let mut sources = SourceMap::new();
+    let file = sources.add("test.deed", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module, &Universe::default());
+    let checked = deed_typeck::check(
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        &deed_typeck::World::default(),
+    );
+
+    lower_with_tests(&parsed.module, &resolved.resolutions, &checked.types)
+        .expect("test blocks should lower")
+}
+
+#[test]
+fn separate_test_blocks_get_separate_body_functions() {
+    let program = lowered_with_test_blocks(
+        "module a\n\ntest \"one\" { assert 1 == 1 }\ntest \"two\" { assert 2 == 2 }\n",
+    );
+
+    assert_eq!(program.tests.len(), 2);
+    assert_ne!(program.tests[0].body, program.tests[1].body);
+    assert!(program.find(&program.tests[0].body).is_some());
+    assert!(program.find(&program.tests[1].body).is_some());
 }
 
 #[test]
