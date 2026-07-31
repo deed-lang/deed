@@ -163,8 +163,9 @@ the interpreter does and it costs no duplication at all.
 
 Measured rather than argued, in `crates/deed-driver/tests/growth.rs`. Calling one generic
 function forty times at one type produces the same number of functions as calling it once,
-and the module grows by 46 bytes per call site, the same for the fortieth as for the second.
-A second element type costs one more body and nothing else.
+and the module grows by 99 to 107 bytes per call site with arithmetic overflow checks. The
+range comes from WebAssembly's variable-width local indices crossing a LEB128 boundary, not
+from another function body. A second element type costs one more body and nothing else.
 
 So the growth is in distinct type arguments, and a program's distinct type arguments are
 bounded by what it writes down. That is what makes this affordable, and it is why the

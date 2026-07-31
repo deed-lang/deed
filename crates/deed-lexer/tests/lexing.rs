@@ -740,6 +740,17 @@ fn an_oversized_integer_names_the_limit() {
     );
 }
 
+#[test]
+fn the_negative_boundary_is_a_minus_and_an_oversized_digit_run() {
+    let (_, lexed) = lex("-9223372036854775808");
+    assert_eq!(
+        codes_of(&lexed.diagnostics),
+        vec![codes::INTEGER_OUT_OF_RANGE]
+    );
+    assert_eq!(lexed.tokens[0].kind, TokenKind::Minus);
+    assert_eq!(lexed.tokens[1].kind, TokenKind::Error);
+}
+
 // DEED1006, five ways: no digits at all, and one note per radix.
 
 #[test]

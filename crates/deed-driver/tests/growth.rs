@@ -65,15 +65,16 @@ fn calling_a_generic_function_more_often_does_not_make_more_copies() {
         "one call, twenty and forty at the same type should all be {once} functions"
     );
 
-    // Twenty more calls cost the same each as the nineteen before them. A
-    // copy per call site would make the later ones dearer, and this is the
-    // number that would say so.
+    // Variable-width local indices make later calls a few bytes wider after
+    // crossing a LEB128 boundary. A copied body would be much larger; keep
+    // both batches tightly bounded while the function-count assertion above
+    // proves there is still only one instantiation.
     let first = (medium - small) / 19;
     let second = (large - medium) / 20;
     assert!(
-        second.abs_diff(first) <= 1,
+        first <= 128 && second <= 128 && second.abs_diff(first) <= 16,
         "the first nineteen calls cost {first} bytes each and the next twenty cost \
-         {second} each, which is not a fixed price per call site"
+         {second} each, which is too much variation for call-site encoding"
     );
 }
 

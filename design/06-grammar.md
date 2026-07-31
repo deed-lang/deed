@@ -93,8 +93,10 @@ octal-digit  ::=  "0" ... "7"
 ```
 
 Digit separators (`_`) are accepted anywhere after the first digit and are stripped before
-the value is decoded. `Int` is a signed 64-bit integer; a literal outside the range
-`-9223372036854775808` to `9223372036854775807` is a lexical error.
+the value is decoded. `Int` is a signed 64-bit integer, so values range from
+`-9223372036854775808` to `9223372036854775807`. A digit run is decoded before any unary `-`
+is applied, which means a positive literal must fit `0` to `9223372036854775807`; a larger
+digit run is a lexical error.
 
 Numeric literals use ASCII digits only. Unicode digits are accepted in identifiers but not in
 integer literals.

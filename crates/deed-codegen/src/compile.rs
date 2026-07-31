@@ -18,6 +18,9 @@ use deed_mir::{BinaryOp, Block, Expr, FuncId, Function, Local, Program, Stmt, Ty
 use crate::layout;
 use crate::wasm::{Func, FuncType, Import, Ins, Module, ValType};
 
+const ARITHMETIC_CODE: &str = "DEED6007";
+const ARITHMETIC_MESSAGE: &str = "this arithmetic has no answer";
+
 /// What a backend can say about a program it will not compile.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Unsupported {
@@ -407,6 +410,191 @@ impl<'a> Builder<'a> {
         }
     }
 
+    fn failure_instructions(&mut self, code: &str, message: &str) -> Vec<Ins> {
+        let at_code = self.strings.place(code);
+        let at_message = self.strings.place(message);
+        vec![
+            Ins::I32Const(layout::FAILURE_CODE as i32),
+            Ins::I64Const(at_code as i64),
+            Ins::I64Store(0),
+            Ins::I32Const(layout::FAILURE_MESSAGE as i32),
+            Ins::I64Const(at_message as i64),
+            Ins::I64Store(0),
+            Ins::Unreachable,
+        ]
+    }
+
+    fn emit_failure(&mut self, code: &str, message: &str) {
+        let failure = self.failure_instructions(code, message);
+        self.instructions.extend(failure);
+    }
+
+    fn trap_on_true(&mut self) {
+        let failure = self.failure_instructions(ARITHMETIC_CODE, ARITHMETIC_MESSAGE);
+        self.instructions.push(Ins::If {
+            result: None,
+            then: failure,
+            otherwise: Vec::new(),
+        });
+    }
+
+    fn checked_negate(&mut self, operand: &Expr) -> Result<(), Unsupported> {
+        let value = self.temporary(ValType::I64);
+        self.expr(operand)?;
+        self.instructions.push(Ins::LocalSet(value));
+
+        self.instructions.push(Ins::LocalGet(value));
+        self.instructions.push(Ins::I64Const(i64::MIN));
+        self.instructions.push(Ins::I64Eq);
+        self.trap_on_true();
+
+        self.instructions.push(Ins::I64Const(0));
+        self.instructions.push(Ins::LocalGet(value));
+        self.instructions.push(Ins::I64Sub);
+        Ok(())
+    }
+
+    fn checked_binary(
+        &mut self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(), Unsupported> {
+        let left_slot = self.temporary(ValType::I64);
+        let right_slot = self.temporary(ValType::I64);
+
+        self.expr(left)?;
+        self.instructions.push(Ins::LocalSet(left_slot));
+        self.expr(right)?;
+        self.instructions.push(Ins::LocalSet(right_slot));
+
+        match op {
+            BinaryOp::AddInt => {
+                let sum = self.temporary(ValType::I64);
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Add);
+                self.instructions.push(Ins::LocalSet(sum));
+
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Const(0));
+                self.instructions.push(Ins::I64GtS);
+                self.instructions.push(Ins::LocalGet(sum));
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::I64LtS);
+                self.instructions.push(Ins::I32And);
+
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Const(0));
+                self.instructions.push(Ins::I64LtS);
+                self.instructions.push(Ins::LocalGet(sum));
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::I64GtS);
+                self.instructions.push(Ins::I32And);
+
+                self.instructions.push(Ins::I32Or);
+                self.trap_on_true();
+                self.instructions.push(Ins::LocalGet(sum));
+            }
+            BinaryOp::SubInt => {
+                let diff = self.temporary(ValType::I64);
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Sub);
+                self.instructions.push(Ins::LocalSet(diff));
+
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Const(0));
+                self.instructions.push(Ins::I64GtS);
+                self.instructions.push(Ins::LocalGet(diff));
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::I64GtS);
+                self.instructions.push(Ins::I32And);
+
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Const(0));
+                self.instructions.push(Ins::I64LtS);
+                self.instructions.push(Ins::LocalGet(diff));
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::I64LtS);
+                self.instructions.push(Ins::I32And);
+
+                self.instructions.push(Ins::I32Or);
+                self.trap_on_true();
+                self.instructions.push(Ins::LocalGet(diff));
+            }
+            BinaryOp::MulInt => {
+                let product = self.temporary(ValType::I64);
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Mul);
+                self.instructions.push(Ins::LocalSet(product));
+
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::I64Const(-1));
+                self.instructions.push(Ins::I64Eq);
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Const(i64::MIN));
+                self.instructions.push(Ins::I64Eq);
+                self.instructions.push(Ins::I32And);
+
+                self.trap_on_true();
+
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::I64Eqz);
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Eqz);
+                self.instructions.push(Ins::I32Or);
+                self.instructions.push(Ins::I32Eqz);
+                let failure = self.failure_instructions(ARITHMETIC_CODE, ARITHMETIC_MESSAGE);
+                self.instructions.push(Ins::If {
+                    result: None,
+                    then: vec![
+                        Ins::LocalGet(product),
+                        Ins::LocalGet(left_slot),
+                        Ins::I64DivS,
+                        Ins::LocalGet(right_slot),
+                        Ins::I64Ne,
+                        Ins::If {
+                            result: None,
+                            then: failure,
+                            otherwise: Vec::new(),
+                        },
+                    ],
+                    otherwise: Vec::new(),
+                });
+
+                self.instructions.push(Ins::LocalGet(product));
+            }
+            BinaryOp::DivInt | BinaryOp::RemInt => {
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Eqz);
+
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::I64Const(i64::MIN));
+                self.instructions.push(Ins::I64Eq);
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(Ins::I64Const(-1));
+                self.instructions.push(Ins::I64Eq);
+                self.instructions.push(Ins::I32And);
+
+                self.instructions.push(Ins::I32Or);
+                self.trap_on_true();
+
+                self.instructions.push(Ins::LocalGet(left_slot));
+                self.instructions.push(Ins::LocalGet(right_slot));
+                self.instructions.push(match op {
+                    BinaryOp::DivInt => Ins::I64DivS,
+                    BinaryOp::RemInt => Ins::I64RemS,
+                    _ => unreachable!("only division and remainder reach here"),
+                });
+            }
+            _ => unreachable!("only checked integer operations reach here"),
+        }
+
+        Ok(())
+    }
+
     fn block(&mut self, block: &Block) -> Result<(), Unsupported> {
         for stmt in &block.stmts {
             self.stmt(stmt)?;
@@ -440,25 +628,7 @@ impl<'a> Builder<'a> {
                 }
             }
             Stmt::Fail { code, message } => {
-                // A contract failure ends the program, and says which one
-                // before it does. The two strings are placed the way every
-                // literal is, and their addresses go in the two words
-                // `layout` set aside, so whatever runs the module can read
-                // them after the trap.
-                let at_code = self.strings.place(code);
-                let at_message = self.strings.place(message);
-
-                self.instructions
-                    .push(Ins::I32Const(layout::FAILURE_CODE as i32));
-                self.instructions.push(Ins::I64Const(at_code as i64));
-                self.instructions.push(Ins::I64Store(0));
-
-                self.instructions
-                    .push(Ins::I32Const(layout::FAILURE_MESSAGE as i32));
-                self.instructions.push(Ins::I64Const(at_message as i64));
-                self.instructions.push(Ins::I64Store(0));
-
-                self.instructions.push(Ins::Unreachable);
+                self.emit_failure(code, message);
             }
             Stmt::Return { value } => {
                 self.expr(value)?;
@@ -607,19 +777,20 @@ impl<'a> Builder<'a> {
                     self.expr(operand)?;
                     self.instructions.push(Ins::I32Eqz);
                 }
-                UnaryOp::Negate => {
-                    // No negate instruction: subtract from zero, so the zero
-                    // is pushed before the operand rather than after it.
-                    self.instructions.push(Ins::I64Const(0));
-                    self.expr(operand)?;
-                    self.instructions.push(Ins::I64Sub);
+                UnaryOp::Negate => self.checked_negate(operand)?,
+            },
+            Expr::Binary { op, left, right } => match op {
+                BinaryOp::AddInt
+                | BinaryOp::SubInt
+                | BinaryOp::MulInt
+                | BinaryOp::DivInt
+                | BinaryOp::RemInt => self.checked_binary(*op, left, right)?,
+                _ => {
+                    self.expr(left)?;
+                    self.expr(right)?;
+                    self.binary(*op, left)?;
                 }
             },
-            Expr::Binary { op, left, right } => {
-                self.expr(left)?;
-                self.expr(right)?;
-                self.binary(*op, left)?;
-            }
             Expr::Call { func, args } => {
                 for arg in args {
                     self.expr(arg)?;
@@ -1000,6 +1171,44 @@ mod tests {
         });
         program.add_function(function);
         program
+    }
+
+    fn binary(name: &str, op: BinaryOp) -> crate::wasm::Module {
+        let mut program = Program::new();
+        let mut function = Function::new(name, vec![Ty::Int, Ty::Int], Ty::Int);
+        function.body = Block::of(Expr::Binary {
+            op,
+            left: Box::new(Expr::Local(Local(0))),
+            right: Box::new(Expr::Local(Local(1))),
+        });
+        program.add_function(function);
+        compile(&program).expect("this compiles")
+    }
+
+    fn assert_arithmetic_failure(module: &crate::wasm::Module, name: &str, args: [i64; 2]) {
+        assert_eq!(
+            crate::call(
+                module,
+                name,
+                &[crate::Value::I64(args[0]), crate::Value::I64(args[1])],
+            ),
+            Err(crate::Trap::Failed {
+                code: ARITHMETIC_CODE.to_string(),
+                message: ARITHMETIC_MESSAGE.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn the_signed_minimum_cannot_be_negated_by_binary_arithmetic() {
+        let multiply = binary("multiply", BinaryOp::MulInt);
+        assert_arithmetic_failure(&multiply, "multiply", [-1, i64::MIN]);
+
+        let divide = binary("divide", BinaryOp::DivInt);
+        assert_arithmetic_failure(&divide, "divide", [i64::MIN, -1]);
+
+        let remainder = binary("remainder", BinaryOp::RemInt);
+        assert_arithmetic_failure(&remainder, "remainder", [i64::MIN, -1]);
     }
 
     #[test]
