@@ -69,6 +69,7 @@ enum Want {
 /// bracket, which is there when the list is broken over lines and gone when it
 /// is not. A row that turns on one of those says so, and the token property
 /// then asserts the tokens really do change rather than skipping the row.
+#[derive(Clone, Copy)]
 enum Tokens {
     Kept,
     Rewritten,
@@ -503,6 +504,72 @@ fn the_properties_are_handed_something_to_do() {
     );
 }
 
+#[test]
+fn generated_layouts_feed_the_formatter_properties() {
+    let generated = generated_inputs();
+    assert!(
+        !generated.is_empty(),
+        "no generated input was produced for the properties"
+    );
+
+    let mut idempotent = 0;
+    let mut comments_kept = 0;
+    let mut braces_checked = 0;
+    let mut rewritten = 0;
+    for sample in &generated {
+        let once = fmt(&sample.generated);
+        let twice = fmt(&once);
+        assert_eq!(
+            once, twice,
+            "`{}` changed on a second pass after layout generation:\n{once}",
+            sample.name
+        );
+        idempotent += 1;
+
+        for comment in comments(sample.source) {
+            assert!(
+                once.contains(&comment),
+                "`{}` lost `{comment}` from:\n{once}",
+                sample.name
+            );
+            comments_kept += 1;
+        }
+
+        match sample.tokens {
+            Tokens::Kept => assert_eq!(
+                shape(sample.source),
+                shape(&once),
+                "`{}` changed the tree after layout generation:\n{once}",
+                sample.name
+            ),
+            Tokens::Rewritten => {
+                assert_ne!(
+                    shape(sample.source),
+                    shape(&once),
+                    "`{}` says a token changes and none did:\n{once}",
+                    sample.name
+                );
+                rewritten += 1;
+            }
+        }
+
+        braces_checked += assert_closing_braces_align(&sample.name, &once);
+    }
+    assert!(idempotent > 0, "idempotence was not checked");
+    assert!(
+        comments_kept > 0,
+        "no comment was checked on generated input"
+    );
+    assert!(
+        braces_checked > 0,
+        "no closing brace was checked on generated input"
+    );
+    assert!(
+        rewritten > 0,
+        "no known rewrite was exercised on generated input"
+    );
+}
+
 // -- broken input ----------------------------------------------------------
 
 #[test]
@@ -532,6 +599,86 @@ fn inputs() -> Vec<(String, &'static str)> {
         }
     }
     all
+}
+
+/// Every source this file has, with deterministic badly laid out variants.
+fn generated_inputs() -> Vec<GeneratedInput> {
+    let mut all = Vec::new();
+
+    for (index, source) in SOURCES.iter().enumerate() {
+        for (variant, generated) in generated_layouts(source).into_iter().enumerate() {
+            assert_ne!(
+                generated, *source,
+                "`source {index}` variant {variant} was not laid out differently"
+            );
+            all.push(GeneratedInput {
+                name: format!("source {index} (generated {variant})"),
+                source,
+                generated,
+                tokens: Tokens::Kept,
+            });
+        }
+    }
+
+    for decision in DECISIONS {
+        for (index, spelling) in decision.spellings.iter().enumerate() {
+            for (variant, generated) in generated_layouts(spelling).into_iter().enumerate() {
+                assert_ne!(
+                    generated, *spelling,
+                    "`{}` spelling {index} variant {variant} was not laid out differently",
+                    decision.name
+                );
+                all.push(GeneratedInput {
+                    name: format!("{} (spelling {index}, generated {variant})", decision.name),
+                    source: spelling,
+                    generated,
+                    tokens: decision.tokens,
+                });
+            }
+        }
+    }
+    all
+}
+
+struct GeneratedInput {
+    name: String,
+    source: &'static str,
+    generated: String,
+    tokens: Tokens,
+}
+
+/// Deterministic variations of one source with deliberately bad layout.
+fn generated_layouts(source: &str) -> Vec<String> {
+    let mut made = Vec::new();
+
+    for variant in 0..3 {
+        let mut out = String::new();
+        for (line, text) in source.lines().enumerate() {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                out.push('\n');
+                if (line + variant) % 3 == 0 {
+                    out.push('\n');
+                }
+                continue;
+            }
+
+            for _ in 0..(((line + 1) * (variant + 2)) % 6) * 2 {
+                out.push(' ');
+            }
+            out.push_str(trimmed);
+            for _ in 0..(variant + 1) * 2 {
+                out.push(' ');
+            }
+            out.push('\n');
+        }
+
+        if out != source {
+            made.push(out);
+        }
+    }
+
+    made
 }
 
 /// A rough shape of the source, for comparing two spellings of one program.
@@ -564,6 +711,68 @@ fn comments(source: &str) -> Vec<String> {
         })
         .filter(|text| !text.contains('\n'))
         .collect()
+}
+
+/// A block's closing brace sits under the line that opened it.
+fn assert_closing_braces_align(name: &str, source: &str) -> usize {
+    let mut opened: Vec<(usize, usize)> = Vec::new();
+    let mut checked = 0;
+
+    for (number, line) in source.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        let mut leading = trimmed.starts_with('}');
+
+        for brace in braces(line) {
+            if brace == '{' {
+                opened.push((number + 1, indent));
+                leading = false;
+                continue;
+            }
+            let (at, was) = opened
+                .pop()
+                .unwrap_or_else(|| panic!("`{name}`:{} closes a block nothing opened", number + 1));
+            if leading {
+                assert_eq!(
+                    indent,
+                    was,
+                    "`{name}`:{} closes the block opened on line {at}, so it belongs at {was} \
+                     spaces and is at {indent}",
+                    number + 1
+                );
+                checked += 1;
+            }
+            leading = false;
+        }
+    }
+
+    assert!(
+        opened.is_empty(),
+        "`{name}` leaves a block open at line {}",
+        opened[0].0
+    );
+
+    checked
+}
+
+/// The braces on a line, with the ones inside text and comments left out.
+fn braces(line: &str) -> Vec<char> {
+    let mut found = Vec::new();
+    let mut chars = line.chars().peekable();
+    let mut in_string = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if in_string => {
+                chars.next();
+            }
+            '"' => in_string = !in_string,
+            '/' if !in_string && chars.peek() == Some(&'/') => break,
+            '{' | '}' if !in_string => found.push(c),
+            _ => {}
+        }
+    }
+    found
 }
 
 /// Whole programs, for the properties that are about the output in general.
