@@ -25,6 +25,8 @@ machine from [releases](https://github.com/deed-lang/deed/releases), unpack it, 
 There is nothing else to install: the compiler, the formatter, the test runner and the
 language server are all in that one file.
 
+Start with the [tutorial](TUTORIAL.md) if you want one program built up one step at a time.
+
 ```
 $ tar xzf deed-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
 $ ./deed-v0.1.0-x86_64-unknown-linux-gnu/deed --version
@@ -98,6 +100,12 @@ There is no REPL. A Deed input is a module of declarations, and `deed run` enter
 `main` rather than evaluating a top-level expression. For quick experiments, use a scratch
 `.deed` file with `deed check`, `deed test` or `deed run`. The right browser answer is a
 playground that edits and runs a whole program in that same shape.
+
+There is also a small [conformance suite](conformance/README.md) for checks that should hold
+across implementations.
+
+User-visible language, diagnostics, library and tool changes are recorded in
+[CHANGELOG.md](CHANGELOG.md), including programs that used to compile and no longer do.
 
 ## The idea
 
@@ -175,6 +183,7 @@ The longer version, including the cost model this is all based on, is in
 | [07-editions.md](design/07-editions.md) | How a breaking change ships without splitting the ecosystem |
 | [characters.md](design/characters.md) | Why characters remain one-scalar strings |
 | [fractional-values.md](design/fractional-values.md) | The decision on fractional values and money |
+| [hash-map-requirements.md](design/hash-map-requirements.md) | What a hash map would require from the language |
 | [refusals.md](design/refusals.md) | Everything deliberately left out, and why |
 | [07-versioning.md](design/07-versioning.md) | Compatibility policy for language, diagnostics, and `std/` |
 
