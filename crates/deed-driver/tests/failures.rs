@@ -113,6 +113,50 @@ fn the_interpreter_stops_on_the_same_code() {
     );
 }
 
+/// Both engines stop with the same sentence, not just the same code.
+///
+/// A compiled program that said something different would force a reader
+/// to learn two dialects of the same failure, which is worse than one.
+/// The message comes from the same place in both paths, so they should
+/// agree word for word.
+#[test]
+fn the_interpreter_and_compiler_stop_with_the_same_message() {
+    let trap = stopped(PRECONDITION, "answer", &[Value::I64(-4)]);
+    let Trap::Failed {
+        message: compiled_message,
+        ..
+    } = trap
+    else {
+        panic!("the compiled engine should have stopped with a message, not {trap}");
+    };
+
+    let source = format!("{PRECONDITION}\ntest \"it stops\" {{\n    assert answer(-4) == 0\n}}\n");
+    let one = checked(&source);
+
+    let mut interpreted = Interpreted::new();
+    interpreted.add(
+        one.file,
+        &one.module,
+        &one.resolutions,
+        one.guards(),
+        one.rows(),
+    );
+    let outcomes = run_tests(&interpreted, one.file);
+
+    let interp_message = outcomes
+        .iter()
+        .find_map(|outcome| {
+            let diag = outcome.failure.as_ref()?;
+            (diag.code == deed_interp::codes::PRECONDITION_FAILED).then(|| diag.message.clone())
+        })
+        .expect("the interpreter should have filed a precondition failure");
+
+    assert_eq!(
+        compiled_message, interp_message,
+        "compiled and interpreted engines should stop with the same sentence"
+    );
+}
+
 /// A contract the checker settled leaves nothing to fail, so nothing is
 /// written and the program does not stop.
 ///

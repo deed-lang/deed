@@ -81,6 +81,12 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         let (namespace, operation) = name.split_once('.').unwrap_or(("deed", name));
         module.add_import(&format!("deed:{namespace}"), operation, type_index);
     }
+    // Give each import a debug name so a runtime can name the frame. The
+    // operation name (the part after the namespace dot) is what a reader
+    // of the source would recognize.
+    for (index, import) in module.imports.iter().enumerate() {
+        module.names.push((index as u32, import.name.clone()));
+    }
     let shift = module.imports.len() as u32;
 
     let mut strings = Strings::new();
@@ -100,6 +106,9 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         };
         let func_index = module.add_func(compiled);
         module.export(function.name.clone(), func_index);
+        // Record the function's source name for the name section, so a
+        // trap says which function rather than its index.
+        module.names.push((func_index, function.name.clone()));
         // Every function goes in the table at its own index, so a code
         // pointer and a function index are the same number and lowering does
         // not need a second numbering to keep straight.

@@ -320,6 +320,13 @@ pub struct Module {
     /// in, so the table is the set of function bodies a value can carry
     /// rather than everything the module declares.
     pub table: Vec<u32>,
+    /// Debug names for functions, by function index.
+    ///
+    /// These go in the WebAssembly name custom section. A name section costs
+    /// nothing at runtime, and it is the reason a trap says "unreachable in
+    /// `answer`" rather than "unreachable in function 3": without it, a host
+    /// runtime has no way to name the frame.
+    pub names: Vec<(u32, String)>,
 }
 
 impl Module {
@@ -508,6 +515,35 @@ impl Module {
             write_section(&mut out, 11, &section);
         }
 
+        // The name section is a custom section (id 0) placed after all
+        // standard sections. It maps function indices to human-readable
+        // names, which a host runtime uses when formatting a trap: the
+        // difference between "unreachable in `answer`" and "unreachable in
+        // function 3" is the whole of what this section costs.
+        if !self.names.is_empty() {
+            // Sort by function index so the subsection is in order.
+            let mut sorted = self.names.clone();
+            sorted.sort_by_key(|(index, _)| *index);
+
+            // Encode the function names subsection (id = 1).
+            let mut funcnames = Vec::new();
+            write_u32(&mut funcnames, sorted.len() as u32);
+            for (index, name) in &sorted {
+                write_u32(&mut funcnames, *index);
+                write_name(&mut funcnames, name);
+            }
+
+            // The custom section body is the section name followed by any
+            // number of subsections, each with their own id and size.
+            let mut body = Vec::new();
+            write_name(&mut body, "name");
+            body.push(1); // subsection id: function names
+            write_u32(&mut body, funcnames.len() as u32);
+            body.extend_from_slice(&funcnames);
+
+            write_section(&mut out, 0, &body);
+        }
+
         out
     }
 }
@@ -606,5 +642,74 @@ mod tests {
             vec![(2, ValType::I64), (1, ValType::I32), (1, ValType::I64)]
         );
         assert!(compress_locals(&[]).is_empty());
+    }
+
+    /// A name section is a custom section (id 0) that carries the string
+    /// "name" and a function-names subsection (id 1). Without it a runtime
+    /// has no human-readable label for a trapped frame.
+    #[test]
+    fn a_name_section_is_emitted_when_names_are_present() {
+        let mut module = Module::new();
+        module.names.push((0, "answer".to_string()));
+        let bytes = module.encode();
+
+        // Find the custom section in the encoded bytes (after the 8-byte header).
+        // A custom section starts with id byte 0, followed by the LEB128 size.
+        let mut pos = 8usize;
+        let mut found = false;
+        while pos < bytes.len() {
+            let section_id = bytes[pos];
+            pos += 1;
+            // Read the LEB128 size.
+            let mut size = 0u32;
+            let mut shift = 0;
+            loop {
+                let byte = bytes[pos];
+                pos += 1;
+                size |= ((byte & 0x7f) as u32) << shift;
+                shift += 7;
+                if byte & 0x80 == 0 {
+                    break;
+                }
+            }
+            if section_id == 0 {
+                // The body starts with the section name "name".
+                let name_len = bytes[pos] as usize;
+                let name_bytes = &bytes[pos + 1..pos + 1 + name_len];
+                assert_eq!(name_bytes, b"name", "custom section should be named 'name'");
+                found = true;
+                break;
+            }
+            pos += size as usize;
+        }
+        assert!(found, "encoded module should contain a name custom section");
+    }
+
+    /// A module with no names does not emit the custom section at all.
+    #[test]
+    fn no_name_section_when_no_names_are_given() {
+        let bytes = Module::new().encode();
+        // After the 8-byte header, all section ids should be non-zero.
+        let mut pos = 8usize;
+        while pos < bytes.len() {
+            let section_id = bytes[pos];
+            assert_ne!(
+                section_id, 0,
+                "should not emit a custom section without names"
+            );
+            pos += 1;
+            let mut size = 0u32;
+            let mut shift = 0;
+            loop {
+                let byte = bytes[pos];
+                pos += 1;
+                size |= ((byte & 0x7f) as u32) << shift;
+                shift += 7;
+                if byte & 0x80 == 0 {
+                    break;
+                }
+            }
+            pos += size as usize;
+        }
     }
 }
