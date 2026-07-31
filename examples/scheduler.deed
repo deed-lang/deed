@@ -29,6 +29,25 @@
 //   - a standalone recursive function to drain the queue (ordinary `Diverge`)
 //
 // Nothing about the scheduler is language machinery.
+//
+// It is also not a library, and the reason is worth being exact about, because
+// "concurrency is a library here" is the claim this file is usually read as
+// making. What it shows is that a scheduler can be *written* in Deed. It cannot
+// be *shipped*, and a program that wants one has to copy this file and edit it.
+//
+// The wall is one line above: `Schedule.fork` takes a
+// `Fn() uses Schedule.fork, Schedule.yield, Log.note -> ()`, and that row names
+// `Log.note` because these particular tasks log. A library cannot know what its
+// tasks will perform, so the queue element type would have to be
+// `Fn() uses r -> ()` for a row variable `r` belonging to the effect. Effects do
+// not take row parameters: `effect Schedule<uses r>` does not parse, and
+// `DEED5008` separately confines a row variable to a function-typed parameter's
+// row and the declaration's own `uses`, which a handler's `state` is neither.
+//
+// So the queue's element type has to name a concrete row, the row has to name
+// every effect a task might perform, and both are things only the program
+// knows. That is why `std/task` does not exist next to `std/list`, and it is a
+// row-polymorphism gap rather than anything about concurrency.
 
 module examples/scheduler
 
