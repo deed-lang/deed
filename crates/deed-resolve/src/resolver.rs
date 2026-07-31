@@ -892,7 +892,10 @@ impl Resolver<'_> {
     }
 
     fn apply_deprecation(&mut self, deprecate: &DeprecateDecl) {
-        if deprecate.old.name.is_empty() || deprecate.new.name.is_empty() {
+        if deprecate.old.name.is_empty() {
+            return;
+        }
+        if deprecate.new.name.is_empty() {
             return;
         }
         let Some((old, _)) = self.lookup(&deprecate.old.name) else {
