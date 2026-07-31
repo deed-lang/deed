@@ -1,31 +1,40 @@
 # Deed for VS Code
 
-Syntax highlighting for `.deed` files.
+Syntax highlighting and language-server wiring for `.deed` files.
 
 ## Installing it
 
-There is nothing to build. The extension is three JSON files and no code, so
-copying the directory into the extensions folder is the whole install:
+The extension has a small client entrypoint plus the grammar and language
+configuration. Install its runtime dependency before copying it into your
+extensions folder:
 
 ```
+# from the repository root
+cd editors/vscode
+npm install
+
 # Windows
+cd ..\..
 xcopy /E /I editors\vscode %USERPROFILE%\.vscode\extensions\deed
 
 # macOS and Linux
+cd ../..
 cp -r editors/vscode ~/.vscode/extensions/deed
 ```
 
 Then restart VS Code and open any file in `examples/`.
 
-## What it does and does not do
+## What it does
 
-It colours. That is all it does today.
+It colours and starts `deed lsp` over stdio when a Deed file opens.
 
-The compiler already has a language server with hover, go to definition, find
+The compiler's language server provides hover, go to definition, find
 references, rename, formatting, document symbols, completion, signature help,
-workspace search and quick fixes, and none of it is wired up here yet. Until
-it is, run `deed check` in a terminal. `../README.md` has the editors that do
-start it.
+workspace search and quick fixes.
+
+By default the extension launches `deed lsp`. If your binary is somewhere else,
+set `deed.server.path`. To pass additional arguments after `lsp`, set
+`deed.server.args`.
 
 Highlighting comes from a TextMate grammar rather than from the compiler,
 which means it works on a file that does not parse. That is the right way

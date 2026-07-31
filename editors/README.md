@@ -7,7 +7,7 @@ stdout, which is all any of these editors want.
 
 |  | highlighting | language server |
 | --- | --- | --- |
-| VS Code | yes, [editors/vscode](vscode) | not yet |
+| VS Code | yes, [editors/vscode](vscode) | yes, [editors/vscode](vscode) |
 | Helix | yes, [editors/tree-sitter-deed](tree-sitter-deed) | yes |
 | Neovim | yes, [editors/tree-sitter-deed](tree-sitter-deed) | yes |
 | anything else that speaks LSP | no | yes |
@@ -18,9 +18,8 @@ and are held to the compiler in `crates/deed-parser/tests/grammar.rs`:
 `editors/vscode/syntaxes/deed.tmLanguage.json` and
 `editors/tree-sitter-deed/grammar.js`.
 
-The other half is the reverse. Helix and Neovim start a language server from
-a few lines of configuration, and VS Code needs an extension with code in it.
-There is not one of those yet either.
+Helix and Neovim start a language server from a few lines of configuration.
+VS Code does the same through a small extension client in `editors/vscode`.
 
 ## Getting the binary
 

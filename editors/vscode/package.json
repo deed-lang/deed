@@ -1,7 +1,7 @@
 {
   "name": "deed",
   "displayName": "Deed",
-  "description": "Syntax highlighting for the Deed programming language.",
+  "description": "Language support for Deed, including syntax highlighting and language server wiring.",
   "version": "0.1.0",
   "publisher": "deed-lang",
   "license": "Apache-2.0",
@@ -36,6 +36,34 @@
         "scopeName": "source.deed",
         "path": "./syntaxes/deed.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Deed",
+      "properties": {
+        "deed.server.path": {
+          "type": "string",
+          "default": "deed",
+          "description": "Path to the Deed executable used to start the language server."
+        },
+        "deed.server.args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra arguments passed after `deed lsp` when starting the language server."
+        }
+      }
+    }
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:deed"
+  ],
+  "scripts": {
+    "test": "node --test ./test/*.test.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }
