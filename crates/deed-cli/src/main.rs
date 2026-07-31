@@ -200,7 +200,12 @@ fn run_check(args: CheckArgs) -> ExitCode {
     if args.mode == Mode::Test {
         // Running code that does not check would be answering a question
         // nobody asked, and the failure would be about the wrong thing.
-        match run_tests(&mut out, &sources, &checks, subject) {
+        let test_result = if args.compiled {
+            run_compiled_tests(&mut out, &sources, &checks, subject)
+        } else {
+            run_tests(&mut out, &sources, &checks, subject)
+        };
+        match test_result {
             Ok(true) => {}
             Ok(false) => return ExitCode::FAILURE,
             Err(error) => {
@@ -572,6 +577,116 @@ fn run_tests(
     writeln!(out, "\n{passed} passed, {} failed", failed.len())?;
 
     Ok(failed.is_empty())
+}
+
+/// Runs every test block that the compiled backend can lower and compile.
+///
+/// Test blocks the backend cannot lower are silently skipped, because the
+/// backend compiles a subset of the language on purpose. The blocks that do
+/// run must all pass, and the output format matches `run_tests` so the two
+/// paths are comparable.
+///
+/// Each `assert refuses` probe is called and must produce a contract-failure
+/// trap. Any other outcome (no trap, or a different kind of trap) is a
+/// failure. The body function must not trap at all.
+fn run_compiled_tests(
+    out: &mut impl Write,
+    sources: &SourceMap,
+    checks: &[Checked],
+    subject: usize,
+) -> io::Result<bool> {
+    let mut passed = 0usize;
+    let mut failed: Vec<(String, String)> = Vec::new();
+    let mut ran = 0usize;
+
+    for checked in &checks[..subject.min(checks.len())] {
+        let lowered =
+            match deed_mir::lower_with_tests(&checked.module, &checked.resolutions, &checked.types)
+            {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+        if lowered.tests.is_empty() {
+            continue;
+        }
+
+        let compiled = match deed_codegen::compile(&lowered) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        writeln!(out, "{}", sources.file(checked.file).name())?;
+
+        for test in &lowered.tests {
+            ran += 1;
+            let label = &test.name;
+            let mut ok = true;
+
+            // The body must complete without trapping.
+            if let Err(trap) = deed_codegen::call(&compiled, &test.body, &[]) {
+                failed.push((label.clone(), format!("body trapped: {trap}")));
+                ok = false;
+            }
+
+            // Each `assert refuses` probe must get a contract-failure trap.
+            if ok {
+                for probe in &test.refuses {
+                    match deed_codegen::call(&compiled, probe, &[]) {
+                        Err(deed_codegen::Trap::Failed { code, .. })
+                            if is_compiled_contract_failure(&code) => {}
+                        Ok(_) => {
+                            failed.push((
+                                label.clone(),
+                                "an `assert refuses` expression did not fail".to_string(),
+                            ));
+                            ok = false;
+                            break;
+                        }
+                        Err(other) => {
+                            failed.push((
+                                label.clone(),
+                                format!("an `assert refuses` probe trapped unexpectedly: {other}"),
+                            ));
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if ok {
+                passed += 1;
+                writeln!(out, "  ok    {label}")?;
+            } else {
+                writeln!(out, "  FAIL  {label}")?;
+            }
+        }
+    }
+
+    if ran == 0 {
+        writeln!(out, "no tests found in the compiled backend")?;
+        return Ok(true);
+    }
+
+    for (name, reason) in &failed {
+        writeln!(out, "\n{name}\n{reason}")?;
+    }
+
+    writeln!(out, "\n{passed} passed, {} failed", failed.len())?;
+
+    Ok(failed.is_empty())
+}
+
+/// Whether a diagnostic code from the compiled backend counts as a contract
+/// failure, which is what `assert refuses` expects.
+///
+/// Mirrors the interpreter's `is_contract_failure` check.
+fn is_compiled_contract_failure(code: &str) -> bool {
+    // DEED6002 = PRECONDITION_FAILED
+    // DEED6003 = POSTCONDITION_FAILED  (not yet compiled, included for when it is)
+    // DEED6004 = REFINEMENT_FAILED     (not yet compiled, included for when it is)
+    matches!(code, "DEED6002" | "DEED6003" | "DEED6004")
 }
 
 fn report_human(

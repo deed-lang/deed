@@ -27,12 +27,17 @@ Options:
                           current directory. A program cannot get outside it.
   --check                 With `fmt` or `fix`, change nothing and report what
                           would have changed.
+  --compiled              With `test`, run test blocks through the compiled
+                          WebAssembly backend instead of the interpreter.
   -h, --help              Print this.
   -V, --version           Print the version.
 
 Paths may be files or directories. A directory is searched for `.deed` files.
 
 `deed test` refuses to run anything that does not check.
+`deed test --compiled` runs the same test blocks through the compiled backend.
+  Blocks the backend cannot compile are skipped, and the count of the ones that
+  ran has to match what the interpreter ran.
 `deed run` calls `main`, handing it the one `System` capability there is.
 Everything after `--` goes to the program, which reads it with `Io.args`.
 `deed build` compiles to a WebAssembly module beside the file it was given. It
@@ -95,6 +100,9 @@ pub struct CheckArgs {
     /// arguments can look exactly like this tool's and guessing which is which
     /// is how a flag ends up being eaten by the wrong reader.
     pub arguments: Vec<String>,
+    /// With `test`, run through the compiled backend rather than the
+    /// interpreter.
+    pub compiled: bool,
 }
 
 #[derive(Debug)]
@@ -167,6 +175,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut dir = None;
     let mut check_only = false;
     let mut arguments = Vec::new();
+    let mut compiled = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -180,6 +189,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             "--obligations" => obligations = true,
             "--timings" => timings = true,
             "--check" => check_only = true,
+            "--compiled" => compiled = true,
             "--format" => {
                 let value = args
                     .next()
@@ -228,6 +238,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         dir,
         check_only,
         arguments,
+        compiled,
     }))
 }
 

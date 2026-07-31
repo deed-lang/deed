@@ -60,10 +60,37 @@ impl Nominal<'_> {
 ///
 /// Takes the whole checked module rather than one function, because a call
 /// needs the callee's index and a function may call one declared below it.
+///
+/// Test blocks are not lowered. See [`lower_with_tests`] for a version that
+/// includes them.
 pub fn lower(
     module: &Module,
     resolutions: &Resolutions,
     types: &Types,
+) -> Result<Program, Unlowered> {
+    lower_impl(module, resolutions, types, false)
+}
+
+/// Lowers every function a module declares, and also lowers test blocks.
+///
+/// Test blocks that cannot be lowered are silently skipped; the backend
+/// compiles a subset of the language on purpose. The blocks that do lower
+/// are in [`Program::tests`].
+///
+/// See [`lower`] for the version without test blocks.
+pub fn lower_with_tests(
+    module: &Module,
+    resolutions: &Resolutions,
+    types: &Types,
+) -> Result<Program, Unlowered> {
+    lower_impl(module, resolutions, types, true)
+}
+
+fn lower_impl(
+    module: &Module,
+    resolutions: &Resolutions,
+    types: &Types,
+    include_tests: bool,
 ) -> Result<Program, Unlowered> {
     let mut program = Program::new();
 
@@ -339,6 +366,145 @@ pub fn lower(
     for function in lifted {
         program.add_function(function);
     }
+
+    // Lower test blocks into the program. Only when the caller asked for
+    // them: test bodies may use features the backend cannot compile, and
+    // adding them to a program that `deed build` will compile would break
+    // files that used to compile cleanly.
+    //
+    // A test block that cannot be lowered is silently skipped: the backend
+    // compiles a subset of the language on purpose. Each block that does lower
+    // becomes a body function and one probe function per `assert refuses`.
+    // See `crate::TestBlock` and `deed test --compiled`.
+    if include_tests {
+        let mut test_index: usize = 0;
+        for item in &module.items {
+            let ast::Item::Test(test) = item else {
+                continue;
+            };
+
+            // Save enough state to roll back any partial work if the block fails.
+            let prev_functions = program.functions.len();
+            let saved_instantiated = instantiated.clone();
+            let saved_answered = answered.clone();
+
+            let outcome: Option<crate::TestBlock> = 'block: {
+                let mut refuses_names: Vec<String> = Vec::new();
+
+                // Lower one probe function per `assert refuses` statement.
+                for (stmt_index, stmt) in test.body.stmts.iter().enumerate() {
+                    let ast::Stmt::Refuses { subject, .. } = stmt else {
+                        continue;
+                    };
+                    let probe_name = format!("__test_refuses_{test_index}_{stmt_index}__");
+                    let probe_id = program.add_function(crate::Function::new(
+                        probe_name.clone(),
+                        vec![],
+                        Ty::Unit,
+                    ));
+                    let mut lowering = Lowering {
+                        resolutions,
+                        types,
+                        by_def: &by_def,
+                        layouts: &layouts,
+                        alias_types: &alias_types,
+                        shapes: program.layouts.clone(),
+                        declared: program.functions.len(),
+                        lifted: Vec::new(),
+                        bindings: HashMap::new(),
+                        declarations: &declarations,
+                        instantiated: &mut instantiated,
+                        effects: &effects,
+                        signatures: &signatures,
+                        handlers: &handlers,
+                        answered: &mut answered,
+                        state: None,
+                        function: program.functions[probe_id.0].clone(),
+                        slots: HashMap::new(),
+                    };
+                    let value = match lowering.expr(subject) {
+                        Ok(v) => v,
+                        Err(_) => break 'block None,
+                    };
+                    program.layouts = lowering.shapes;
+                    for f in lowering.lifted {
+                        program.add_function(f);
+                    }
+                    let mut func = lowering.function;
+                    func.body = Block {
+                        stmts: vec![Stmt::Discard(value)],
+                        value: Expr::Unit,
+                    };
+                    program.functions[probe_id.0] = func;
+                    refuses_names.push(probe_name);
+                }
+
+                // Lower the body function, skipping `assert refuses` statements.
+                let body_name = format!("__test_body_{test_index}__");
+                let body_id =
+                    program.add_function(crate::Function::new(body_name.clone(), vec![], Ty::Unit));
+                let filtered = ast::Block {
+                    stmts: test
+                        .body
+                        .stmts
+                        .iter()
+                        .filter(|s| !matches!(s, ast::Stmt::Refuses { .. }))
+                        .cloned()
+                        .collect(),
+                    tail: test.body.tail.clone(),
+                    span: test.body.span,
+                };
+                let mut lowering = Lowering {
+                    resolutions,
+                    types,
+                    by_def: &by_def,
+                    layouts: &layouts,
+                    alias_types: &alias_types,
+                    shapes: program.layouts.clone(),
+                    declared: program.functions.len(),
+                    lifted: Vec::new(),
+                    bindings: HashMap::new(),
+                    declarations: &declarations,
+                    instantiated: &mut instantiated,
+                    effects: &effects,
+                    signatures: &signatures,
+                    handlers: &handlers,
+                    answered: &mut answered,
+                    state: None,
+                    function: program.functions[body_id.0].clone(),
+                    slots: HashMap::new(),
+                };
+                let body = match lowering.block(&filtered) {
+                    Ok(b) => b,
+                    Err(_) => break 'block None,
+                };
+                program.layouts = lowering.shapes;
+                for f in lowering.lifted {
+                    program.add_function(f);
+                }
+                let mut func = lowering.function;
+                func.body = body;
+                program.functions[body_id.0] = func;
+
+                Some(crate::TestBlock {
+                    name: test.name.clone(),
+                    body: body_name,
+                    refuses: refuses_names,
+                })
+            };
+
+            match outcome {
+                Some(test_block) => program.tests.push(test_block),
+                None => {
+                    program.functions.truncate(prev_functions);
+                    instantiated = saved_instantiated;
+                    answered = saved_answered;
+                }
+            }
+
+            test_index += 1;
+        }
+    } // if include_tests
 
     program.entry = program.find("main");
     Ok(program)
