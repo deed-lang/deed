@@ -22,9 +22,11 @@ mod imports;
 mod report;
 mod rows;
 mod shipped;
+pub mod wit;
 
 pub use report::json_report;
 pub use shipped::{shipped_for, shipped_modules, shipped_source, take_shipped};
+pub use wit::wit_world_for;
 
 use std::time::{Duration, Instant};
 
