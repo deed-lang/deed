@@ -284,6 +284,8 @@ pub enum Val {
 pub enum Error {
     OutOfBounds,
     InvalidUtf8,
+    /// The boundary value does not have the shape its Deed type requires.
+    TypeMismatch,
     /// A discriminant read from memory named a variant that does not exist.
     InvalidDiscriminant {
         got: usize,
@@ -297,6 +299,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::OutOfBounds => write!(f, "memory access out of bounds"),
             Error::InvalidUtf8 => write!(f, "string bytes are not valid UTF-8"),
+            Error::TypeMismatch => write!(f, "value does not match its boundary type"),
             Error::InvalidDiscriminant { got, max } => {
                 write!(f, "discriminant {got} is past the last variant (max {max})")
             }
@@ -452,9 +455,7 @@ fn lower_flat(
         }
         (_, Ty::Closure) => Err(Error::from(Unsupported::Closure)),
         (_, Ty::Capability) => Err(Error::from(Unsupported::Capability)),
-        // Any other combination is a programmer error in the test; return empty
-        // rather than panic so the mismatch surfaces as an assertion failure.
-        _ => Ok(vec![]),
+        _ => Err(Error::TypeMismatch),
     }
 }
 
@@ -627,7 +628,7 @@ fn lower_to_memory(
                 poff += size_of(&fdef.ty, layouts)?;
             }
         }
-        _ => {}
+        _ => return Err(Error::TypeMismatch),
     }
     Ok(())
 }
@@ -1313,5 +1314,218 @@ mod tests {
             lift(&flat, &ty, &[layout], &mem),
             Err(Error::InvalidDiscriminant { got: 99, max: 1 })
         ));
+    }
+
+    #[test]
+    fn discriminant_width_changes_only_after_each_limit() {
+        assert_eq!(discriminant_size(0x100), 1);
+        assert_eq!(discriminant_size(0x101), 2);
+        assert_eq!(discriminant_size(0x1_0000), 2);
+        assert_eq!(discriminant_size(0x1_0001), 4);
+    }
+
+    #[test]
+    fn allocator_accepts_the_exact_end_and_refuses_one_byte_past_it() {
+        let mut memory = Memory::new();
+        assert_eq!(memory.alloc(64 * 1024, 1), Ok(0));
+        assert_eq!(memory.next, 64 * 1024);
+        assert_eq!(memory.alloc(1, 1), Err(Error::OutOfBounds));
+    }
+
+    #[test]
+    fn mixed_record_has_exact_flat_and_memory_representations() {
+        let layouts = vec![record_layout(
+            "Mixed",
+            vec![("yes", Ty::Bool), ("number", Ty::Int), ("no", Ty::Bool)],
+        )];
+        let ty = Ty::Aggregate(LayoutId(0));
+        let value = Val::Record(vec![
+            Val::Bool(true),
+            Val::Int(0x0102_0304_0506_0708),
+            Val::Bool(false),
+        ]);
+        assert_eq!(size_of(&ty, &layouts), Ok(24));
+        assert_eq!(align_of(&ty, &layouts), Ok(8));
+
+        let mut flat_memory = Memory::new();
+        let exact_flat = vec![
+            FlatArg::I32(1),
+            FlatArg::I64(0x0102_0304_0506_0708),
+            FlatArg::I32(0),
+        ];
+        assert_eq!(
+            lower(&value, &ty, &layouts, &mut flat_memory),
+            Ok(exact_flat.clone())
+        );
+        assert_eq!(
+            lift(&exact_flat, &ty, &layouts, &flat_memory),
+            Ok(value.clone())
+        );
+
+        let expected = [
+            1, 0, 0, 0, 0, 0, 0, 0, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let mut memory = Memory::new();
+        lower_to_memory(&value, &ty, &layouts, &mut memory, 0).unwrap();
+        assert_eq!(&memory.bytes[..24], &expected);
+
+        let mut authored = Memory::new();
+        authored.write_bytes(0, &expected).unwrap();
+        assert_eq!(lift_from_memory(&ty, &layouts, &authored, 0), Ok(value));
+    }
+
+    #[test]
+    fn list_and_choice_wire_bytes_are_fixed_independently_of_lifting() {
+        let list_ty = Ty::List(Box::new(Ty::Int));
+        let list = Val::List(vec![Val::Int(11), Val::Int(22), Val::Int(33)]);
+        let mut list_memory = Memory::new();
+        assert_eq!(
+            lower(&list, &list_ty, &[], &mut list_memory),
+            Ok(vec![FlatArg::I32(0), FlatArg::I32(3)])
+        );
+        let mut expected_list = Vec::new();
+        expected_list.extend_from_slice(&11i64.to_le_bytes());
+        expected_list.extend_from_slice(&22i64.to_le_bytes());
+        expected_list.extend_from_slice(&33i64.to_le_bytes());
+        assert_eq!(&list_memory.bytes[..24], expected_list.as_slice());
+        assert_eq!(
+            lift(
+                &[FlatArg::I32(0), FlatArg::I32(3)],
+                &list_ty,
+                &[],
+                &list_memory
+            ),
+            Ok(list)
+        );
+
+        let layouts = vec![result_layout(Ty::Int, Ty::Str)];
+        let ty = Ty::Aggregate(LayoutId(0));
+        let ok = Val::Variant {
+            discriminant: 0,
+            fields: vec![Val::Int(42)],
+        };
+        let mut ok_memory = Memory::new();
+        assert_eq!(
+            lower(&ok, &ty, &layouts, &mut ok_memory),
+            Ok(vec![FlatArg::I32(0), FlatArg::I64(42), FlatArg::I32(0)])
+        );
+        assert_eq!(
+            lift(
+                &[FlatArg::I32(0), FlatArg::I64(42), FlatArg::I32(0)],
+                &ty,
+                &layouts,
+                &ok_memory,
+            ),
+            Ok(ok)
+        );
+
+        let err = Val::Variant {
+            discriminant: 1,
+            fields: vec![Val::Str("xy".to_string())],
+        };
+        let mut err_memory = Memory::new();
+        assert_eq!(
+            lower(&err, &ty, &layouts, &mut err_memory),
+            Ok(vec![FlatArg::I32(1), FlatArg::I64(0), FlatArg::I32(2)])
+        );
+        assert_eq!(&err_memory.bytes[..2], b"xy");
+
+        let mut authored = Memory::new();
+        let mut exact = vec![0u8; 18];
+        exact[0] = 1;
+        exact[8..12].copy_from_slice(&16u32.to_le_bytes());
+        exact[12..16].copy_from_slice(&2u32.to_le_bytes());
+        exact[16..18].copy_from_slice(b"xy");
+        authored.write_bytes(0, &exact).unwrap();
+        assert_eq!(lift_from_memory(&ty, &layouts, &authored, 0), Ok(err));
+    }
+
+    #[test]
+    fn sixteen_flat_values_stay_direct_and_seventeen_become_one_pointer() {
+        let make = |count: usize| {
+            record_layout(
+                "Many",
+                (0..count)
+                    .map(|index| {
+                        (
+                            Box::leak(format!("f{index}").into_boxed_str()) as &str,
+                            Ty::Int,
+                        )
+                    })
+                    .collect(),
+            )
+        };
+
+        let layouts16 = vec![make(16)];
+        let ty16 = Ty::Aggregate(LayoutId(0));
+        let value16 = Val::Record((0..16).map(|value| Val::Int(value)).collect());
+        let mut memory16 = Memory::new();
+        assert_eq!(
+            lower(&value16, &ty16, &layouts16, &mut memory16).unwrap(),
+            (0..16).map(|value| FlatArg::I64(value)).collect::<Vec<_>>()
+        );
+
+        let layouts17 = vec![make(17)];
+        let ty17 = Ty::Aggregate(LayoutId(0));
+        let value17 = Val::Record((0..17).map(|value| Val::Int(value)).collect());
+        let mut memory17 = Memory::new();
+        assert_eq!(
+            lower(&value17, &ty17, &layouts17, &mut memory17),
+            Ok(vec![FlatArg::I32(0)])
+        );
+        for value in 0..17usize {
+            assert_eq!(
+                &memory17.bytes[value * 8..value * 8 + 8],
+                &(value as i64).to_le_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn two_byte_discriminants_lift_from_external_memory() {
+        let variants = (0..257)
+            .map(|index| {
+                (
+                    Box::leak(format!("V{index}").into_boxed_str()) as &str,
+                    vec![],
+                )
+            })
+            .collect();
+        let layouts = vec![choice_layout("Wide", variants)];
+        let ty = Ty::Aggregate(LayoutId(0));
+        let mut memory = Memory::new();
+        memory.write_bytes(0, &256u16.to_le_bytes()).unwrap();
+        assert_eq!(
+            lift_from_memory(&ty, &layouts, &memory, 0),
+            Ok(Val::Variant {
+                discriminant: 256,
+                fields: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn mismatched_and_unsupported_values_are_not_silently_empty() {
+        let mut memory = Memory::new();
+        assert_eq!(
+            lower(&Val::Int(1), &Ty::Bool, &[], &mut memory),
+            Err(Error::TypeMismatch)
+        );
+        assert_eq!(
+            lower_flat(&Val::Unit, &Ty::Closure, &[], &[], &mut memory),
+            Err(Error::Unsupported(Unsupported::Closure))
+        );
+        assert_eq!(
+            lower_flat(&Val::Unit, &Ty::Capability, &[], &[], &mut memory),
+            Err(Error::Unsupported(Unsupported::Capability))
+        );
+        assert_eq!(
+            lower_to_memory(&Val::Unit, &Ty::Unit, &[], &mut memory, 0),
+            Ok(())
+        );
+        assert_eq!(
+            lower_to_memory(&Val::Int(1), &Ty::Bool, &[], &mut memory, 0),
+            Err(Error::TypeMismatch)
+        );
     }
 }
