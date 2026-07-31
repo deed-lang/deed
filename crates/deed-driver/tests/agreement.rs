@@ -12,9 +12,10 @@
 //! the number in the table here is what the compiled module is checked
 //! against. One place would let a wrong shared answer pass twice.
 
-use deed_codegen::{Value, call, compile};
+use deed_codegen::{Trap, Value, call, compile};
 use deed_diagnostics::SourceMap;
 use deed_driver::check_all;
+use deed_interp::codes;
 use deed_interp::{Program as Interpreted, run_tests};
 
 /// A program, the function to call in it, and what it should come back with.
@@ -418,6 +419,49 @@ fn the_agreement_covers_more_than_one_program() {
     assert!(
         programs().len() >= 10,
         "the agreement table should carry more than a couple of programs"
+    );
+}
+
+/// A proof about `Int` is only sound if every engine shares the same boundary.
+///
+/// `grow` is Proven because `Int` does not wrap: `n + 1` either answers with
+/// another positive integer or fails with arithmetic that has no answer. If the
+/// backend wrapped here, this would come back `i64::MIN` and the proof would be
+/// a lie.
+#[test]
+fn overflow_near_the_boundary_fails_the_same_way_under_both_engines() {
+    let source = "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn grow(n: Positive) -> Positive { n + 1 }\n\n\
+         test \"the boundary\" {\n\
+         \x20 assert grow(9223372036854775807) == 0\n\
+         }\n";
+    let (_, one) = checked(source);
+
+    let mut interpreted = Interpreted::new();
+    interpreted.add(
+        one.file,
+        &one.module,
+        &one.resolutions,
+        one.guards(),
+        one.rows(),
+    );
+    let outcomes = run_tests(&interpreted, one.file);
+    assert_eq!(outcomes.len(), 1);
+    let failure = outcomes[0]
+        .failure
+        .as_ref()
+        .expect("the interpreter should stop at the overflow");
+    assert_eq!(failure.code, codes::ARITHMETIC);
+
+    let lowered = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+    let module = compile(&lowered).expect("this compiles");
+    assert_eq!(
+        call(&module, "grow", &[Value::I64(i64::MAX)]),
+        Err(Trap::Failed {
+            code: codes::ARITHMETIC.to_string(),
+            message: "this arithmetic has no answer".to_string(),
+        })
     );
 }
 
