@@ -1550,4 +1550,16 @@ using an effect to get around not having a loop.
   and a comparator over a record is one function the user writes once. The old form of this
   question, whether a trait could be implemented outside the module that defines the type,
   is a coherence problem worth having only after there is something to implement.
+  #617 asked the two things this had not settled: whether a keyed collection specifically
+  crosses the bar, and whether hashing can be structural the way equality already is. The
+  second question answers the first. Equality is structural and total, so nothing bounds
+  `==` on a bare type parameter; a structural hash is the same shape of claim over the same
+  values, so it needs no bound either, and a hashed collection can key on any `K` with no
+  comparator, no passed function, and therefore none of the cross-call consistency gap
+  `examples/tree.deed` found, because there is nothing passed for two calls to disagree
+  about. That gap is specific to *ordering*: there is no structural order the way there is
+  a structural equality, since order is a choice (numeric, lexicographic, or a domain's own)
+  and equality is not, so an ordered tree keeps needing a comparator and keeps needing to be
+  trusted to use the same one. Deed has no structural hash implemented yet; this is the
+  decision that one, when written, needs no trait to carry it. #617 does not reopen #246.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
