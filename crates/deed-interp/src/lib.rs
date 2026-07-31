@@ -64,6 +64,9 @@ pub use deed_rt::sandbox;
 pub use interp::{
     DeclaredRows, Guard, Guards, Program, RowItem, Run, TestOutcome, run_main, run_tests,
 };
-pub use property::{PropertyConfig, PropertyOutcome, is_testable, run_properties};
+pub use property::{
+    GeneratedInputs, PropertyConfig, PropertyOutcome, generate_inputs, is_testable, run_properties,
+    shrink_inputs,
+};
 pub use sandbox::Refused;
 pub use value::{Capability, Fields, Value, VariantValue};

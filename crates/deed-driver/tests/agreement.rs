@@ -16,7 +16,10 @@ use deed_codegen::{Trap, Value, call, compile};
 use deed_diagnostics::SourceMap;
 use deed_driver::check_all;
 use deed_interp::codes;
-use deed_interp::{Program as Interpreted, run_tests};
+use deed_interp::{
+    Program as Interpreted, PropertyConfig, Value as InterpretedValue, generate_inputs, run_main,
+    run_tests, shrink_inputs,
+};
 
 /// A program, the function to call in it, and what it should come back with.
 struct Agreed {
@@ -533,5 +536,238 @@ fn a_program_the_backend_refuses_still_runs_under_the_interpreter() {
     assert!(
         compile(&lowered).is_err(),
         "the backend has not got here yet"
+    );
+}
+
+/// One generated run, by what happened.
+enum Finding {
+    Agreed,
+    Unsupported(String),
+    Crash(String),
+    Disagreement { interpreted: i64, compiled: i64 },
+}
+
+const GENERATED_SUBJECT: &str = "module a\n\nchoice Mood {\n    Calm,\n    Loud { by: Int },\n}\n\nrecord Sample {\n    numbers: List<Int>,\n    word: String,\n    mood: Mood,\n    yes: Bool,\n}\n\nfn score(sample: Sample) -> Int {\n    let tone = match sample.mood {\n        Calm => 0,\n        Loud { by } => by,\n    }\n\n    let sign = if sample.yes {\n        1\n    } else {\n        0 - 1\n    }\n\n    length(sample.numbers) + length(sample.word) + tone + sign\n}\n";
+
+fn escaped(text: &str) -> String {
+    let mut out = String::new();
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn to_deed_literal(value: &InterpretedValue) -> String {
+    match value {
+        InterpretedValue::Unit => "()".to_string(),
+        InterpretedValue::Int(n) => n.to_string(),
+        InterpretedValue::Bool(true) => "true".to_string(),
+        InterpretedValue::Bool(false) => "false".to_string(),
+        InterpretedValue::Str(text) => escaped(text),
+        InterpretedValue::List(elements) => {
+            let inner: Vec<String> = elements.iter().map(to_deed_literal).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        InterpretedValue::Record(fields) => {
+            let inner: Vec<String> = fields
+                .iter()
+                .map(|(name, value)| format!("{name}: {}", to_deed_literal(value)))
+                .collect();
+            format!("Sample {{ {} }}", inner.join(", "))
+        }
+        InterpretedValue::Variant(variant) => {
+            if variant.fields.is_empty() {
+                variant.name.clone()
+            } else {
+                let fields: Vec<String> = variant
+                    .fields
+                    .iter()
+                    .map(|(name, value)| format!("{name}: {}", to_deed_literal(value)))
+                    .collect();
+                format!("{} {{ {} }}", variant.name, fields.join(", "))
+            }
+        }
+        InterpretedValue::Result { ok, value } => {
+            let name = if *ok { "ok" } else { "err" };
+            format!("{name}({})", to_deed_literal(value))
+        }
+        InterpretedValue::Capability(_)
+        | InterpretedValue::Closure(_)
+        | InterpretedValue::Function { .. } => {
+            panic!("this generator should not produce callable or capability values")
+        }
+    }
+}
+
+fn generated_program(input: &InterpretedValue) -> String {
+    format!(
+        "{GENERATED_SUBJECT}\nfn main() -> Int {{\n    score({})\n}}\n",
+        to_deed_literal(input)
+    )
+}
+
+fn run_generated_case(input: &InterpretedValue) -> Finding {
+    let source = generated_program(input);
+    let (sources, one) = checked(&source);
+
+    let mut interpreted = Interpreted::new();
+    interpreted.add(
+        one.file,
+        &one.module,
+        &one.resolutions,
+        one.guards(),
+        one.rows(),
+    );
+    let interpreted_run = run_main(&interpreted, one.file, std::path::Path::new("."), &[])
+        .expect("generated source should declare main");
+    let interpreted_value = match interpreted_run.result {
+        Ok(value) => match value.as_int() {
+            Some(value) => value,
+            None => {
+                return Finding::Crash("the interpreter returned a non-integer value".to_string());
+            }
+        },
+        Err(why) => {
+            let text = deed_diagnostics::render_human(&sources, &why);
+            return Finding::Crash(format!("the interpreter stopped:\n{text}"));
+        }
+    };
+
+    let lowered = match deed_mir::lower(&one.module, &one.resolutions, &one.types) {
+        Ok(lowered) => lowered,
+        Err(why) => return Finding::Unsupported(why.to_string()),
+    };
+    let module = match compile(&lowered) {
+        Ok(module) => module,
+        Err(why) => return Finding::Unsupported(why.to_string()),
+    };
+    let compiled_value = match call(&module, "main", &[]) {
+        Ok(Some(value)) => value.as_i64(),
+        Ok(None) => return Finding::Crash("the backend returned no value".to_string()),
+        Err(why) => return Finding::Crash(format!("the backend trapped: {why}")),
+    };
+
+    if interpreted_value == compiled_value {
+        Finding::Agreed
+    } else {
+        Finding::Disagreement {
+            interpreted: interpreted_value,
+            compiled: compiled_value,
+        }
+    }
+}
+
+#[test]
+fn generated_programs_keep_the_interpreter_and_backend_in_agreement() {
+    let (_, generated) = checked(GENERATED_SUBJECT);
+    let mut program = Interpreted::new();
+    program.add(
+        generated.file,
+        &generated.module,
+        &generated.resolutions,
+        generated.guards(),
+        generated.rows(),
+    );
+
+    let function = generated
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            deed_ast::Item::Function(function) if function.sig.name.name == "score" => {
+                Some(function)
+            }
+            _ => None,
+        })
+        .expect("`score` should exist");
+
+    let cases = generate_inputs(
+        &program,
+        generated.file,
+        &generated.module,
+        &generated.resolutions,
+        function,
+        PropertyConfig {
+            cases: 60,
+            ..PropertyConfig::default()
+        },
+    );
+    assert!(
+        !cases.cases.is_empty(),
+        "the generator produced no usable input (seed {:#x}, rejected {})",
+        cases.seed,
+        cases.rejected
+    );
+
+    let mut agreed = 0usize;
+    let mut unsupported = Vec::new();
+    let mut crashes = Vec::new();
+    let mut disagreements = Vec::new();
+
+    for args in &cases.cases {
+        let input = args[0].clone();
+        match run_generated_case(&input) {
+            Finding::Agreed => agreed += 1,
+            Finding::Unsupported(why) => unsupported.push((input, why)),
+            Finding::Crash(why) => crashes.push((input, why)),
+            Finding::Disagreement {
+                interpreted,
+                compiled,
+            } => disagreements.push((input, interpreted, compiled)),
+        }
+    }
+
+    assert!(
+        agreed > 0,
+        "no generated input reached both engines; unsupported: {:?}; crashes: {:?}",
+        unsupported
+            .iter()
+            .map(|(value, why)| format!("{} -> {why}", to_deed_literal(value)))
+            .collect::<Vec<_>>(),
+        crashes
+            .iter()
+            .map(|(value, why)| format!("{} -> {why}", to_deed_literal(value)))
+            .collect::<Vec<_>>()
+    );
+
+    if let Some((input, interpreted, compiled)) = disagreements.into_iter().next() {
+        let shrunk = shrink_inputs(
+            &program,
+            generated.file,
+            &generated.module,
+            &generated.resolutions,
+            vec![input.clone()],
+            |candidate| {
+                matches!(
+                    run_generated_case(&candidate[0]),
+                    Finding::Disagreement { .. }
+                )
+            },
+        );
+        panic!(
+            "generated disagreement: input {} shrinks to {}, interpreter {}, backend {}",
+            to_deed_literal(&input),
+            to_deed_literal(&shrunk[0]),
+            interpreted,
+            compiled
+        );
+    }
+
+    assert!(
+        crashes.is_empty(),
+        "generated crashes: {:?}",
+        crashes
+            .iter()
+            .map(|(value, why)| format!("{} -> {why}", to_deed_literal(value)))
+            .collect::<Vec<_>>()
     );
 }

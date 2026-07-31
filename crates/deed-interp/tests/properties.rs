@@ -1,8 +1,10 @@
 //! Property tests generated from contracts.
 
+use deed_ast::Item;
 use deed_diagnostics::{SourceMap, render_human};
 use deed_interp::{
-    DeclaredRows, Guards, Program, PropertyConfig, PropertyOutcome, codes, run_properties,
+    DeclaredRows, Guards, Program, PropertyConfig, PropertyOutcome, Value, codes, generate_inputs,
+    run_properties, shrink_inputs,
 };
 use deed_lexer::tokenize;
 use deed_parser::parse;
@@ -490,6 +492,126 @@ fn a_refinement_the_generator_cannot_satisfy_is_not_a_false_failure() {
         outcome.failure.as_ref().map(|f| f.code),
         Some(codes::NOT_ENOUGH_CASES)
     );
+}
+
+#[test]
+fn direct_generation_uses_the_whole_rejection_budget() {
+    let source = "module a\n\n\
+                  fn impossible(n: Int) -> Int\n\
+                  \x20 where n > 0, n < 0,\n\
+                  \x20 ensures ok => result == n,\n\
+                  { n }\n";
+    let mut sources = SourceMap::new();
+    let file = sources.add("test.deed", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
+    let function = parsed
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .expect("the function should parse");
+    let mut program = Program::new();
+    program.add(
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        Guards::new(),
+        DeclaredRows::new(),
+    );
+
+    let generated = generate_inputs(
+        &program,
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        function,
+        PropertyConfig { cases: 4, seed: 1 },
+    );
+    assert!(generated.cases.is_empty());
+    assert_eq!(generated.rejected, 80);
+}
+
+#[test]
+fn direct_generation_counts_arguments_it_cannot_make() {
+    let source = "module a\n\n\
+                  fn impossible<T>(value: T) -> Int\n\
+                  \x20 ensures ok => result == 1,\n\
+                  { 1 }\n";
+    let mut sources = SourceMap::new();
+    let file = sources.add("test.deed", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
+    let function = parsed
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .expect("the function should parse");
+    let mut program = Program::new();
+    program.add(
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        Guards::new(),
+        DeclaredRows::new(),
+    );
+
+    let generated = generate_inputs(
+        &program,
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        function,
+        PropertyConfig { cases: 3, seed: 1 },
+    );
+    assert!(generated.cases.is_empty());
+    assert_eq!(generated.rejected, 60);
+}
+
+#[test]
+fn direct_shrinking_honours_the_predicate_and_finds_the_smallest_integer() {
+    let mut sources = SourceMap::new();
+    let file = sources.add("test.deed", "module a\n");
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    let resolved = resolve(file, &parsed.module, &Universe::new());
+    let mut program = Program::new();
+    program.add(
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        Guards::new(),
+        DeclaredRows::new(),
+    );
+
+    let unchanged = shrink_inputs(
+        &program,
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        vec![Value::Int(100)],
+        |candidate| matches!(candidate[0], Value::Int(value) if value < 100),
+    );
+    assert_eq!(unchanged, vec![Value::Int(100)]);
+
+    let smallest = shrink_inputs(
+        &program,
+        file,
+        &parsed.module,
+        &resolved.resolutions,
+        vec![Value::Int(100)],
+        |candidate| matches!(candidate[0], Value::Int(value) if value > 0),
+    );
+    assert_eq!(smallest, vec![Value::Int(1)]);
 }
 
 // -- the examples ----------------------------------------------------------
