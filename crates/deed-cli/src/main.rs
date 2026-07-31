@@ -486,7 +486,7 @@ fn to_wit_type(ty: &deed_mir::Ty, program: &deed_mir::Program) -> String {
 
 /// Converts snake_case to kebab-case, as WIT identifiers require.
 fn to_kebab(s: &str) -> String {
-    s.replace('_', "-")
+    s.replace('_', "-").to_lowercase()
 }
 
 /// The module declaration name, or a fallback derived from the first segment.
