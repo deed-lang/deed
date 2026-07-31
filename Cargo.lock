@@ -22,6 +22,7 @@ dependencies = [
  "deed-fmt",
  "deed-interp",
  "deed-lsp",
+ "deed-mcp",
  "deed-mir",
  "deed-typeck",
 ]
@@ -117,6 +118,17 @@ dependencies = [
  "deed-parser",
  "deed-resolve",
  "deed-typeck",
+]
+
+[[package]]
+name = "deed-mcp"
+version = "0.2.2"
+dependencies = [
+ "deed-diagnostics",
+ "deed-driver",
+ "deed-explain",
+ "deed-lsp",
+ "deed-wasm",
 ]
 
 [[package]]

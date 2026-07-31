@@ -64,6 +64,7 @@ fn run() -> ExitCode {
         Command::Explain(code) => run_explain(&code),
         Command::Check(check) => run_check(check),
         Command::Lsp => run_lsp(),
+        Command::Mcp => run_mcp(),
     }
 }
 
@@ -112,6 +113,27 @@ fn run_lsp() -> ExitCode {
     let mut output = stdout.lock();
 
     match deed_lsp::serve(&mut input, &mut output) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::from(EXIT_USAGE)
+        }
+    }
+}
+
+/// Speaks the Model Context Protocol on stdin and stdout.
+///
+/// Started by an agent host rather than typed, the same way `deed lsp` is
+/// started by an editor. Errors go to stderr for the same reason they do
+/// there: stdout carries the protocol, and a stray line on it is a client
+/// that stops being able to read anything.
+fn run_mcp() -> ExitCode {
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+
+    match deed_mcp::serve(&mut input, &mut output) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
