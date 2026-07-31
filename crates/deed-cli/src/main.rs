@@ -1701,4 +1701,39 @@ mod component_tests {
             )
         );
     }
+
+    #[test]
+    fn one_variant_with_a_different_name_is_still_a_choice() {
+        let mut program = Program::new();
+        let only = program.add_layout(Layout {
+            name: "Solo_Choice".to_string(),
+            variants: vec![Variant {
+                name: "Only".to_string(),
+                fields: vec![Field {
+                    name: "value".to_string(),
+                    ty: Ty::Int,
+                }],
+            }],
+        });
+        program.add_function(Function::new(
+            "choose",
+            vec![Ty::Aggregate(only)],
+            Ty::Aggregate(only),
+        ));
+
+        assert_eq!(
+            generate_wit("solo", &program),
+            concat!(
+                "package deed:solo;\n",
+                "\n",
+                "variant solo-choice {\n",
+                "    only(s64),\n",
+                "}\n",
+                "\n",
+                "world component {\n",
+                "    export choose: func(p0: solo-choice) -> solo-choice;\n",
+                "}\n",
+            )
+        );
+    }
 }
