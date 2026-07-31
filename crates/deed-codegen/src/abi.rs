@@ -1458,16 +1458,16 @@ mod tests {
 
         let layouts16 = vec![make(16)];
         let ty16 = Ty::Aggregate(LayoutId(0));
-        let value16 = Val::Record((0..16).map(|value| Val::Int(value)).collect());
+        let value16 = Val::Record((0..16).map(Val::Int).collect());
         let mut memory16 = Memory::new();
         assert_eq!(
             lower(&value16, &ty16, &layouts16, &mut memory16).unwrap(),
-            (0..16).map(|value| FlatArg::I64(value)).collect::<Vec<_>>()
+            (0..16).map(FlatArg::I64).collect::<Vec<_>>()
         );
 
         let layouts17 = vec![make(17)];
         let ty17 = Ty::Aggregate(LayoutId(0));
-        let value17 = Val::Record((0..17).map(|value| Val::Int(value)).collect());
+        let value17 = Val::Record((0..17).map(Val::Int).collect());
         let mut memory17 = Memory::new();
         assert_eq!(
             lower(&value17, &ty17, &layouts17, &mut memory17),
