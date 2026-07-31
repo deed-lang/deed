@@ -1201,6 +1201,45 @@ fn regenerate_the_std_api_pages() {
     }
 }
 
+#[test]
+fn the_changelog_has_the_sections_the_release_policy_uses() {
+    let changelog = read("CHANGELOG.md");
+    let required = [
+        "## Unreleased",
+        "### Programs that used to compile and no longer do",
+        "### Language",
+        "### Diagnostics",
+        "### Standard library",
+        "### Tools",
+        "### Measurements",
+    ];
+
+    for heading in required {
+        assert!(
+            changelog.contains(heading),
+            "CHANGELOG.md should contain {heading:?}, because that is the release-note shape contributors are told to keep"
+        );
+    }
+}
+
+#[test]
+fn the_release_workflow_publishes_notes_from_the_changelog() {
+    let workflow = read(".github/workflows/release.yml");
+
+    assert!(
+        workflow.contains("CHANGELOG.md"),
+        "the release workflow should read CHANGELOG.md, because release notes come from the changelog rather than commit titles"
+    );
+    assert!(
+        workflow.contains("--notes-file"),
+        "the release workflow should pass explicit notes to gh release create"
+    );
+    assert!(
+        !workflow.contains("--generate-notes"),
+        "the release workflow should not ask GitHub to generate notes from commit titles"
+    );
+}
+
 /// The types every operator is tried against.
 ///
 /// Concrete and declarable inside one module, but nowhere near all of those:

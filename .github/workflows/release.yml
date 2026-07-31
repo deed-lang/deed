@@ -149,8 +149,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="$(mktemp)"
+          awk -v version="$version" '
+            $0 ~ "^## " version "($| \\()" { take = 1; next }
+            /^## / && take { exit }
+            take { print }
+          ' CHANGELOG.md > "$notes"
+          if ! grep -q '[^[:space:]]' "$notes"; then
+            echo "CHANGELOG.md has no release notes section for $version"
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --generate-notes \
+            --notes-file "$notes" \
             dist/*

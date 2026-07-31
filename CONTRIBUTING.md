@@ -106,6 +106,11 @@ A pull request also runs `cargo mutants --in-diff` against only the lines it tou
 "Tests" below); nothing to run locally for that beyond the tests above, since a mutant
 surviving means one of those tests should have caught it and did not.
 
+- **`CHANGELOG.md` is part of the release contract**: `crates/deed-driver/tests/documentation.rs`
+  checks that the changelog still carries the named user-facing sections and that the
+  release workflow reads release notes from it rather than generating them from commit
+  titles. If a PR changes what a user sees, update `## Unreleased` in the same PR.
+
 
 
 ## Tests
@@ -178,6 +183,31 @@ docs(design): clarify effect propagation rules
 One PR, one concern. Link the issue it closes. If a PR changes behaviour that a design
 document describes, update the document in the same PR, because a design that lags the code
 is worse than no design at all.
+
+## Changelog
+
+`CHANGELOG.md` is written per change, not assembled at release time.
+
+If a PR changes anything user-visible that release notes should carry, update
+`## Unreleased` in the same PR, under every heading it touches:
+
+- `Programs that used to compile and no longer do`
+- `Language`
+- `Diagnostics`
+- `Standard library`
+- `Tools`
+- `Measurements`
+
+Anything that makes an old program stop compiling goes in `Programs that used
+to compile and no longer do`, even when the refusal came from the parser, type
+checker, `std/`, or a tool. That is the heading a person scans first when
+checking whether an upgrade broke a program they already had.
+
+Those headings match the compatibility surface in
+[design/07-versioning.md](design/07-versioning.md). Patch releases should leave
+the refusal section empty. At release time, rename `Unreleased` to the version
+number and date; the release workflow publishes that section as the GitHub
+release notes.
 
 ## Design changes
 
