@@ -1327,6 +1327,7 @@ mod tests {
             Span::new(5, 6),
             Span::new(7, 8),
             Span::new(9, 10),
+            Span::new(11, 12),
         ];
         let sites: Vec<u32> = spans
             .iter()
@@ -1353,6 +1354,7 @@ mod tests {
                 then: vec![marked(sites[3], Ins::I32Const(0))],
                 otherwise: vec![marked(sites[4], Ins::I64Const(0))],
             },
+            marked(sites[5], Ins::I32Const(0)),
         ];
 
         let mapped = builder.finish_sites(7, &body);
@@ -1363,7 +1365,7 @@ mod tests {
                 .iter()
                 .map(|site| site.offset)
                 .collect::<Vec<_>>(),
-            [0, 4, 8, 14, 17]
+            [0, 4, 8, 14, 17, 20]
         );
         assert_eq!(
             mapped

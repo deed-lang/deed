@@ -1254,6 +1254,7 @@ impl Lowering<'_> {
                             "this computation was abandoned by its handler at {}",
                             span.start
                         ),
+                        span: *span,
                     });
                 }
                 ast::Stmt::Assign {
