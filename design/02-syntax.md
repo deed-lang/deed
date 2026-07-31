@@ -125,8 +125,7 @@ is refused for the same reason and pinned by its own test. A caller that needs a
 passes the comparison. Equality is different, because structural equality is total and
 wanting to know whether two records are the same is reasonable.
 
-Strings are ordered because `<` is the only thing here that puts two pieces of text in an
-order and never ties two of them that differ, and that is the argument for the comparisons.
+Strings are ordered because the other writable answers are weaker than they first look.
 Three other things do rank text and all three tie. `length` answers for every pair and
 calls `ab` and `ba` the same. `to_int` refuses everything that does not spell a number and
 calls `007` and `7` the same. `Io.list` hands back file names already sorted, which agrees
@@ -144,7 +143,8 @@ alphabet written down, and to rank anything else it needs one typed out by hand,
 every character left out of that alphabet tying with every other one, silently. Taking
 `<` away would not make ordering text impossible, it would put a hand-written alphabet in
 every program that sorts names and leave each of them wrong somewhere its author never
-looked, which is what separates it from the type parameter refused above.
+looked. That is the actual argument for the comparisons, and it is weaker than "text is
+otherwise unordered" for exactly one reason: there is still no code point.
 
 The order is by character. For text in one script that is the order anyone expects, and for
 text that mixes them it is a decision that needs a locale, which is not something an
@@ -223,8 +223,10 @@ can say so in a name of its own, the same way it can for whitespace.
 They are in `std/string` rather than the prelude because the prelude test is whether a
 thing can be written in the language, and this can: `index_of` on the two alphabets is the
 table, written the only way this language can write one today, the same as every other
-function that name ships with. What they were waiting for was somewhere to live, and now
-they have it.
+function that name ships with. What that writes is an ASCII table, not a general character
+library: without a code point or some other way to distinguish an arbitrary character from
+every other one, the only tables a Deed program can write are the ones whose keys were
+typed into the source.
 
 Slicing, searching and padding are not missing any more, and they are not in the prelude
 either. `std/string` has `slice`, `index_of`, `starts_with`, `ends_with`, `contains`, `replace`, `pad_left`,

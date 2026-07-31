@@ -297,12 +297,12 @@ fn case_of_nothing_is_nothing() {
 }
 
 #[test]
-fn case_cannot_be_written_in_the_language() {
-    // Why these two are in the prelude at all, which is the test every name
-    // there has to pass. A program can reach the characters of a string with
-    // `split(s, "")`, and there is nothing that turns one of them into a
-    // number: `to_int` speaks about text that spells a number, so it covers
-    // the ten digits and no letter.
+fn letters_have_no_numeric_code_in_the_language() {
+    // A program can reach the characters of a string with `split(s, "")`, and
+    // `std/string` can write a finite case table over those one-character
+    // strings, but there is still nothing that turns an arbitrary character
+    // into a number. `to_int` speaks about text that spells a number, so it
+    // covers the ten digits and no letter.
     let (sources, checked) = check(
         "module a\n\nfn code_of(letter: String) -> Result<Int, String> {\n    to_int(letter)\n}\n\n\
          test \"a letter is not a number\" {\n    assert code_of(\"a\") == err(\"`a` is not a number\")\n}\n",

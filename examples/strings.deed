@@ -55,15 +55,14 @@ fn announce(text: NonEmpty) -> String {
     text
 }
 
-// Strings are ordered, and `<` is the only thing in the language that puts two
-// pieces of text in an order and never ties two of them that differ. Three
-// other things do rank text and all three tie. `length` answers for every pair
-// and calls "ab" and "ba" the same. `to_int` refuses everything that does not
-// spell a number and calls "007" and "7" the same. `Io.list` hands back file
-// names already sorted, which agrees with `<` on the text it will take, but it
-// refuses whatever the machine will not accept as a name, it calls "A" and "a"
-// the same wherever the filesystem does, and it costs a `Dir`, two entries in
-// the row and a written file per comparison.
+// Strings are ordered because the other writable answers are weaker than they
+// first look. Three other things do rank text and all three tie. `length`
+// answers for every pair and calls "ab" and "ba" the same. `to_int` refuses
+// everything that does not spell a number and calls "007" and "7" the same.
+// `Io.list` hands back file names already sorted, which agrees with `<` on the
+// text it will take, but it refuses whatever the machine will not accept as a
+// name, it calls "A" and "a" the same wherever the filesystem does, and it
+// costs a `Dir`, two entries in the row and a written file per comparison.
 //
 // A record has fields, so a caller who wants two of them ranked passes the
 // comparison in, which is why ordering a record is refused, and that asks the
@@ -79,7 +78,9 @@ fn announce(text: NonEmpty) -> String {
 // by hand, with everything left out of that alphabet tying with everything
 // else, silently. Take `<` away and sorting names is still writable, at the
 // price of one hand-written alphabet per program, each of them wrong somewhere
-// its author never looked.
+// its author never looked. That is the argument for `<` on `String`, and it is
+// weaker than "text is otherwise unordered" for exactly one reason: there is
+// still no code point.
 //
 // The order is by character. For text in one script that is the order anybody
 // expects, and for text that mixes them it is a decision nobody should be
@@ -142,10 +143,10 @@ fn cleaned(raw: String) -> String {
     trim(raw)
 }
 
-// What is deliberately missing: slicing, searching, case, padding, and any
-// formatting beyond `+`. Those want a standard library and Deed has no story
-// for one yet. This file is the minimum that makes a program writable, not a
-// claim that strings are finished.
+// What is deliberately missing from the prelude: slicing, searching, padding,
+// and richer formatting than `+`. Those live in `std/string` now. This file is
+// the minimum that makes a program writable, not a claim that the prelude
+// should grow.
 
 test "joining" {
     assert greeting(Person { name: "onat", town: "istanbul" }) == "hello, onat of istanbul"
