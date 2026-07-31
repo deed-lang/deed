@@ -31,7 +31,11 @@ release notes.
 
 ### Tools
 
-- None yet.
+- The wasm artifact answers two more questions. `deed_tokens` says how the
+  compiler's own lexer classified each byte range, so a page can colour Deed
+  without a second grammar to keep in step, and `deed_explain` hands over
+  every diagnostic code with its page, so a site can host an error index
+  rather than write one. The artifact is 858,097 bytes, up from 816,258.
 
 ### Measurements
 

@@ -110,9 +110,52 @@ check(
   "",
 );
 
+// The two exports that are not verbs.
+const tokens = call("deed_tokens", HELLO)
+  .split("\n")
+  .filter((line) => line.trim() !== "")
+  .map((line) => JSON.parse(line));
+
+check("tokens classifies something", tokens.length > 10, tokens.length);
+check(
+  "tokens covers everything but whitespace, in order, without overlapping",
+  (() => {
+    let at = 0;
+    for (const { start, end } of tokens) {
+      if (start < at) return false;
+      if (HELLO.slice(at, start).trim() !== "") return false;
+      at = end;
+    }
+    return HELLO.slice(at).trim() === "";
+  })(),
+  tokens.slice(0, 4),
+);
+check(
+  "`module` is a keyword and `main` is not",
+  tokens.find((t) => HELLO.slice(t.start, t.end) === "module")?.class === "keyword" &&
+    tokens.find((t) => HELLO.slice(t.start, t.end) === "main")?.class === "name",
+  tokens.slice(0, 4),
+);
+
+wasm.deed_explain();
+const pages = readResult()
+  .split("\n")
+  .filter((line) => line.trim() !== "")
+  .map((line) => JSON.parse(line));
+
+check("explain lists the codes", pages.length > 50, pages.length);
+check(
+  "every page has a code and something to say",
+  pages.every((page) => /^DEED\d{4}$/.test(page.code) && page.name && page.text),
+  pages.find((page) => !page.text) ?? pages[0],
+);
+
 if (failures.length > 0) {
   console.error(`the artifact does not answer:\n\n${failures.join("\n\n")}`);
   process.exit(1);
 }
 
-console.log(`the artifact answers: deed ${version}, four verbs, every line parses`);
+console.log(
+  `the artifact answers: deed ${version}, four verbs, ${tokens.length} classified ranges, ` +
+    `${pages.length} diagnostic pages, every line parses`,
+);
