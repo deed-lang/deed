@@ -846,7 +846,7 @@ fn run_compiled_main(
     }
 
     if runs.is_empty() {
-        eprintln!("error: no `main` found, so there is nothing to run");
+        eprintln!("error: {}", deed_driver::NOTHING_TO_RUN);
         return Ok(None);
     }
     if runs.len() > 1 {
@@ -990,7 +990,7 @@ fn run_main(
     }
 
     if runs.is_empty() {
-        eprintln!("error: no `main` found, so there is nothing to run");
+        eprintln!("error: {}", deed_driver::NOTHING_TO_RUN);
         return Ok(None);
     }
     if runs.len() > 1 {

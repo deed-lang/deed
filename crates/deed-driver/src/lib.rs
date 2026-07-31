@@ -282,6 +282,15 @@ pub fn check(sources: &SourceMap, file: FileId) -> Checked {
         .expect("one file in, one out")
 }
 
+/// What every entry point says when a program has no `main`.
+///
+/// Three copies of this sentence had drifted into two different sentences: the
+/// CLI explained itself and the wasm artifact did not, so a page said only
+/// "no `main` found" to a reader looking at one of the twenty-two library
+/// files in the corpus, for whom that is the expected answer rather than a
+/// mistake.
+pub const NOTHING_TO_RUN: &str = "no `main` found, so there is nothing to run";
+
 /// Runs the whole pipeline over a set of files that see each other.
 ///
 /// Three passes over the list: parse everything, work out what each module
