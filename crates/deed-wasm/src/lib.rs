@@ -21,6 +21,11 @@
 //! - [`deed_test`], [`deed_run`] and [`deed_fmt`]: the other three verbs,
 //!   same calling shape, different question. [`deed_fmt`] is the one that
 //!   can answer with the program rather than about it.
+//! - [`deed_tokens`] and [`deed_explain`]: not verbs. One says how the
+//!   compiler's own lexer classified each byte range, so a page can colour
+//!   Deed without a second grammar to keep in step. The other hands over
+//!   every diagnostic code with its page, so a site hosts an error index
+//!   rather than writing one.
 //!
 //! `usize` throughout rather than packing a pointer and a length into one
 //! return value: a pointer is whatever width the target is, and a scheme that
@@ -41,6 +46,7 @@ use deed_diagnostics::{SourceMap, json_string, render_json};
 use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
 use deed_fmt::format as format_source;
 use deed_interp::{Program, run_main, run_tests};
+use deed_lexer::{TokenKind, TriviaKind};
 
 thread_local! {
     /// Where the last `deed_*` verb's answer is, for [`deed_result_ptr`] and
@@ -329,6 +335,91 @@ pub fn fmt_source(source: &str) -> String {
     }
 }
 
+/// How the compiler's own lexer classified each byte range, as JSON, one
+/// object a line: `{"class":...,"start":N,"end":M}`.
+///
+/// A page that colours Deed has two choices: reimplement the grammar, or ask
+/// the thing that already has one. The second is the only one that cannot
+/// drift, and it is why this returns classes rather than a rendering: what a
+/// keyword looks like is the page's business, what is a keyword is not.
+///
+/// The classes are what a lexer knows and no more. There is no `type` class,
+/// because at this stage `Console` and `console` are both an identifier, and
+/// a highlighter that guessed from the capital letter would be claiming
+/// something the compiler has not concluded yet.
+///
+/// Comments come from the same pass, as `comment`, so the ranges together
+/// cover everything but whitespace. Ranges are byte offsets into the source
+/// that was passed in, and they never overlap.
+pub fn token_classes(source: &str) -> String {
+    let mut sources = SourceMap::new();
+    let file = sources.add("main.deed".to_string(), source.to_string());
+    let lexed = deed_lexer::tokenize(file, source);
+
+    let mut spans: Vec<(u32, u32, &'static str)> = lexed
+        .tokens
+        .iter()
+        .filter_map(|token| {
+            let class = match &token.kind {
+                TokenKind::Keyword(_) => "keyword",
+                TokenKind::Ident(_) => "name",
+                TokenKind::Int(_) => "number",
+                TokenKind::Str(_) => "string",
+                TokenKind::Error => "error",
+                TokenKind::Eof => return None,
+                _ => "punctuation",
+            };
+            Some((token.span.start, token.span.end, class))
+        })
+        .collect();
+
+    spans.extend(lexed.trivia.iter().map(|trivia| {
+        let class = match trivia.kind {
+            TriviaKind::Line | TriviaKind::Block => "comment",
+        };
+        (trivia.span.start, trivia.span.end, class)
+    }));
+
+    spans.sort_by_key(|(start, _, _)| *start);
+    spans
+        .iter()
+        .map(|(start, end, class)| {
+            format!("{{\"class\":\"{class}\",\"start\":{start},\"end\":{end}}}\n")
+        })
+        .collect()
+}
+
+/// Every diagnostic code with its page, as JSON, one object a line.
+///
+/// The same pages `deed explain` prints, generated in `deed-explain` from the
+/// doc comments above each code and an example taken out of the test that
+/// already had to exist for it. A site that wants an error index therefore
+/// hosts one rather than writing one, and it cannot document a code this
+/// compiler does not have or miss one it does.
+pub fn explain_all() -> String {
+    deed_explain::all_pages()
+        .iter()
+        .map(|page| {
+            let example = match page.example {
+                Some(text) => json_string(text),
+                None => "null".to_string(),
+            };
+            let from = match page.example_source {
+                Some(text) => json_string(text),
+                None => "null".to_string(),
+            };
+            format!(
+                "{{\"code\":{},\"name\":{},\"text\":{},\"example\":{},\"example_source\":{}}}\n",
+                json_string(page.code),
+                json_string(page.name),
+                json_string(page.text),
+                example,
+                from,
+            )
+        })
+        .collect()
+}
+
 /// The `check` entry point: reads `len` UTF-8 bytes starting at `ptr` as a
 /// Deed program, checks it, and leaves the JSON where [`deed_result_ptr`]
 /// and [`deed_result_len`] find it.
@@ -393,6 +484,34 @@ pub unsafe extern "C" fn deed_fmt(ptr: *const u8, len: usize) {
     set_result(fmt_source(&source));
 }
 
+/// The colouring entry point: same input shape as [`deed_check`], and leaves
+/// one `{"class":...,"start":N,"end":M}` line per token and comment.
+///
+/// Not a verb. `check`, `test`, `run` and `fmt` answer questions about a
+/// program; this answers one about its text, and a page needs it on every
+/// keystroke rather than on a button.
+///
+/// # Safety
+///
+/// Same contract as [`deed_check`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn deed_tokens(ptr: *const u8, len: usize) {
+    // SAFETY: forwarded from this function's own contract.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let source = String::from_utf8_lossy(bytes);
+    set_result(token_classes(&source));
+}
+
+/// Every diagnostic code and its page, at
+/// [`deed_result_ptr`]/[`deed_result_len`].
+///
+/// Takes no source, because it is not about a program: it is what this
+/// compiler can say and why.
+#[unsafe(no_mangle)]
+pub extern "C" fn deed_explain() {
+    set_result(explain_all());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +546,152 @@ mod tests {
 
     fn call_check(source: &str) -> String {
         call_export(deed_check, source)
+    }
+
+    /// The `(start, end, class)` triples `token_classes` wrote, in order.
+    fn classes(source: &str) -> Vec<(usize, usize, String)> {
+        call_export(deed_tokens, source)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                (
+                    json_number(line, "start"),
+                    json_number(line, "end"),
+                    json_field(line, "class"),
+                )
+            })
+            .collect()
+    }
+
+    fn json_number(line: &str, key: &str) -> usize {
+        let needle = format!("\"{key}\":");
+        let start = line
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{line:?} has no {key}"))
+            + needle.len();
+        line[start..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .unwrap_or_else(|_| panic!("{key} in {line:?} is not a number"))
+    }
+
+    /// Whatever a page does with the classes, it has to be able to lay the
+    /// source out from them alone: covering everything but whitespace, in
+    /// order, without overlapping.
+    #[test]
+    fn the_classes_tile_the_source_and_leave_only_whitespace() {
+        let source = "module main\n\n// a comment\nfn main() -> Int {\n    \"hi\"\n    1\n}\n";
+        let mut at = 0;
+
+        for (start, end, class) in classes(source) {
+            assert!(start >= at, "{class} at {start} overlaps what came before");
+            assert!(
+                source[at..start].trim().is_empty(),
+                "nothing classified {:?}, which is not whitespace",
+                &source[at..start]
+            );
+            at = end;
+        }
+        assert!(source[at..].trim().is_empty(), "the tail went unclassified");
+    }
+
+    #[test]
+    fn each_class_is_the_one_the_lexer_decided() {
+        let source = "// c\nmodule a\n\nfn f() -> Int {\n    \"s\" == 1\n}\n";
+        let found: Vec<(String, String)> = classes(source)
+            .into_iter()
+            .map(|(start, end, class)| (class, source[start..end].to_string()))
+            .collect();
+
+        let of = |text: &str| {
+            found
+                .iter()
+                .find(|(_, seen)| seen == text)
+                .map(|(class, _)| class.clone())
+                .unwrap_or_else(|| panic!("nothing classified {text:?}: {found:?}"))
+        };
+
+        assert_eq!(of("// c"), "comment");
+        assert_eq!(of("module"), "keyword");
+        assert_eq!(of("f"), "name");
+        assert_eq!(of("\"s\""), "string");
+        assert_eq!(of("1"), "number");
+        assert_eq!(of("=="), "punctuation");
+    }
+
+    /// Two arms cargo-mutants could delete without a test noticing, and both
+    /// are things a page can see: text the lexer could not read should look
+    /// unread, and end-of-file is not a thing on screen.
+    #[test]
+    fn what_the_lexer_could_not_read_says_so_and_the_end_of_file_is_not_drawn() {
+        let source = "module a\n\nfn f() -> Int {\n    1 @ 2\n}\n";
+        let found = classes(source);
+
+        assert!(
+            found
+                .iter()
+                .any(|(start, end, class)| class == "error" && &source[*start..*end] == "@"),
+            "a character the lexer could not read should be classed error: {found:?}"
+        );
+        assert!(
+            found.iter().all(|(start, end, _)| start < end),
+            "an empty range draws nothing and is a page's problem to skip: {found:?}"
+        );
+    }
+
+    /// A highlighter that coloured `Console` differently would be claiming
+    /// something no pass has concluded at this point: to the lexer a capital
+    /// letter is a letter.
+    #[test]
+    fn a_capital_letter_is_not_a_type_yet() {
+        let source = "module a\n\nfn f(out: Console, n: Int) -> Int {\n    n\n}\n";
+        let found: Vec<(String, String)> = classes(source)
+            .into_iter()
+            .map(|(start, end, class)| (class, source[start..end].to_string()))
+            .collect();
+
+        for name in ["Console", "out", "Int", "n"] {
+            let class = found
+                .iter()
+                .find(|(_, seen)| seen == name)
+                .map(|(class, _)| class.as_str())
+                .unwrap_or_else(|| panic!("nothing classified {name:?}"));
+            assert_eq!(class, "name", "{name} should be a plain name");
+        }
+    }
+
+    #[test]
+    fn every_code_this_compiler_has_arrives_with_its_page() {
+        deed_explain();
+        let out_ptr = deed_result_ptr();
+        let out_len = deed_result_len();
+        // SAFETY: exactly what `deed_explain` just set.
+        let text = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+        let json = String::from_utf8(text.to_vec()).expect("the index is UTF-8");
+        // SAFETY: the same buffer, freed once.
+        unsafe { deed_free(out_ptr, out_len) };
+
+        let lines: Vec<&str> = json.lines().filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            deed_explain::all_pages().len(),
+            "one line per page, no more and no fewer"
+        );
+
+        for page in deed_explain::all_pages() {
+            let line = lines
+                .iter()
+                .find(|line| json_field(line, "code") == page.code)
+                .unwrap_or_else(|| panic!("{} is missing from the index", page.code));
+            assert_eq!(json_field(line, "name"), page.name);
+            assert!(
+                !json_field(line, "text").is_empty(),
+                "{} arrived with an empty page",
+                page.code
+            );
+        }
     }
 
     #[test]
