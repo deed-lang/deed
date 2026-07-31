@@ -44,6 +44,11 @@ not compile rather than guessing.
 code identifier (`DEED4025`) or the constant name (`BROKEN_PRECONDITION`).
 `deed lsp` speaks the language server protocol on stdin and stdout. It is for an
 editor to start, not for a person to type.
+There is no REPL. A Deed input is a module of declarations, and `deed run`
+enters through `main` rather than evaluating a top-level expression. For quick
+experiments, use a scratch `.deed` file with `deed check`, `deed test` or
+`deed run`, or use a playground that edits a whole program rather than one
+expression.
 
 Exit codes:
   0   no errors, though there may be warnings
@@ -103,14 +108,28 @@ pub enum Command {
     Version,
 }
 
+fn repl_refusal(command: Option<&str>) -> String {
+    let lead = match command {
+        Some(name) => format!("`deed {name}` is not a command here because there is no REPL"),
+        None => "there is no REPL".to_string(),
+    };
+    format!(
+        "{lead}: a Deed input is a module of declarations, `deed run` enters through `main`, \
+         and a prompt would need its own capability row and contract context. For experiments, \
+         use a scratch `.deed` file with `deed check`, `deed test` or `deed run`, or use a \
+         playground that edits a whole program."
+    )
+}
+
 pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String> {
     let Some(first) = args.next() else {
-        return Err("expected a command, try `deed check <path>`".to_string());
+        return Err(repl_refusal(None));
     };
 
     let mode = match first.as_str() {
         "-h" | "--help" | "help" => return Ok(Command::Help),
         "-V" | "--version" | "version" => return Ok(Command::Version),
+        "repl" | "interactive" => return Err(repl_refusal(Some(first.as_str()))),
         // No options and no paths. An editor starts it and talks to it down
         // the pipe, so anything else on the line is a mistake worth saying so
         // about rather than ignoring.
@@ -316,5 +335,13 @@ mod tests {
         let error = parse(args(&["buidl"])).unwrap_err();
         assert!(error.contains("check"), "{error}");
         assert!(error.contains("test"), "{error}");
+    }
+
+    #[test]
+    fn repl_is_refused_with_a_program_shaped_alternative() {
+        let error = parse(args(&["repl"])).unwrap_err();
+        assert!(error.contains("there is no REPL"), "{error}");
+        assert!(error.contains("scratch `.deed` file"), "{error}");
+        assert!(error.contains("playground"), "{error}");
     }
 }

@@ -308,7 +308,18 @@ fn help_and_version_succeed() {
 fn no_arguments_at_all_explains_itself() {
     let output = run(&[]);
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("deed check"));
+    let text = stderr(&output);
+    assert!(text.contains("there is no REPL"), "{text}");
+    assert!(text.contains("scratch `.deed` file"), "{text}");
+}
+
+#[test]
+fn repl_is_refused_with_a_whole_program_alternative() {
+    let output = run(&["repl"]);
+    assert_eq!(code(&output), 2);
+    let text = stderr(&output);
+    assert!(text.contains("there is no REPL"), "{text}");
+    assert!(text.contains("playground"), "{text}");
 }
 
 // -- the language server ---------------------------------------------------
