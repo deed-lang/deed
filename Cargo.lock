@@ -172,5 +172,6 @@ dependencies = [
  "deed-ast",
  "deed-diagnostics",
  "deed-driver",
+ "deed-fmt",
  "deed-interp",
 ]

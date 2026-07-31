@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 deed-ast = { path = "../deed-ast" }
 deed-diagnostics = { path = "../deed-diagnostics" }
 deed-driver = { path = "../deed-driver" }
+deed-fmt = { path = "../deed-fmt" }
 deed-interp = { path = "../deed-interp" }
 
 [lints]

@@ -445,11 +445,12 @@ nothing else does: a `Worker` it can terminate, keeping the compiler's answer
 the same on every host and the timeout policy where the thing being timed
 out is running.
 **Size (#592).** Measured with `[profile.wasm]` (root `Cargo.toml`, tuned for size:
-`opt-level = "z"`, one codegen unit, LTO, stripped, `panic = "abort"`): 741,996 bytes
-uncompressed, 245,645 gzipped. The embedded `std/` library
-(`std/string.deed` + `std/list.deed` + `std/table.deed`) is 39,303 bytes of that, about
-five percent; the rest is the lexer, parser, resolver, type checker, effect checker,
-interpreter and their shared machinery, compiled once. CI asserts a ceiling
+`opt-level = "z"`, one codegen unit, LTO, stripped, `panic = "abort"`): 816,258 bytes
+uncompressed, 265,841 gzipped. The embedded `std/` library
+(`std/string.deed` + `std/list.deed` + `std/table.deed` + `std/map.deed`) is 66,586 bytes
+of that, about eight percent; the rest is the lexer, parser, resolver, type checker,
+effect checker, formatter and interpreter and their shared machinery, compiled once.
+CI asserts a ceiling
 (1,500,000 bytes uncompressed, 550,000 gzipped, `.github/workflows/ci.yml`) with
 room to grow rather than slack to stop counting, the same shape as the codeword
 counts elsewhere in this repository.

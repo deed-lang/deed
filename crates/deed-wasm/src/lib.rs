@@ -18,6 +18,9 @@
 //!   object a line, in the exact shape `deed check --format json` already
 //!   writes (see `deed_driver::json_report`, #587). The caller reads it and
 //!   then calls [`deed_free`] on it.
+//! - [`deed_test`], [`deed_run`] and [`deed_fmt`]: the other three verbs,
+//!   same calling shape, different question. [`deed_fmt`] is the one that
+//!   can answer with the program rather than about it.
 //!
 //! `usize` throughout rather than packing a pointer and a length into one
 //! return value: a pointer is whatever width the target is, and a scheme that
@@ -36,6 +39,7 @@ use std::path::Path;
 use deed_ast::Item;
 use deed_diagnostics::{SourceMap, json_string, render_json};
 use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
+use deed_fmt::format as format_source;
 use deed_interp::{Program, run_main, run_tests};
 
 thread_local! {
@@ -293,6 +297,38 @@ pub fn run_source(source: &str) -> String {
     out
 }
 
+/// Formats the page's file, or says why it cannot.
+///
+/// One `{"kind":"formatted","text":...}` line when the file parses, and the
+/// same `{"kind":"diagnostic",...}` lines [`check_source`] writes when it
+/// does not. Refusing rather than reshaping is `deed fmt`'s own rule: a file
+/// that does not parse has no layout to choose, and picking one would be
+/// guessing at what was meant.
+///
+/// Only the page's file, with no shipped modules behind it. Formatting reads
+/// one file's own text, so an import would be a file this cannot rewrite
+/// anyway.
+pub fn fmt_source(source: &str) -> String {
+    let mut sources = SourceMap::new();
+    let file = sources.add("main.deed".to_string(), source.to_string());
+
+    match format_source(file, source) {
+        Ok(text) => format!(
+            "{{\"kind\":\"formatted\",\"text\":{}}}\n",
+            json_string(&text)
+        ),
+        Err(diagnostics) => diagnostics
+            .iter()
+            .map(|diagnostic| {
+                format!(
+                    "{{\"kind\":\"diagnostic\",\"diagnostic\":{}}}\n",
+                    render_json(&sources, diagnostic)
+                )
+            })
+            .collect(),
+    }
+}
+
 /// The `check` entry point: reads `len` UTF-8 bytes starting at `ptr` as a
 /// Deed program, checks it, and leaves the JSON where [`deed_result_ptr`]
 /// and [`deed_result_len`] find it.
@@ -342,35 +378,55 @@ pub unsafe extern "C" fn deed_run(ptr: *const u8, len: usize) {
     set_result(run_source(&source));
 }
 
+/// The `fmt` entry point: same input shape as [`deed_check`], and leaves
+/// either one `{"kind":"formatted","text":...}` line or the
+/// `{"kind":"diagnostic",...}` lines saying why there was nothing to format.
+///
+/// # Safety
+///
+/// Same contract as [`deed_check`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn deed_fmt(ptr: *const u8, len: usize) {
+    // SAFETY: forwarded from this function's own contract.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let source = String::from_utf8_lossy(bytes);
+    set_result(fmt_source(&source));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Calls the exports the way a page would: allocate, write, call, read
-    /// the result back through the two accessors, then free both buffers.
-    fn call_check(source: &str) -> String {
+    /// Calls one of the exports the way a page would: allocate, write, call,
+    /// read the result back through the two accessors, then free both
+    /// buffers.
+    fn call_export(verb: unsafe extern "C" fn(*const u8, usize), source: &str) -> String {
         let input = source.as_bytes();
         let in_ptr = deed_alloc(input.len());
         // SAFETY: `in_ptr` was allocated above with `input.len()` bytes.
         unsafe { std::ptr::copy_nonoverlapping(input.as_ptr(), in_ptr, input.len()) };
 
         // SAFETY: `in_ptr`/`input.len()` name the buffer just filled in.
-        unsafe { deed_check(in_ptr, input.len()) };
+        unsafe { verb(in_ptr, input.len()) };
 
         let out_ptr = deed_result_ptr();
         let out_len = deed_result_len();
-        // SAFETY: `out_ptr`/`out_len` are exactly what `deed_check` just set,
-        // and this module never hands out a pointer it does not also own.
+        // SAFETY: `out_ptr`/`out_len` are exactly what the verb just set, and
+        // this module never hands out a pointer it does not also own.
         let text = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
-        let result = String::from_utf8(text.to_vec()).expect("deed_check should write UTF-8");
+        let result = String::from_utf8(text.to_vec()).expect("a verb should write UTF-8");
 
         // SAFETY: `in_ptr`/`input.len()` and `out_ptr`/`out_len` are exactly
-        // what was allocated above and what `deed_check` just set.
+        // what was allocated above and what the verb just set.
         unsafe {
             deed_free(in_ptr, input.len());
             deed_free(out_ptr, out_len);
         }
         result
+    }
+
+    fn call_check(source: &str) -> String {
+        call_export(deed_check, source)
     }
 
     #[test]
@@ -578,5 +634,41 @@ mod tests {
             json_field(json.lines().next().unwrap(), "line"),
             "over\ntwo"
         );
+    }
+
+    #[test]
+    fn a_formatted_program_survives_the_trip_through_json() {
+        let messy = "module main\n\n\n\n\nfn main( ) -> Int {\n        1 + 1\n}\n";
+        let json = fmt_source(messy);
+        assert_eq!(json.lines().count(), 1, "one answer, got {json:?}");
+
+        let text = json_field(json.lines().next().unwrap(), "text");
+        // A whole program is the value here, so it carries the newlines that
+        // would otherwise split this answer into lines nobody wrote.
+        assert!(text.contains('\n'), "got {text:?}");
+        assert_ne!(text, messy, "this input was not already canonical");
+
+        // Formatting what came back changes nothing, which is the property
+        // that says the text arrived intact rather than merely parsed.
+        let again = fmt_source(&text);
+        assert_eq!(json_field(again.lines().next().unwrap(), "text"), text);
+    }
+
+    #[test]
+    fn a_file_that_does_not_parse_is_refused_rather_than_reshaped() {
+        let json = fmt_source("module main\n\nfn main( -> Int {\n");
+        assert!(
+            !json.is_empty()
+                && json
+                    .lines()
+                    .all(|line| line.contains("\"kind\":\"diagnostic\"")),
+            "a file with no layout to choose should only say why, got {json:?}"
+        );
+    }
+
+    #[test]
+    fn fmt_source_agrees_with_the_exported_boundary() {
+        let source = "module main\n\nfn main( ) -> Int {\n  1\n}\n";
+        assert_eq!(fmt_source(source), call_export(deed_fmt, source));
     }
 }
