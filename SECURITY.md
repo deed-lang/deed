@@ -1,27 +1,46 @@
 # Security policy
 
-## What is actually a security boundary here
+## What is a vulnerability in Deed
 
-Most of this repository is a compiler for a language with no users, so most bugs in it are
-bugs rather than vulnerabilities. Two things are different, and both are claims the project
-makes out loud.
+Most defects in this repository are correctness bugs. A report is a security vulnerability
+when it crosses one of these boundaries:
 
-**The `Dir` sandbox.** A function holding a `Dir` rooted at some directory must have no way
-to reach outside it. `crates/deed-interp/src/sandbox.rs` refuses separators, `.` and `..`,
-absolute paths, drive prefixes and empty names, and canonicalizes before comparing so that a
-symlink cannot walk out. If you find any input that escapes the root, that is a
-vulnerability, not a bug report. `design/04-capabilities.md` is the claim it is measured
-against.
+- **Capability safety:** code that was not handed a capability can still obtain or forge one.
+  `DEED4019` exists because a type name in expression position once allowed exactly that.
+- **`Dir` containment:** a function holding a `Dir` can reach paths outside that root.
+  `crates/deed-rt/src/sandbox.rs` is the implementation and `design/04-capabilities.md`
+  is the design statement.
 
-**Capability safety.** A function that was never handed a capability must have no way to
-obtain one. Naming a capability type where a value belongs is `DEED4019` precisely because it
-was once a way to conjure authority out of a type name. Any other route from "holds nothing"
-to "holds a `Console`, a `Clock` or a `Dir`" is the same class of problem.
+Anything else should normally be filed as a regular bug unless it can be shown to break one
+of those two boundaries.
 
-Running untrusted Deed source through `deed run` is not otherwise a supported threat model.
-The interpreter has a depth limit and traps on overflow, but it has not been hardened
-against a program written to attack it, and the sandbox is about the filesystem rather than
-about CPU or memory.
+## Security boundary in the current implementation
+
+The runtime boundary here is capability passing plus host-enforced operations:
+
+- The interpreter and backend expose one built-in effect, `Io`, with `write`, `now`, `epoch`,
+  `open`, `read`, `save`, `remove`, `make`, `list` and `args`.
+- Every `Io` operation takes the capability it acts on as its first argument. The row says
+  what kind of operation may happen, and the capability value says which resource it may
+  happen to.
+- Runtime row checking reports `DEED6010` when a run performs an operation the checked row did
+  not admit. That is treated as a compiler/runtime invariant failure, not as a program fault.
+- Embedded std modules (`std/string`, `std/list`, `std/table`) are normal Deed code and run
+  under the same row and capability rules as any other module.
+- In compiled output, host imports are the authority boundary. A module can only ask for what
+  it imports, and the host decides what those imports do.
+
+## What this does not guarantee
+
+- **No resource sandbox:** this is not a CPU, memory, or wall-clock isolation boundary.
+  `MAX_DEPTH` (`DEED6009`) bounds call depth, but there is no general limit on allocation or
+  total runtime.
+- **No hostile-input hardening promise for the whole toolchain:** running an untrusted source
+  file through the compiler or interpreter is expected to produce diagnostics or runtime
+  failures, but denial-of-service resistance is not a stated guarantee.
+- **No generic foreign import escape hatch in Deed source today:** capability crossings are the
+  fixed host operations above. If components or FFI are added, they must preserve the same
+  explicit capability boundary or they become a new security boundary to specify.
 
 ## Supported versions
 

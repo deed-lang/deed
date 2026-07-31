@@ -56,6 +56,34 @@ spelling it. The test that was supposed to prove capabilities work found it.
 
 `Dir` is real too, and it is the interesting one, so it gets its own section below.
 
+## Security boundary of this design
+
+This document is mostly about language design, but two of its claims are security boundaries
+in the current implementation:
+
+- **Capability safety.** A function cannot perform authority it was not passed. Capability
+  values are opaque, `Io` operations require the capability argument they act on, and
+  `DEED4019` refuses using a capability type name as a value.
+- **`Dir` containment.** A function with a `Dir` cannot escape its root by path text or by
+  symlink traversal. The rules are implemented in `crates/deed-rt/src/sandbox.rs` and applied
+  by every host that uses `deed-rt`.
+
+What this boundary does and does not cover:
+
+- **Covers:** which host actions code may request (`uses` rows plus capability arguments), and
+  which filesystem paths a `Dir` may reach.
+- **Does not cover:** CPU, memory, or wall-clock exhaustion. `MAX_DEPTH` stops unbounded call
+  depth (`DEED6009`), but that is not a general resource quota.
+- **Runtime row check guarantee:** `DEED6010` means a checked program performed an operation a
+  running function did not declare, which is reported as a checker/runtime bug rather than a
+  user program error.
+- **Compiled backend and host trust:** a compiled module can only request what it imports, and
+  host imports are where real authority is granted. The host is trusted to implement those
+  imports without widening authority beyond what the module was handed.
+- **Embedded std and future components:** shipped std modules run under the same capability
+  rules as user modules. There is no user-declared external import escape hatch today; any
+  future component/FFI boundary has to preserve this explicit capability crossing model.
+
 ## No ambient authority
 
 In every mainstream language, any code can do anything the process can do. `import os` and
