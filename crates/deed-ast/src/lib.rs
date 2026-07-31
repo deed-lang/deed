@@ -66,10 +66,18 @@ pub struct Use {
     pub span: Span,
 }
 
+/// An edition declaration on a module.
+#[derive(Clone, Debug)]
+pub struct EditionDecl {
+    pub year: u32,
+    pub span: Span,
+}
+
 /// One file.
 #[derive(Clone, Debug)]
 pub struct Module {
     pub name: Option<ModulePath>,
+    pub edition: Option<EditionDecl>,
     pub uses: Vec<Use>,
     pub items: Vec<Item>,
     pub span: Span,

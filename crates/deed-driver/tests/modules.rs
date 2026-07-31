@@ -108,6 +108,19 @@ fn a_variant_of_an_imported_choice_can_be_imported() {
 }
 
 #[test]
+fn modules_in_different_editions_interoperate() {
+    let (sources, checked) = check(&[
+        "module a edition 2024\n\nuse other.{helper}\n\nfn f() -> Int { helper(1) }\n",
+        "module other edition 2025\n\nuse a.{f};\n\nfn helper(n: Int) -> Int { n }\n",
+    ]);
+    assert!(
+        checked.diagnostics.is_empty(),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
 fn a_test_is_not_part_of_what_a_module_offers() {
     let (_, checked) = check(&[
         "module a\n\nuse other.{t}\n",

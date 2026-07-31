@@ -145,6 +145,14 @@ const DECISIONS: &[Decision] = &[
         tokens: Tokens::Kept,
     },
     Decision {
+        name: "a module edition stays on the module line",
+        spellings: &["module a edition 2025\nfn f() -> Int { 0 }\n"],
+        wants: &[Want::Says(
+            "module a edition 2025\n\nfn f() -> Int {\n    0\n}\n",
+        )],
+        tokens: Tokens::Kept,
+    },
+    Decision {
         name: "`ok` is padded so the arrows line up",
         spellings: &[
             "module a\n\nfn f(n: Int) -> Int\n  ensures\n    ok => result > 0,\n{\n  n\n}\n",

@@ -120,7 +120,8 @@ Every file begins with a `module` declaration followed by zero or more `use` dec
 then the body declarations.
 
 ```
-module       ::=  "module" module-path use* item*
+module       ::=  "module" module-path module-edition? use* item*
+module-edition ::= "edition" integer
 
 module-path  ::=  ident ("/" ident)*
 

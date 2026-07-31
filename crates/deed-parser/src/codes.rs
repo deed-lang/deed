@@ -75,3 +75,9 @@ pub const NO_RANGE: &str = "DEED2011";
 /// The conversions that exist are calls, and a call says in its return type
 /// whether it can fail, which is the thing a cast is for hiding.
 pub const NO_CAST: &str = "DEED2012";
+
+/// An edition declaration the parser does not recognize.
+///
+/// Editions are accepted per module, and an unknown one should fail at the
+/// declaration line with a list of the versions that exist.
+pub const UNKNOWN_EDITION: &str = "DEED2013";
