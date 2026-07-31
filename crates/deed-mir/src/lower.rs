@@ -41,6 +41,21 @@ fn unlowered(what: &str, span: Span) -> Unlowered {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Nominal<'a> {
+    Record(&'a ast::RecordDecl),
+    Choice(&'a ast::ChoiceDecl),
+}
+
+impl Nominal<'_> {
+    fn generics(&self) -> &[ast::Ident] {
+        match self {
+            Self::Record(record) => &record.generics,
+            Self::Choice(choice) => &choice.generics,
+        }
+    }
+}
+
 /// Lowers every function a module declares.
 ///
 /// Takes the whole checked module rather than one function, because a call
@@ -60,19 +75,32 @@ pub fn lower(
     // An alias is a name for something else, and a refinement is a claim
     // about a value rather than a shape it has, so both come out as whatever
     // they are written over. Nothing downstream needs to know either existed.
-    let mut aliases: HashMap<String, &ast::Type> = HashMap::new();
+    let mut aliases: HashMap<String, &ast::TypeAlias> = HashMap::new();
+    let mut nominals: HashMap<String, Nominal<'_>> = HashMap::new();
     for item in &module.items {
-        if let Item::TypeAlias(alias) = item {
-            aliases.insert(alias.name.name.to_string(), &alias.ty);
+        match item {
+            Item::TypeAlias(alias) => {
+                aliases.insert(alias.name.name.to_string(), alias);
+            }
+            Item::Record(record) => {
+                nominals.insert(record.name.name.to_string(), Nominal::Record(record));
+            }
+            Item::Choice(choice) => {
+                nominals.insert(choice.name.name.to_string(), Nominal::Choice(choice));
+            }
+            _ => {}
         }
     }
 
     for item in &module.items {
-        let name = match item {
-            Item::Record(record) => record.name.name.to_string(),
-            Item::Choice(choice) => choice.name.name.to_string(),
+        let (name, generics) = match item {
+            Item::Record(record) => (record.name.name.to_string(), &record.generics),
+            Item::Choice(choice) => (choice.name.name.to_string(), &choice.generics),
             _ => continue,
         };
+        if !generics.is_empty() {
+            continue;
+        }
         let id = program.add_layout(crate::Layout {
             name: name.clone(),
             variants: Vec::new(),
@@ -88,6 +116,9 @@ pub fn lower(
     for item in &module.items {
         match item {
             Item::Record(record) => {
+                if !record.generics.is_empty() {
+                    continue;
+                }
                 let id = layouts[record.name.name.as_str()];
                 let variants = vec![crate::Variant {
                     name: record.name.name.to_string(),
@@ -101,6 +132,7 @@ pub fn lower(
                                     &field.ty,
                                     &layouts,
                                     &aliases,
+                                    &nominals,
                                     &HashMap::new(),
                                     &mut shapes,
                                 )?,
@@ -111,6 +143,9 @@ pub fn lower(
                 shapes[id.0].variants = variants;
             }
             Item::Choice(choice) => {
+                if !choice.generics.is_empty() {
+                    continue;
+                }
                 let id = layouts[choice.name.name.as_str()];
                 let mut variants = Vec::new();
                 for variant in &choice.variants {
@@ -122,6 +157,7 @@ pub fn lower(
                                 &field.ty,
                                 &layouts,
                                 &aliases,
+                                &nominals,
                                 &HashMap::new(),
                                 &mut shapes,
                             )?,
@@ -177,8 +213,18 @@ pub fn lower(
     // may name are all built.
     let mut alias_types: HashMap<String, Ty> = HashMap::new();
     let mut shapes = std::mem::take(&mut program.layouts);
-    for (name, ty) in &aliases {
-        if let Ok(lowered) = written(ty, &layouts, &aliases, &HashMap::new(), &mut shapes) {
+    for (name, alias) in &aliases {
+        if !alias.generics.is_empty() {
+            continue;
+        }
+        if let Ok(lowered) = written(
+            &alias.ty,
+            &layouts,
+            &aliases,
+            &nominals,
+            &HashMap::new(),
+            &mut shapes,
+        ) {
             alias_types.insert(name.clone(), lowered);
         }
     }
@@ -205,13 +251,14 @@ pub fn lower(
                 ty,
                 &layouts,
                 &aliases,
+                &nominals,
                 &HashMap::new(),
                 &mut shapes,
             )?);
         }
         let ret = match &declaration.sig.ret {
             None => Ty::Unit,
-            Some(ty) => written(ty, &layouts, &aliases, &HashMap::new(), &mut shapes)?,
+            Some(ty) => written(ty, &layouts, &aliases, &nominals, &HashMap::new(), &mut shapes)?,
         };
         let id = program.add_function(Function::new(name, params, ret));
         if let Some(def) = resolutions.resolution(declaration.sig.name.span) {
@@ -254,6 +301,8 @@ pub fn lower(
             effects: &effects,
             signatures: &signatures,
             handlers: &handlers,
+            aliases: &aliases,
+            nominals: &nominals,
             answered: &mut answered,
             state: None,
             function: program.functions[index].clone(),
@@ -320,6 +369,90 @@ fn result_layout(shapes: &mut Vec<crate::Layout>, ok: Ty, err: Ty) -> crate::Lay
     crate::LayoutId(shapes.len() - 1)
 }
 
+fn instantiate_nominal(
+    name: &str,
+    args: &[Ty],
+    span: Span,
+    layouts: &HashMap<String, crate::LayoutId>,
+    aliases: &HashMap<String, &ast::TypeAlias>,
+    nominals: &HashMap<String, Nominal<'_>>,
+    shapes: &mut Vec<crate::Layout>,
+) -> Result<crate::LayoutId, Unlowered> {
+    if args.is_empty() {
+        if let Some(id) = layouts.get(name) {
+            return Ok(*id);
+        }
+    }
+
+    let nominal = match nominals.get(name) {
+        Some(nominal) => nominal,
+        None => {
+            return Err(unlowered(&format!("the generic type `{name}`"), span));
+        }
+    };
+    if nominal.generics().len() != args.len() {
+        return Err(unlowered(&format!("the generic type `{name}`"), span));
+    }
+
+    let held = args
+        .iter()
+        .map(|ty| format!("{ty:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let instantiated = format!("{name}<{held}>");
+    if let Some(at) = shapes.iter().position(|shape| shape.name == instantiated) {
+        return Ok(crate::LayoutId(at));
+    }
+
+    let mut bindings = HashMap::new();
+    for (generic, actual) in nominal.generics().iter().zip(args.iter().cloned()) {
+        bindings.insert(generic.name.to_string(), actual);
+    }
+
+    let id = crate::LayoutId(shapes.len());
+    shapes.push(crate::Layout {
+        name: instantiated.clone(),
+        variants: Vec::new(),
+    });
+
+    let variants = match nominal {
+        Nominal::Record(record) => vec![crate::Variant {
+            name: record.name.name.to_string(),
+            fields: record
+                .fields
+                .iter()
+                .map(|field| {
+                    Ok(crate::Field {
+                        name: field.name.name.to_string(),
+                        ty: written(
+                            &field.ty, layouts, aliases, nominals, &bindings, shapes,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>, Unlowered>>()?,
+        }],
+        Nominal::Choice(choice) => {
+            let mut variants = Vec::new();
+            for variant in &choice.variants {
+                let mut fields = Vec::new();
+                for field in variant.fields.iter().flatten() {
+                    fields.push(crate::Field {
+                        name: field.name.name.to_string(),
+                        ty: written(&field.ty, layouts, aliases, nominals, &bindings, shapes)?,
+                    });
+                }
+                variants.push(crate::Variant {
+                    name: variant.name.name.to_string(),
+                    fields,
+                });
+            }
+            variants
+        }
+    };
+    shapes[id.0].variants = variants;
+    Ok(id)
+}
+
 /// The MIR type of a type somebody wrote down.
 ///
 /// A signature in this language is complete, so every type in one is written
@@ -329,7 +462,8 @@ fn result_layout(shapes: &mut Vec<crate::Layout>, ok: Ty, err: Ty) -> crate::Lay
 fn written(
     ty: &ast::Type,
     layouts: &HashMap<String, crate::LayoutId>,
-    aliases: &HashMap<String, &ast::Type>,
+    aliases: &HashMap<String, &ast::TypeAlias>,
+    nominals: &HashMap<String, Nominal<'_>>,
     bindings: &HashMap<String, Ty>,
     shapes: &mut Vec<crate::Layout>,
 ) -> Result<Ty, Unlowered> {
@@ -342,11 +476,11 @@ fn written(
             ("Bool", 0) => Ty::Bool,
             ("String", 0) => Ty::Str,
             ("List", 1) => Ty::List(Box::new(written(
-                &args[0], layouts, aliases, bindings, shapes,
+                &args[0], layouts, aliases, nominals, bindings, shapes,
             )?)),
             ("Result", 2) => {
-                let ok = written(&args[0], layouts, aliases, bindings, shapes)?;
-                let err = written(&args[1], layouts, aliases, bindings, shapes)?;
+                let ok = written(&args[0], layouts, aliases, nominals, bindings, shapes)?;
+                let err = written(&args[1], layouts, aliases, nominals, bindings, shapes)?;
                 Ty::Aggregate(result_layout(shapes, ok, err))
             }
             // The four capabilities the language provides. All one type
@@ -359,16 +493,42 @@ fn written(
             // lowered for exactly one thing and that is what it stands for
             // here.
             (other, 0) if bindings.contains_key(other) => bindings[other].clone(),
-            (other, 0) => match layouts.get(other) {
-                Some(id) => Ty::Aggregate(*id),
-                None => match aliases.get(other) {
-                    Some(names) => written(names, layouts, aliases, bindings, shapes)?,
+            (other, _) => match aliases.get(other) {
+                Some(alias) => {
+                    if alias.generics.len() != args.len() {
+                        return Err(unlowered(&format!("the generic type `{other}`"), *span));
+                    }
+                    let mut alias_bindings = bindings.clone();
+                    for (generic, actual) in alias.generics.iter().zip(args) {
+                        alias_bindings.insert(
+                            generic.name.to_string(),
+                            written(actual, layouts, aliases, nominals, bindings, shapes)?,
+                        );
+                    }
+                    written(
+                        &alias.ty,
+                        layouts,
+                        aliases,
+                        nominals,
+                        &alias_bindings,
+                        shapes,
+                    )?
+                }
+                None if args.is_empty() => match layouts.get(other) {
+                    Some(id) => Ty::Aggregate(*id),
                     None => return Err(unlowered(&format!("the type `{other}`"), *span)),
                 },
+                None if nominals.contains_key(other) => {
+                    let actuals = args
+                        .iter()
+                        .map(|arg| written(arg, layouts, aliases, nominals, bindings, shapes))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ty::Aggregate(instantiate_nominal(
+                        other, &actuals, *span, layouts, aliases, nominals, shapes,
+                    )?)
+                }
+                None => return Err(unlowered(&format!("the generic type `{other}`"), *span)),
             },
-            (other, _) => {
-                return Err(unlowered(&format!("the generic type `{other}`"), *span));
-            }
         },
     })
 }
@@ -432,6 +592,8 @@ struct Lowering<'a> {
     /// of its own and inherits them from here.
     signatures: &'a HashMap<String, &'a ast::EffectDecl>,
     handlers: &'a HashMap<String, &'a ast::HandlerDecl>,
+    aliases: &'a HashMap<String, &'a ast::TypeAlias>,
+    nominals: &'a HashMap<String, Nominal<'a>>,
     /// Which handlers have been lowered, by name: the effect they answer
     /// for, the shape of their state, and a function per operation. A
     /// handler is one set of bodies however many `with` blocks name it, so
@@ -639,7 +801,8 @@ impl Lowering<'_> {
                 Some(ty) => written(
                     ty,
                     self.layouts,
-                    &HashMap::new(),
+                    self.aliases,
+                    self.nominals,
                     &bindings,
                     &mut self.shapes,
                 ),
@@ -651,7 +814,8 @@ impl Lowering<'_> {
             Some(ty) => written(
                 ty,
                 self.layouts,
-                &HashMap::new(),
+                self.aliases,
+                self.nominals,
                 &bindings,
                 &mut self.shapes,
             )?,
@@ -820,6 +984,22 @@ impl Lowering<'_> {
                         None => return Err(unlowered(&format!("the type `{name}`"), span)),
                     },
                 }
+            }
+            CheckedTy::Named { def, args } => {
+                let name = &self.resolutions.def(*def).name;
+                let actuals = args
+                    .iter()
+                    .map(|arg| self.convert(arg, span))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ty::Aggregate(instantiate_nominal(
+                    name.as_str(),
+                    &actuals,
+                    span,
+                    self.layouts,
+                    self.aliases,
+                    self.nominals,
+                    &mut self.shapes,
+                )?)
             }
             other => lower_ty(other, span)?,
         })
@@ -1413,7 +1593,8 @@ impl Lowering<'_> {
                 ty: written(
                     &field.ty,
                     self.layouts,
-                    &HashMap::new(),
+                    self.aliases,
+                    self.nominals,
                     &bindings,
                     &mut self.shapes,
                 )?,
@@ -1460,7 +1641,8 @@ impl Lowering<'_> {
                     Some(ty) => written(
                         ty,
                         self.layouts,
-                        &HashMap::new(),
+                        self.aliases,
+                        self.nominals,
                         &self.bindings.clone(),
                         &mut self.shapes,
                     )?,
@@ -1472,7 +1654,8 @@ impl Lowering<'_> {
                 Some(ty) => written(
                     ty,
                     self.layouts,
-                    &HashMap::new(),
+                    self.aliases,
+                    self.nominals,
                     &self.bindings.clone(),
                     &mut self.shapes,
                 )?,
@@ -1570,7 +1753,8 @@ impl Lowering<'_> {
                 Some(ty) => written(
                     ty,
                     self.layouts,
-                    &HashMap::new(),
+                    self.aliases,
+                    self.nominals,
                     &self.bindings.clone(),
                     &mut self.shapes,
                 )?,

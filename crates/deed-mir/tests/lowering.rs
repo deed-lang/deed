@@ -129,6 +129,46 @@ fn calling_a_generic_function_twice_at_one_type_makes_one_copy() {
     assert_eq!(copies, 1, "one element type, one copy");
 }
 
+#[test]
+fn a_generic_record_gets_a_layout_per_set_of_type_arguments() {
+    let program = lowered(
+        "module a\n\nrecord Box<T> {\n    value: T,\n}\n\nfn put<T>(value: T) -> Box<T> { Box { value: value } }\n\nfn f() -> Int { put(1).value }\n\nfn g() -> Bool { put(true).value }\n",
+    )
+    .expect("this lowers");
+
+    let layouts: Vec<&str> = program.layouts.iter().map(|layout| layout.name.as_str()).collect();
+    assert!(
+        layouts.contains(&"Box<Int>"),
+        "an `Int` call should instantiate `Box<Int>`: {layouts:?}"
+    );
+    assert!(
+        layouts.contains(&"Box<Bool>"),
+        "a `Bool` call should instantiate `Box<Bool>`: {layouts:?}"
+    );
+    assert!(
+        !layouts.contains(&"Box"),
+        "the generic declaration itself should not become a concrete layout"
+    );
+}
+
+#[test]
+fn a_generic_alias_is_expanded_before_lowering() {
+    let program = lowered(
+        "module a\n\nrecord Entry<K, V> {\n    key: K,\n    value: V,\n}\n\ntype Table<K, V> = List<Entry<K, V>>\n\nfn set<K, V>(entries: Table<K, V>, key: K, value: V) -> Table<K, V> {\n    [Entry { key: key, value: value }]\n}\n\nfn f() -> Int { length(set([], \"a\", 1)) }\n",
+    )
+    .expect("this lowers");
+
+    let layouts: Vec<&str> = program.layouts.iter().map(|layout| layout.name.as_str()).collect();
+    assert!(
+        layouts.contains(&"Entry<Str, Int>"),
+        "the alias target should instantiate: {layouts:?}"
+    );
+    assert!(
+        !layouts.iter().any(|name| name.starts_with("Table<")),
+        "an alias expands and should not survive to MIR layouts: {layouts:?}"
+    );
+}
+
 /// A closure becomes a function of its own, and the value that points at it
 /// carries what the body reads from outside.
 #[test]
