@@ -91,6 +91,9 @@ start with [how-to/README.md](how-to/README.md). Those pages index the existing
 corpus: checking a module set, writing tests, contracts and `assert refuses`,
 effects and capabilities, formatting, backend compilation, and editor setup.
 
+The shipped library API is indexed separately in [docs/std.md](docs/std.md), with one
+page per module and every exported function held there by a documentation ratchet.
+
 ## The idea
 
 Most of the code being written today is not typed out by a person. That changes which
