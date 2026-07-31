@@ -1,0 +1,3 @@
+mode: check
+expect: accept
+path: examples/hello.deed

@@ -1,0 +1,5 @@
+module a
+
+use other.{Thing}
+
+fn f() -> Thing {}

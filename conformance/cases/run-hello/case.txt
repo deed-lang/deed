@@ -1,0 +1,7 @@
+mode: run
+expect: run
+path: examples/hello.deed
+stdout: hello, 
+stdout: world
+stdout: 
+stdout: the pure part does not need any of this
