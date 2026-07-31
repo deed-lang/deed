@@ -133,6 +133,10 @@ fn any<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
     }
 }
 
+// Whether every element matches.
+//
+// Stops at the first failure for the same reason `any` stops at the first hit.
+// An empty list answers `true`, which is the usual "all of nothing" case.
 fn all<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
   uses
     r,
@@ -142,6 +146,10 @@ fn all<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Bool
     }
 }
 
+// How many elements match.
+//
+// This is `filter` without building the kept list, so the callback still runs
+// on every element and only the count is accumulated.
 fn count_where<T, uses r>(items: List<T>, matches: Fn(T) uses r -> Bool) -> Int
   uses
     r,
@@ -188,16 +196,19 @@ fn first<T>(items: List<T>) -> Result<T, String> {
     at(items, 0)
 }
 
+// The last element, or the same out-of-range error `at` gives on an empty list.
 fn last<T>(items: List<T>) -> Result<T, String> {
     at(items, length(items) - 1)
 }
 
+// The same items, in the opposite order.
 fn reversed<T>(items: List<T>) -> List<T> {
     for item in items with out = [] {
         prepend(out, item)
     }
 }
 
+// `front` followed by the list that was already there.
 fn prepend<T>(items: List<T>, front: T) -> List<T> {
     for item in items with out = [front] {
         push(out, item)
@@ -273,6 +284,7 @@ record Parts<T> {
     rest: List<T>,
 }
 
+// Both sides of a filter, kept and rejected, each in input order.
 fn partition<T, uses r>(items: List<T>, keep: Fn(T) uses r -> Bool) -> Parts<T>
   uses
     r,
@@ -294,6 +306,10 @@ record Pair<A, B> {
     right: B,
 }
 
+// Two lists walked together into pairs.
+//
+// Stops when either side runs out, so anything past the shorter length is
+// dropped rather than padded.
 fn zip<A, B>(left: List<A>, right: List<B>) -> List<Pair<A, B>> {
     // The index is not in scope for `while` (it belongs to the turn the
     // condition is deciding about), so the walk stops by refusing to grow
@@ -372,6 +388,7 @@ record Sides<A, B> {
     right: List<B>,
 }
 
+// The inverse of `zip`: all lefts together and all rights together.
 fn unzip<A, B>(items: List<Pair<A, B>>) -> Sides<A, B> {
     for pair in items with out = Sides { left: [], right: [] } {
         Sides { left: push(out.left, pair.left), right: push(out.right, pair.right) }

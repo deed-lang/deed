@@ -106,18 +106,27 @@ fn or_else<K, V>(entries: Table<K, V>, key: K, fallback: V) -> V {
     }
 }
 
+// Every key in insertion order.
+//
+// Replacing a value keeps the key where it was, because `set` rewrites in
+// place rather than removing and appending.
 fn keys<K, V>(entries: Table<K, V>) -> List<K> {
     for one in entries with out = [] {
         push(out, one.key)
     }
 }
 
+// Every value in the same order `keys` answers its keys.
 fn values<K, V>(entries: Table<K, V>) -> List<V> {
     for one in entries with out = [] {
         push(out, one.value)
     }
 }
 
+// How many entries are in the table.
+//
+// The count is the underlying list's length, which is also the reason lookup
+// cost stays linear in the number of keys.
 fn size<K, V>(entries: Table<K, V>) -> Int {
     length(entries)
 }
