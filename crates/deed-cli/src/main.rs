@@ -1672,30 +1672,33 @@ mod component_tests {
 
         assert_eq!(
             generate_wit("demo-module", &program),
-            "package deed:demo-module;\n\n\
-record inner-record {\n\
-    flag-value: bool,\n\
-}\n\
-\n\
-record outcome-type-pair {\n\
-    text-value: string,\n\
-    inner: inner-record,\n\
-}\n\
-variant outcome-type {\n\
-    none,\n\
-    one(s64),\n\
-    pair(outcome-type-pair),\n\
-}\n\
-\n\
-record outer-record {\n\
-    nested: inner-record,\n\
-    outcomes: list<outcome-type>,\n\
-}\n\
-\n\
-world component {\n\
-    export do-work: func(p0: outer-record) -> outcome-type;\n\
-    export ping: func();\n\
-}\n"
+            concat!(
+                "package deed:demo-module;\n",
+                "\n",
+                "record inner-record {\n",
+                "    flag-value: bool,\n",
+                "}\n",
+                "\n",
+                "record outcome-type-pair {\n",
+                "    text-value: string,\n",
+                "    inner: inner-record,\n",
+                "}\n",
+                "variant outcome-type {\n",
+                "    none,\n",
+                "    one(s64),\n",
+                "    pair(outcome-type-pair),\n",
+                "}\n",
+                "\n",
+                "record outer-record {\n",
+                "    nested: inner-record,\n",
+                "    outcomes: list<outcome-type>,\n",
+                "}\n",
+                "\n",
+                "world component {\n",
+                "    export do-work: func(p0: outer-record) -> outcome-type;\n",
+                "    export ping: func();\n",
+                "}\n",
+            )
         );
     }
 }
