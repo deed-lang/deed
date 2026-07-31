@@ -37,12 +37,11 @@ From source instead, which needs Rust 1.85 or newer:
 $ cargo install --path crates/deed-cli
 ```
 
-**What the version promises.** `0.x` says the language can still move. A file that compiles
-against one release may not compile against the next, and when that happens the release
-notes say what changed and `deed fix` applies whatever part of it is mechanical. Two things
-are steadier than the syntax, because tools are built on them: a diagnostic code is never
-reused, so `DEED4009` means today what it meant when it was assigned, and `--format json`
-is an output something else can read.
+**What the version promises.** `0.x` says the language can still move, so a file that
+compiles against one minor release may not compile against the next. Breaking moves are
+called out in release notes, and `deed fix` carries the mechanical part when possible. The
+full policy, including diagnostics and `std/`, is in
+[design/07-versioning.md](design/07-versioning.md).
 
 ```
 $ deed run examples/config.deed --dir examples
@@ -159,6 +158,7 @@ The longer version, including the cost model this is all based on, is in
 | [06-grammar.md](design/06-grammar.md) | The grammar, checked against the parser both ways |
 | [07-editions.md](design/07-editions.md) | How a breaking change ships without splitting the ecosystem |
 | [refusals.md](design/refusals.md) | Everything deliberately left out, and why |
+| [07-versioning.md](design/07-versioning.md) | Compatibility policy for language, diagnostics, and `std/` |
 
 Read them in order. Each one leans on the one before it.
 
