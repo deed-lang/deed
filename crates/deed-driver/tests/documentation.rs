@@ -227,7 +227,9 @@ fn line_start(text: &str, offset: usize) -> usize {
 }
 
 fn line_end(text: &str, offset: usize) -> usize {
-    text[offset..].find('\n').map_or(text.len(), |at| offset + at)
+    text[offset..]
+        .find('\n')
+        .map_or(text.len(), |at| offset + at)
 }
 
 fn file_header_comment(text: &str) -> String {
@@ -1165,8 +1167,7 @@ fn the_std_api_pages_match_the_shipped_modules_the_compiler_ships() {
     let expected_index = std_api_index();
     let actual_index = read("docs/std.md");
     assert_eq!(
-        actual_index,
-        expected_index,
+        actual_index, expected_index,
         "docs/std.md should match the generated shipped-module index"
     );
 
@@ -1190,7 +1191,8 @@ fn the_std_api_pages_match_the_shipped_modules_the_compiler_ships() {
 fn regenerate_the_std_api_pages() {
     let docs = root().join("docs").join("std");
     std::fs::create_dir_all(&docs).expect("docs/std should be writable");
-    std::fs::write(root().join("docs/std.md"), std_api_index()).expect("docs/std.md should be writable");
+    std::fs::write(root().join("docs/std.md"), std_api_index())
+        .expect("docs/std.md should be writable");
 
     for (path, page) in shipped_std_api_pages() {
         let absolute = root().join(path);
