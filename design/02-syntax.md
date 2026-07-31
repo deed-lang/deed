@@ -739,7 +739,17 @@ by reason.
 | Guarded, nothing names this value | 0 |
 | Guarded, crossed a module boundary | 0 |
 | Guarded, not a shape the checker reasons about | 0 |
-| Guarded, no reason (an `ensures` clause, which does not go through `facts::holds`) | 9 |
+| Guarded, nothing tries to prove this one ahead of time (an `ensures` clause) | 9 |
+| Guarded, no reason at all | 0 |
+
+The last two rows used to be one row saying nothing. Nine of the twelve `Guarded`
+obligations are `ensures` clauses, which `check_all` never routes through `facts::holds`:
+nothing tries to settle one ahead of time, so the floor is `Guarded` whatever the body looks
+like. Reporting that as an absent reason made it read as the same answer the other three
+give, and those three are the checker having looked and come back without one. A reader
+deciding whether they have a bug needs "nobody tried" and "I could not" to be different
+sentences. `crates/deed-driver/tests/obligations.rs` now refuses any `Guarded` obligation
+that carries no reason at all.
 
 **What this decides.** Zero of the corpus's `Guarded` obligations are "not a shape the
 checker reasons about", and zero crossed a module boundary. The two that are categorised at

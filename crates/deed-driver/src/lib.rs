@@ -515,6 +515,13 @@ fn check_parsed(
     // every call, so the floor is `Guarded`. A pure function whose parameters
     // can be generated gets exercised by a property test as well, which is the
     // `Tested` tier and the only place it comes from.
+    //
+    // A guarded one carries `NothingTriesToProveThis` rather than no reason at
+    // all. The distinction matters more here than anywhere else: the other
+    // guarded obligations are the checker having looked and failed, and these
+    // are the checker never having looked, and until this said so the two were
+    // the same word with nothing to tell them apart. Thirteen of the sixteen
+    // guarded obligations in `examples/` are this case.
     for item in &parsed_module.items {
         let Item::Function(function) = item else {
             continue;
@@ -532,7 +539,12 @@ fn check_parsed(
                         Outcome::Err => "err",
                     }
                 ),
-                reason: None,
+                // `Tested` says a property test exercises it, which is an
+                // answer rather than the absence of one.
+                reason: match tested {
+                    true => None,
+                    false => Some(deed_typeck::facts::Reason::NothingTriesToProveThis),
+                },
             });
         }
     }

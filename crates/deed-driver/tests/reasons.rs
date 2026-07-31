@@ -119,21 +119,29 @@ fn the_corpus_is_counted_by_tier_and_by_reason() {
             o.reason.map(reason_text) == Some(Reason::NotAShapeTheCheckerReasonsAbout.text())
         })
         .count();
+    let nothing_tries = guarded
+        .iter()
+        .filter(|o| o.reason.map(reason_text) == Some(Reason::NothingTriesToProveThis.text()))
+        .count();
     let no_reason_at_all = guarded.iter().filter(|o| o.reason.is_none()).count();
 
     // Every Guarded obligation is accounted for by exactly one of the buckets
     // above, so the parts add up to the whole without a bucket for "counted
-    // twice" or "counted nowhere" to hide in. "No reason at all" is not a gap
-    // in the five: it is every `ensures` clause that fell to Guarded rather
-    // than Tested, which check_all never routes through facts::holds in the
-    // first place (see deed-driver's lib.rs), so #593's shape does not reach
-    // it yet.
+    // twice" or "counted nowhere" to hide in.
+    //
+    // `no_reason_at_all` is now zero and `crates/deed-driver/tests/obligations.rs`
+    // holds it there. It used to be nine, all of them `ensures` clauses, which
+    // `check_all` never routes through `facts::holds`: nothing tries to settle
+    // one ahead of time, so the floor is Guarded whatever the body looks like.
+    // Saying nothing made that look like the same answer as "I looked and could
+    // not", so those nine now carry `NothingTriesToProveThis` instead.
     assert_eq!(
         name_not_narrowed
             + length_not_established
             + value_unnamed
             + crossed_a_boundary
             + not_a_shape
+            + nothing_tries
             + no_reason_at_all,
         guarded.len(),
         "every Guarded obligation should fall into exactly one reason bucket, including \"none\""
@@ -148,9 +156,10 @@ fn the_corpus_is_counted_by_tier_and_by_reason() {
             value_unnamed,
             crossed_a_boundary,
             not_a_shape,
+            nothing_tries,
             no_reason_at_all,
         ),
-        (68, 8, 2, 1, 0, 0, 0, 9),
+        (68, 8, 2, 1, 0, 0, 0, 9, 0),
         "the corpus's obligation counts changed; update this test and the table in \
          design/02-syntax.md together"
     );
