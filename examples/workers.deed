@@ -1,0 +1,179 @@
+// A concurrent program written to find the walls.
+//
+// The shape: several workers scan different directories and a collector writes
+// a report. The capability row enforces the separation: workers cannot write,
+// the collector cannot read, and the signatures say so without a comment.
+//
+// Run it on a directory that contains subdirectories called `a`, `b` and `out`:
+//
+//   deed run examples/workers.deed --dir /some/path
+//
+// What it demonstrates:
+//
+// The row as a capability boundary. `scan` declares `uses Io.list, Io.read`
+// and cannot save no matter which `Dir` it holds. `collect` declares
+// `uses Io.save` and cannot list or read no matter which `Dir` it holds.
+// Neither of those restrictions is a comment: both are checked.
+//
+// Passing authority, not ambient access. Every function that touches the
+// filesystem was handed a `Dir` and cannot reach anything else. A worker that
+// is given only `dir_a` cannot see inside `dir_b`. There is no global path, no
+// ambient file system, and no way to widen a `Dir` once it has been narrowed.
+//
+// What it cannot say, and why those are separate issues:
+//
+// There is no spawn. The three `scan` calls below run one after another, even
+// though their authorities are disjoint and nothing stops them running in
+// parallel. The language has no construct that expresses "these are
+// independent; run them together." That is the first wall, and it is
+// deed-lang/deed#613.
+//
+// There is no channel. A worker cannot push results to the collector as it
+// runs; it returns data at the end and the caller assembles the parts. That is
+// the right shape for pure data and the wrong one for a stream. The second
+// wall is deed-lang/deed#614.
+//
+// There is no static proof of disjointness. The type system cannot verify that
+// `dir_a` and `dir_b` name directories that do not overlap, so a caller
+// holding both could, if they tried, send the same directory to two workers.
+// The row stops the collision from being a write collision but cannot stop it
+// from being a read duplicate. That is deed-lang/deed#615.
+
+module examples/workers
+
+// One file reported from one worker.
+record Finding {
+    worker: String,
+    name: String,
+    size: Int,
+}
+
+// Format one finding as one report line.
+fn format_finding(f: Finding) -> String {
+    f.worker + "/" + f.name + " (" + to_string(f.size) + " bytes)"
+}
+
+// Render all findings as a single block of text.
+//
+// An empty finding list is "no files found" rather than an empty string,
+// because a report with no content and no explanation looks like a missing
+// report.
+fn render(findings: List<Finding>) -> String {
+    if length(findings) == 0 {
+        "no files found"
+    } else {
+        join(lines_for(findings), "\n")
+    }
+}
+
+fn lines_for(findings: List<Finding>) -> List<String> {
+    for f in findings with out = [] {
+        push(out, format_finding(f))
+    }
+}
+
+fn appended(front: List<Finding>, back: List<Finding>) -> List<Finding> {
+    for one in back with out = front {
+        push(out, one)
+    }
+}
+
+// A worker: reads one directory, cannot save.
+//
+// The row says `uses Io.list, Io.read`. `Io.save` is not in it.
+// A function that has not declared `Io.save` cannot save, whatever `Dir` it
+// happens to hold. Take out `Io.list` and this does not compile; put in
+// `Io.save` and it does not compile either, because the body never uses it.
+//
+// The worker that scans `dir_a` cannot touch `dir_b`, because it was handed
+// a narrowed `Dir` and `Io.open` does not go up.
+fn scan(files: Dir, worker: String) -> List<Finding>
+  uses
+    Io.list,
+    Io.read,
+{
+    let names = match Io.list(files) {
+        ok(found) => found,
+        err(why) => [],
+    }
+    for name in names with findings = [] {
+        let size = match Io.read(files, name) {
+            ok(text) => length(text),
+            err(why) => 0,
+        }
+        push(findings, Finding { worker, name, size })
+    }
+}
+
+// The collector: saves a report, cannot read.
+//
+// The row says `uses Io.save`. `Io.list` and `Io.read` are not in it.
+// The collector received the findings as data, not as a directory to read.
+// There is no path from here to the workers' files, and there does not need
+// to be: the data arrived already assembled.
+fn collect(output: Dir, findings: List<Finding>) -> Result<(), String>
+  uses
+    Io.save,
+{
+    Io.save(output, "report.txt", render(findings))
+}
+
+fn main(sys: System) -> Result<(), String>
+  uses
+    Io.open,
+    Io.list,
+    Io.read,
+    Io.save,
+    Io.write,
+{
+    let out = sys.console
+
+    // Each worker is handed a narrowed view of the filesystem. `Io.open`
+    // hands back a `Dir` that reaches inside `sys.files` and nowhere else.
+    let dir_a = Io.open(sys.files, "a")?
+    let dir_b = Io.open(sys.files, "b")?
+    let dir_out = Io.open(sys.files, "out")?
+
+    // This is where concurrency would live if the language had it. These calls
+    // are provably independent -- `dir_a`, `dir_b` and `dir_out` are disjoint
+    // subdirectories -- but there is no spawn, so they run one after another.
+    let found_a = scan(dir_a, "a")
+    let found_b = scan(dir_b, "b")
+
+    // Hand the assembled data to the collector. The collector holds only
+    // `Io.save`. Even if its `Dir` argument were `dir_a`, it could not read
+    // from it, because `Io.read` is not in its row.
+    let all = appended(found_a, found_b)
+    collect(dir_out, all)?
+
+    Io.write(out, "wrote " + to_string(length(all)) + " findings")
+    ok(())
+}
+
+test "one finding formats as one line" {
+    let f = Finding { worker: "a", name: "data.txt", size: 12 }
+    assert format_finding(f) == "a/data.txt (12 bytes)"
+}
+
+test "a zero-size file still appears in the report" {
+    let f = Finding { worker: "b", name: "empty.txt", size: 0 }
+    assert format_finding(f) == "b/empty.txt (0 bytes)"
+}
+
+test "an empty finding list says no files found" {
+    assert render([]) == "no files found"
+}
+
+test "two findings join on a newline" {
+    let fa = Finding { worker: "a", name: "x.txt", size: 3 }
+    let fb = Finding { worker: "b", name: "y.txt", size: 7 }
+    assert render([fa, fb]) == "a/x.txt (3 bytes)\nb/y.txt (7 bytes)"
+}
+
+test "appended puts one list behind the other" {
+    let fa = Finding { worker: "a", name: "x.txt", size: 1 }
+    let fb = Finding { worker: "b", name: "y.txt", size: 2 }
+    assert appended([fa], [fb]) == [fa, fb]
+    assert appended([], [fb]) == [fb]
+    assert appended([fa], []) == [fa]
+}
