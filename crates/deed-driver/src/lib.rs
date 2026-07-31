@@ -71,8 +71,40 @@ mod clock {
 
     pub(crate) fn started() -> Started {}
 
+    // cargo-mutants reports replacing this with `Default::default()` as
+    // missed, and it is right that no test kills it: `Duration`'s default is
+    // zero, so the mutant is this function. A test that appeared to catch it
+    // would be asserting nothing. The same mutation of the branch above is a
+    // real change and is rejected before it runs, since dropping `start`
+    // leaves an unused binding and CI builds with `-D warnings`.
     pub(crate) fn since(_: Started) -> Duration {
         Duration::ZERO
+    }
+}
+
+/// A clock that always answers zero is not a clock, and the numbers it feeds
+/// are only ever printed, so nothing else in the crate would notice.
+///
+/// This runs on the host, the only target the tests run on and the only one
+/// where an answer of zero would be wrong. The branch above is checked by
+/// loading the artifact and calling it, in `crates/deed-wasm/smoke.mjs`.
+#[cfg(test)]
+mod clock_tests {
+    use std::hint::black_box;
+    use std::time::Duration;
+
+    #[test]
+    fn the_clock_measures_something() {
+        let start = super::clock::started();
+        let mut sum = 0u64;
+        for i in 0..500_000u64 {
+            sum = sum.wrapping_add(black_box(i));
+        }
+        black_box(sum);
+        assert!(
+            super::clock::since(start) > Duration::ZERO,
+            "half a million additions took no time at all, so this is not reading a clock",
+        );
     }
 }
 
