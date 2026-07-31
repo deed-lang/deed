@@ -199,7 +199,9 @@ fn the_backend_still_compiles_what_it_used_to() {
         "generics.deed",
         // A program that writes a line, which the module asks its host for.
         "hello.deed",
+        "list.deed",
         "names.deed",
+        "table.deed",
     ];
     expected.sort_unstable();
 
