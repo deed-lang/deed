@@ -697,6 +697,20 @@ fn the_odd_operation_is_odd_among_however_many_there_are() {
     );
 }
 
+/// The security policy repeats the operation list as part of the boundary.
+#[test]
+fn the_security_policy_lists_the_io_operations_that_exist() {
+    let security = read("SECURITY.md");
+    let sentence = between(
+        &security,
+        "The interpreter and backend expose one built-in effect, `Io`, with ",
+        ".\n",
+    );
+    let mut expected = vec!["Io".to_string()];
+    expected.extend(IO_OPERATIONS.iter().map(|name| name.to_string()));
+    assert_eq!(backticked(sentence), expected);
+}
+
 /// What ships inside the compiler, where the document says what ships.
 ///
 /// The table is a list of names the compiler holds, so it is the checkable
