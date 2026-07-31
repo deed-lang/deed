@@ -84,6 +84,13 @@ For an editor, see [`editors`](editors). VS Code gets syntax highlighting from t
 files and no code. Helix and Neovim get the language server from a few lines of
 configuration and no plugin. Neither gets both yet, and the table there says why.
 
+## How-to guides
+
+If you already know the language and want the shortest path to a specific task,
+start with [how-to/README.md](how-to/README.md). Those pages index the existing
+corpus: checking a module set, writing tests, contracts and `assert refuses`,
+effects and capabilities, formatting, backend compilation, and editor setup.
+
 ## The idea
 
 Most of the code being written today is not typed out by a person. That changes which
