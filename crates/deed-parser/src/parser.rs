@@ -11,10 +11,10 @@
 //! function from being parsed, because each hidden error costs a round trip.
 
 use deed_ast::{
-    Accumulator, BinaryOp, Block, ChoiceDecl, Contract, EditionDecl, EffectDecl, EffectRef,
-    Ensures, Expr, FieldDecl, FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module,
-    ModulePath, Outcome, Param, Pattern, PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias,
-    UnaryOp, Use, Variant,
+    Accumulator, BinaryOp, Block, ChoiceDecl, Contract, DeprecateDecl, EditionDecl, EffectDecl,
+    EffectRef, Ensures, Expr, FieldDecl, FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item,
+    MatchArm, Module, ModulePath, Outcome, Param, Pattern, PatternField, RecordDecl, Stmt,
+    TestDecl, Type, TypeAlias, UnaryOp, Use, Variant,
 };
 use deed_diagnostics::{Applicability, Diagnostic, FileId, Span, SuggestedEdit};
 use deed_lexer::{Keyword, Token, TokenKind};
@@ -621,7 +621,7 @@ impl<'a> Parser<'a> {
                 Some(Elsewhere::NotAThing(note)) => diagnostic = diagnostic.with_note(note),
                 None => {
                     diagnostic = diagnostic.with_note(
-                        "a file contains `type`, `record`, `choice`, `effect`, `handler`, `fn` and `test` declarations",
+                        "a file contains `deprecated`, `type`, `record`, `choice`, `effect`, `handler`, `fn` and `test` declarations",
                     );
                 }
             }
@@ -631,6 +631,7 @@ impl<'a> Parser<'a> {
         };
 
         match kw {
+            Keyword::Deprecated => self.parse_deprecate().map(Item::Deprecate),
             Keyword::Type => self.parse_type_alias().map(Item::TypeAlias),
             Keyword::Record => self.parse_record().map(Item::Record),
             Keyword::Choice => self.parse_choice().map(Item::Choice),
@@ -653,6 +654,19 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    /// `deprecated old_name -> new_name`
+    fn parse_deprecate(&mut self) -> Option<DeprecateDecl> {
+        let start = self.bump().span;
+        let old = self.expect_ident("a deprecation declaration")?;
+        self.expect(TokenKind::Arrow, "a deprecation declaration")?;
+        let new = self.expect_ident("a deprecation declaration")?;
+        Some(DeprecateDecl {
+            span: start.to(new.span),
+            old,
+            new,
+        })
     }
 
     /// `type Positive = Int where value > 0`

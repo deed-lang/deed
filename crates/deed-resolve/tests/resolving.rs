@@ -536,6 +536,49 @@ fn an_unused_import_is_a_warning_not_an_error() {
     assert!(resolved.diagnostics[0].message.contains("Spare"));
 }
 
+#[test]
+fn using_a_deprecated_declaration_warns_with_a_replacement_fix() {
+    let (_, _, resolved) = resolve_source(
+        "module a\n\n\
+         deprecated legacy -> replacement\n\
+         fn legacy() -> Int { 1 }\n\
+         fn replacement() -> Int { 2 }\n\
+         fn f() -> Int { legacy() }\n",
+    );
+    assert_eq!(
+        codes_of(&resolved.diagnostics),
+        vec![codes::DEPRECATED_DECLARATION]
+    );
+    let fix = resolved.diagnostics[0]
+        .fix
+        .as_ref()
+        .expect("deprecation should offer a mechanical rename");
+    assert_eq!(
+        fix.applicability,
+        deed_diagnostics::Applicability::MachineApplicable
+    );
+    assert_eq!(fix.edits.len(), 1);
+    assert_eq!(fix.edits[0].replacement, "replacement");
+}
+
+#[test]
+fn importing_a_deprecated_name_still_warns_at_use_site() {
+    let universe = universe_of(&["module dep\n\n\
+         deprecated legacy -> replacement\n\
+         fn legacy() -> Int { 1 }\n\
+         fn replacement() -> Int { 2 }\n"]);
+    let (_, _, resolved) = resolve_source_in(
+        "module a\n\n\
+         use dep.{legacy, replacement}\n\
+         fn f() -> Int { legacy() + replacement() }\n",
+        &universe,
+    );
+    assert_eq!(
+        codes_of(&resolved.diagnostics),
+        vec![codes::DEPRECATED_DECLARATION]
+    );
+}
+
 // -- a name nobody reads -------------------------------------------------
 
 #[test]

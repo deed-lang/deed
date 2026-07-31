@@ -153,6 +153,14 @@ const DECISIONS: &[Decision] = &[
         tokens: Tokens::Kept,
     },
     Decision {
+        name: "a deprecation declaration is spaced canonically",
+        spellings: &[
+            "module a\n\ndeprecated  legacy  ->replacement\nfn legacy() -> Int { replacement() }\n",
+        ],
+        wants: &[Want::Says("deprecated legacy -> replacement\n")],
+        tokens: Tokens::Kept,
+    },
+    Decision {
         name: "`ok` is padded so the arrows line up",
         spellings: &[
             "module a\n\nfn f(n: Int) -> Int\n  ensures\n    ok => result > 0,\n{\n  n\n}\n",

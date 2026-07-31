@@ -1371,6 +1371,14 @@ impl Server {
 
     fn symbol_of(&self, document: &Document, item: &Item) -> Json {
         match item {
+            Item::Deprecate(decl) => self.symbol(
+                document,
+                &decl.old.name,
+                kind::FIELD,
+                decl.span,
+                decl.old.span,
+                Vec::new(),
+            ),
             // The protocol has fewer kinds than this language has
             // declarations. A `type` is a named type with nothing to list
             // inside it, which is the closest thing to an interface the
@@ -2285,6 +2293,7 @@ fn touches(span: Span, start: u32, end: u32) -> bool {
 /// nested one level and each fold independently.
 fn item_folds(document: &Document, item: &Item, ranges: &mut Vec<Json>) {
     match item {
+        Item::Deprecate(_) => {}
         Item::Function(decl) => {
             if let Some(r) = body_fold(document, decl.body.span) {
                 ranges.push(r);
@@ -2446,7 +2455,11 @@ fn collect_item_spans(offset: u32, item: &Item, spans: &mut Vec<Span>) {
         Item::Function(decl) => collect_fn_spans(offset, decl, spans),
         Item::Test(decl) => collect_test_spans(offset, decl, spans),
         Item::Handler(decl) => collect_handler_spans(offset, decl, spans),
-        Item::Record(_) | Item::Choice(_) | Item::Effect(_) | Item::TypeAlias(_) => {}
+        Item::Deprecate(_)
+        | Item::Record(_)
+        | Item::Choice(_)
+        | Item::Effect(_)
+        | Item::TypeAlias(_) => {}
     }
     push_span_if_new(item_span, spans);
 }
