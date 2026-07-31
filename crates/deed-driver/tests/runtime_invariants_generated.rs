@@ -93,7 +93,7 @@ fn generated_cases() -> Vec<Case> {
                  test \"list payload is guarded\" {\n\
                  \x20 assert make(0) == [1, 1]\n\
                  }\n"
-            .to_string(),
+        .to_string(),
         expectation: Expectation::GuardRefusal,
         row_exemption: None,
     });
@@ -126,7 +126,7 @@ fn generated_cases() -> Vec<Case> {
                  test \"with discharges the effect\" {\n\
                  \x20 assert quietly(1) == 2\n\
                  }\n"
-            .to_string(),
+        .to_string(),
         expectation: Expectation::Passes,
         row_exemption: Some("with discharges"),
     });
@@ -162,7 +162,7 @@ fn generated_cases() -> Vec<Case> {
                  \x20   assert installs(1) == 8\n\
                  \x20 }\n\
                  }\n"
-            .to_string(),
+        .to_string(),
         expectation: Expectation::Passes,
         row_exemption: Some("handler belongs to installer"),
     });
@@ -195,7 +195,7 @@ fn generated_cases() -> Vec<Case> {
                  \x20   assert counted(1) == 2\n\
                  \x20 }\n\
                  }\n"
-            .to_string(),
+        .to_string(),
         expectation: Expectation::Passes,
         row_exemption: Some("contracts are exempt"),
     });
@@ -265,7 +265,10 @@ fn assert_invariants(case: &Case) -> Option<&'static str> {
         case.source
     );
 
-    let failures: Vec<Diagnostic> = outcomes.into_iter().filter_map(|outcome| outcome.failure).collect();
+    let failures: Vec<Diagnostic> = outcomes
+        .into_iter()
+        .filter_map(|outcome| outcome.failure)
+        .collect();
 
     let row_failures: Vec<Diagnostic> = failures
         .iter()
