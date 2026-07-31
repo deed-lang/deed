@@ -102,13 +102,17 @@ fn run() -> ()
 // for itself, and yields so the other task can proceed.
 
 fn a_step2() -> ()
-  uses Log.note
+  uses
+    Log.note,
 {
     Log.note("A2")
 }
 
 fn a_step1() -> ()
-  uses Schedule.fork, Schedule.yield, Log.note
+  uses
+    Schedule.fork,
+    Schedule.yield,
+    Log.note,
 {
     Log.note("A1")
     Schedule.fork(a_step2)
@@ -116,13 +120,17 @@ fn a_step1() -> ()
 }
 
 fn b_step2() -> ()
-  uses Log.note
+  uses
+    Log.note,
 {
     Log.note("B2")
 }
 
 fn b_step1() -> ()
-  uses Schedule.fork, Schedule.yield, Log.note
+  uses
+    Schedule.fork,
+    Schedule.yield,
+    Log.note,
 {
     Log.note("B1")
     Schedule.fork(b_step2)
