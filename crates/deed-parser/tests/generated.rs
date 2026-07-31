@@ -85,7 +85,9 @@ fn generated_programs() -> Vec<(String, String)> {
 
         programs.push((
             format!("if_expression_{index}"),
-            wrap(&format!("if {cond} {{ {when_true} }} else {{ {when_false} }}")),
+            wrap(&format!(
+                "if {cond} {{ {when_true} }} else {{ {when_false} }}"
+            )),
         ));
         programs.push((
             format!("call_and_let_{index}"),
@@ -123,7 +125,10 @@ fn render_all(sources: &SourceMap, diagnostics: &[Diagnostic]) -> String {
 #[test]
 fn step_1_generated_programs_parse_cleanly() {
     let programs = generated_programs();
-    assert!(programs.len() >= 40, "the generated corpus should be non-trivial");
+    assert!(
+        programs.len() >= 40,
+        "the generated corpus should be non-trivial"
+    );
 
     for (name, source) in programs {
         let mut sources = SourceMap::new();
