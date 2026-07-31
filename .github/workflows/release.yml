@@ -140,6 +140,10 @@ jobs:
     needs: [build, wasm]
     runs-on: ubuntu-latest
     steps:
+      # The notes come out of `CHANGELOG.md`, which is in the repository and
+      # not in any artifact the jobs above uploaded.
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v8
         with:
           path: dist
