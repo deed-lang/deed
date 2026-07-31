@@ -193,6 +193,9 @@ pub enum Keyword {
     Test,
     With,
     Assert,
+
+    // Abandonment
+    Abandon,
 }
 
 impl Keyword {
@@ -202,7 +205,7 @@ impl Keyword {
     /// it rather than repeat it. The editor grammar in `editors/vscode` is a
     /// second copy of these words living outside the compiler, and
     /// `crates/deed-parser/tests/grammar.rs` holds it to this list.
-    pub const ALL: [Keyword; 27] = [
+    pub const ALL: [Keyword; 28] = [
         Keyword::Module,
         Keyword::Use,
         Keyword::Type,
@@ -230,6 +233,7 @@ impl Keyword {
         Keyword::Test,
         Keyword::With,
         Keyword::Assert,
+        Keyword::Abandon,
     ];
 
     pub fn from_ident(text: &str) -> Option<Keyword> {
@@ -261,6 +265,7 @@ impl Keyword {
             "test" => Keyword::Test,
             "with" => Keyword::With,
             "assert" => Keyword::Assert,
+            "abandon" => Keyword::Abandon,
             _ => return None,
         };
         Some(kw)
@@ -295,6 +300,7 @@ impl Keyword {
             Keyword::Test => "test",
             Keyword::With => "with",
             Keyword::Assert => "assert",
+            Keyword::Abandon => "abandon",
         }
     }
 }

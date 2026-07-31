@@ -27,6 +27,8 @@ const KEYWORDS = [
   "test",
   "with",
   "assert",
+  "abandon",
+  "finally",
   "state",
   "at",
   "while",

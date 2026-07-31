@@ -1249,8 +1249,8 @@ impl<'a> Interp<'a> {
                 // Run `finally` blocks for every installed handler that has
                 // one, from the most recently installed to the least recently
                 // installed. This runs whether the body returned normally,
-                // via `return`, or via a contract failure so that any
-                // resource a handler acquired is always released.
+                // via `return`, a contract failure, or abandonment so that
+                // any resource a handler acquired is always released.
                 let result = self.run_finally_blocks(base, result);
                 self.handlers.truncate(base);
                 result
@@ -2775,6 +2775,22 @@ impl<'a> Interp<'a> {
                 };
                 Err(Signal::Return(value))
             }
+
+            // `abandon` unwinds the computation unconditionally.
+            //
+            // The abandoned computation does not receive a return value from
+            // the effect operation; instead the stack unwinds through cleanup
+            // blocks on installed handlers. `assert refuses` cannot catch this
+            // because DEED6011 is not a contract failure.
+            Stmt::Abandon { span } => Err(self.fail(
+                Diagnostic::error(
+                    codes::ABANDONED,
+                    self.file(),
+                    *span,
+                    "this computation was abandoned by its handler",
+                )
+                .with_primary_label("abandoned here"),
+            )),
 
             Stmt::Assert { condition, span } => {
                 if self.condition(condition)? {

@@ -903,6 +903,7 @@ impl Printer<'_> {
                 Some(value) => format!("return {}", self.with_prefix(7, value)),
                 None => "return".to_string(),
             },
+            Stmt::Abandon { .. } => "abandon".to_string(),
             Stmt::Assert { condition, .. } => {
                 format!("assert {}", self.with_prefix(7, condition))
             }

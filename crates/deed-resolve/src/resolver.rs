@@ -1153,6 +1153,7 @@ impl Resolver<'_> {
             }
             Stmt::Assert { condition, .. } => self.resolve_expr(condition),
             Stmt::Refuses { subject, .. } => self.resolve_expr(subject),
+            Stmt::Abandon { .. } => {}
             Stmt::Expr(expr) => self.resolve_expr(expr),
         }
     }

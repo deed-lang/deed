@@ -277,6 +277,27 @@ impl<'a> Checker<'a> {
                 _ => {}
             }
         }
+
+        // Finalizers have no signature of their own, so infer their row only
+        // after every function declaration above has supplied its call row.
+        // The handler stays installed while cleanup runs; adding this to the
+        // handler row lets the surrounding `with` discharge its own effect
+        // while charging every other cleanup effect to the installer.
+        for item in &module.items {
+            let Item::Handler(handler) = item else {
+                continue;
+            };
+            let (Some(def), Some(finally)) = (
+                self.resolutions.resolution(handler.name.span),
+                &handler.finally,
+            ) else {
+                continue;
+            };
+            let finally_row = self.infer_block(finally);
+            if let Some(row) = self.handler_rows.get_mut(&def) {
+                row.extend(&finally_row);
+            }
+        }
     }
 
     /// Checks that every row variable is somewhere a call site can fill in.
@@ -366,6 +387,7 @@ impl<'a> Checker<'a> {
                 }
                 Stmt::Assert { condition, .. } => self.calls_in(condition, found),
                 Stmt::Refuses { subject, .. } => self.calls_in(subject, found),
+                Stmt::Abandon { .. } => {}
                 Stmt::Expr(expr) => self.calls_in(expr, found),
             }
         }
@@ -875,6 +897,7 @@ impl<'a> Checker<'a> {
             // Asserting that something breaks its contract still runs it, so
             // what it performs is performed.
             Stmt::Refuses { subject, .. } => self.infer_expr(subject),
+            Stmt::Abandon { .. } => Row::new(),
             Stmt::Expr(expr) => self.infer_expr(expr),
         }
     }

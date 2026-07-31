@@ -386,6 +386,18 @@ pub enum Stmt {
         subject: Expr,
         span: Span,
     },
+    /// `abandon`
+    ///
+    /// Unwinds the current computation unconditionally. Used inside a handler
+    /// operation to signal that the computation which performed the effect
+    /// should not receive a value back; instead the stack unwinds, running
+    /// cleanup blocks for installed handlers.
+    ///
+    /// The abandoned computation observes `DEED6011`. `assert refuses` cannot
+    /// catch it, because it is not a contract failure.
+    Abandon {
+        span: Span,
+    },
     Expr(Expr),
 }
 
@@ -396,7 +408,8 @@ impl Stmt {
             | Stmt::Assign { span, .. }
             | Stmt::Return { span, .. }
             | Stmt::Refuses { span, .. }
-            | Stmt::Assert { span, .. } => *span,
+            | Stmt::Assert { span, .. }
+            | Stmt::Abandon { span } => *span,
             Stmt::Expr(expr) => expr.span(),
         }
     }

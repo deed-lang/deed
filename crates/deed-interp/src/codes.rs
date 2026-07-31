@@ -87,3 +87,13 @@ pub const TOO_DEEP: &str = "DEED6009";
 /// The rows are the argument this language is making, and until this existed
 /// the only thing that ever read one was the pass that wrote it.
 pub const ROW_NOT_KEPT: &str = "DEED6010";
+
+/// A computation was abandoned by its handler.
+///
+/// A handler operation executed `abandon` instead of returning a value. The
+/// computation that performed the effect does not receive a return value;
+/// instead the stack unwinds, running every `finally` clause it passes
+/// through, and then the run stops with this code.
+///
+/// This is not a contract failure and `assert refuses` cannot catch it.
+pub const ABANDONED: &str = "DEED6011";

@@ -77,6 +77,7 @@ fn the_codes_the_backend_uses_are_the_interpreters_codes() {
         deed_mir::codes::NOT_RUNNABLE,
         deed_interp::codes::NOT_RUNNABLE
     );
+    assert_eq!(deed_mir::codes::ABANDONED, deed_interp::codes::ABANDONED);
 }
 
 /// The same program, run by the interpreter, files a diagnostic with the

@@ -1527,6 +1527,11 @@ impl<'a> Parser<'a> {
             };
         }
 
+        if self.at_kw(Keyword::Abandon) {
+            let span = self.bump().span;
+            return Stmt::Abandon { span };
+        }
+
         if self.at_kw(Keyword::Assert) {
             let start = self.bump().span;
 

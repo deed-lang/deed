@@ -2472,7 +2472,7 @@ impl<'a> Checker<'a> {
         let mut diverges = false;
         for stmt in &block.stmts {
             self.check_stmt(stmt);
-            if matches!(stmt, Stmt::Return { .. }) {
+            if matches!(stmt, Stmt::Return { .. } | Stmt::Abandon { .. }) {
                 diverges = true;
             }
         }
@@ -2589,7 +2589,7 @@ impl<'a> Checker<'a> {
         let mut diverges = false;
         for stmt in &block.stmts {
             self.check_stmt(stmt);
-            if matches!(stmt, Stmt::Return { .. }) {
+            if matches!(stmt, Stmt::Return { .. } | Stmt::Abandon { .. }) {
                 diverges = true;
             }
         }
@@ -2724,6 +2724,10 @@ impl<'a> Checker<'a> {
                 self.infer(subject);
                 self.refuting = outer;
             }
+            // `abandon` is a diverging statement, like `return`. No type to
+            // check: it never produces a value and the block it lives in is
+            // marked diverging by `check_block_against`.
+            Stmt::Abandon { .. } => {}
             Stmt::Expr(expr) => {
                 let ty = self.infer(expr);
                 self.discarded(&ty, expr);

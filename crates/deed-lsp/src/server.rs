@@ -2549,6 +2549,7 @@ fn collect_stmt_spans(offset: u32, stmt: &Stmt, spans: &mut Vec<Span>) -> bool {
         Stmt::Refuses { subject, .. } => {
             collect_expr_spans(offset, subject, spans);
         }
+        Stmt::Abandon { .. } => {}
         Stmt::Expr(expr) => {
             collect_expr_spans(offset, expr, spans);
         }

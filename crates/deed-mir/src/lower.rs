@@ -906,6 +906,7 @@ fn names_in_block(block: &ast::Block, out: &mut Vec<Span>) {
                 }
             }
             ast::Stmt::Refuses { .. } => {}
+            ast::Stmt::Abandon { .. } => {}
         }
     }
     if let Some(tail) = &block.tail {
@@ -1239,6 +1240,18 @@ impl Lowering<'_> {
                             Some(value) => self.expr(value)?,
                             None => Expr::Unit,
                         },
+                    });
+                }
+                ast::Stmt::Abandon { span } => {
+                    // `abandon` lowers to a contract-style failure with its
+                    // own code. The compiled backend emits an `unreachable`
+                    // the same way it does for any `Stmt::Fail`.
+                    stmts.push(Stmt::Fail {
+                        code: crate::codes::ABANDONED.to_string(),
+                        message: format!(
+                            "this computation was abandoned by its handler at {}",
+                            span.start
+                        ),
                     });
                 }
                 ast::Stmt::Assign {
@@ -1728,6 +1741,7 @@ impl Lowering<'_> {
                 ty: Box::new(ty.clone()),
             };
         }
+
         Ok(inner)
     }
 
