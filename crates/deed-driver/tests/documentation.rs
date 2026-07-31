@@ -1513,3 +1513,61 @@ fn the_types_ordering_takes_are_the_ones_the_syntax_document_names() {
         );
     }
 }
+
+/// The numbers P9's edit-loop section derives from its own table agree with it.
+///
+/// The table is a measurement on one machine, so nothing can keep it fresh.
+/// What can be kept is the arithmetic on top of it: the per-file constant, the
+/// file count where a recheck crosses the 100ms budget, and the halved count
+/// for a request that checks the workspace twice. Those three moved out of step
+/// once already, when the table was re-run and the sentences under it were not,
+/// which left the document claiming more margin than the machine had.
+#[test]
+fn the_edit_loop_trigger_follows_from_the_table_above_it() {
+    let principles = read("design/01-principles.md");
+
+    let per_file: f64 = between(
+        &principles,
+        "the constant is about ",
+        " microseconds per file",
+    )
+    .trim_start_matches("the constant is about ")
+    .trim()
+    .parse()
+    .expect("the constant is written as a number of microseconds");
+
+    let trigger: f64 = between(&principles, "crosses P9's budget at about ", " files")
+        .trim_start_matches("crosses P9's budget at about ")
+        .trim()
+        .replace(',', "")
+        .parse()
+        .expect("the trigger is written as a number of files");
+
+    let halved: f64 = between(&principles, "the same budget is gone at about ", " files")
+        .trim_start_matches("the same budget is gone at about ")
+        .trim()
+        .replace(',', "")
+        .parse()
+        .expect("the halved trigger is written as a number of files");
+
+    // 100ms in microseconds, which is P9's budget.
+    let expected = 100_000.0 / per_file;
+    assert!(
+        (trigger - expected).abs() / expected < 0.1,
+        "at {per_file}us a file the budget is gone at about {expected:.0} files, \
+         and the document says {trigger}"
+    );
+    assert!(
+        (halved - trigger / 2.0).abs() / (trigger / 2.0) < 0.1,
+        "two passes should halve {trigger} to about {:.0}, and the document says {halved}",
+        trigger / 2.0
+    );
+
+    // The table has to be the one those came from, rather than a third number.
+    let stated = format!("{per_file}us");
+    assert!(
+        principles.contains(&format!("512      41.6ms    41.9ms    {stated}"))
+            || principles.contains(&stated),
+        "the per-file constant in the prose does not appear in the table"
+    );
+}

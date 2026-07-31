@@ -155,12 +155,20 @@ and a second walkable built-in is, by construction, a second `List`. Still open.
 
 ## No incremental checking
 
-Measured, not assumed. `crates/deed-driver/examples/edit_loop.rs` reports that at 512 files
-a full recheck costs about 38ms on one developer machine, inside the 100ms budget
-[P9](01-principles.md) sets for the edit loop, and 99% of that time is spent on files that
-did not change. That last number is the one that matters: it says a cache is worth writing
-when the corpus is large enough to need it, rather than on a feeling that it might be, and
-nobody has written a few thousand files of Deed yet.
+Measured, not assumed, and measured again rather than quoted. Running
+`cargo run -p deed-driver --example edit_loop --release` reports that at 512 files a full
+recheck costs about 42ms on one developer machine, inside the 100ms budget
+[P9](01-principles.md) sets for the edit loop, and effectively all of that time is spent on
+files that did not change. That last number is the one that matters: it says a cache is worth
+writing when the corpus is large enough to need it, rather than on a feeling that it might
+be, and nobody has written a few thousand files of Deed yet.
+
+The number moved since it was first written down. It was 38ms, at about 70us a file; it is
+42ms now, at about 82us. Two shipped modules and a larger corpus arrived in between, and the
+per-file cost is what grew rather than the shape: the curve still flattens (60us at one file,
+82us at 512), which is what `crates/deed-driver/tests/scaling.rs` guards. A number in a
+design document that nobody re-runs is the thing this repository keeps finding, so it is
+written here with the command that produces it.
 
 **What would change the answer:** a realistic codebase where a full check is slow enough
 that the absence of a cache stops being a footnote, or a change to the scaling test's curve
