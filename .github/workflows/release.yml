@@ -123,6 +123,10 @@ jobs:
       - name: cargo build --profile wasm
         run: cargo build --profile wasm --target wasm32-unknown-unknown -p deed-wasm --locked
 
+      # A release is the worst place to find out the artifact traps (#776).
+      - name: the artifact answers
+        run: node crates/deed-wasm/smoke.mjs target/wasm32-unknown-unknown/wasm/deed_wasm.wasm
+
       - name: package
         run: |
           mkdir -p dist

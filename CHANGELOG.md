@@ -28,7 +28,10 @@ release notes.
 
 ### Tools
 
-- None yet.
+- The wasm artifact answers instead of trapping. Every verb went through
+  `check_all`, which read a clock, and `wasm32-unknown-unknown` has none, so
+  0.2.0's artifact aborted on any input at all. CI now runs the artifact
+  rather than only building and weighing it.
 
 ### Measurements
 
