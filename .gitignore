@@ -13,3 +13,4 @@
 Thumbs.db
 
 mutants.out*/
+*.wasm

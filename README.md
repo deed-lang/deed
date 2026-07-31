@@ -86,6 +86,15 @@ For an editor, see [`editors`](editors). VS Code now carries both syntax
 highlighting and a language-server client, while Helix and Neovim start the
 language server from a few lines of configuration and no plugin.
 
+## Demo
+
+One clause in a function signature is the difference between two components.
+[demo/README.md](demo/README.md) shows two functions that are identical except
+for one `uses` entry, compiles both to WebAssembly, and shows the import section
+of each module side by side. The test in
+`crates/deed-driver/tests/demo.rs` pins the host's refusal mechanically on
+every commit.
+
 ## How-to guides
 
 If you already know the language and want the shortest path to a specific task,
