@@ -247,9 +247,15 @@ fn first_deed_snippet(body: &str) -> Option<String> {
             continue;
         }
 
+        // #780: a `format!` argument is a template, not a program. Its
+        // placeholders and its doubled braces are Rust telling `format!` what
+        // to do, and a page that prints them is showing something no compiler
+        // would accept. The literal is skipped rather than repaired, and the
+        // search carries on to the next one.
+        let is_template = ends_with_format_macro(&body[..i]);
+
         // We are at the opening `"`.
         i += 1;
-        let string_start = i;
         let mut buf = String::new();
         let mut escaped = false;
 
@@ -269,6 +275,27 @@ fn first_deed_snippet(body: &str) -> Option<String> {
                             i += 1; // consume two hex digits
                         }
                         buf.push(' '); // approximate
+                    }
+                    // A backslash before a newline is Rust joining two source
+                    // lines into one string line: the newline and the
+                    // indentation that follows it are not in the string. This
+                    // arm used to fall through to the one below and put the
+                    // backslash in the page.
+                    '\n' => {
+                        i += 1;
+                        while i < len && (bytes[i] as char).is_whitespace() {
+                            i += 1;
+                        }
+                        escaped = false;
+                        continue;
+                    }
+                    '\r' => {
+                        i += 1;
+                        while i < len && (bytes[i] as char).is_whitespace() {
+                            i += 1;
+                        }
+                        escaped = false;
+                        continue;
                     }
                     _ => {
                         buf.push('\\');
@@ -295,7 +322,9 @@ fn first_deed_snippet(body: &str) -> Option<String> {
             }
         }
 
-        let _ = string_start; // consumed
+        if is_template {
+            continue;
+        }
 
         // Check whether this looks like deed source.
         if buf.contains('\n') && deed_markers.iter().any(|m| buf.contains(m)) {
@@ -304,4 +333,17 @@ fn first_deed_snippet(body: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Whether the text immediately before a string literal opens a `format!`-like
+/// macro call, which makes that literal a template rather than a program.
+fn ends_with_format_macro(before: &str) -> bool {
+    let head = before.trim_end();
+    let Some(head) = head.strip_suffix('(') else {
+        return false;
+    };
+    let head = head.trim_end();
+    // `format!`, `write!`, `writeln!`, `panic!`, `assert!` and the rest all
+    // end the same way, and every one of them takes a template first.
+    head.ends_with('!')
 }

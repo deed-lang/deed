@@ -116,3 +116,60 @@ fn all_pages_lists_one_page_per_declared_code() {
         );
     }
 }
+
+/// An example is copied out of a test, and a test is Rust, so an example can
+/// be a `format!` template rather than a program (#780).
+///
+/// Thirty of the ninety-seven pages printed one: doubled braces, placeholders
+/// and lone backslashes where Rust had joined two source lines. The tests
+/// above all passed the whole time, because a template is a non-empty string
+/// and that was the only question being asked.
+///
+/// This asks whether what came out could be a program. It cannot check that
+/// the snippet checks, since most of them are meant not to, but Deed has no
+/// syntax that produces any of these.
+#[test]
+fn no_example_is_a_rust_template_rather_than_a_program() {
+    let mut wrong: Vec<String> = Vec::new();
+
+    for page in deed_explain::all_pages() {
+        let Some(example) = page.example else {
+            continue;
+        };
+
+        // `{{` and `}}` are how a format string writes one brace. Deed writes
+        // a brace as a brace, and never two.
+        if example.contains("{{") || example.contains("}}") {
+            wrong.push(format!("{}: doubled braces", page.code));
+            continue;
+        }
+
+        // A line that is nothing but a backslash is Rust's line continuation
+        // read as text.
+        if example.lines().any(|line| line.trim() == "\\") {
+            wrong.push(format!("{}: a line continuation", page.code));
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "these pages print Rust rather than Deed: {}",
+        wrong.join(", ")
+    );
+}
+
+/// The count is the point. A change to the extractor that quietly stopped
+/// finding examples would leave every other test in this file green, because
+/// the pages would still exist and still have reasoning in them.
+#[test]
+fn the_pages_that_carry_an_example_keep_carrying_one() {
+    let with_example = deed_explain::all_pages()
+        .iter()
+        .filter(|p| p.example.is_some())
+        .count();
+
+    assert!(
+        with_example >= 76,
+        "only {with_example} pages have an example; the extractor found fewer than it used to"
+    );
+}
