@@ -313,6 +313,37 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 13,
         },
+        // The frame-list shape survives an inner `with` block for a
+        // different effect. After the inner block ends, the outer handler is
+        // restored and its state is intact. This is the same property a
+        // scheduler needs after a resumption completes inside a nested
+        // context: the outer frame must not be corrupted or lost.
+        //
+        // step() bumps and reads Counter. Called from inside the Flag block
+        // (count goes to 1), then after the Flag block ends (count goes to
+        // 2). If the outer frame were stale the second call would find the
+        // wrong handler or the wrong count.
+        Agreed {
+            name: "state persists across a nested handler block for a different effect",
+            source: "module a\n\neffect Counter {\n    fn value() -> Int\n    fn bump(by: Int) -> ()\n}\n\nhandler InMemory implements Counter {\n    state count: Int\n\n    fn value() -> Int { count }\n\n    fn bump(by) -> () {\n        count = count + by\n    }\n}\n\neffect Flag {\n    fn mark() -> ()\n    fn marked() -> Bool\n}\n\nhandler Toggle implements Flag {\n    state set: Bool\n\n    fn mark() -> () {\n        set = true\n    }\n\n    fn marked() -> Bool { set }\n}\n\nfn step() -> Int\n  uses Counter.bump, Counter.value\n{\n    Counter.bump(1)\n    Counter.value()\n}\n\nfn answer() -> Int {\n    with InMemory { count: 0 } {\n        let a = with Toggle { set: false } {\n            Flag.mark()\n            step()\n        }\n        let b = step()\n        a + b\n    }\n}\n\ntest \"state survives a nested block for a different effect\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        // A handler operation performs into a co-installed handler across
+        // the frame boundary. Summer.add uses Log.note, and Sink answers
+        // Log from the outer `with` block. When Summer.add runs, the frame
+        // search finds Sink further down the list, not Summer itself.
+        //
+        // This is the cross-frame search a suspended operation relies on
+        // when it is resumed: the operation's handler must be found in the
+        // list even when the search passes through frames the resumption did
+        // not itself install.
+        Agreed {
+            name: "a handler operation that performs into a co-installed handler",
+            source: "module a\n\neffect Tally {\n    fn add(n: Int) -> ()\n    fn total() -> Int\n}\n\neffect Log {\n    fn note() -> ()\n}\n\nhandler Summer implements Tally {\n    state sum: Int\n\n    fn add(n) -> ()\n      uses Log.note\n    {\n        Log.note()\n        sum = sum + n\n    }\n\n    fn total() -> Int { sum }\n}\n\nhandler Sink implements Log {\n    state calls: Int\n\n    fn note() -> () {\n        calls = calls + 1\n    }\n}\n\nfn answer() -> Int {\n    with Sink { calls: 0 } {\n        with Summer { sum: 0 } {\n            Tally.add(3)\n            Tally.add(4)\n            Tally.total()\n        }\n    }\n}\n\ntest \"an operation performs into a co-installed handler\" {\n    assert answer() == 7\n}\n",
+            call: "answer",
+            expect: 7,
+        },
         // State that is not a number. A field narrower than a word is
         // widened on the way in, and a handler is the only place anything
         // gets written twice, so this is where getting that wrong shows.

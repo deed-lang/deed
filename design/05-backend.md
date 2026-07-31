@@ -293,3 +293,50 @@ and it is the one dependency this backend has spent every other design decision 
 document avoiding. The number that would change this: a bug reaches a released `deed build`
 that validation here missed and a real engine would have caught. None has, yet.
 
+## What suspension does to the handler frame list
+
+The handler stack is a linked list in memory rather than a flat stack of addresses because
+one program asked for it: the three-line example above. A scheduler asks for the same
+shape, and this section is that program, written before the scheduler is.
+
+OCaml's implementation notes are the reference: their stack is a linked list of fibers, a
+captured continuation points at a segment rather than copying frames, and resuming relinks
+it. Deed's frame list already has that shape.
+
+**What a stored resumption owns.** A suspended computation, in the frame model, is a saved
+value of the HANDLERS global: the address of the innermost frame that was installed when the
+computation paused. That frame's `next` pointer holds the frame below it, and so on to zero.
+Nothing is copied. The resumption owns one word, the head-of-list address; the list is
+already in memory, already linked, and already correct.
+
+**Whether the frame list can be reattached.** Yes, without copying or rebuilding. To suspend
+a computation inside a `with` block: save the current HANDLERS value. To resume it: restore
+that value before continuing. The frame linked in for the `with` block is still at its
+address, because nothing in this backend ever frees a frame. Its `next` pointer was stored
+on entry and has not moved. The frame is ready to be the head of the list again.
+
+**What the interpreter does.** The interpreter's handler list is `handlers: Vec<Instance>`
+in `crates/deed-interp/src/interp.rs`, and `Expr::With` calls `self.handlers.truncate(base)`
+when the body finishes evaluating. Suspension arrives as a value the body produces, and that
+truncate runs before any resumption. A scheduler, once written, cannot use the return path of
+the `with` body to truncate: it has to hold the range `base..handlers.len()` alive until the
+last resumption resolves, then truncate at that point.
+
+**What the backend does.** The backend already has the right shape, for the same reason the
+linked-list design was right about the three-line example: frames are allocated once and
+never freed, so a frame in the list is there for as long as the program runs. The restore
+instruction at the end of a `with` block reads `frame.next` and writes it into HANDLERS,
+putting back what was there before the block. For a scheduler: save HANDLERS before
+suspending, restore it before resuming, and nothing else changes. The `next` pointer in the
+saved frame is still valid.
+
+**The invariant.** A `with` block must not unlink its frame while a resumption that would
+search through that frame is outstanding. For the backend this holds for free. For the
+interpreter it means not truncating until the last resumption resolves.
+
+The two programs added to `crates/deed-driver/tests/agreement.rs` for this section are the
+ratchet. The first checks that after an inner `with` block for a different effect ends, the
+outer handler's state is intact and still searchable, which is the same property a scheduler
+needs after a resumption completes inside a nested context. The second checks that a handler
+operation can perform into a co-installed handler across the frame boundary, which is the
+cross-frame search a suspended operation relies on when it is resumed.
