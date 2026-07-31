@@ -20,10 +20,7 @@ release notes.
 
 ### Diagnostics
 
-- `deed explain` prints Deed. Thirty of the ninety-seven pages showed a Rust
-  `format!` template instead of a program, doubled braces and placeholders and
-  all, because the example is copied out of a test and a test is Rust. Every
-  page that had an example still has one.
+- None yet.
 
 ### Standard library
 
@@ -31,15 +28,49 @@ release notes.
 
 ### Tools
 
-- The wasm artifact answers two more questions. `deed_tokens` says how the
-  compiler's own lexer classified each byte range, so a page can colour Deed
-  without a second grammar to keep in step, and `deed_explain` hands over
-  every diagnostic code with its page, so a site can host an error index
-  rather than write one. The artifact is 858,097 bytes, up from 816,258.
+- None yet.
 
 ### Measurements
 
 - None yet.
+
+## 0.2.2 (2026-07-31)
+
+Nothing about the language moved. What changed is what `deed explain` prints
+and what the WebAssembly artifact will answer, both of them for the benefit of
+something outside this repository reading them.
+
+### Programs that used to compile and no longer do
+
+- None.
+
+### Language
+
+- None.
+
+### Diagnostics
+
+- `deed explain` prints Deed. Thirty of the ninety-seven pages showed a Rust
+  `format!` template instead of a program, doubled braces and placeholders and
+  all, because the example is copied out of a test and a test is Rust. Every
+  page that had an example still has one.
+
+### Standard library
+
+- None.
+
+### Tools
+
+- The wasm artifact answers two more questions. `deed_tokens` says how the
+  compiler's own lexer classified each byte range, so a page can colour Deed
+  without a second grammar to keep in step, and `deed_explain` hands over
+  every diagnostic code with its page, so a site can host an error index
+  rather than write one.
+
+### Measurements
+
+- The wasm artifact is 858,097 bytes uncompressed and 280,748 gzipped, up
+  from 816,258 and 265,841, inside the same ceiling.
 
 ## 0.2.1 (2026-07-31)
 
