@@ -1737,3 +1737,68 @@ mod component_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod compiled_tests {
+    use super::*;
+    use deed_codegen::wasm::{Func, FuncType, Ins, ValType};
+
+    #[test]
+    fn compiled_failure_codes_keep_their_diagnostic_labels() {
+        let mut sources = SourceMap::new();
+        let file = sources.add("test.deed", "0123456789");
+        let span = deed_diagnostics::Span::new(2, 5);
+
+        for (code, label) in [
+            (deed_mir::codes::ASSERTION_FAILED, "evaluated to false"),
+            (deed_mir::codes::PRECONDITION_FAILED, "precondition not met"),
+            (deed_mir::codes::NOT_RUNNABLE, "not runnable"),
+        ] {
+            let trap = deed_codegen::Trap::Failed {
+                code: code.to_string(),
+                message: "stopped".to_string(),
+                span: Some(span),
+                blame_caller: false,
+            };
+            let diagnostic = compiled_diagnostic(file, &trap).expect("known code");
+            assert_eq!(diagnostic.code, code);
+            assert_eq!(diagnostic.primary.span, span);
+            assert_eq!(diagnostic.primary.message, label);
+        }
+    }
+
+    #[test]
+    fn compiled_arguments_use_the_named_exports_signature() {
+        let mut module = deed_codegen::Module::new();
+        let other_ty = module.intern_type(FuncType {
+            params: vec![ValType::I32],
+            results: vec![],
+        });
+        let other = module.add_func(Func {
+            type_index: other_ty,
+            locals: vec![],
+            body: vec![Ins::I32Const(0)],
+        });
+        module.export("other", other);
+
+        let main_ty = module.intern_type(FuncType {
+            params: vec![ValType::I64, ValType::I32],
+            results: vec![],
+        });
+        let main = module.add_func(Func {
+            type_index: main_ty,
+            locals: vec![],
+            body: vec![Ins::I64Const(0)],
+        });
+        module.export("main", main);
+
+        assert_eq!(
+            compiled_args(&module, "main"),
+            Some(vec![
+                deed_codegen::Value::I64(0),
+                deed_codegen::Value::I32(0)
+            ])
+        );
+        assert!(compiled_args(&module, "missing").is_none());
+    }
+}
