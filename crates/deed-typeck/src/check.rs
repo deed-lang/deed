@@ -3123,22 +3123,11 @@ impl<'a> Checker<'a> {
             Expr::Old { expr, .. } => self.infer(expr),
             Expr::Unchanged { .. } => Ty::Bool,
 
-            Expr::With {
-                handlers,
-                body,
-                finally,
-                ..
-            } => {
+            Expr::With { handlers, body, .. } => {
                 for handler in handlers {
                     self.infer(handler);
                 }
-                let ty = self.check_block(body);
-                // The `finally` clause runs for its side effects; its type is
-                // not the type of the `with` expression.
-                if let Some(finally) = finally {
-                    self.check_block(finally);
-                }
-                ty
+                self.check_block(body)
             }
         }
     }

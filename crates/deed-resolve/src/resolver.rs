@@ -1291,19 +1291,11 @@ impl Resolver<'_> {
             Expr::Old { expr, .. } => self.resolve_expr(expr),
             Expr::Unchanged { effect, .. } => self.resolve_effect_ref(effect),
 
-            Expr::With {
-                handlers,
-                body,
-                finally,
-                ..
-            } => {
+            Expr::With { handlers, body, .. } => {
                 for handler in handlers {
                     self.resolve_expr(handler);
                 }
                 self.resolve_block(body);
-                if let Some(finally) = finally {
-                    self.resolve_block(finally);
-                }
             }
         }
     }

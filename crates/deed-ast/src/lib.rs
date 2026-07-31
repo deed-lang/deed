@@ -390,8 +390,8 @@ pub enum Stmt {
     ///
     /// Unwinds the current computation unconditionally. Used inside a handler
     /// operation to signal that the computation which performed the effect
-    /// should not receive a value back; instead the stack unwinds, running any
-    /// `finally` clauses it passes through.
+    /// should not receive a value back; instead the stack unwinds, running
+    /// cleanup blocks for installed handlers.
     ///
     /// The abandoned computation observes `DEED6011`. `assert refuses` cannot
     /// catch it, because it is not a contract failure.
@@ -644,17 +644,9 @@ pub enum Expr {
         span: Span,
     },
     /// `with SomeHandler, Another { ... }`
-    ///
-    /// The optional `finally { ... }` clause runs after the body on every
-    /// exit, including contract failures and `abandon`. In the compiled
-    /// backend the `finally` block runs inline after the body for the normal
-    /// case; when the body traps (via `abandon` or a contract failure) the
-    /// host process terminates and the clause is not reached.
     With {
         handlers: Vec<Expr>,
         body: Block,
-        /// `finally { ... }` runs after the body regardless of how it exits.
-        finally: Option<Block>,
         span: Span,
     },
 

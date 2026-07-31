@@ -61,9 +61,8 @@ ident-start   ::=  "_" | unicode-letter
 ident-continue ::=  "_" | unicode-letter | unicode-digit
 
 keyword  ::=
-    "abandon" | "assert"     | "choice"     | "deprecated" | "effect"
-  | "else"    | "ensures"    | "false"      | "finally"    | "fn"
-  | "for"     | "handler"    | "if"
+    "abandon" | "assert"  | "choice"     | "deprecated" | "effect"  | "else"
+  | "ensures" | "false"   | "fn"         | "for"        | "handler" | "if"
   | "implements" | "in"      | "let"     | "match"     | "module"
   | "old"     | "record"     | "return"  | "test"      | "true"
   | "type"    | "unchanged"  | "use"     | "uses"      | "where"

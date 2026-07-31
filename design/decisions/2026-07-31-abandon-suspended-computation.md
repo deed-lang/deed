@@ -16,7 +16,7 @@ those tasks may be sitting inside a `for` loop or holding a resource open.
 
 OCaml's `Effect.Deep.discontinue` is the reference point: it resumes a
 captured continuation by raising at the point of `perform`, so that the
-ordinary `try`/`finally` unwinding runs.
+ordinary cleanup unwinding runs.
 
 The checklist from the original issue:
 - a way to abandon a suspended computation
@@ -36,36 +36,34 @@ computation was abandoned by its handler". This is not a contract failure
 expected.
 
 **What the abandoned computation observes.** Because `abandon` raises
-`DEED6011` at the call site, the caller's stack unwinds normally. Any
-`finally` clause on an enclosing `with` block runs on the way out (interpreter
-only; see Drawbacks).
+`DEED6011` at the call site, the caller's stack unwinds normally. The existing
+`finally` block on each installed handler runs on the way out while that
+handler and its state are still available.
 
-**`finally` clause on `with`.** An optional `finally { ... }` clause may
-follow any `with H { ... }` block. In the interpreter, the clause runs on all
-exits from the `with` body: normal, `return`, contract failure, and
-abandonment. In the compiled backend it is inlined after the body, so it runs
-only on normal exit.
+**Cleanup effects belong to the installer.** A handler's `finally` block has
+no signature of its own. Its inferred effects are included in the handler row,
+so installing a handler whose cleanup writes still requires `uses Io.write`.
+The handler's own effect is discharged by the surrounding `with`, exactly as
+it is for operation bodies.
 
 **Not catchable.** `DEED6011` is not in the set checked by
 `is_contract_failure()`, so `assert refuses` does not suppress abandonment.
 This is deliberate: a handler that calls `abandon` has decided the computation
 is done; the caller cannot override that decision.
 
-**Interpreter and backend agreement.** The `DEED6011` constant is declared in
-both `deed-interp` and `deed-mir` and tested to be equal. The compiled backend
-lowers `abandon` to `Stmt::Fail { code: DEED6011 }`, which compiles to an
-`unreachable` instruction preceded by the code and message written into memory,
-the same shape every other contract failure takes.
+**Interpreter and backend representation.** The `DEED6011` constant is
+declared in both `deed-interp` and `deed-mir` and tested to be equal. The
+compiled backend lowers `abandon` to `Stmt::Fail { code: DEED6011 }`, which
+compiles to an `unreachable` instruction preceded by the code and message
+written into memory, the same shape every other runtime failure takes.
 
 ## Drawbacks (required)
 
-The `finally` clause only runs on normal exit in the compiled backend. A trap
-(from `abandon` or any contract failure) kills the process before reaching
-the inlined clause. Programs that rely on `finally` for cleanup on failure will
-behave differently between the interpreter and the compiled backend. This
-asymmetry is documented on the `install` function in `deed-mir/src/lower.rs`.
-Fixing it requires a structured exception table in the backend, which is
-deferred.
+The compiled backend represents abandonment as a trap and does not yet lower
+handler finalizers into an unwind path. Programs that rely on handler cleanup
+after a compiled failure therefore still differ from the interpreter. Fixing
+that requires structured unwind support in the backend rather than another
+surface syntax, and is deferred with the existing compiled-handler limitation.
 
 ## Rejected Ideas (required)
 
@@ -79,16 +77,19 @@ deferred.
     the computation is finished. Letting the computation catch and ignore it
     undermines the mechanism.
 
-- Option: run `finally` on all exits in the compiled backend using a landing
-  pad or cleanup section.
-  - Rejected because: the current backend has no exception table and adding
-    one is a larger change than this issue calls for. The interpreter already
-    covers the cases a scheduler would use.
+- Option: add `finally` after each `with` expression.
+  - Rejected because: cleanup belongs to the handler that owns the resource,
+    and handlers already have one `finally` block. A second cleanup syntax
+    would give the same installation two competing owners.
+
+- Option: run handler finalizers on compiled traps using a landing pad.
+  - Rejected because: the current backend has no structured unwind mechanism,
+    and adding one is larger than deciding and representing abandonment.
 
 ## Open Questions (required)
 
-- Whether `finally` should be allowed to use effects from the enclosing `with`
-  (it currently can, since the handler is still installed).
+- What structured unwind representation should carry handler finalizers in the
+  compiled backend.
 
 ## References
 
@@ -96,6 +97,6 @@ deferred.
 - deed-lang/deed#575 (parent issue)
 - `crates/deed-interp/src/codes.rs` (`DEED6011`)
 - `crates/deed-mir/src/lib.rs` (`codes::ABANDONED`)
-- `crates/deed-mir/src/lower.rs` (`install` function)
-- `crates/deed-driver/tests/dispatch.rs` (`abandon_in_an_operation_raises_deed6011`, `a_finally_clause_runs_on_normal_exit`)
+- `crates/deed-mir/src/lower.rs` (`Stmt::Abandon` lowering)
+- `crates/deed-driver/tests/dispatch.rs` (`abandon_in_an_operation_raises_deed6011`, `abandonment_runs_handler_cleanup`)
 - `crates/deed-interp/tests/messages.rs` (`an_abandoned_computation_says_it_was_abandoned`)

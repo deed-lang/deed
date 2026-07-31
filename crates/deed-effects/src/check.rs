@@ -277,6 +277,27 @@ impl<'a> Checker<'a> {
                 _ => {}
             }
         }
+
+        // Finalizers have no signature of their own, so infer their row only
+        // after every function declaration above has supplied its call row.
+        // The handler stays installed while cleanup runs; adding this to the
+        // handler row lets the surrounding `with` discharge its own effect
+        // while charging every other cleanup effect to the installer.
+        for item in &module.items {
+            let Item::Handler(handler) = item else {
+                continue;
+            };
+            let (Some(def), Some(finally)) = (
+                self.resolutions.resolution(handler.name.span),
+                &handler.finally,
+            ) else {
+                continue;
+            };
+            let finally_row = self.infer_block(finally);
+            if let Some(row) = self.handler_rows.get_mut(&def) {
+                row.extend(&finally_row);
+            }
+        }
     }
 
     /// Checks that every row variable is somewhere a call site can fill in.
@@ -453,19 +474,11 @@ impl<'a> Checker<'a> {
                 }
                 self.calls_in_block(body, found);
             }
-            Expr::With {
-                handlers,
-                body,
-                finally,
-                ..
-            } => {
+            Expr::With { handlers, body, .. } => {
                 for handler in handlers {
                     self.calls_in(handler, found);
                 }
                 self.calls_in_block(body, found);
-                if let Some(finally) = finally {
-                    self.calls_in_block(finally, found);
-                }
             }
             Expr::Int { .. }
             | Expr::Str { .. }
@@ -1033,12 +1046,7 @@ impl<'a> Checker<'a> {
             Expr::Old { expr, .. } if self.in_contract => row.extend(&self.infer_expr(expr)),
             Expr::Old { .. } | Expr::Unchanged { .. } => {}
 
-            Expr::With {
-                handlers,
-                body,
-                finally,
-                ..
-            } => {
+            Expr::With { handlers, body, .. } => {
                 let mut handled: HashSet<DefId> = HashSet::new();
                 let mut handles_everything = false;
                 // What the handlers themselves perform, kept with the body's
@@ -1065,13 +1073,6 @@ impl<'a> Checker<'a> {
                             row.insert(item.clone());
                         }
                     }
-                }
-
-                // The `finally` clause runs after the body and may perform
-                // effects too; they are charged to whoever installed the
-                // handler.
-                if let Some(finally) = finally {
-                    row.extend(&self.infer_block(finally));
                 }
             }
         }

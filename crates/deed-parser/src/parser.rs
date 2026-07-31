@@ -2449,21 +2449,10 @@ impl<'a> Parser<'a> {
         self.struct_lit = saved;
 
         let body = self.parse_block();
-
-        // Optional `finally { ... }` clause after the body.
-        let finally = if self.at_kw(Keyword::Finally) {
-            self.bump();
-            Some(self.parse_block())
-        } else {
-            None
-        };
-
-        let end = finally.as_ref().map_or(body.span, |f| f.span);
         Expr::With {
-            span: start.to(end),
+            span: start.to(body.span),
             handlers,
             body,
-            finally,
         }
     }
 

@@ -6,9 +6,11 @@
 //! The claim is about the interpreter's behaviour, so it is asked of the
 //! interpreter rather than left as a sentence somebody read once.
 
+use std::path::Path;
+
 use deed_diagnostics::SourceMap;
 use deed_driver::check_all;
-use deed_interp::{Program, run_tests};
+use deed_interp::{Program, run_main, run_tests};
 
 /// Run the single test in `source` and expect it to fail with a specific code.
 fn fails_with(source: &str, expected_code: &str) {
@@ -41,6 +43,28 @@ fn fails_with(source: &str, expected_code: &str) {
         "unexpected failure code; message: {}",
         failure.primary.message
     );
+}
+
+fn ran_main(source: &str) -> deed_interp::Run {
+    let mut sources = SourceMap::new();
+    let id = sources.add("handlers.deed".to_string(), source.to_string());
+    let mut all = check_all(&sources, &[id]);
+    let one = all.pop().expect("one file in, one result out");
+    assert!(
+        !one.has_errors(),
+        "this program should check: {:?}",
+        one.diagnostics
+    );
+
+    let mut program = Program::new();
+    program.add(
+        one.file,
+        &one.module,
+        &one.resolutions,
+        one.guards(),
+        one.rows(),
+    );
+    run_main(&program, one.file, Path::new("."), &[]).expect("the program should have main")
 }
 
 fn ran(source: &str) -> Vec<deed_interp::TestOutcome> {
@@ -201,34 +225,38 @@ fn abandon_in_an_operation_raises_deed6011() {
     );
 }
 
-// -- finally ---------------------------------------------------------------
-
-/// The `finally` block runs after the `with` body completes normally.
+/// Abandonment follows the same unwind path as other failures, so cleanup on
+/// the installed handler runs before the failure leaves the `with` block.
 #[test]
-fn a_finally_clause_runs_on_normal_exit() {
-    ran("module a\n\
+fn abandonment_runs_handler_cleanup() {
+    let run = ran_main(
+        "module a\n\
          \n\
-         effect Tally {\n\
-         \x20   fn bump() -> Int\n\
+         effect Gate {\n\
+         \x20   fn enter() -> Int\n\
          }\n\
          \n\
-         handler Counting implements Tally {\n\
-         \x20   state seen: Int\n\
+         handler Closed implements Gate {\n\
+         \x20   state out: Console\n\
          \n\
-         \x20   fn bump() -> Int {\n\
-         \x20       seen = seen + 1\n\
-         \x20       seen\n\
+         \x20   fn enter() -> Int {\n\
+         \x20       abandon\n\
          \x20   }\n\
+         \n\
+         \x20   finally { Io.write(out, \"cleaned\") }\n\
          }\n\
          \n\
-         fn ask() -> Int uses Tally.bump { Tally.bump() }\n\
-         \n\
-         test \"finally runs after the body\" {\n\
-         \x20   let result = with Counting { seen: 0 } {\n\
-         \x20       ask()\n\
-         \x20   } finally {\n\
-         \x20       assert 1 == 1\n\
+         fn main(sys: System) -> Int\n\
+         \x20   uses Io.write,\n\
+         {\n\
+         \x20   with Closed { out: sys.console } {\n\
+         \x20       Gate.enter()\n\
          \x20   }\n\
-         \x20   assert result == 1\n\
-         }\n");
+         }\n",
+    );
+    assert_eq!(run.output, vec!["cleaned".to_string()]);
+    let failure = run
+        .result
+        .expect_err("abandonment should still fail the run");
+    assert_eq!(failure.code, deed_interp::codes::ABANDONED);
 }

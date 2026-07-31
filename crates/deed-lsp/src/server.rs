@@ -2656,22 +2656,12 @@ fn collect_expr_spans(offset: u32, expr: &Expr, spans: &mut Vec<Span>) -> bool {
         Expr::Closure { body, .. } => {
             collect_expr_spans(offset, body, spans);
         }
-        Expr::With {
-            handlers,
-            body,
-            finally,
-            ..
-        } => {
+        Expr::With { handlers, body, .. } => {
             let found = handlers
                 .iter()
                 .any(|h| collect_expr_spans(offset, h, spans));
             if !found {
-                let in_body = collect_block_spans_checked(offset, body, spans);
-                if !in_body {
-                    if let Some(finally) = finally {
-                        collect_block_spans(offset, finally, spans);
-                    }
-                }
+                collect_block_spans(offset, body, spans);
             }
         }
         Expr::Old { expr, .. } => {

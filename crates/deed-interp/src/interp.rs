@@ -1233,12 +1233,7 @@ impl<'a> Interp<'a> {
                 Ok(Value::Bool(before == now))
             }
 
-            Expr::With {
-                handlers,
-                body,
-                finally,
-                ..
-            } => {
+            Expr::With { handlers, body, .. } => {
                 let base = self.handlers.len();
                 let mut installed = Ok(());
                 for handler in handlers {
@@ -1247,29 +1242,18 @@ impl<'a> Interp<'a> {
                         break;
                     }
                 }
-                let body_result = match installed {
+                let result = match installed {
                     Ok(()) => self.eval_block(body),
                     Err(signal) => Err(signal),
                 };
                 // Run `finally` blocks for every installed handler that has
                 // one, from the most recently installed to the least recently
                 // installed. This runs whether the body returned normally,
-                // via `return`, or via a contract failure so that any
-                // resource a handler acquired is always released.
+                // via `return`, a contract failure, or abandonment so that
+                // any resource a handler acquired is always released.
                 let result = self.run_finally_blocks(base, result);
                 self.handlers.truncate(base);
-
-                // Run the `finally` clause on every exit: normal completion,
-                // contract failure, and abandonment all pass through here.
-                // If the `finally` clause itself raises a signal that takes
-                // priority over what the body raised.
-                match finally {
-                    Some(finally_block) => match self.eval_block(finally_block) {
-                        Ok(_) | Err(Signal::Return(_)) => body_result,
-                        Err(signal) => Err(signal),
-                    },
-                    None => body_result,
-                }
+                result
             }
 
             Expr::Error(span) => Err(self.not_runnable(*span, "code that did not compile")),
@@ -2795,9 +2779,9 @@ impl<'a> Interp<'a> {
             // `abandon` unwinds the computation unconditionally.
             //
             // The abandoned computation does not receive a return value from
-            // the effect operation; instead the stack unwinds through any
-            // `finally` clauses on `with` blocks. `assert refuses` cannot
-            // catch this because DEED6011 is not a contract failure.
+            // the effect operation; instead the stack unwinds through cleanup
+            // blocks on installed handlers. `assert refuses` cannot catch this
+            // because DEED6011 is not a contract failure.
             Stmt::Abandon { span } => Err(self.fail(
                 Diagnostic::error(
                     codes::ABANDONED,
