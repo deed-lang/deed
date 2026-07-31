@@ -531,14 +531,6 @@ impl<'a> Builder<'a> {
                 self.instructions.push(Ins::LocalSet(product));
 
                 self.instructions.push(Ins::LocalGet(left_slot));
-                self.instructions.push(Ins::I64Const(i64::MIN));
-                self.instructions.push(Ins::I64Eq);
-                self.instructions.push(Ins::LocalGet(right_slot));
-                self.instructions.push(Ins::I64Const(-1));
-                self.instructions.push(Ins::I64Eq);
-                self.instructions.push(Ins::I32And);
-
-                self.instructions.push(Ins::LocalGet(left_slot));
                 self.instructions.push(Ins::I64Const(-1));
                 self.instructions.push(Ins::I64Eq);
                 self.instructions.push(Ins::LocalGet(right_slot));
@@ -546,7 +538,6 @@ impl<'a> Builder<'a> {
                 self.instructions.push(Ins::I64Eq);
                 self.instructions.push(Ins::I32And);
 
-                self.instructions.push(Ins::I32Or);
                 self.trap_on_true();
 
                 self.instructions.push(Ins::LocalGet(left_slot));
@@ -1180,6 +1171,44 @@ mod tests {
         });
         program.add_function(function);
         program
+    }
+
+    fn binary(name: &str, op: BinaryOp) -> crate::wasm::Module {
+        let mut program = Program::new();
+        let mut function = Function::new(name, vec![Ty::Int, Ty::Int], Ty::Int);
+        function.body = Block::of(Expr::Binary {
+            op,
+            left: Box::new(Expr::Local(Local(0))),
+            right: Box::new(Expr::Local(Local(1))),
+        });
+        program.add_function(function);
+        compile(&program).expect("this compiles")
+    }
+
+    fn assert_arithmetic_failure(module: &crate::wasm::Module, name: &str, args: [i64; 2]) {
+        assert_eq!(
+            crate::call(
+                module,
+                name,
+                &[crate::Value::I64(args[0]), crate::Value::I64(args[1])],
+            ),
+            Err(crate::Trap::Failed {
+                code: ARITHMETIC_CODE.to_string(),
+                message: ARITHMETIC_MESSAGE.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn the_signed_minimum_cannot_be_negated_by_binary_arithmetic() {
+        let multiply = binary("multiply", BinaryOp::MulInt);
+        assert_arithmetic_failure(&multiply, "multiply", [-1, i64::MIN]);
+
+        let divide = binary("divide", BinaryOp::DivInt);
+        assert_arithmetic_failure(&divide, "divide", [i64::MIN, -1]);
+
+        let remainder = binary("remainder", BinaryOp::RemInt);
+        assert_arithmetic_failure(&remainder, "remainder", [i64::MIN, -1]);
     }
 
     #[test]
