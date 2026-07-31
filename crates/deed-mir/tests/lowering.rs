@@ -136,7 +136,11 @@ fn a_generic_record_gets_a_layout_per_set_of_type_arguments() {
     )
     .expect("this lowers");
 
-    let layouts: Vec<&str> = program.layouts.iter().map(|layout| layout.name.as_str()).collect();
+    let layouts: Vec<&str> = program
+        .layouts
+        .iter()
+        .map(|layout| layout.name.as_str())
+        .collect();
     assert!(
         layouts.contains(&"Box<Int>"),
         "an `Int` call should instantiate `Box<Int>`: {layouts:?}"
@@ -158,7 +162,11 @@ fn a_generic_alias_is_expanded_before_lowering() {
     )
     .expect("this lowers");
 
-    let layouts: Vec<&str> = program.layouts.iter().map(|layout| layout.name.as_str()).collect();
+    let layouts: Vec<&str> = program
+        .layouts
+        .iter()
+        .map(|layout| layout.name.as_str())
+        .collect();
     assert!(
         layouts.contains(&"Entry<Str, Int>"),
         "the alias target should instantiate: {layouts:?}"

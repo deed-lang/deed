@@ -258,7 +258,14 @@ pub fn lower(
         }
         let ret = match &declaration.sig.ret {
             None => Ty::Unit,
-            Some(ty) => written(ty, &layouts, &aliases, &nominals, &HashMap::new(), &mut shapes)?,
+            Some(ty) => written(
+                ty,
+                &layouts,
+                &aliases,
+                &nominals,
+                &HashMap::new(),
+                &mut shapes,
+            )?,
         };
         let id = program.add_function(Function::new(name, params, ret));
         if let Some(def) = resolutions.resolution(declaration.sig.name.span) {
@@ -424,9 +431,7 @@ fn instantiate_nominal(
                 .map(|field| {
                     Ok(crate::Field {
                         name: field.name.name.to_string(),
-                        ty: written(
-                            &field.ty, layouts, aliases, nominals, &bindings, shapes,
-                        )?,
+                        ty: written(&field.ty, layouts, aliases, nominals, &bindings, shapes)?,
                     })
                 })
                 .collect::<Result<Vec<_>, Unlowered>>()?,
