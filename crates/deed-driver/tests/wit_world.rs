@@ -116,6 +116,34 @@ fn a_user_effect_in_the_row_appears_in_the_world() {
     );
 }
 
+#[test]
+fn an_imported_effect_in_the_row_appears_in_the_world() {
+    let mut sources = SourceMap::new();
+    let effect = sources.add(
+        "effect.deed".to_string(),
+        "module dep\n\neffect Log {\n  fn note(message: String) -> Int\n}\n".to_string(),
+    );
+    let main = sources.add(
+        "main.deed".to_string(),
+        "module main\n\n\
+         use dep.{Log}\n\n\
+         fn main(n: Int) -> Int\n\
+           uses\n\
+             Log.note,\n\
+         {\n\
+             n + Log.note(\"hi\")\n\
+         }\n"
+        .to_string(),
+    );
+    let checked = check_all(&sources, &[effect, main]);
+    assert!(!checked[1].has_errors(), "main should check cleanly");
+
+    assert_eq!(
+        wit_world_for(&checked[1]),
+        "world program {\n  import deed:log.note;\n}\n"
+    );
+}
+
 // -- handled effects excluded ----------------------------------------------
 
 #[test]
