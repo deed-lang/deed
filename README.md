@@ -155,6 +155,9 @@ The longer version, including the cost model this is all based on, is in
 | [02-syntax.md](design/02-syntax.md) | Contract blocks, types, errors, modules |
 | [03-effects.md](design/03-effects.md) | Effect declarations, propagation, handlers |
 | [04-capabilities.md](design/04-capabilities.md) | Authority, how it enters a program, and why |
+| [05-backend.md](design/05-backend.md) | Compiling to WebAssembly, and what does not change |
+| [06-grammar.md](design/06-grammar.md) | The grammar, checked against the parser both ways |
+| [refusals.md](design/refusals.md) | Everything deliberately left out, and why |
 
 Read them in order. Each one leans on the one before it.
 
