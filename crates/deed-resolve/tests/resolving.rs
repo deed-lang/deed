@@ -536,6 +536,74 @@ fn an_unused_import_is_a_warning_not_an_error() {
     assert!(resolved.diagnostics[0].message.contains("Spare"));
 }
 
+#[test]
+fn using_a_deprecated_declaration_warns_with_a_replacement_fix() {
+    let (_, _, resolved) = resolve_source(
+        "module a\n\n\
+         deprecated legacy -> replacement\n\
+         fn legacy() -> Int { 1 }\n\
+         fn replacement() -> Int { 2 }\n\
+         fn f() -> Int { legacy() }\n",
+    );
+    assert_eq!(
+        codes_of(&resolved.diagnostics),
+        vec![codes::DEPRECATED_DECLARATION]
+    );
+    let fix = resolved.diagnostics[0]
+        .fix
+        .as_ref()
+        .expect("deprecation should offer a mechanical rename");
+    assert_eq!(
+        fix.applicability,
+        deed_diagnostics::Applicability::MachineApplicable
+    );
+    assert_eq!(fix.edits.len(), 1);
+    assert_eq!(fix.edits[0].replacement, "replacement");
+    assert_eq!(resolved.diagnostics[0].secondary.len(), 1);
+    assert_eq!(
+        resolved.diagnostics[0].secondary[0].message,
+        "deprecated here"
+    );
+}
+
+#[test]
+fn importing_a_deprecated_name_still_warns_at_use_site() {
+    let universe = universe_of(&["module dep\n\n\
+         deprecated legacy -> replacement\n\
+         fn legacy() -> Int { 1 }\n\
+         fn replacement() -> Int { 2 }\n"]);
+    let (_, _, resolved) = resolve_source_in(
+        "module a\n\n\
+         use dep.{legacy, replacement}\n\
+         fn f() -> Int { legacy() + replacement() }\n",
+        &universe,
+    );
+    assert_eq!(
+        codes_of(&resolved.diagnostics),
+        vec![codes::DEPRECATED_DECLARATION]
+    );
+}
+
+#[test]
+fn an_incomplete_deprecation_does_not_create_a_resolver_error() {
+    let source = "module a\n\ndeprecated -> replacement\nfn replacement() -> Int { 1 }\n";
+    let mut sources = SourceMap::new();
+    let file = sources.add("test.deed", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    let parsed = parse(file, &lexed.tokens);
+    assert!(
+        parsed.has_errors(),
+        "the parser should report the missing name"
+    );
+
+    let resolved = resolve(file, &parsed.module, &Universe::new());
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "parser recovery should not cause another resolver error: {:?}",
+        resolved.diagnostics
+    );
+}
+
 // -- a name nobody reads -------------------------------------------------
 
 #[test]

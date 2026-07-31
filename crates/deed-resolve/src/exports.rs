@@ -101,6 +101,8 @@ pub struct Export {
     /// itself with whatever it passed at each of these, which is what makes a
     /// row variable mean anything at a call site.
     pub row_from: Vec<usize>,
+    /// The replacement name, when this export is deprecated.
+    pub deprecated: Option<String>,
 }
 
 /// Which parameters carry a row variable that the declaration passes through.
@@ -273,12 +275,14 @@ impl Exports {
                             row: Vec::new(),
                             row_complete: true,
                             row_from: Vec::new(),
+                            deprecated: None,
                         },
                     );
                 }
             }
 
             let (name, kind, members, row, row_complete, row_from) = match item {
+                Item::Deprecate(_) => continue,
                 Item::TypeAlias(decl) => (
                     &decl.name,
                     ExportKind::Type,
@@ -364,8 +368,20 @@ impl Exports {
                     row,
                     row_complete,
                     row_from,
+                    deprecated: None,
                 },
             );
+        }
+
+        for item in &module.items {
+            let Item::Deprecate(decl) = item else {
+                continue;
+            };
+            if names.contains_key(&decl.new.name)
+                && let Some(export) = names.get_mut(&decl.old.name)
+            {
+                export.deprecated = Some(decl.new.name.clone());
+            }
         }
 
         Self { names }

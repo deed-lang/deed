@@ -213,6 +213,19 @@ fn a_refinement_is_part_of_the_type_alias() {
 }
 
 #[test]
+fn a_deprecation_declaration_names_the_old_and_new_items() {
+    let parsed =
+        parse_ok("module a\n\ndeprecated old_name -> new_name\nfn old_name() -> Int { 0 }\n");
+    match &parsed.module.items[0] {
+        Item::Deprecate(decl) => {
+            assert_eq!(decl.old.name, "old_name");
+            assert_eq!(decl.new.name, "new_name");
+        }
+        other => panic!("expected a deprecation declaration, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_choice_variant_may_or_may_not_carry_fields() {
     let parsed = parse_ok(
         "module a\n\nchoice E {\n  WithFields { available: Money },\n  Bare,\n  Empty {},\n}\n",

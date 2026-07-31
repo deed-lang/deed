@@ -547,6 +547,7 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
     let mut items = BTreeMap::new();
     for item in &module.items {
         match item {
+            Item::Deprecate(_) => {}
             Item::Function(decl) => {
                 // What this module's own checker calls them, so an imported
                 // generic function arrives with its parameters still in it and

@@ -168,6 +168,22 @@ fn a_cast_comes_out_as_the_call_it_meant() {
     );
 }
 
+#[test]
+fn a_deprecated_name_is_rewritten_to_its_replacement() {
+    let source = "module a\n\ndeprecated legacy -> replacement\nfn legacy() -> Int { 1 }\nfn replacement() -> Int { 2 }\nfn f() -> Int { legacy() }\n";
+    let result = fix(source, diagnose);
+    assert_eq!(result.applied, 1);
+    assert_eq!(
+        result.source,
+        "module a\n\ndeprecated legacy -> replacement\nfn legacy() -> Int { 1 }\nfn replacement() -> Int { 2 }\nfn f() -> Int { replacement() }\n"
+    );
+    assert!(
+        diagnose(&result.source).is_empty(),
+        "it should check clean now: {:?}",
+        diagnose(&result.source)
+    );
+}
+
 // -- rows ------------------------------------------------------------------
 //
 // The row diagnostics say what to type and, for a long time, did not type it.

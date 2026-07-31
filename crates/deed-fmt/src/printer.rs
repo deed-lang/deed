@@ -8,8 +8,8 @@
 use std::fmt::Write;
 
 use deed_ast::{
-    BinaryOp, Block, ChoiceDecl, Contract, EffectDecl, EffectRef, Expr, FieldDecl, FieldInit,
-    FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module, Outcome, Param, Pattern,
+    BinaryOp, Block, ChoiceDecl, Contract, DeprecateDecl, EffectDecl, EffectRef, Expr, FieldDecl,
+    FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module, Outcome, Param, Pattern,
     PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias, UnaryOp, Use, Variant,
 };
 use deed_lexer::Trivia;
@@ -234,6 +234,7 @@ impl Printer<'_> {
 
     fn item(&mut self, item: &Item) {
         match item {
+            Item::Deprecate(decl) => self.deprecate(decl),
             Item::TypeAlias(decl) => self.type_alias(decl),
             Item::Record(decl) => self.record(decl),
             Item::Choice(decl) => self.choice(decl),
@@ -242,6 +243,15 @@ impl Printer<'_> {
             Item::Function(decl) => self.function(decl),
             Item::Test(decl) => self.test(decl),
         }
+    }
+
+    fn deprecate(&mut self, decl: &DeprecateDecl) {
+        self.line_start();
+        self.push("deprecated ");
+        self.push(&decl.old.name);
+        self.push(" -> ");
+        self.push(&decl.new.name);
+        self.newline();
     }
 
     fn type_alias(&mut self, decl: &TypeAlias) {

@@ -85,6 +85,7 @@ pub struct Module {
 
 #[derive(Clone, Debug)]
 pub enum Item {
+    Deprecate(DeprecateDecl),
     TypeAlias(TypeAlias),
     Record(RecordDecl),
     Choice(ChoiceDecl),
@@ -97,6 +98,7 @@ pub enum Item {
 impl Item {
     pub fn span(&self) -> Span {
         match self {
+            Item::Deprecate(d) => d.span,
             Item::TypeAlias(d) => d.span,
             Item::Record(d) => d.span,
             Item::Choice(d) => d.span,
@@ -106,6 +108,17 @@ impl Item {
             Item::Test(d) => d.span,
         }
     }
+}
+
+/// `deprecated old_name -> new_name`
+///
+/// A declaration-level migration marker. `old_name` remains available for now,
+/// but every use warns and points at `new_name`.
+#[derive(Clone, Debug)]
+pub struct DeprecateDecl {
+    pub old: Ident,
+    pub new: Ident,
+    pub span: Span,
 }
 
 /// `type Positive = Int where value > 0`

@@ -61,7 +61,7 @@ ident-start   ::=  "_" | unicode-letter
 ident-continue ::=  "_" | unicode-letter | unicode-digit
 
 keyword  ::=
-    "assert"  | "choice"     | "effect"  | "else"      | "ensures"
+    "assert"  | "choice"     | "deprecated" | "effect"  | "else"      | "ensures"
   | "false"   | "fn"         | "for"     | "handler"   | "if"
   | "implements" | "in"      | "let"     | "match"     | "module"
   | "old"     | "record"     | "return"  | "test"      | "true"
@@ -147,13 +147,18 @@ use          ::=  "use" module-path "." "{" ident ("," ident)* ","? "}"
 
 ```
 item  ::=
-    type-alias
+    deprecate-decl
+  | type-alias
   | record-decl
   | choice-decl
   | effect-decl
   | handler-decl
   | fn-decl
   | test-decl
+```
+
+```
+deprecate-decl  ::=  "deprecated" ident "->" ident
 ```
 
 #### Type alias

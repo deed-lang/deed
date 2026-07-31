@@ -169,6 +169,7 @@ pub enum Keyword {
     Handler,
     Implements,
     Fn,
+    Deprecated,
 
     // Contract block
     Where,
@@ -201,7 +202,7 @@ impl Keyword {
     /// it rather than repeat it. The editor grammar in `editors/vscode` is a
     /// second copy of these words living outside the compiler, and
     /// `crates/deed-parser/tests/grammar.rs` holds it to this list.
-    pub const ALL: [Keyword; 26] = [
+    pub const ALL: [Keyword; 27] = [
         Keyword::Module,
         Keyword::Use,
         Keyword::Type,
@@ -211,6 +212,7 @@ impl Keyword {
         Keyword::Handler,
         Keyword::Implements,
         Keyword::Fn,
+        Keyword::Deprecated,
         Keyword::Where,
         Keyword::Uses,
         Keyword::Ensures,
@@ -241,6 +243,7 @@ impl Keyword {
             "handler" => Keyword::Handler,
             "implements" => Keyword::Implements,
             "fn" => Keyword::Fn,
+            "deprecated" => Keyword::Deprecated,
             "where" => Keyword::Where,
             "uses" => Keyword::Uses,
             "ensures" => Keyword::Ensures,
@@ -274,6 +277,7 @@ impl Keyword {
             Keyword::Handler => "handler",
             Keyword::Implements => "implements",
             Keyword::Fn => "fn",
+            Keyword::Deprecated => "deprecated",
             Keyword::Where => "where",
             Keyword::Uses => "uses",
             Keyword::Ensures => "ensures",
@@ -311,6 +315,7 @@ mod tests {
             "handler",
             "implements",
             "fn",
+            "deprecated",
             "where",
             "uses",
             "ensures",

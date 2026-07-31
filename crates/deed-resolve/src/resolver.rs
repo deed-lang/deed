@@ -12,13 +12,13 @@
 use std::collections::{HashMap, HashSet};
 
 use deed_ast::{
-    Block, ChoiceDecl, EffectDecl, EffectRef, Expr, FnDecl, HandlerDecl, Ident, Item, Module,
-    Pattern, RecordDecl, Stmt, Type, TypeAlias,
+    Block, ChoiceDecl, DeprecateDecl, EffectDecl, EffectRef, Expr, FnDecl, HandlerDecl, Ident,
+    Item, Module, Pattern, RecordDecl, Stmt, Type, TypeAlias,
 };
 use deed_diagnostics::{Applicability, Diagnostic, FileId, Span};
 
 use crate::codes;
-use crate::defs::{DefData, DefId, DefKind, Dot, Resolutions};
+use crate::defs::{DefData, DefId, DefKind, Deprecation, Dot, Resolutions};
 use crate::exports::{ExportKind, Universe};
 
 /// Names the language provides without anyone importing them.
@@ -452,6 +452,7 @@ impl Resolver<'_> {
         if let Some((def, _)) = self.lookup(&ident.name) {
             self.used.insert(def);
             self.resolutions.record_name(ident.span, def);
+            self.warn_if_deprecated(ident, def);
             return Some(def);
         }
 
@@ -519,6 +520,35 @@ impl Resolver<'_> {
         None
     }
 
+    fn warn_if_deprecated(&mut self, ident: &Ident, def: DefId) {
+        let Some(deprecation) = self.resolutions.deprecation(def).cloned() else {
+            return;
+        };
+        let data = self.resolutions.def(def);
+        let mut diagnostic = Diagnostic::warning(
+            codes::DEPRECATED_DECLARATION,
+            self.file,
+            ident.span,
+            format!(
+                "`{}` is deprecated; use `{}` instead",
+                data.name, deprecation.replacement
+            ),
+        )
+        .with_primary_label("deprecated declaration");
+        if !data.span.is_empty() {
+            diagnostic = diagnostic.with_secondary(data.span, "deprecated here");
+        }
+        if self.lookup(&deprecation.replacement).is_some() {
+            diagnostic = diagnostic.with_fix(
+                format!("write `{}`", deprecation.replacement),
+                ident.span,
+                &deprecation.replacement,
+                Applicability::MachineApplicable,
+            );
+        }
+        self.diagnostics.push(diagnostic);
+    }
+
     /// Resolves `container.name`, classifying the `.` on the way.
     fn resolve_member(&mut self, container: DefId, ident: &Ident) -> Option<DefId> {
         match self.resolutions.def(container).kind {
@@ -555,6 +585,7 @@ impl Resolver<'_> {
                     });
                     self.used.insert(member);
                     self.resolutions.record_name(ident.span, member);
+                    self.warn_if_deprecated(ident, member);
                     return Some(member);
                 }
 
@@ -586,6 +617,7 @@ impl Resolver<'_> {
                 Some(member) => {
                     self.used.insert(member);
                     self.resolutions.record_name(ident.span, member);
+                    self.warn_if_deprecated(ident, member);
                     Some(member)
                 }
                 None => {
@@ -770,6 +802,14 @@ impl Resolver<'_> {
                 match exports.get(&name.name) {
                     Some(export) => {
                         self.resolutions.record_export(def, export.clone());
+                        if let Some(replacement) = &export.deprecated {
+                            self.resolutions.record_deprecation(
+                                def,
+                                Deprecation {
+                                    replacement: replacement.clone(),
+                                },
+                            );
+                        }
                     }
                     None => {
                         let suggestion = closest(&name.name, exports.names());
@@ -796,6 +836,7 @@ impl Resolver<'_> {
 
         for item in &module.items {
             match item {
+                Item::Deprecate(_) => {}
                 Item::TypeAlias(alias) => {
                     self.declare_item(&alias.name, DefKind::Type, None);
                 }
@@ -826,11 +867,19 @@ impl Resolver<'_> {
                 Item::Test(_) => {}
             }
         }
+
+        for item in &module.items {
+            let Item::Deprecate(deprecate) = item else {
+                continue;
+            };
+            self.apply_deprecation(deprecate);
+        }
     }
 
     fn resolve_module(&mut self, module: &Module) {
         for item in &module.items {
             match item {
+                Item::Deprecate(_) => {}
                 Item::TypeAlias(alias) => self.resolve_type_alias(alias),
                 Item::Record(record) => self.resolve_record(record),
                 Item::Choice(choice) => self.resolve_choice(choice),
@@ -840,6 +889,48 @@ impl Resolver<'_> {
                 Item::Test(test) => self.resolve_block(&test.body),
             }
         }
+    }
+
+    fn apply_deprecation(&mut self, deprecate: &DeprecateDecl) {
+        if deprecate.old.name.is_empty() {
+            return;
+        }
+        if deprecate.new.name.is_empty() {
+            return;
+        }
+        let Some((old, _)) = self.lookup(&deprecate.old.name) else {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    codes::UNKNOWN_NAME,
+                    self.file,
+                    deprecate.old.span,
+                    format!("cannot find `{}` in this scope", deprecate.old.name),
+                )
+                .with_primary_label("deprecated declaration not found"),
+            );
+            return;
+        };
+        let Some((new, _)) = self.lookup(&deprecate.new.name) else {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    codes::UNKNOWN_NAME,
+                    self.file,
+                    deprecate.new.span,
+                    format!("cannot find `{}` in this scope", deprecate.new.name),
+                )
+                .with_primary_label("replacement not found"),
+            );
+            return;
+        };
+        if old == new {
+            return;
+        }
+        self.resolutions.record_deprecation(
+            old,
+            Deprecation {
+                replacement: deprecate.new.name.clone(),
+            },
+        );
     }
 
     fn resolve_type_alias(&mut self, alias: &TypeAlias) {

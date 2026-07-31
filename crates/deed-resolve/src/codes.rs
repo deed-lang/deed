@@ -51,3 +51,9 @@ pub const UNUSED_BINDING: &str = "DEED3009";
 /// is what every arm that wanted this was already doing with the fields it
 /// never read.
 pub const BINDING_IN_AN_ALTERNATIVE: &str = "DEED3010";
+
+/// A reference to a declaration marked `deprecated`.
+///
+/// The declaration still exists for now, so this is a warning, but the warning
+/// carries the replacement and may carry a machine-applicable fix.
+pub const DEPRECATED_DECLARATION: &str = "DEED3011";

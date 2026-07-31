@@ -98,6 +98,11 @@ pub struct DefData {
     pub parent: Option<DefId>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Deprecation {
+    pub replacement: String,
+}
+
 /// How a `.` was classified.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dot {
@@ -135,6 +140,7 @@ pub struct Resolutions {
     /// Recorded even when the module was missing, because a diagnostic about
     /// the name reads better with the module in it either way.
     import_modules: HashMap<DefId, String>,
+    deprecated: HashMap<DefId, Deprecation>,
 }
 
 impl Resolutions {
@@ -164,6 +170,10 @@ impl Resolutions {
         self.import_modules.insert(def, module.to_string());
     }
 
+    pub(crate) fn record_deprecation(&mut self, def: DefId, deprecation: Deprecation) {
+        self.deprecated.insert(def, deprecation);
+    }
+
     /// What an imported name is, on the other side of the import.
     pub fn import(&self, def: DefId) -> Option<&Export> {
         self.imports.get(&def)
@@ -172,6 +182,10 @@ impl Resolutions {
     /// Which module an imported name came from.
     pub fn import_module(&self, def: DefId) -> Option<&str> {
         self.import_modules.get(&def).map(String::as_str)
+    }
+
+    pub fn deprecation(&self, def: DefId) -> Option<&Deprecation> {
+        self.deprecated.get(&def)
     }
 
     /// A name the language provides, such as `Console` or the `Io` effect.
