@@ -20,7 +20,10 @@ release notes.
 
 ### Diagnostics
 
-- None yet.
+- `deed explain` prints Deed. Thirty of the ninety-seven pages showed a Rust
+  `format!` template instead of a program, doubled braces and placeholders and
+  all, because the example is copied out of a test and a test is Rust. Every
+  page that had an example still has one.
 
 ### Standard library
 
