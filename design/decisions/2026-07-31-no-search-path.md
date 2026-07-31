@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-31
 - Supersedes: None
-- Superseded by: None
+- Superseded by: `design/decisions/2026-07-31-minimal-manifest.md` (adds external component roots)
 
 ## Context
 
@@ -11,7 +11,9 @@ A named module needs one place to resolve from. Search paths, manifests, and con
 
 ## Decision
 
-Deed resolves modules from the root implied by the file named on the command line. There is no search path, no config file, and no manifest.
+Deed resolves modules from the root implied by the file named on the command line. There is no search path and no general config file.
+
+A `deed.manifest` file in a project root can declare external component roots, which are searched after the roots derived from the named files. The manifest answers exactly one question and cannot change what a module means. See `design/decisions/2026-07-31-minimal-manifest.md`.
 
 ## Drawbacks (required)
 

@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use deed_diagnostics::{SourceMap, render_human};
+use deed_diagnostics::{Diagnostic, SourceMap, render_human};
 use deed_driver::{Checked, ObligationReport};
 use deed_interp::{Program, PropertyConfig, RuntimeProfile};
 use deed_typeck::Tier;
@@ -151,7 +151,8 @@ fn run_check(args: CheckArgs) -> ExitCode {
     // tests and its `main` are not the ones you asked about.
     let subject = files.len();
     let mut shipped: Vec<&'static str> = Vec::new();
-    if let Err(error) = resolve_imports(&mut files, &mut shipped) {
+    let mut manifests: Vec<(String, String, Vec<Diagnostic>)> = Vec::new();
+    if let Err(error) = resolve_imports(&mut files, &mut shipped, &mut manifests) {
         eprintln!("error: {error}");
         return ExitCode::from(EXIT_USAGE);
     }
@@ -179,6 +180,22 @@ fn run_check(args: CheckArgs) -> ExitCode {
         ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
     }
 
+    // Register manifest files in the source map so their text appears in
+    // diagnostics, then re-anchor each diagnostic to the registered file id.
+    let manifest_diagnostics: Vec<Vec<Diagnostic>> = manifests
+        .into_iter()
+        .map(|(name, text, diagnostics)| {
+            let file = sources.add(name, text);
+            diagnostics
+                .into_iter()
+                .map(|mut d| {
+                    d.file = file;
+                    d
+                })
+                .collect()
+        })
+        .collect();
+
     // Every file at once, so a `use` has something to point at. Checking them
     // one at a time would mean an import could never resolve, which is how it
     // used to work and why nothing crossing a module boundary was checked.
@@ -186,6 +203,21 @@ fn run_check(args: CheckArgs) -> ExitCode {
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
+
+    // Manifest diagnostics first, in source order within each manifest file.
+    let mut manifest_errors = 0usize;
+    for diagnostics in &manifest_diagnostics {
+        for diagnostic in diagnostics {
+            if diagnostic.is_error() {
+                manifest_errors += 1;
+            }
+            if let Err(error) = writeln!(out, "{}", render_human(&sources, diagnostic)) {
+                eprintln!("error: {error}");
+                return ExitCode::from(EXIT_USAGE);
+            }
+        }
+    }
+
     let result = match args.format {
         Format::Human => report_human(&mut out, &sources, &checks, args.obligations, args.timings),
         Format::Json => report_json(&mut out, &sources, &checks, args.obligations),
@@ -197,7 +229,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     let errors: usize = checks.iter().map(Checked::error_count).sum();
-    if errors > 0 {
+    if errors > 0 || manifest_errors > 0 {
         return ExitCode::FAILURE;
     }
 
@@ -882,8 +914,10 @@ fn plural(count: usize, noun: &str) -> String {
 /// out that way, and until now nothing said so out loud, so a program that
 /// imported anything could not be run by naming its own file.
 ///
-/// This is not a package manager. Nothing is fetched, nothing is versioned,
-/// and the search stops at the root the named files imply.
+/// A `deed.manifest` file in a root adds component roots from other source
+/// trees. Those roots are searched only after the roots derived from the named
+/// files have been asked and have not answered. The manifest cannot change what
+/// a module means; it can only say where to look.
 ///
 /// One thing is not under a root: a module that ships inside the compiler.
 /// Those are looked at only after every root has been asked, which is
@@ -891,8 +925,14 @@ fn plural(count: usize, noun: &str) -> String {
 /// makes, so a file called `std/string.deed` sitting under somebody's own root
 /// is the one that wins. Nobody should have to know which is which, and the
 /// one that is right there is the one they can read.
-fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) -> io::Result<()> {
+fn resolve_imports(
+    files: &mut Vec<PathBuf>,
+    shipped: &mut Vec<&'static str>,
+    manifests: &mut Vec<(String, String, Vec<deed_diagnostics::Diagnostic>)>,
+) -> io::Result<()> {
     let mut roots: Vec<PathBuf> = Vec::new();
+    // Component roots added by manifests, searched after named roots.
+    let mut component_roots: Vec<PathBuf> = Vec::new();
     let mut have: HashSet<String> = HashSet::new();
     let mut wanted: Vec<String> = Vec::new();
 
@@ -910,10 +950,12 @@ fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) ->
                 continue;
             };
 
-            if let Some(root) = root_of(&path, &module)
-                && !roots.contains(&root)
-            {
-                roots.push(root);
+            if let Some(root) = root_of(&path, &module) {
+                if !roots.contains(&root) {
+                    // Read the manifest from this root, if one exists.
+                    read_manifest(&root, &mut component_roots, manifests);
+                    roots.push(root);
+                }
             }
             have.insert(module);
             wanted.extend(uses);
@@ -926,7 +968,8 @@ fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) ->
                 continue;
             }
             let mut found = false;
-            for root in &roots {
+            // Named roots first, then component roots from the manifest.
+            for root in roots.iter().chain(component_roots.iter()) {
                 let mut candidate = root.clone();
                 for segment in module.split('/') {
                     candidate.push(segment);
@@ -965,6 +1008,44 @@ fn resolve_imports(files: &mut Vec<PathBuf>, shipped: &mut Vec<&'static str>) ->
         if !added {
             return Ok(());
         }
+    }
+}
+
+/// Reads a `deed.manifest` from `root`, if one exists, adding its component
+/// roots to `component_roots` and collecting any parse diagnostics.
+///
+/// An absent manifest is silently ignored. An unreadable one is silently
+/// ignored too; the error message for that is better coming from the OS than
+/// from a detour through the diagnostic system.
+fn read_manifest(
+    root: &Path,
+    component_roots: &mut Vec<PathBuf>,
+    manifests: &mut Vec<(String, String, Vec<deed_diagnostics::Diagnostic>)>,
+) {
+    let manifest_path = root.join("deed.manifest");
+    let Ok(text) = std::fs::read_to_string(&manifest_path) else {
+        return;
+    };
+
+    let name = display_path(&manifest_path);
+
+    let mut sources = deed_diagnostics::SourceMap::new();
+    let file = sources.add(name.clone(), text.clone());
+    let parsed = deed_driver::parse_manifest(file, &text);
+
+    for component in &parsed.components {
+        let resolved = if component.path.is_absolute() {
+            component.path.clone()
+        } else {
+            root.join(&component.path)
+        };
+        if !component_roots.contains(&resolved) {
+            component_roots.push(resolved);
+        }
+    }
+
+    if !parsed.diagnostics.is_empty() {
+        manifests.push((name, text, parsed.diagnostics));
     }
 }
 

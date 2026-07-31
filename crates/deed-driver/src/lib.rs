@@ -17,13 +17,16 @@
 //! nothing to a mess they did not make, and there are tests in `deed-resolve`
 //! and `deed-typeck` asserting exactly that.
 
+pub mod codes;
 pub mod fix;
 mod imports;
+pub mod manifest;
 mod report;
 mod rows;
 mod shipped;
 pub mod wit;
 
+pub use manifest::{ComponentRoot, Manifest, parse_manifest};
 pub use report::json_report;
 pub use shipped::{shipped_for, shipped_modules, shipped_source, take_shipped};
 pub use wit::wit_world_for;
