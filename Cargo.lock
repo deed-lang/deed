@@ -18,6 +18,7 @@ dependencies = [
  "deed-diagnostics",
  "deed-driver",
  "deed-explain",
+ "deed-fetch",
  "deed-fmt",
  "deed-interp",
  "deed-lsp",
