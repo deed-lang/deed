@@ -156,6 +156,14 @@ fn identifiers_may_be_non_ascii() {
     );
 }
 
+#[test]
+fn unicode_digits_may_continue_identifiers() {
+    assert_eq!(
+        kinds("café໐test໑"),
+        vec![TokenKind::Ident("café໐test໑".into())]
+    );
+}
+
 // -- spans -----------------------------------------------------------------
 
 #[test]

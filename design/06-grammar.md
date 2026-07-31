@@ -56,6 +56,10 @@ A string of identifier characters that matches a keyword lexes as that keyword r
 identifier.
 
 ```
+ident         ::=  ident-start ident-continue*
+ident-start   ::=  "_" | unicode-letter
+ident-continue ::=  "_" | unicode-letter | unicode-digit
+
 keyword  ::=
     "assert"  | "choice"     | "effect"  | "else"      | "ensures"
   | "false"   | "fn"         | "for"     | "handler"   | "if"
@@ -64,6 +68,9 @@ keyword  ::=
   | "type"    | "unchanged"  | "use"     | "uses"      | "where"
   | "with"
 ```
+
+Here `unicode-letter` and `unicode-digit` mean the Unicode Letter and Decimal_Digit
+properties.
 
 The following words are contextual: they lex as ordinary identifiers and are read by the
 parser in specific positions only. A variable may still be named any of them.
@@ -88,6 +95,9 @@ octal-digit  ::=  "0" ... "7"
 Digit separators (`_`) are accepted anywhere after the first digit and are stripped before
 the value is decoded. `Int` is a signed 64-bit integer; a literal outside the range
 `-9223372036854775808` to `9223372036854775807` is a lexical error.
+
+Numeric literals use ASCII digits only. Unicode digits are accepted in identifiers but not in
+integer literals.
 
 There are no float literals.
 
