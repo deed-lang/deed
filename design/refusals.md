@@ -179,12 +179,38 @@ caller can reach does not grow, only the set of things that exist inside a place
 already reach does, and the `Dir` `Io.make` returns is always rooted inside the one that was
 handed to it.
 
+## No detached spawn
+
+A detached spawn starts a task and immediately disconnects: the spawning block exits while
+the task keeps running, owned by nothing, with no scoped lifetime. Most concurrent languages
+start here and then add structured concurrency on top, paying the cost of two models for the
+lifetime of the language.
+
+Deed chooses the opposite order. The decision is recorded in
+`design/decisions/2026-07-31-structured-concurrency.md`. The short version: a task in Deed
+is tied to the block that started it and cannot outlive it. That is the same shape as `with`,
+which already says "inside this block, this effect is handled, and outside it, it is not".
+A task group would say the same thing about tasks rather than effects, and the scoping
+mechanism is the same.
+
+The refusal is `DEED2014`. `spawn(f())` at statement level is read by the parser and refused
+with a message that explains the structural alternative rather than treating `spawn` as an
+unknown name. The conformance case at `conformance/cases/reject-spawn/` is the test where a
+parent would return before its child, which is the exact shape this decision refuses.
+
+**What would change the answer:** a program where scoped concurrency is demonstrably unable
+to express something that detached concurrency can, not merely less convenient, and where
+carrying both models is clearly cheaper than the structural change that would let scoped
+concurrency cover the case.
+
 ## Checked against the compiler
 
-The float, trait, range and `while`/`break`/`continue` refusals are each read by an existing
-documentation test (`crates/deed-driver/tests/documentation.rs`) that keeps this page's
-claims tied to the parser's and prelude's actual behaviour rather than to a description of
-it that can go stale. The rest are structural claims about the type checker and the backend
-that do not have a single number to check against; they are read against the reasoning in
-`design/02-syntax.md`, `design/04-capabilities.md` and `design/01-principles.md`, which is
-where each one was first written down in full.
+The float, trait, range, `while`/`break`/`continue`, and detached-spawn refusals are each
+read by an existing test that keeps this page's claims tied to the parser's and prelude's
+actual behaviour rather than to a description of it that can go stale. The first four are
+read by `crates/deed-driver/tests/documentation.rs`; the spawn refusal is held by
+`crates/deed-parser/tests/parsing.rs` and `crates/deed-cli/tests/conformance.rs`. The rest
+are structural claims about the type checker and the backend that do not have a single
+number to check against; they are read against the reasoning in `design/02-syntax.md`,
+`design/04-capabilities.md` and `design/01-principles.md`, which is where each one was
+first written down in full.

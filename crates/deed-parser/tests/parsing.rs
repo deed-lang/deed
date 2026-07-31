@@ -839,6 +839,74 @@ fn as_is_still_a_name() {
     parse_ok("module a\n\nfn f() -> Int {\n    let as = 1\n    as\n}\n");
 }
 
+// -- a detached spawn --------------------------------------------------------
+//
+// `spawn(f())` is what anybody arriving from Go, Rust, or Kotlin writes who
+// wants a background task, and the identifier `spawn` followed by `(` on the
+// same line is the pattern. Detached spawn is not in this language: a task is
+// tied to the block that started it, so there is no child running after the
+// parent exits.
+
+#[test]
+fn a_detached_spawn_says_there_is_no_such_construct() {
+    let (sources, parsed) =
+        parse_source("module a\n\nfn f() -> () {}\n\nfn g() -> () {\n    spawn(f())\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::NO_DETACHED_SPAWN]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("there is no detached spawn"), "{text}");
+    assert!(text.contains("tied to the block that started it"), "{text}");
+}
+
+/// The argument list is parsed and thrown away, so the statement after
+/// `spawn(...)` is still a statement. This is the whole reason for reading
+/// the arguments rather than reporting the first token and stopping.
+#[test]
+fn what_comes_after_a_spawn_still_parses() {
+    let (_, parsed) =
+        parse_source("module a\n\nfn f() -> () {}\n\nfn g() -> () {\n    spawn(f())\n    f()\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::NO_DETACHED_SPAWN]
+    );
+}
+
+/// A parent that would return while a child is still running cannot be
+/// written: there is no mechanism to start such a child. This test records
+/// that the pattern is explicitly refused rather than silently broken.
+#[test]
+fn a_parent_that_returns_before_its_child_is_refused() {
+    let (sources, parsed) = parse_source(
+        "module a\n\nfn child() -> () {}\n\nfn parent() -> () {\n    spawn(child())\n}\n",
+    );
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::NO_DETACHED_SPAWN]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(
+        text.contains("when concurrency arrives"),
+        "the message should point toward the structured alternative: {text}"
+    );
+}
+
+/// `spawn` stays an ordinary name everywhere the pattern does not apply: as a
+/// parameter, a binding, a function name, or alone without a call on the same
+/// line. Only `spawn(args)` at statement level on one line is refused.
+#[test]
+fn spawn_is_still_a_name_outside_the_pattern() {
+    parse_ok("module a\n\nfn spawn(n: Int) -> Int {\n    n\n}\n");
+    parse_ok("module a\n\nfn f(spawn: Int) -> Int {\n    spawn\n}\n");
+    // `spawn` on one line, call on the next line: two separate statements.
+    parse_ok(
+        "module a\n\nfn spawn() -> () {}\n\nfn g() -> () {\n    let spawn = 1\n    spawn\n}\n",
+    );
+}
+
 // -- where one statement stops ---------------------------------------------
 //
 // Statements are separated by nothing, so what ends one is the next token not
