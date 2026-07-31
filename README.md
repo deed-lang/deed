@@ -121,6 +121,13 @@ playground that edits and runs a whole program in that same shape.
 There is also a small [conformance suite](conformance/README.md) for checks that should hold
 across implementations.
 
+Every `.deed` file here was written by one person, which is the largest open
+question about this language and not one the compiler can answer.
+[benchmarks/README.md](benchmarks/README.md) is where that stops being a sentence:
+a set of tasks, each with tests it does not show the author, and a scorer that
+reports not only whether an answer compiles and passes but how much of its
+contract the checker could prove.
+
 User-visible language, diagnostics, library and tool changes are recorded in
 [CHANGELOG.md](CHANGELOG.md), including programs that used to compile and no longer do.
 

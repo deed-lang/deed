@@ -1,0 +1,12 @@
+module bench/audit_checks
+
+use bench/audit.{collected}
+
+test "gathers the entries in order" {
+    assert collected(["one", "two", "three"]) == "one, two, three"
+}
+
+test "one entry has no separator, and none has nothing" {
+    assert collected(["only"]) == "only"
+    assert collected([]) == ""
+}

@@ -1,0 +1,17 @@
+module bench/stock
+
+type InStock = Int where value > 0
+
+fn take_one(count: InStock) -> Int {
+    count - 1
+}
+
+fn restock(count: Int, delivered: Int) -> InStock
+  where
+    count > 0,
+    delivered >= 0,
+    count < 1000000000,
+    delivered < 1000000000,
+{
+    count + delivered
+}

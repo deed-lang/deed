@@ -1,0 +1,34 @@
+module bench/split_evenly_checks
+
+use bench/split_evenly.{split_evenly}
+
+// `0 - 1` stands for "it came back an error", which none of the shares below
+// can be, so a wrong answer and a refusal are told apart by the assertion
+// rather than by the shape of the match.
+fn share(amount: Int, people: Int) -> Int {
+    match split_evenly(amount, people) {
+        ok(each) => each,
+        err(_) => 0 - 1,
+    }
+}
+
+fn refusal(amount: Int, people: Int) -> String {
+    match split_evenly(amount, people) {
+        ok(_) => "it did not refuse",
+        err(why) => why,
+    }
+}
+
+test "shares it out" {
+    assert share(100, 4) == 25
+}
+
+test "truncates rather than rounding" {
+    assert share(10, 3) == 3
+}
+
+test "nobody to share with" {
+    assert share(100, 0) == 0 - 1
+    assert refusal(100, 0) == "there is nobody to share with"
+    assert refusal(100, 0 - 2) == "there is nobody to share with"
+}
