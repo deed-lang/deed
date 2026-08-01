@@ -3132,10 +3132,45 @@ impl<'a> Checker<'a> {
             Expr::With { handlers, body, .. } => {
                 for handler in handlers {
                     self.infer(handler);
+                    self.state_was_given(handler);
                 }
                 self.check_block(body)
             }
         }
+    }
+
+    /// A handler installed by name alone, with the state it declared left out.
+    ///
+    /// `with H { n: 0 }` is checked as a literal, so leaving a field out or
+    /// naming one that is not there is already `DEED4002`. `with H { .. }`
+    /// parses as the handler on its own followed by the block, the literal
+    /// check never ran, and the missing field waited for the interpreter.
+    /// Nothing about it needs waiting for: the state is declared here and
+    /// whether a value was written is a fact about the source. See #820.
+    fn state_was_given(&mut self, handler: &'a Expr) {
+        let Expr::Ident(ident) = handler else {
+            return;
+        };
+        let Some(def) = self.def_of(ident) else {
+            return;
+        };
+        if self.resolutions.def(def).kind != DefKind::Handler {
+            return;
+        }
+        let Some(Nominal::Handler { state }) = self.types.nominal(def) else {
+            return;
+        };
+        let state = state.clone();
+        let name = self.types.name_of(def).to_string();
+        let declared_here = self.resolutions.def(def).span;
+        self.check_literal_fields(
+            &state,
+            &[],
+            ident.span,
+            &name,
+            0,
+            Some((None, declared_here)),
+        );
     }
 
     /// Refuses a closure that names the handler state around it.

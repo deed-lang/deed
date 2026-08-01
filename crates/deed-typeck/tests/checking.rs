@@ -834,6 +834,49 @@ fn a_handler_literal_missing_state_says_which() {
 }
 
 #[test]
+fn a_handler_installed_by_name_alone_still_owes_its_state() {
+    // #820: the literal above is checked and leaving it out altogether was
+    // not. `with InMemory {` reads as the handler followed by the block, so
+    // nothing compared the state against anything and the interpreter was
+    // left to notice. A model wrote exactly this and got a clean check.
+    let (sources, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler InMemory implements Counter {{\n\
+         \x20 state count: Int\n\n\
+         \x20 fn set(to) -> () {{\n    count = to\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    count\n  }}\n\
+         }}\n\n\
+         test \"installing it\" {{\n\
+         \x20 with InMemory {{\n\
+         \x20   assert Counter.value() == 0\n\
+         \x20 }}\n\
+         }}\n"
+    ));
+    assert_eq!(codes_of(&checked.diagnostics), vec![codes::MISSING_FIELDS]);
+    assert!(rendered(&sources, &checked.diagnostics).contains("count"));
+}
+
+#[test]
+fn a_handler_with_no_state_is_installed_by_name_alone() {
+    // The other half of that rule: there is nothing to give, so naming the
+    // handler is the whole of installing it, and asking for a literal here
+    // would be asking for `{}`.
+    let (_, checked) = check_source(&format!(
+        "{COUNTER}\
+         handler Silent implements Counter {{\n\
+         \x20 fn set(to) -> () {{\n  }}\n\n\
+         \x20 fn value() -> Int {{\n    0\n  }}\n\
+         }}\n\n\
+         test \"installing it\" {{\n\
+         \x20 with Silent {{\n\
+         \x20   assert Counter.value() == 0\n\
+         \x20 }}\n\
+         }}\n"
+    ));
+    assert_eq!(codes_of(&checked.diagnostics), Vec::<&str>::new());
+}
+
+#[test]
 fn a_missing_field_on_an_imported_record_points_at_the_other_file() {
     let (_, checked) = check_source_in(
         "module a\n\nuse other.{Point}\n\nfn f() -> Point { Point { x: 1 } }\n",
