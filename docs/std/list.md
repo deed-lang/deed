@@ -226,9 +226,9 @@ uses
 #### `fold answers with what it started from when the walk does nothing`
 
 ```deed
-assert fold([1, 2, 3], 0, |sum: Int, n: Int| sum + n) == 6
+assert fold([1, 2, 3], 0, |total: Int, n: Int| total + n) == 6
 assert fold(["a", "b"], "", |joined: String, word: String| joined + word) == "ab"
-assert fold([], 7, |sum: Int, n: Int| sum + n) == 7
+assert fold([], 7, |total: Int, n: Int| total + n) == 7
 ```
 
 ## `fold_at`
@@ -267,9 +267,9 @@ uses
 #### `fold_at hands the index into the step`
 
 ```deed
-assert fold_at([10, 20, 30], 0, |sum: Int, index: Int, n: Int| sum + index) == 3
-assert fold_at([10, 20, 30], 0, |sum: Int, index: Int, n: Int| sum + n) == 60
-assert fold_at([], 7, |sum: Int, index: Int, n: Int| sum + index + n) == 7
+assert fold_at([10, 20, 30], 0, |total: Int, index: Int, n: Int| total + index) == 3
+assert fold_at([10, 20, 30], 0, |total: Int, index: Int, n: Int| total + n) == 60
+assert fold_at([], 7, |total: Int, index: Int, n: Int| total + index + n) == 7
 ```
 
 ## `any`
@@ -1128,8 +1128,8 @@ uses
 #### `scan keeps every partial fold, in the order they were made`
 
 ```deed
-assert scan([1, 2, 3], 0, |sum: Int, n: Int| sum + n) == [1, 3, 6]
-assert scan([], 7, |sum: Int, n: Int| sum + n) == []
+assert scan([1, 2, 3], 0, |total: Int, n: Int| total + n) == [1, 3, 6]
+assert scan([], 7, |total: Int, n: Int| total + n) == []
 assert scan(["a", "b"], "", |joined: String, word: String| joined + word) == ["a", "ab"]
 ```
 
@@ -1249,4 +1249,97 @@ assert sort([3, 1, 2], |a: Int, b: Int| a < b) == [1, 2, 3]
 assert sort([3, 1, 2], |a: Int, b: Int| a > b) == [3, 2, 1]
 assert sort([1], |a: Int, b: Int| a < b) == [1]
 assert sort([], |a: Int, b: Int| a < b) == []
+```
+
+## `sum`
+
+### Behavior and limits
+
+The one `fold` was written for.
+
+The comment above `fold` says a library without it stops working the moment
+somebody wants a sum, and then this file did not have the sum either. It is
+two lines and it saves a closure at every call, which is most of why anybody
+reaches for the name.
+
+`Int` rather than `T`, because addition is what is being asked for and this
+language has it on `Int` and on `String`, where the answer is `join`.
+
+### Signature
+
+```deed
+fn sum(numbers: List<Int>) -> Int
+```
+
+### Row variables
+
+`none`
+
+### Declared row
+
+`pure`
+
+### Contract
+
+```deed
+pure
+```
+
+### Examples from `std/list.deed`
+
+#### `sum adds the list up, and an empty one comes to zero`
+
+```deed
+assert sum([1, 2, 3]) == 6
+assert sum([0 - 4, 4]) == 0
+assert sum([7]) == 7
+assert sum([]) == 0
+```
+
+## `largest`
+
+### Behavior and limits
+
+The largest, by an order the caller passes.
+
+The same `before` `sort` takes, and for the same reason: `<` is refused on a
+type parameter (DEED4020) and a comparator is what this library uses instead
+of a bound. Passing the one that sorts a list gives back the one that sort
+would have put last.
+
+A `Result` because an empty list has no largest element, which is the answer
+`first` and `find` already give for having nothing to hand back.
+
+### Signature
+
+```deed
+fn largest<T, uses r>(items: List<T>, before: Fn(T, T) uses r -> Bool)
+    -> Result<T, String>
+```
+
+### Row variables
+
+`r`
+
+### Declared row
+
+`r`
+
+### Contract
+
+```deed
+uses
+    r,
+```
+
+### Examples from `std/list.deed`
+
+#### `largest reads the order it was handed, and says so about an empty list`
+
+```deed
+assert largest([3, 1, 2], |a: Int, b: Int| a < b) == ok(3)
+assert largest([3, 1, 2], |a: Int, b: Int| a > b) == ok(1)
+assert largest([7], |a: Int, b: Int| a < b) == ok(7)
+assert largest(["a", "c", "b"], |a: String, b: String| a < b) == ok("c")
+let nothing = largest([], |a: Int, b: Int| a < b)
 ```

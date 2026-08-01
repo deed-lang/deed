@@ -245,7 +245,7 @@ to live.
 
 That is also where the list library is. `std/list` has `map`, `map_at`, `filter`, `filter_at`,
 `fold`, `fold_at`, `any`, `all`, `count_where`, `filtered_with`, `first`, `last`, `reversed`,
-`prepend`, `find`, `take`, `drop`, `concat`, `flatten`, `partition`, `zip`, `enumerate`, `windows`, `chunks`, `intersperse`, `unzip`, `flat_map`, `scan`, `transpose`, `group_by` and `sort`. It was written long before there was anywhere to put it and sat under
+`prepend`, `find`, `take`, `drop`, `concat`, `flatten`, `partition`, `zip`, `enumerate`, `windows`, `chunks`, `intersperse`, `unzip`, `flat_map`, `scan`, `transpose`, `group_by`, `sort`, `sum` and `largest`. It was written long before there was anywhere to put it and sat under
 `examples/`, where its name said it lived in this repository and a program elsewhere had to
 copy it.
 
