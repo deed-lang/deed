@@ -536,6 +536,39 @@ fn two_names_from_two_shipped_modules_are_one_repair() {
     assert!(result.contains("use std/string.{to_upper}\n"), "{result}");
 }
 
+/// What it calls the repair, which is the half a reader sees before deciding.
+///
+/// One name is worth naming and several are not, the same split `imports.rs`
+/// makes going the other way.
+#[test]
+fn the_repair_names_the_one_import_it_is_writing() {
+    let one = "module a\n\nfn f(text: String) -> String {\n    to_upper(text)\n}\n";
+    let messages: Vec<String> = repairs(one)
+        .into_iter()
+        .map(|(message, _)| message)
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message == "import `to_upper`"),
+        "{messages:?}"
+    );
+
+    let several = "module a\n\nfn f(text: String, ns: List<Int>) -> String {\n    \
+                   to_upper(text)\n}\n\nfn g(ns: List<Int>) -> List<Int> {\n    \
+                   reversed(ns)\n}\n";
+    let messages: Vec<String> = repairs(several)
+        .into_iter()
+        .map(|(message, _)| message)
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message == "import them from the library that ships"),
+        "{messages:?}"
+    );
+}
+
 #[test]
 fn a_name_joins_the_import_the_file_already_has() {
     let source = "module a\n\nuse std/list.{reversed}\n\nfn f(ns: List<Int>) -> List<Int> {\n    \

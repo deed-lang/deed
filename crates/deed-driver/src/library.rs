@@ -30,6 +30,7 @@ use deed_diagnostics::{Applicability, Diagnostic, SourceMap, Span};
 use deed_lexer::Trivia;
 use deed_resolve::codes;
 
+use crate::imports::{line_end, line_start};
 use crate::shipped::{shipped_modules, shipped_source};
 
 /// Every name a shipped module declares, to the modules that declare it.
@@ -230,21 +231,5 @@ fn rewritten_block(
             let blank = if already_blank { "" } else { "\n" };
             Some((Span::new(after, after), format!("\n{replacement}{blank}")))
         }
-    }
-}
-
-/// The offset just past the newline that ends the line `offset` is on.
-fn line_end(source: &str, offset: u32) -> u32 {
-    match source[offset as usize..].find('\n') {
-        Some(index) => offset + index as u32 + 1,
-        None => source.len() as u32,
-    }
-}
-
-/// The start of the line `offset` is on.
-fn line_start(source: &str, offset: u32) -> u32 {
-    match source[..offset as usize].rfind('\n') {
-        Some(index) => index as u32 + 1,
-        None => 0,
     }
 }
