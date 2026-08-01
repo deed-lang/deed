@@ -454,6 +454,27 @@ fn asking_for_a_maximum_is_pointed_at_the_function_that_takes_an_order() {
     assert!(text.contains("`largest` from `std/list`"), "{text}");
 }
 
+/// The oldest of these arms, and nothing had read it.
+///
+/// A reader who writes `self` is not making a typo, they are expecting the
+/// thing they are working on to be in scope because a method would have put it
+/// there. The suggester would answer that with whatever short name was nearby.
+#[test]
+fn reaching_for_a_receiver_is_told_there_are_no_methods() {
+    for word in ["self", "this"] {
+        let source = format!("module a\n\nfn f(n: Int) -> Int {{ {word} }}\n");
+        let (sources, _, resolved) = resolve_source(&source);
+        let named = resolved
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains(&format!("cannot find `{word}`")))
+            .unwrap_or_else(|| panic!("`{word}` should not resolve"));
+
+        let text = render_human(&sources, named);
+        assert!(text.contains("there are no methods"), "{text}");
+    }
+}
+
 #[test]
 fn a_word_for_an_operator_is_answered_with_the_operator() {
     for (word, op) in [("and", "&&"), ("or", "||"), ("not", "!")] {
