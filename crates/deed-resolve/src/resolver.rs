@@ -1473,6 +1473,13 @@ fn name_from_elsewhere(name: &str) -> Option<Elsewhere> {
             "there are no methods, so a function takes the thing it works on as an argument \
              like anything else",
         ),
+        // The prelude has `length` and nothing else that reduces a list, which
+        // is the one shape a walk cannot be written around: `for` already
+        // carries an accumulator, so a total is a loop rather than a name.
+        "sum" | "max" | "min" | "product" | "average" | "reduce" => Elsewhere::Absent(
+            "a value folded out of a list is written as the walk that folds it, \
+             `for n in numbers with total = 0 { total + n }`, or with `fold` from `std/list`",
+        ),
         _ => return None,
     })
 }

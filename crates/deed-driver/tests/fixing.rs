@@ -507,6 +507,110 @@ fn trailing_space_after_an_import_goes_with_the_line() {
     assert_eq!(result, "module a\n\nfn f() -> Int {\n    1\n}\n");
 }
 
+// -- a name the compiler is already carrying -------------------------------
+//
+// The library ships inside the binary, so a file naming one of its functions
+// is one `use` line away rather than wrong. The resolver cannot see that: a
+// module set is resolved from what the file imports, and this file never asked
+// for the module.
+
+#[test]
+fn a_name_the_shipped_library_declares_is_imported_rather_than_left_unresolved() {
+    let source = "module a\n\nfn f(text: String) -> String {\n    to_upper(text)\n}\n";
+    assert_eq!(
+        fixed(source),
+        "module a\n\nuse std/string.{to_upper}\n\nfn f(text: String) -> String {\n    to_upper(text)\n}\n"
+    );
+}
+
+#[test]
+fn two_names_from_two_shipped_modules_are_one_repair() {
+    // Written separately these are two edits over the same block, and
+    // `fix::collect` drops overlapping edits, so a file with an obvious repair
+    // would be told there was nothing to do.
+    let source = "module a\n\nfn f(text: String, ns: List<Int>) -> String {\n    \
+                  to_upper(text)\n}\n\nfn g(ns: List<Int>) -> List<Int> {\n    \
+                  reversed(ns)\n}\n";
+    let result = fixed(source);
+    assert!(result.contains("use std/list.{reversed}\n"), "{result}");
+    assert!(result.contains("use std/string.{to_upper}\n"), "{result}");
+}
+
+#[test]
+fn a_name_joins_the_import_the_file_already_has() {
+    let source = "module a\n\nuse std/list.{reversed}\n\nfn f(ns: List<Int>) -> List<Int> {\n    \
+                  reversed(sort(ns))\n}\n";
+    let result = fixed(source);
+    assert!(
+        result.contains("use std/list.{reversed, sort}\n"),
+        "{result}"
+    );
+}
+
+#[test]
+fn what_it_writes_for_a_shipped_name_is_what_the_formatter_would_have() {
+    let source = "module a\n\nfn f(text: String) -> String {\n    to_upper(text)\n}\n";
+    let result = fixed(source);
+    // Unchanged source is already canonical, so without this the formatter is
+    // being asked about a repair that never happened.
+    assert_ne!(result, source, "nothing was written");
+
+    let mut sources = SourceMap::new();
+    let file = sources.add("fixed.deed", result.clone());
+    let formatted = deed_fmt::format(file, &result).expect("it should parse");
+    assert_eq!(formatted, result);
+}
+
+/// Several names ship twice, so this is a real case rather than a hypothetical
+/// one: `size` is in `std/map` and in `std/table`.
+///
+/// The sentence is still worth having. The repair is not, because a
+/// machine-applicable fix gets applied without asking and the reader is the
+/// one who knows which of the two they meant.
+#[test]
+fn a_name_two_shipped_modules_declare_is_described_and_not_repaired() {
+    let source = "module a\n\nfn f(t: Int) -> Int {\n    size(t)\n}\n";
+    assert_eq!(fixed(source), source, "it should not have picked one");
+
+    let notes: Vec<String> = diagnose(source)
+        .iter()
+        .flat_map(|diagnostic| diagnostic.notes.clone())
+        .collect();
+    let text = notes.join("\n");
+    assert!(
+        text.contains("`std/map`") && text.contains("`std/table`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_comment_among_the_imports_stops_the_import_being_written_too() {
+    let source = "module a\n\nuse std/list.{reversed}\n// why\nuse std/list.{sort}\n\n\
+                  fn f(ns: List<Int>) -> List<Int> {\n    reversed(sort(take(ns, 1)))\n}\n";
+    assert_eq!(fixed(source), source);
+}
+
+/// A name that is nowhere gets no import, because there is none to write.
+///
+/// The sentence it gets instead belongs to the resolver and is read there.
+/// What is worth holding here is that this half does not reach for a module:
+/// a fix that guessed one would be applied without asking.
+#[test]
+fn a_name_no_shipped_module_declares_gets_no_import() {
+    let source = "module a\n\nfn f(ns: List<Int>) -> Int {\n    max(ns)\n}\n";
+    assert_eq!(fixed(source), source);
+
+    let notes: Vec<String> = diagnose(source)
+        .iter()
+        .flat_map(|diagnostic| diagnostic.notes.clone())
+        .collect();
+    let text = notes.join("\n");
+    assert!(
+        !text.contains("ships with the compiler"),
+        "it claimed a module has it: {text}"
+    );
+}
+
 // -- what it declines to do ------------------------------------------------
 
 #[test]
