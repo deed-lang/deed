@@ -144,3 +144,16 @@ pub const WRONG_ARROW: &str = "DEED2016";
 /// function's `where` clause, so the names in it resolve and the four
 /// diagnostics this used to cost come down to this one.
 pub const PARAMETER_CONSTRAINT: &str = "DEED2017";
+
+/// `xs ++ ys` or `x :: xs`: an operator borrowed from a language that has one.
+///
+/// Both are doubled, and nothing in this grammar puts two `+` or two `:` in a
+/// row, so the shape can be read where it is written rather than left to fall
+/// apart. Left alone, `++` costs an expected expression and `::` costs an
+/// unread value and two more, none of which mention a list.
+///
+/// Two sentences under one code, because it is one mistake: this language
+/// builds lists by calling something. The sentence that changes names the
+/// call, `concat` for one and `prepend` for the other, and says the list goes
+/// first, which is the part that is easy to get backwards.
+pub const NO_LIST_OPERATOR: &str = "DEED2018";

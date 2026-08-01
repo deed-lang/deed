@@ -1835,6 +1835,15 @@ impl<'a> Parser<'a> {
             lhs = self.no_such_cast(lhs);
         }
 
+        // `xs ++ ys` and `x :: xs`, borrowed from languages where a list has
+        // operators. Doubled, both of them, and nothing in this grammar puts
+        // two of either in a row, so the shape is safe to read here.
+        if !self.continues_a_new_line() {
+            if let Some(borrowed) = self.borrowed_operator() {
+                lhs = self.no_such_list_operator(lhs, borrowed);
+            }
+        }
+
         while let Some((op, bp)) = binary_op(self.kind()) {
             if bp < min_bp || self.continues_a_new_line() {
                 break;
@@ -1895,6 +1904,58 @@ impl<'a> Parser<'a> {
             self.bump();
         }
 
+        let rhs = self.parse_unary();
+        Expr::Error(lhs.span().to(rhs.span()))
+    }
+
+    /// The doubled operator sitting here, if it is one this language has read
+    /// before: what was written, and the call that does it instead.
+    fn borrowed_operator(&self) -> Option<(&'static str, &'static str)> {
+        let doubled = |kind: &TokenKind| self.at(kind) && self.nth_kind(1) == kind;
+        if doubled(&TokenKind::Plus) {
+            return Some((
+                "++",
+                "`concat(left, right)` from `std/list` joins two lists",
+            ));
+        }
+        if doubled(&TokenKind::Colon) {
+            return Some((
+                "::",
+                "`prepend(items, front)` from `std/list` puts one value on the front, and the \
+                 list is the first argument because that is the order every `std/list` call \
+                 takes",
+            ));
+        }
+        None
+    }
+
+    /// Reports `xs ++ ys` or `x :: xs` and takes the other side with it.
+    ///
+    /// The right-hand side is read rather than left where it was, for the
+    /// reason the range has: an operator this language does not have, left
+    /// half-parsed, turns one line into an unread value and two more expected
+    /// expressions. What comes back is an error node, because there is no
+    /// operator to build, and the note says the call to write instead.
+    fn no_such_list_operator(&mut self, lhs: Expr, borrowed: (&str, &str)) -> Expr {
+        let (written, instead) = borrowed;
+        let span = self.span().to(self.nth(1).span);
+        self.emit(
+            Diagnostic::error(
+                codes::NO_LIST_OPERATOR,
+                self.file,
+                span,
+                format!("there is no `{written}` in this language"),
+            )
+            .with_primary_label("no such operator")
+            .with_note(instead)
+            .with_note(
+                "lists are built by calling something, so that what a line does is readable \
+                 without knowing which operators this language chose",
+            ),
+        );
+
+        self.bump();
+        self.bump();
         let rhs = self.parse_unary();
         Expr::Error(lhs.span().to(rhs.span()))
     }
