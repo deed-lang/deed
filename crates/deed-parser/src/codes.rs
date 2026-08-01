@@ -157,3 +157,16 @@ pub const PARAMETER_CONSTRAINT: &str = "DEED2017";
 /// call, `concat` for one and `prepend` for the other, and says the list goes
 /// first, which is the part that is easy to get backwards.
 pub const NO_LIST_OPERATOR: &str = "DEED2018";
+
+/// `state count: Int = 0`: a handler's state given its value in the handler.
+///
+/// The value comes from the `with` that installs the handler, which is what
+/// lets one handler be installed twice from two different starting points.
+/// Written on the declaration, it used to end the handler: the state stopped
+/// at the type, the `=` was not a member, and what came back was seven
+/// diagnostics, one of them saying the handler implements none of its
+/// operations and four about names in the operations the parser never reached.
+///
+/// Read and dropped, so the operations after it are still operations, and the
+/// note says both halves of the shape rather than which token was wanted.
+pub const STATE_INITIALISER: &str = "DEED2019";
