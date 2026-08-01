@@ -2051,3 +2051,58 @@ fn an_ensures_that_kept_its_arrow_is_still_one_diagnostic() {
     };
     assert_eq!(function.contract.ensures.len(), 1);
 }
+
+// -- a constraint written on the parameter ---------------------------------
+//
+// `type InStock = Int where value > 0` is legal, so `count: Int where ...` is
+// a fair guess. It used to end the parameter list at the `where` and cost four
+// diagnostics, two of them about a name that was right there in the signature.
+
+const CONSTRAINT: &str = "module a\n\n\
+                          fn restock(count: Int where count + delivered > 0, delivered: Int) \
+                          -> Int {\n    count + delivered\n}\n";
+
+#[test]
+fn a_constraint_on_a_parameter_says_where_constraints_go() {
+    let (sources, parsed) = parse_source(CONSTRAINT);
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::PARAMETER_CONSTRAINT]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(
+        text.contains("goes in the function's `where` clause"),
+        "{text}"
+    );
+}
+
+/// And it is read into the contract, so the rest of the signature is still the
+/// signature and the names in the constraint are in scope.
+#[test]
+fn the_constraint_lands_in_the_contract() {
+    let (_, parsed) = parse_source(CONSTRAINT);
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.sig.params.len(), 2, "both parameters");
+    assert!(function.sig.ret.is_some(), "the return type");
+    assert_eq!(function.contract.requires.len(), 1);
+}
+
+/// One written on the parameter and one written properly are both kept, in the
+/// order they appear.
+#[test]
+fn a_misplaced_constraint_does_not_displace_the_clause_that_was_written() {
+    let (_, parsed) = parse_source(
+        "module a\n\nfn f(n: Int where n > 0, m: Int) -> Int\n  where m > 0,\n{ n + m }\n",
+    );
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::PARAMETER_CONSTRAINT]
+    );
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.contract.requires.len(), 2);
+}

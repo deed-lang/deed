@@ -903,7 +903,10 @@ impl<'a> Parser<'a> {
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
             if self.at_kw(Keyword::Fn) {
-                if let Some(sig) = self.parse_fn_sig(TypesRequired::Yes) {
+                // An operation has no contract to move a stray constraint
+                // into, so the diagnostic is the whole answer here.
+                let mut constraints = Vec::new();
+                if let Some(sig) = self.parse_fn_sig(TypesRequired::Yes, &mut constraints) {
                     operations.push(sig);
                 }
             } else {
@@ -1051,7 +1054,11 @@ impl<'a> Parser<'a> {
 
     // -- functions ---------------------------------------------------------
 
-    fn parse_fn_sig(&mut self, types_required: TypesRequired) -> Option<FnSig> {
+    fn parse_fn_sig(
+        &mut self,
+        types_required: TypesRequired,
+        constraints: &mut Vec<Expr>,
+    ) -> Option<FnSig> {
         let start = self.bump().span;
         let name = self.expect_ident("a function signature")?;
 
@@ -1091,6 +1098,9 @@ impl<'a> Parser<'a> {
                 }
                 None
             };
+            if self.at_kw(Keyword::Where) {
+                constraints.push(self.parameter_constraint());
+            }
             params.push(Param {
                 span: param_name
                     .span
@@ -1127,9 +1137,39 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// A `where` sitting on a parameter: says where it goes, and reads it.
+    ///
+    /// The expression is returned rather than thrown away, so the caller can
+    /// put it in the contract and every name in it resolves. Throwing it away
+    /// would leave the same program with a missing rule in it.
+    fn parameter_constraint(&mut self) -> Expr {
+        let at = self.bump().span;
+        let condition = self.parse_expr_no_struct();
+        self.emit(
+            Diagnostic::error(
+                codes::PARAMETER_CONSTRAINT,
+                self.file,
+                at.to(condition.span()),
+                "a constraint on a parameter goes in the function's `where` clause",
+            )
+            .with_primary_label("this belongs after the signature")
+            .with_note(
+                "a `type` carries its refinement inline, and a function carries its constraints \
+                 after the return type, which is the one place every parameter is in scope at once",
+            ),
+        );
+        condition
+    }
+
     fn parse_fn(&mut self, types_required: TypesRequired) -> Option<FnDecl> {
-        let sig = self.parse_fn_sig(types_required)?;
-        let contract = self.parse_contract();
+        let mut constraints = Vec::new();
+        let sig = self.parse_fn_sig(types_required, &mut constraints)?;
+        let mut contract = self.parse_contract();
+        // A constraint written on a parameter belongs here, and this is where
+        // it goes. The diagnostic said so; putting it there is what makes the
+        // saying true, because the names in it only resolve once the whole
+        // signature is in scope.
+        contract.requires.splice(0..0, constraints);
         let body = self.parse_block();
         Some(FnDecl {
             span: sig.span.to(body.span),
