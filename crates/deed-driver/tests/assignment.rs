@@ -79,6 +79,48 @@ fn assigning_to_a_let_binding_is_rejected() {
     assert!(rendered(&sources, &checked.diagnostics).contains("is a binding"));
 }
 
+/// The shape somebody reaching for a mutable name inside a walk actually
+/// wanted, written with their own names.
+///
+/// A model given the total task wrote `let sum = 0` and then `sum = sum + n`
+/// inside a `for`, which is how almost every other language spells it, and
+/// spent five checks in a row being told the rule. The rule was right and it
+/// does not say what to write.
+#[test]
+fn assigning_inside_a_walk_is_shown_the_accumulator() {
+    let (sources, checked) = check(
+        "module a\n\nfn total(numbers: List<Int>) -> Int {\n  let sum = 0\n  \
+         for number in numbers {\n    sum = sum + number\n  }\n  sum\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        text.contains("for number in ... with sum = ... { ... }"),
+        "{text}"
+    );
+}
+
+/// And not outside one, where it would be pointing at a loop that is not there.
+#[test]
+fn assigning_outside_a_walk_is_not_shown_an_accumulator() {
+    let (sources, checked) = check("module a\n\nfn f() -> Int {\n  let x = 1\n  x = 2\n  x\n}\n");
+    assert!(
+        !rendered(&sources, &checked.diagnostics).contains("carries what it is building"),
+        "there is no walk here to carry anything"
+    );
+}
+
+/// The innermost one, since that is the walk the assignment is in.
+#[test]
+fn a_nested_walk_names_the_binder_that_is_actually_around_it() {
+    let (sources, checked) = check(
+        "module a\n\nfn f(rows: List<List<Int>>) -> Int {\n  let total = 0\n  \
+         for row in rows {\n    for cell in row {\n      total = total + cell\n    }\n  }\n  \
+         total\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(text.contains("for cell in ..."), "{text}");
+}
+
 #[test]
 fn the_value_is_checked_against_the_declared_state_type() {
     let (sources, checked) = check(&format!(

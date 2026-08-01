@@ -68,6 +68,7 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         facts: Facts::new(),
         refuting: false,
         in_closure: 0,
+        walking: Vec::new(),
     };
 
     checker.collect(module);
@@ -249,6 +250,14 @@ struct Checker<'a> {
     /// expression, so the count is only ever unwound by the closure that
     /// raised it.
     in_closure: usize,
+    /// The binder of each `for` whose body is being checked, innermost last.
+    ///
+    /// An assignment is refused wherever it appears, but inside a walk the
+    /// reader is almost always building something up, and this language
+    /// spells that with the walk's own accumulator rather than with a
+    /// mutable name. Knowing there is a walk around the assignment is what
+    /// lets the message say the shape instead of only the rule.
+    walking: Vec<String>,
 }
 
 impl<'a> Checker<'a> {
@@ -2656,19 +2665,29 @@ impl<'a> Checker<'a> {
                 let kind = self.resolutions.def(def).kind;
                 if kind != DefKind::State {
                     let declared = self.resolutions.def(def).span;
-                    self.emit(
-                        Diagnostic::error(
-                            codes::NOT_ASSIGNABLE,
-                            self.file,
-                            *span,
-                            format!("`{}` is a {}, not handler state", target.name, kind.describe()),
-                        )
-                        .with_primary_label("cannot be assigned to")
-                        .with_secondary(declared, "declared here")
-                        .with_note(
-                            "handler state is the only mutable thing in Deed, which is what lets an empty effect row mean a function cannot change anything",
-                        ),
+                    let mut diagnostic = Diagnostic::error(
+                        codes::NOT_ASSIGNABLE,
+                        self.file,
+                        *span,
+                        format!("`{}` is a {}, not handler state", target.name, kind.describe()),
+                    )
+                    .with_primary_label("cannot be assigned to")
+                    .with_secondary(declared, "declared here")
+                    .with_note(
+                        "handler state is the only mutable thing in Deed, which is what lets an empty effect row mean a function cannot change anything",
                     );
+                    // Inside a walk this is almost always somebody building a
+                    // value up, and the rule alone leaves them looking for a
+                    // mutable name they will not find.
+                    if let Some(item) = self.walking.last() {
+                        diagnostic = diagnostic.with_note(format!(
+                            "a `for` carries what it is building: \
+                             `for {item} in ... with {name} = ... {{ ... }}`, and the value \
+                             of the block is `{name}` on the next turn",
+                            name = target.name
+                        ));
+                    }
+                    self.emit(diagnostic);
                     return;
                 }
 
@@ -2935,7 +2954,9 @@ impl<'a> Checker<'a> {
                 "a `for` with no `with` produces `()` on every turn".to_string(),
             )),
         };
+        self.walking.push(binder.name.to_string());
         let produced = self.check_block_against(body, &carried, because);
+        self.walking.pop();
         self.facts = outer.join(&self.facts.clone());
 
         // What the accumulator ends up holding, rather than what it started
