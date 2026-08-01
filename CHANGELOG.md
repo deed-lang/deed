@@ -20,11 +20,7 @@ release notes.
 
 ### Diagnostics
 
-- The wasm artifact says why there is nothing to run. It answered "no `main`
-  found" where the CLI says "no `main` found, so there is nothing to run", and
-  twenty-two of the twenty-nine corpus examples are libraries, so that is the
-  answer a reader is most likely to meet first. One constant now, used by
-  both.
+- None yet.
 
 ### Standard library
 
@@ -37,6 +33,124 @@ release notes.
 ### Measurements
 
 - None yet.
+
+## 0.2.3 (2026-08-01)
+
+Most of this release was found by pointing three models at the compiler
+through `deed mcp` and reading what they were told. A diagnostic that names a
+mistake and then throws the rest of the file away costs the reader more than
+the mistake did, and nine of these turned out to be that. The one that is not
+about wording is the checker: it could not use a `where` clause about a sum,
+so it answered Guarded to a function whose precondition was word for word its
+own obligation, and the transcript shows a model taking that answer and
+writing a worse contract because of it.
+
+### Programs that used to compile and no longer do
+
+- Naming a generic prelude function instead of calling it is refused. Five
+  names work on any type, so there is no one signature to hand back, and they
+  were typed `Unknown` instead. `Unknown` absorbs, so `at == n` compared clean
+  against an `Int` and reached an interpreter that had no value for it either.
+  DEED4019 now, with a note saying to call it.
+- `with H { ... }` is checked where the handler is installed. The form with
+  braces was already checked as a literal; the form without one parsed as the
+  handler followed by a block, so missing state waited for the interpreter and
+  arrived as DEED6006 attached to whichever test ran first. Whether a value
+  was written is a fact about the source, so it is answered there.
+
+### Language
+
+- A `where` clause about two names added together is a fact the checker keeps.
+  It held a range per name and a range for the difference of a pair, because
+  `low < high` is about neither name on its own, and a sum had nowhere to go.
+  So `where count + delivered > 0` was read and dropped, and returning
+  `count + delivered` into a `value > 0` refinement came back Guarded while
+  the strictly stronger `count > 0, delivered > 0` proved. Two names and only
+  two: three is a shape this does not hold, and Guarded stays the answer.
+- A handler frame is given back when its block ends. Frames were never freed,
+  so a `with` inside a walk allocated once per turn and a program installing a
+  handler in an ordinary loop ran out of linear memory. A frame's lifetime is
+  exactly its `with` block, which is what `with` means rather than something
+  inferred, so they get their own region and the block rewinds it. Values do
+  not follow: a block's value outlives the block.
+
+### Diagnostics
+
+- A list written one to a line with no commas says so, once per comma, and
+  goes on reading the list. Match arms used to cost nine diagnostics and none
+  of them said comma; a `choice` said "insert `}`", which is an answer to a
+  question nobody asked and a repair that would have made it worse. DEED2015,
+  with three sentences, one each for arms, variants and fields.
+- `->` where `=>` belongs is named rather than expected. DEED2016, with the
+  right arrow offered and the arm read as an arm afterwards.
+- An `ensures` clause that names no outcome says so once. The condition
+  standing where `ok =>` belongs used to cost two diagnostics, the second one
+  about the `=>` that never came.
+- A constraint written on a parameter says which clause it belongs in, and the
+  expression is read into that clause rather than thrown away, so the names in
+  it resolve. DEED2017. A `type` carries its refinement inline, so writing the
+  same thing on a parameter is a fair guess.
+- `xs ++ ys` and `x :: xs` are named, with the call from `std/list` that does
+  it and which argument the list is. DEED2018.
+- A value on a handler's state says where the value goes instead of ending the
+  handler. DEED2019, and the operations after it are still operations.
+- `cannot find X in this scope` names the shipped module that declares the
+  name and writes the `use`. `fold` is in `std/list`, compiled into the binary
+  that just said it could not find it. A name two shipped modules declare gets
+  the sentence and no repair.
+- Assigning to a name inside a `for` says what to write. DEED4015 said handler
+  state is the only mutable thing here, which is right and does not say what
+  the shape is, so it now spells the accumulator out with the reader's own
+  names.
+- A handler's `state` declaration says what one looks like, both halves of it,
+  rather than naming the token it wanted.
+- An unhandled effect that reached `main` says it is the program's boundary.
+  `deed run` used to advise a `with` block, which would discharge the effect
+  and take the import back out of the component's world.
+- A guarded obligation says why it is guarded, including when nothing tried to
+  prove it, which used to be said by saying nothing at all.
+
+### Standard library
+
+- `std/date`, a calendar. `date_of` refuses a clock set before 1970 rather
+  than answering, `is_leap_year` and `days_in_month` for a caller walking a
+  year, and `text` as `YYYY-MM-DD`, ordered so that sorting the text sorts the
+  dates.
+- `std/ratio`, exact fractions, as a library rather than a number type.
+- `std/list` gains `sum` and `largest`. `fold`'s own comment said a library
+  with `map` and `filter` and no `fold` stops working the moment somebody
+  wants a sum, and then the file did not have the sum. `largest` takes the
+  comparator `sort` takes, so one function covers both ends.
+
+### Tools
+
+- `deed doc <path>...` writes the API page any shipped module gets, for any
+  module, as Markdown on standard output. The generator lived in a test file.
+- `deed mcp`, a server that hands an agent the compiler's six verbs. Its
+  handshake names every tool it offers and says why checking is not the last
+  step.
+- The wasm artifact runs the tests a contract generates, not only the ones a
+  person wrote, and reports each property with its seed. It also refuses a
+  module that does not check, and ends a test run with a summary line, because
+  silence already meant "well formed" on that surface and could not also mean
+  "nothing ran".
+- The wasm artifact says why there is nothing to run. It answered "no `main`
+  found" where the CLI says "no `main` found, so there is nothing to run", and
+  most of the corpus is libraries, so that is the answer a reader is most
+  likely to meet first. One constant now, used by both.
+
+### Measurements
+
+- The edit loop was re-measured. 82us a file and 42ms at 512 files, against
+  the 59us and 30.1ms the design document stated, so the trigger for writing
+  an incremental cache is about 1,200 files rather than about 1,700. The
+  conclusion does not change and a third of the claimed headroom was not
+  there. The arithmetic on top of the table is now a test.
+- Something other than the author writes Deed, and it is measured.
+  `benchmarks/` runs six tasks through a model twice, once with the compiler
+  and once without. Without it, three models answered 0 of 6 across every run.
+- The conformance suite has twenty-eight cases in three groups rather than
+  four, which was an example of a format rather than a suite.
 
 ## 0.2.2 (2026-07-31)
 
