@@ -155,7 +155,9 @@ fn a_non_fn_inside_an_effect_says_what_was_expected() {
 }
 
 /// A handler body admits `state` fields, `fn` implementations and a `finally`
-/// block. Anything else gets the same sentence with all three listed.
+/// block. Anything else gets the same sentence with all three listed, and the
+/// shape of a `state` declaration, because a model spent six turns guessing at
+/// it from a message that only named the token it wanted.
 ///
 /// Sentence: "expected `state`, `fn` or `finally` in a handler, found {found}"
 #[test]
@@ -163,7 +165,8 @@ fn a_non_state_fn_inside_a_handler_says_what_was_expected() {
     only_error("module a\n\nhandler H implements E {\n  x: Int\n}\n")
         .under(codes::UNEXPECTED_TOKEN)
         .says("expected `state`, `fn` or `finally` in a handler, found identifier `x`")
-        .says("expected `state`, `fn` or `finally`");
+        .says("expected `state`, `fn` or `finally`")
+        .says("`state count: Int` here, and `with H { count: 0 } { .. }` there");
 }
 
 /// A `test` declaration needs a string name. An integer, identifier or

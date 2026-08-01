@@ -978,7 +978,14 @@ impl<'a> Parser<'a> {
                         span,
                         format!("expected `state`, `fn` or `finally` in a handler, found {found}"),
                     )
-                    .with_primary_label("expected `state`, `fn` or `finally`"),
+                    .with_primary_label("expected `state`, `fn` or `finally`")
+                    // Saying which token was wanted is not saying what the
+                    // declaration looks like, and a handler is the one shape
+                    // there is nowhere else to learn from.
+                    .with_note(
+                        "state is declared like a field and given its value where the handler is installed: \
+                         `state count: Int` here, and `with H { count: 0 } { .. }` there",
+                    ),
                 );
                 break;
             }
