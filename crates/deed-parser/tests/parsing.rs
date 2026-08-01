@@ -2106,3 +2106,47 @@ fn a_misplaced_constraint_does_not_displace_the_clause_that_was_written() {
     };
     assert_eq!(function.contract.requires.len(), 2);
 }
+
+// -- operators borrowed from a language that has them -----------------------
+//
+// `xs ++ ys` and `x :: xs`. Left where they were, `++` was an expected
+// expression and `::` was an unread value and two more, and none of the five
+// mentioned a list.
+
+#[test]
+fn there_is_no_append_operator_and_the_message_names_the_call() {
+    let (sources, parsed) = parse_source(
+        "module a\n\nfn joined(l: List<String>, r: List<String>) -> List<String> {\n    \
+         l ++ r\n}\n",
+    );
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::NO_LIST_OPERATOR]);
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("no `++` in this language"), "{text}");
+    assert!(text.contains("`concat(left, right)`"), "{text}");
+}
+
+#[test]
+fn there_is_no_cons_operator_and_the_message_says_which_side_the_list_is() {
+    let (sources, parsed) = parse_source(
+        "module a\n\nfn added(items: List<String>, front: String) -> List<String> {\n    \
+         front :: items\n}\n",
+    );
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::NO_LIST_OPERATOR]);
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("no `::` in this language"), "{text}");
+    assert!(text.contains("`prepend(items, front)`"), "{text}");
+    assert!(text.contains("the list is the first argument"), "{text}");
+}
+
+/// One `+` is still addition and one `:` is still a field, which is the whole
+/// reason the shape is safe to read here.
+#[test]
+fn a_single_one_of_either_is_left_alone() {
+    let parsed = parse_ok(
+        "module a\n\nrecord Point {\n    x: Int,\n}\n\n\
+         fn f(p: Point) -> Point {\n    Point { x: p.x + 1 }\n}\n",
+    );
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}
