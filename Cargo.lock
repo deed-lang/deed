@@ -25,6 +25,7 @@ dependencies = [
  "deed-mcp",
  "deed-mir",
  "deed-typeck",
+ "deed-wasm",
 ]
 
 [[package]]
