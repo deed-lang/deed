@@ -369,6 +369,18 @@ pub struct Facts {
     /// orders keeps that answer where it belongs, on the order that could not
     /// be worked out, instead of on every lookup.
     differences: HashMap<(Term, Term), Range>,
+    /// The range of `a + b`, for the pair `(a, b)`.
+    ///
+    /// The other half a pair of names can be constrained by, and the one a
+    /// `where` clause reaches for most: `where count + delivered > 0` is a
+    /// fact about neither name and about their total. Without somewhere to put
+    /// it, the clause was read, found to be about no term this could be keyed
+    /// on, and dropped, so a function whose precondition was word for word its
+    /// own obligation came back Guarded.
+    ///
+    /// Both orders are stored, and unlike a difference they hold the same
+    /// range, because addition does not care which way round it is read.
+    totals: HashMap<(Term, Term), Range>,
     /// What `value` stands for, while a refinement predicate is being read.
     subject: Option<Subject>,
 }
@@ -476,6 +488,25 @@ impl Facts {
         self.known.retain(|term, _| !gone(term));
         self.differences
             .retain(|(left, right), _| !gone(left) && !gone(right));
+        self.totals
+            .retain(|(left, right), _| !gone(left) && !gone(right));
+    }
+
+    /// The range of `a + b`.
+    pub fn total(&self, a: Term, b: Term) -> Range {
+        self.totals.get(&(a, b)).copied().unwrap_or(Range::ANY)
+    }
+
+    /// Narrows what is known about `a + b`, keeping anything already known.
+    ///
+    /// No settling afterwards, unlike a difference. What a total says about
+    /// either name on its own needs a bound on the other, and where there is
+    /// one the interval reasoning already has it, so there is nothing here to
+    /// propagate and no reason to walk the whole table to find that out.
+    pub fn narrow_total(&mut self, a: Term, b: Term, range: Range) {
+        let narrowed = self.total(a, b).meet(range);
+        self.totals.insert((a, b), narrowed);
+        self.totals.insert((b, a), narrowed);
     }
 
     /// The range of `a - b`.
@@ -579,6 +610,7 @@ impl Facts {
         Facts {
             known: self.known.clone(),
             differences: self.differences.clone(),
+            totals: self.totals.clone(),
             subject: Some(subject),
         }
     }
@@ -601,9 +633,18 @@ impl Facts {
             }
         }
 
+        let mut totals = HashMap::new();
+        for ((a, b), range) in &self.totals {
+            let combined = range.join(other.total(*a, *b));
+            if !combined.is_any() {
+                totals.insert((*a, *b), combined);
+            }
+        }
+
         Facts {
             known,
             differences,
+            totals,
             subject: None,
         }
     }
@@ -1135,6 +1176,17 @@ impl Linear {
         Some((positive?, negative?))
     }
 
+    /// The pair this is the total of, when it is the total of a pair.
+    ///
+    /// The other shape two names come in. `count + delivered` is not a
+    /// difference and not one name counted twice, and it is what a `where`
+    /// clause about two parameters nearly always says.
+    fn total(&self) -> Option<(Term, Term)> {
+        let mut both = self.terms.iter().filter(|(_, count)| **count == 1);
+        let (first, second) = (both.next()?.0, both.next()?.0);
+        (self.terms.len() == 2).then_some((*first, *second))
+    }
+
     /// The one name in this, and how many of it, when there is exactly one.
     fn scaled_name(&self) -> Option<(Term, i64)> {
         match self.terms.iter().next() {
@@ -1299,9 +1351,10 @@ pub fn overflowing(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Span> {
 
 /// What the difference facts add to an expression, when it is a difference.
 ///
-/// Only worth the walk for a sum, since nothing else can reduce to one. The
-/// arithmetic here is checked rather than clamped: this is the value the
-/// program computes, and a subtraction that overflows does not have one.
+/// Or the total facts, when it is a total. Only worth the walk for a sum,
+/// since nothing else can reduce to either. The arithmetic here is checked
+/// rather than clamped: this is the value the program computes, and a
+/// subtraction that overflows does not have one.
 fn related(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Range> {
     if !matches!(
         expr,
@@ -1313,8 +1366,11 @@ fn related(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Option<Range> {
         return None;
     }
     let form = linear(expr, facts, env);
-    let (a, b) = form.pair()?;
-    Some(facts.difference(a, b).add(form.offset))
+    if let Some((a, b)) = form.pair() {
+        return Some(facts.difference(a, b).add(form.offset));
+    }
+    let (a, b) = form.total()?;
+    Some(facts.total(a, b).add(form.offset))
 }
 
 /// The range an expression can take, from the ranges of the names in it alone.
@@ -1569,20 +1625,23 @@ fn bound_from(op: BinaryOp, offset: Range) -> Option<Range> {
     })
 }
 
-/// Records what `left op right` says about the difference of two names.
+/// Records what `left op right` says about a pair of names.
 ///
 /// This is the half an interval cannot hold. `low < high` says nothing about
-/// either name on its own, and everything about `low - high`.
+/// either name on its own, and everything about `low - high`; `a + b > 0` says
+/// nothing about either and everything about their total.
 fn narrow_relation(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
     let form = linear(left, facts, env).add(linear(right, facts, env).negate());
-    let Some((a, b)) = form.pair() else {
-        return;
-    };
-    // The constraint is `(a - b) + offset op 0`.
+    // The constraint is `<the names> + offset op 0`, whichever shape the names
+    // came in.
     let Some(bound) = bound_from(op, form.offset) else {
         return;
     };
-    facts.narrow_difference(a, b, bound);
+    if let Some((a, b)) = form.pair() {
+        facts.narrow_difference(a, b, bound);
+    } else if let Some((a, b)) = form.total() {
+        facts.narrow_total(a, b, bound);
+    }
 }
 
 /// Narrows a name a comparison counts more than once, or not on its own.

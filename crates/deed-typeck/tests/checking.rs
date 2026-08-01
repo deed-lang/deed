@@ -1079,6 +1079,79 @@ fn an_unprovable_refinement_says_so_out_loud() {
     assert!(text.contains("Guarded"), "{text}");
 }
 
+// -- what is known about two names added together ---------------------------
+//
+// The half a difference could not hold. `where count + delivered > 0` is a
+// fact about neither name and about their total, and with nowhere to put it
+// the clause was read and dropped, so a function whose precondition was word
+// for word its own obligation came back Guarded.
+
+#[test]
+fn a_where_clause_about_a_sum_proves_the_refinement_it_states() {
+    let types = check_ok(
+        "module a\n\n\
+         type InStock = Int where value > 0\n\n\
+         fn restock(count: Int, delivered: Int) -> InStock\n  \
+         where\n    count + delivered > 0,\n{\n    count + delivered\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// Addition does not care which way round it is read, and neither does this.
+#[test]
+fn the_two_names_can_be_stated_in_either_order() {
+    let types = check_ok(
+        "module a\n\n\
+         type InStock = Int where value > 0\n\n\
+         fn restock(count: Int, delivered: Int) -> InStock\n  \
+         where\n    delivered + count > 0,\n{\n    count + delivered\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+}
+
+/// A guard above the value, not just a clause above the body. The same fact
+/// arriving by the other route.
+#[test]
+fn a_guard_on_a_sum_narrows_it_too() {
+    let types = check_ok(
+        "module a\n\n\
+         type InStock = Int where value > 0\n\n\
+         fn restock(count: Int, delivered: Int) -> Int {\n    \
+         if count + delivered > 0 {\n        \
+         let held: InStock = count + delivered\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// The bound is the one that was stated, not any bound at all. `> 0` does not
+/// settle `> 1`, and saying it did would be worse than saying nothing.
+#[test]
+fn the_total_only_settles_what_it_actually_bounds() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type Plenty = Int where value > 1\n\n\
+         fn restock(count: Int, delivered: Int) -> Plenty\n  \
+         where\n    count + delivered > 0,\n{\n    count + delivered\n}\n",
+    );
+    assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
+    assert_eq!(checked.types.obligations_at(Tier::Proven), 0);
+}
+
+/// Two names, and only two. Three is a shape this does not hold, and coming
+/// back Guarded is the honest answer rather than a wrong one.
+#[test]
+fn three_names_added_together_are_still_out_of_reach() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type InStock = Int where value > 0\n\n\
+         fn restock(count: Int, delivered: Int, spare: Int) -> InStock\n  \
+         where\n    count + delivered + spare > 0,\n{\n    count + delivered + spare\n}\n",
+    );
+    assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
+}
+
 #[test]
 fn a_refinement_widens_to_its_base_without_an_obligation() {
     let types = check_ok(
