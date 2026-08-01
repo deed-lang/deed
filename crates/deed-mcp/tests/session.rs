@@ -99,6 +99,62 @@ fn the_handshake_points_at_the_thing_an_agent_would_otherwise_miss() {
     }
 }
 
+/// Every tool, not just the one to start with.
+///
+/// The first version of this handshake named two of the six and described a
+/// workflow that ended at `deed_check`. An agent read it and did exactly that:
+/// sixty-five checks across six tasks and not one test run, on tasks scored on
+/// whether their tests pass. A tool nothing points at is a tool nobody calls,
+/// so a seventh arriving unmentioned should fail here rather than be found in
+/// a transcript later.
+#[test]
+fn the_handshake_names_every_tool_the_server_offers() {
+    let answers = session(&[hello(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#]);
+    let instructions = answers[0]
+        .at(&["result", "instructions"])
+        .and_then(Json::as_str)
+        .expect("initialize carries instructions");
+
+    let offered = answers[1]
+        .at(&["result", "tools"])
+        .and_then(Json::as_array)
+        .expect("tools/list answers with tools");
+    assert!(
+        !offered.is_empty(),
+        "nothing was offered, so nothing is held"
+    );
+
+    for tool in offered {
+        let name = tool
+            .get("name")
+            .and_then(Json::as_str)
+            .expect("a tool name");
+        assert!(
+            instructions.contains(name),
+            "`{name}` is offered and the handshake never mentions it: {instructions}"
+        );
+    }
+}
+
+/// And it says the thing the tiers are there to make sayable.
+///
+/// Checking settles the contract. Running the tests is a different question
+/// and this is the one language where that difference is the point, so an
+/// agent that is told to check and nothing else has been told half of it.
+#[test]
+fn the_handshake_says_checking_is_not_passing() {
+    let answers = session(&[hello()]);
+    let instructions = answers[0]
+        .at(&["result", "instructions"])
+        .and_then(Json::as_str)
+        .expect("initialize carries instructions");
+
+    assert!(
+        instructions.contains("a program that checks is not a program that works"),
+        "{instructions}"
+    );
+}
+
 /// A notification has no id, and the protocol says a server answers nothing.
 ///
 /// A client that got an answer to one would be reading it as the answer to

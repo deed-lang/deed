@@ -30,6 +30,16 @@ existing anywhere.
 | `deed_fix` | `source` | The program with every machine-applicable repair applied, and how many went in. |
 | `deed_explain` | `code` | The page for one diagnostic code, like `DEED4025`. |
 
+The order matters, and the server says so in its handshake because an agent that is not
+told picks one. `deed_check`, then `deed_fix` for the repairs the compiler is sure about,
+then `deed_test`, then `deed_run`. Skipping the third step is the easy mistake: the first
+model to be pointed at this server made sixty-five checks across six tasks and never ran a
+test, on tasks that were scored on whether their tests pass.
+
+Checking is not passing. That is not a caveat, it is the distinction the whole language is
+arranged around: the check settles what the contract can settle, and `deed_test` runs what
+is left, which is the `test` blocks and the properties generated from the contracts.
+
 Every tool takes a whole module, because that is the unit this language has.
 [`design/refusals.md`](../design/refusals.md) says why there is no REPL, and the same
 reasoning applies: there is no expression to evaluate on its own.
