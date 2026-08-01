@@ -1930,3 +1930,19 @@ fn the_comma_after_a_variant_with_fields_goes_after_the_fields() {
     let text = render_human(&sources, &parsed.diagnostics[0]);
     assert!(text.contains("Circle { radius: Int }"), "{text}");
 }
+
+/// The last one goes without, in both, and the closing brace on its own line
+/// is not the next item.
+///
+/// The half that says this is a repair rather than a new rule: every
+/// declaration in this repository is written without the trailing comma
+/// somewhere, and a check that asked for one would be asking the corpus to
+/// change.
+#[test]
+fn the_last_item_of_a_declaration_needs_no_comma() {
+    let (_, parsed) = parse_source(
+        "module a\n\nchoice Grade {\n    Low,\n    High\n}\n\n\
+         record Point {\n    x: Int,\n    y: Int\n}\n",
+    );
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}
