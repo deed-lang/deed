@@ -59,6 +59,44 @@ fn every_task_tests_the_module_the_prompt_asks_for() {
     }
 }
 
+/// Every task asks for a module and nothing else, and the README says what
+/// that costs.
+///
+/// The rule itself is deliberate: the answer is judged by tests it never saw,
+/// so it cannot pass by writing tests it already satisfies. The cost is that
+/// an answer with no tests and no `main` in it gives three of the six tools
+/// `deed mcp` offers nothing to do, and a transcript that never calls them is
+/// therefore not evidence about them.
+///
+/// I read one as evidence anyway and filed #833 off it. A task that asks for
+/// tests would make that reading right and this paragraph wrong, so the two
+/// are held together here.
+#[test]
+fn the_readme_says_what_asking_for_no_tests_costs() {
+    for task in bench::tasks() {
+        let prompt = fs::read_to_string(bench::prompt(&task)).expect("the prompt is readable");
+        assert!(
+            prompt.contains("no tests"),
+            "{task}'s prompt asks for tests, so the README's paragraph about \
+             the tools that cannot be reached is now wrong"
+        );
+    }
+
+    let readme = fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../benchmarks/README.md")
+            .canonicalize()
+            .expect("the benchmarks README is there"),
+    )
+    .expect("the README is readable");
+    for tool in ["deed_test", "deed_run", "deed_fmt"] {
+        assert!(
+            readme.contains(tool),
+            "the README never says a task cannot reach `{tool}`"
+        );
+    }
+}
+
 /// The reference is one answer that works, so it should score full marks.
 ///
 /// This is the harness testing itself: a scorer that cannot pass a known good
