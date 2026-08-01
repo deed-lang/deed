@@ -2034,3 +2034,20 @@ fn the_condition_of_an_outcomeless_ensures_is_still_read() {
         Expr::Binary { .. }
     ));
 }
+
+/// The third shape: no outcome but the `=>` still there. The word that was
+/// meant to be the outcome is missing rather than wrong, so there is nothing
+/// to step over, and stepping anyway would eat the arrow and cost a second
+/// diagnostic about the arrow that is sitting right there.
+#[test]
+fn an_ensures_that_kept_its_arrow_is_still_one_diagnostic() {
+    let (_, parsed) = parse_source("module a\n\nfn f() -> Int\n  ensures\n    => true,\n{ 0 }\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::INVALID_ENSURES_OUTCOME]
+    );
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.contract.ensures.len(), 1);
+}
