@@ -247,6 +247,102 @@ fn wasm_run(source: &str) -> Run {
     }
 }
 
+// -- checking, formatting and repairing -------------------------------------
+
+/// The codes a surface reported, in source order, and the tier of every
+/// obligation it settled.
+///
+/// The codes and the tiers rather than the whole rendering: one side writes
+/// carets and the other writes JSON, and what has to agree is what the
+/// compiler concluded.
+#[derive(Debug, PartialEq, Eq)]
+struct Checked {
+    codes: Vec<String>,
+    tiers: Vec<String>,
+}
+
+fn cli_checked(source: &str) -> Checked {
+    let scratch = Scratch::new("check");
+    let path = scratch.write(source);
+    let output = Command::new(DEED)
+        .args(["check", "--format", "json", "--obligations"])
+        .arg(&path)
+        .output()
+        .expect("the binary should run");
+    from_json(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn wasm_checked(source: &str) -> Checked {
+    from_json(&deed_wasm::check_source(source))
+}
+
+fn from_json(json: &str) -> Checked {
+    let mut codes = Vec::new();
+    let mut tiers = Vec::new();
+    for line in json.lines() {
+        if line.contains("\"kind\":\"diagnostic\"") {
+            codes.push(field(line, "code").expect("a diagnostic carries its code"));
+        } else if line.contains("\"kind\":\"obligation\"") {
+            tiers.push(field(line, "tier").expect("an obligation carries its tier"));
+        }
+    }
+    tiers.sort();
+    Checked { codes, tiers }
+}
+
+/// What formatting a file came to.
+#[derive(Debug, PartialEq, Eq)]
+enum Formatted {
+    /// There is no tree, so there is no layout to pick.
+    Refused,
+    Text(String),
+}
+
+fn cli_formatted(source: &str) -> Formatted {
+    let scratch = Scratch::new("fmt");
+    let path = scratch.write(source);
+    let output = Command::new(DEED)
+        .arg("fmt")
+        .arg(&path)
+        .output()
+        .expect("the binary should run");
+    if !output.status.success() {
+        return Formatted::Refused;
+    }
+    Formatted::Text(std::fs::read_to_string(&path).expect("the file is still there"))
+}
+
+fn wasm_formatted(source: &str) -> Formatted {
+    let json = deed_wasm::fmt_source(source);
+    match json.contains("\"kind\":\"formatted\"") {
+        // The text arrives as a JSON string, so the line breaks in it are
+        // escaped and have to come back before it is the same file.
+        true => Formatted::Text(
+            field(&json, "text")
+                .expect("a formatted line carries text")
+                .replace("\\n", "\n")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\"),
+        ),
+        false => Formatted::Refused,
+    }
+}
+
+fn cli_fixed(source: &str) -> String {
+    let scratch = Scratch::new("fix");
+    let path = scratch.write(source);
+    Command::new(DEED)
+        .arg("fix")
+        .arg(&path)
+        .output()
+        .expect("the binary should run");
+    std::fs::read_to_string(&path).expect("the file is still there")
+}
+
+fn wasm_fixed(source: &str) -> String {
+    deed_driver::fix::fix(source, deed_wasm::diagnostics_of).source
+}
+
 // -- the cases -------------------------------------------------------------
 
 fn agree_on_tests(source: &str, expected: Tested) {
@@ -368,4 +464,79 @@ fn a_contract_that_refuses_at_run_time_fails_on_both() {
             ok: false,
         },
     );
+}
+
+// -- the other three verbs -------------------------------------------------
+
+#[test]
+fn a_clean_program_is_clean_on_both() {
+    let source = "module main\n\nfn f(n: Int) -> Int {\n    n + 1\n}\n";
+    assert_eq!(cli_checked(source), wasm_checked(source));
+    assert_eq!(
+        cli_checked(source),
+        Checked {
+            codes: Vec::new(),
+            tiers: Vec::new()
+        }
+    );
+}
+
+#[test]
+fn the_same_mistakes_come_back_in_the_same_order_on_both() {
+    let source = "module main\n\nfn f() -> Int {\n    nonesuch\n}\n\n\
+                  fn g() -> Int {\n    alsonot\n}\n";
+    let from_cli = cli_checked(source);
+    assert_eq!(from_cli, wasm_checked(source));
+    assert_eq!(from_cli.codes, vec!["DEED3001", "DEED3001"]);
+}
+
+/// The tier is the answer this compiler exists to give, so a surface that
+/// reported a different one would be a different compiler.
+#[test]
+fn an_obligation_lands_in_the_same_tier_on_both() {
+    let source = "module main\n\ntype Positive = Int where value > 0\n\n\
+                  fn keep(n: Int) -> Positive {\n    n\n}\n";
+    let from_cli = cli_checked(source);
+    assert_eq!(from_cli, wasm_checked(source));
+    assert_eq!(from_cli.tiers, vec!["guarded"]);
+}
+
+#[test]
+fn a_badly_laid_out_program_comes_back_the_same_on_both() {
+    let source = "module main\n\n\n\nfn  f( n : Int )->Int{\n  n+1\n}\n";
+    let from_cli = cli_formatted(source);
+    assert_eq!(from_cli, wasm_formatted(source));
+    assert_eq!(
+        from_cli,
+        Formatted::Text("module main\n\nfn f(n: Int) -> Int {\n    n + 1\n}\n".to_string())
+    );
+}
+
+/// A file with no tree has no layout to pick, and both of them say so by
+/// declining rather than by guessing at one.
+#[test]
+fn a_program_that_does_not_parse_is_refused_by_both() {
+    let source = "module main\n\nfn f( -> Int {\n";
+    assert_eq!(cli_formatted(source), wasm_formatted(source));
+    assert_eq!(cli_formatted(source), Formatted::Refused);
+}
+
+/// `deed fix` and `deed_fix` apply the same repairs or one of them is
+/// rewriting somebody's file differently from the tool they read about.
+#[test]
+fn the_same_repairs_go_in_on_both() {
+    let source = "module main\n\nfn f(text: String) -> String {\n    to_upper(text)\n}\n";
+    let from_cli = cli_fixed(source);
+    assert_eq!(from_cli, wasm_fixed(source));
+    assert!(
+        from_cli.contains("use std/string.{to_upper}\n"),
+        "{from_cli}"
+    );
+}
+
+#[test]
+fn a_file_with_nothing_to_repair_is_left_alone_by_both() {
+    let source = "module main\n\nfn f(n: Int) -> Int {\n    n + 1\n}\n";
+    assert_eq!(cli_fixed(source), wasm_fixed(source));
+    assert_eq!(cli_fixed(source), source);
 }
