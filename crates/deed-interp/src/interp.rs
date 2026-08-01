@@ -501,6 +501,18 @@ struct Promise {
     allowed: Vec<(Origin, Option<String>)>,
 }
 
+impl Promise {
+    /// Whether this row admits performing one operation.
+    ///
+    /// An entry naming the whole effect admits every operation on it, which is
+    /// what `uses Log` means next to `uses Log.note`.
+    fn covers(&self, effect: &Origin, operation: &str) -> bool {
+        self.allowed.iter().any(|(declared, op)| {
+            declared == effect && op.as_deref().is_none_or(|name| name == operation)
+        })
+    }
+}
+
 /// What every call to one function needs before its body can run.
 ///
 /// All of it is a property of the declaration rather than of the call, and it
@@ -2192,13 +2204,14 @@ impl<'a> Interp<'a> {
     /// the question is what the program admits to at its boundary, and that is
     /// a property of one declaration. A run with no entry point, which is what
     /// running a test is, answers no.
+    ///
+    /// The same predicate [`Interp::check_row`] holds every active call to,
+    /// rather than a second copy of it. Two copies of "does this row admit
+    /// this" would be two chances to disagree about a row.
     fn reaches_the_boundary(&self, effect: &Origin, operation: &str) -> bool {
-        let Some(entry) = &self.entry else {
-            return false;
-        };
-        entry.allowed.iter().any(|(declared, op)| {
-            declared == effect && op.as_deref().is_none_or(|name| name == operation)
-        })
+        self.entry
+            .as_ref()
+            .is_some_and(|entry| entry.covers(effect, operation))
     }
 
     /// The row a declaration wrote down, when it says something a call can be
@@ -2259,13 +2272,9 @@ impl<'a> Interp<'a> {
 
             if frame.handled <= barrier
                 && let Some(promise) = &frame.promise
+                && !promise.covers(effect, operation)
             {
-                let covered = promise.allowed.iter().any(|(declared, op)| {
-                    declared == effect && op.as_deref().is_none_or(|name| name == operation)
-                });
-                if !covered {
-                    return Some(promise.name.clone());
-                }
+                return Some(promise.name.clone());
             }
 
             // A handler operation. What it performs belongs to the `with` that
@@ -3099,11 +3108,45 @@ fn collect_olds<'a>(expr: &'a Expr, out: &mut Vec<(Span, &'a Expr)>) {
 
 #[cfg(test)]
 mod tests {
-    use super::Interp;
+    use super::{Interp, Promise};
     use crate::{DeclaredRows, Guards, Program};
     use deed_ast::Item;
     use deed_diagnostics::SourceMap;
     use deed_resolve::Universe;
+
+    /// Both halves of what a row entry admits.
+    ///
+    /// Read here rather than through a program, because the two ways it can
+    /// say no cannot both be reached from a file the checker accepts: a row
+    /// that does not cover what the body performs is refused long before
+    /// anything runs. The predicate answers `check_row`, which is the runtime
+    /// invariant that found five escaped effects in #131, so a version of it
+    /// that took any operation with the right name under the wrong effect
+    /// would be that invariant quietly agreeing with anything.
+    #[test]
+    fn a_row_entry_admits_its_own_effect_and_no_other() {
+        let log = (std::rc::Rc::from("a"), "Log".to_string());
+        let other = (std::rc::Rc::from("a"), "Ledger".to_string());
+
+        let one = Promise {
+            name: "f".to_string(),
+            allowed: vec![(log.clone(), Some("note".to_string()))],
+        };
+        assert!(one.covers(&log, "note"));
+        assert!(!one.covers(&log, "other"), "a different operation");
+        assert!(
+            !one.covers(&other, "note"),
+            "the same operation name under another effect"
+        );
+
+        let whole = Promise {
+            name: "f".to_string(),
+            allowed: vec![(log.clone(), None)],
+        };
+        assert!(whole.covers(&log, "note"), "`uses Log` admits every one");
+        assert!(whole.covers(&log, "anything"));
+        assert!(!whole.covers(&other, "note"));
+    }
 
     /// Runs the first `test` block and reads something off the interpreter
     /// that ran it, which is the only way to see a table nothing outside the
