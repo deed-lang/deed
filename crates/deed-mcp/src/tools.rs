@@ -40,12 +40,15 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "deed_test",
-        description: "Run every `test` block in a Deed program. Writes one JSON object a line \
-                      with the test's name and whether it passed, and the failing diagnostic \
-                      when it did not, then a `summary` line counting them, so a program with no \
-                      tests in it says so rather than answering with nothing. Refuses without \
-                      running when the program does not check: ask `deed_check` for what is \
-                      wrong with it.",
+        description: "Run a Deed program's tests: every `test` block in it, and every property \
+                      its contracts generate. Writes one JSON object a line with the name and \
+                      whether it passed, and the failing diagnostic when it did not, then a \
+                      `summary` line counting them, so a program with no tests in it says so \
+                      rather than answering with nothing. A `property` line is one nobody wrote: \
+                      the checker generated inputs from a `where` clause and held the function \
+                      to its `ensures`, and the seed is on the line so the same run can be asked \
+                      for again. Refuses without running when the program does not check: ask \
+                      `deed_check` for what is wrong with it.",
         argument: ("source", "The whole text of one Deed module."),
     },
     Tool {

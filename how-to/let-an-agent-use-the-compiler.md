@@ -24,7 +24,7 @@ existing anywhere.
 | Tool | Argument | What comes back |
 | --- | --- | --- |
 | `deed_check` | `source` | One JSON object a line: `diagnostic` for anything wrong, `obligation` for every contract clause the checker looked at. Silence means the program is well formed. |
-| `deed_test` | `source` | One line per `test` block, with the failing diagnostic when one failed, then a `summary` line counting them. |
+| `deed_test` | `source` | One line per `test` block and one per property a contract generates, with the failing diagnostic when one failed, then a `summary` line counting them. |
 | `deed_run` | `source` | The lines `main` printed, then whether it finished. |
 | `deed_fmt` | `source` | The one layout the formatter chooses, or the parse diagnostics. |
 | `deed_fix` | `source` | The program with every machine-applicable repair applied, and how many went in. |
@@ -80,6 +80,46 @@ They could run it. The interpreter would get partway in and complain about whate
 first, which is a real sentence about the wrong thing: an agent reading it goes looking for a
 bug in the code it was executing, when the answer was two lines up in `deed_check`. The
 command line has refused this for the same reason since it had a `test` subcommand.
+
+## The test you did not write
+
+`deed_test` runs two kinds of thing. The `test` blocks in the file, and one property per
+function whose contract can be exercised: the checker generates inputs that satisfy the
+`where` clause and holds the function to its `ensures`.
+
+The second kind is the one worth waiting for. This checks cleanly and passes its written
+test:
+
+Playground: [open](https://deed-lang.github.io/play/)
+
+```deed agent-property-example
+module guide
+
+fn twice(n: Int) -> Int
+  where
+    n > 0,
+  ensures
+    ok  => result > n,
+{
+    n + n
+}
+
+test "twice doubles" {
+    assert twice(3) == 6
+}
+```
+
+and fails its property, because `n + n` overflows near the top of the range and `Int` does
+not wrap, so the `ensures` is not true for every `n > 0`. Nobody wrote that test and nobody
+had to.
+
+```json
+{"kind":"property","function":"twice","cases":9,"seed":"0x5eed1234abcd0001","passed":false,
+ "diagnostic":{"code":"DEED6007", ...}}
+```
+
+The seed is on the line because a property test you cannot reproduce is a rumour. The
+diagnostic names the input it failed on.
 
 ## What it may not do
 

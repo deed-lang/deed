@@ -45,7 +45,7 @@ use deed_ast::Item;
 use deed_diagnostics::{Diagnostic, SourceMap, json_string, render_json};
 use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
 use deed_fmt::format as format_source;
-use deed_interp::{Program, run_main, run_tests};
+use deed_interp::{Program, PropertyConfig, run_main, run_properties, run_tests};
 use deed_lexer::{TokenKind, TriviaKind};
 
 thread_local! {
@@ -222,11 +222,20 @@ pub fn unsupported_capabilities(checked: &Checked) -> Vec<String> {
         .collect()
 }
 
-/// Runs every `test` block in the page's file.
+/// Runs every `test` block in the page's file, and every property its
+/// contracts generate.
 ///
 /// No capability decision applies here: a `test` block takes no parameters,
 /// so there is no way for one to hold a capability at all, the same reason
 /// `deed test` never asks for a directory to run one in.
+///
+/// Both kinds, because `deed test` runs both and a surface that ran one of
+/// them would be answering a narrower question under the same name. A
+/// property is on its own line kind rather than mixed in with the written
+/// tests: one of them is something a person wrote and the other is generated
+/// from a contract, and nobody should have to work out where a failing test
+/// they never wrote came from. The default configuration's seed is fixed and
+/// reported, so this stays as reproducible here as it is from a terminal.
 ///
 /// The summary line is always written, including when nothing ran. Silence
 /// already means "well formed" on this surface, so letting it also mean
@@ -271,6 +280,35 @@ pub fn test_source(source: &str) -> String {
             }
         }
     }
+
+    for outcome in run_properties(
+        &program,
+        subject.file,
+        &subject.module,
+        &subject.resolutions,
+        PropertyConfig::default(),
+    ) {
+        let head = format!(
+            "\"kind\":\"property\",\"function\":{},\"cases\":{},\"seed\":\"{:#018x}\"",
+            json_string(&outcome.function),
+            outcome.cases,
+            outcome.seed
+        );
+        match outcome.failure {
+            None => {
+                passed += 1;
+                out.push_str(&format!("{{{head},\"passed\":true}}\n"));
+            }
+            Some(failure) => {
+                failed += 1;
+                out.push_str(&format!(
+                    "{{{head},\"passed\":false,\"diagnostic\":{}}}\n",
+                    render_json(&sources, &failure)
+                ));
+            }
+        }
+    }
+
     out.push_str(&format!(
         "{{\"kind\":\"summary\",\"passed\":{passed},\"failed\":{failed}}}\n"
     ));
@@ -489,8 +527,10 @@ pub unsafe extern "C" fn deed_check(ptr: *const u8, len: usize) {
 
 /// The `test` entry point: same input shape as [`deed_check`], and leaves
 /// one JSON object a line at [`deed_result_ptr`]/[`deed_result_len`], one per
-/// `test` block: `{"kind":"test","name":...,"passed":bool}`, with a
-/// `"diagnostic"` key added when it failed, and then one
+/// `test` block: `{"kind":"test","name":...,"passed":bool}`, then one
+/// `{"kind":"property","function":...,"cases":N,"seed":...,"passed":bool}`
+/// per property a contract generates, with a `"diagnostic"` key added to
+/// either when it failed, and then one
 /// `{"kind":"summary","passed":N,"failed":M}` line. A file that does not
 /// check answers with one `{"kind":"refused",...}` line instead, and nothing
 /// runs.
@@ -901,6 +941,58 @@ mod tests {
              fn main() -> Positive {\n    keep(1)\n}\n",
         );
         assert_eq!(json, "{\"kind\":\"result\",\"ok\":true}\n");
+    }
+
+    /// The contract's own test, which nobody wrote and which is the one that
+    /// finds this.
+    ///
+    /// `twice` looks right and passes the test written under it. `deed test`
+    /// reports it as failing, because `n + n` overflows near the top of the
+    /// range and `ensures` claims a result for every `n > 0`. This surface
+    /// used to run only the written test and answer that the program was
+    /// fine.
+    #[test]
+    fn a_property_a_contract_generates_is_run_and_can_disagree_with_the_written_test() {
+        let json = test_source(
+            "module main\n\n\
+             fn twice(n: Int) -> Int\n  where\n    n > 0,\n  ensures\n    ok  => result > n,\n{\n    n + n\n}\n\n\
+             test \"twice doubles\" {\n    assert twice(3) == 6\n}\n",
+        );
+        assert!(
+            json.contains("\"kind\":\"test\",\"name\":\"twice doubles\",\"passed\":true"),
+            "the written test still passes, which is the point: {json}"
+        );
+        assert!(
+            json.contains("\"kind\":\"property\",\"function\":\"twice\"")
+                && json.contains("\"passed\":false"),
+            "the generated property should fail: {json}"
+        );
+        assert!(
+            json.contains("{\"kind\":\"summary\",\"passed\":1,\"failed\":1}"),
+            "and it should be counted: {json}"
+        );
+    }
+
+    /// A property is reproducible or it is a rumour, and a reader who cannot
+    /// see the seed cannot ask for the same run twice.
+    #[test]
+    fn a_property_reports_the_seed_it_ran_under() {
+        let json = test_source(
+            "module main\n\n\
+             fn keep(n: Int) -> Int\n  ensures\n    ok  => result == n,\n{\n    n\n}\n",
+        );
+        assert!(
+            json.contains("\"kind\":\"property\",\"function\":\"keep\"")
+                && json.contains("\"passed\":true"),
+            "a contract that holds should pass: {json}"
+        );
+        assert!(
+            json.contains(&format!(
+                "\"seed\":\"{:#018x}\"",
+                PropertyConfig::default().seed
+            )),
+            "the seed should be on the line: {json}"
+        );
     }
 
     #[test]
