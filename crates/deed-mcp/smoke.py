@@ -91,7 +91,8 @@ async def main(binary: str) -> int:
             print(f"{server.name} {server.version}, {version}")
 
             assert info.instructions, "an agent arrives with no idea what Deed is"
-            assert "deed_check" in info.instructions, "the instructions do not name the tool to start with"
+            for name in WANTED:
+                assert name in info.instructions, f"the handshake never mentions {name}"
 
             listed = await session.list_tools()
             offered = {t.name: t for t in listed.tools}

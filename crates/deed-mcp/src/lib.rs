@@ -162,11 +162,18 @@ impl Server {
                 Json::string(
                     "Deed is a contract-first language: a signature carries the \
                      whole contract and the compiler checks the body against it. \
-                     Call `deed_check` on a program before trusting it, and read \
-                     the `obligation` lines as well as the `diagnostic` ones: an \
+                     Work in this order. `deed_check` first, and read the \
+                     `obligation` lines as well as the `diagnostic` ones: an \
                      obligation that came back `guarded` says what stopped it \
-                     from being proven. `deed_explain` turns any DEED#### code \
-                     into its page.",
+                     from being proven, which is what would have to change for \
+                     it to be. `deed_fix` applies the repairs the compiler is \
+                     sure about, so run it before hand-editing anything. Then \
+                     `deed_test`, because a program that checks is not a \
+                     program that works: it runs the `test` blocks and the \
+                     properties the contracts generate, and a property is one \
+                     nobody wrote. `deed_run` last, for what `main` prints. \
+                     `deed_explain` turns any DEED#### code into its page, and \
+                     `deed_fmt` into the one layout this language has.",
                 ),
             ),
         ])
