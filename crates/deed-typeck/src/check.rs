@@ -31,6 +31,12 @@ use crate::ty::{
     FieldTy, FnRow, Nominal, Obligation, Precondition, Tier, Ty, Types, VariantTy, bindings_for,
 };
 
+/// The prelude names that work on any type, so there is no one signature to
+/// give them. Named in one place because the refusal and the note explaining it
+/// have to agree: they did not, and a test that dropped one from the refusal
+/// still passed on the strength of the other.
+const GENERIC_BUILTINS: &[&str] = &["ok", "err", "at", "push", "repeat"];
+
 pub struct Checked {
     pub types: Types,
     pub diagnostics: Vec<Diagnostic>,
@@ -3244,7 +3250,12 @@ impl<'a> Checker<'a> {
                     row: signature.row.clone(),
                     ret: Box::new(signature.ret.clone()),
                 },
-                None if matches!(ident.name.as_str(), "ok" | "err" | "at" | "push" | "repeat") => {
+                // #818: these work on any type, so there is no one signature to
+                // hand back. `Unknown` absorbs, so a bare one used to compare
+                // equal to anything and reach the interpreter, which has no
+                // value to give it either.
+                None if GENERIC_BUILTINS.contains(&ident.name.as_str()) => {
+                    self.not_a_value(ident, "a builtin that works on any type");
                     Ty::Unknown
                 }
                 None => {
@@ -3350,6 +3361,13 @@ impl<'a> Checker<'a> {
             diagnostic = diagnostic.with_note(format!(
                 "a `{name}` cannot be constructed, only received, which is the point: \
                  a function that was not handed one cannot reach one"
+            ));
+        }
+
+        if GENERIC_BUILTINS.contains(&name.as_str()) {
+            diagnostic = diagnostic.with_note(format!(
+                "`{name}` works on any type, so it has no one type to be a value of; \
+                 call it rather than naming it"
             ));
         }
 
