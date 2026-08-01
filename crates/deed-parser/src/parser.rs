@@ -940,6 +940,39 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Reports `state count: Int = 0` and reads the value it was given.
+    ///
+    /// A handler declares what it keeps; the value comes from the `with` that
+    /// installs it, which is what lets one handler be installed twice with two
+    /// starting points. Written here, the declaration used to end at the type
+    /// and the `=` ended the handler with it: seven diagnostics, one of them
+    /// saying the handler implements nothing, and four about names that were
+    /// in the operations the parser never reached.
+    fn state_has_no_initialiser(&mut self) {
+        let start = self.span();
+        self.bump();
+        let value = self.parse_expr();
+        let span = start.to(value.span());
+        self.emit(
+            Diagnostic::error(
+                codes::STATE_INITIALISER,
+                self.file,
+                span,
+                "a handler's state is not given its value here",
+            )
+            .with_primary_label("the value goes where the handler is installed")
+            .with_note(
+                "state is declared like a field and given its value where the handler is installed: \
+                 `state count: Int` here, and `with H { count: 0 } { .. }` there",
+            )
+            .with_note(
+                "which is what lets one handler be installed twice, from two different \
+                 starting points",
+            )
+            .with_fix("drop the value", span, "", Applicability::MaybeIncorrect),
+        );
+    }
+
     fn parse_handler(&mut self) -> Option<HandlerDecl> {
         let start = self.bump().span;
         let name = self.expect_ident("a handler declaration")?;
@@ -965,6 +998,9 @@ impl<'a> Parser<'a> {
                 if let Some(field_name) = self.expect_ident("handler state") {
                     if self.expect(TokenKind::Colon, "handler state").is_some() {
                         let ty = self.parse_type();
+                        if self.at(&TokenKind::Eq) {
+                            self.state_has_no_initialiser();
+                        }
                         state.push(FieldDecl {
                             span: field_name.span.to(ty.span()),
                             name: field_name,

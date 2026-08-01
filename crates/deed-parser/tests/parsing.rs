@@ -2150,3 +2150,47 @@ fn a_single_one_of_either_is_left_alone() {
     );
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 }
+
+// -- a handler's state given its value in the handler -----------------------
+//
+// The value comes from the `with`. Written on the declaration, the `=` was not
+// a member, the handler ended there, and the answer was seven diagnostics
+// about operations the parser never read.
+
+const INITIALISED: &str = "module a\n\n\
+                           effect Audit {\n    fn note(entry: String) -> ()\n}\n\n\
+                           handler Collected implements Audit {\n    \
+                           state entries: List<String> = []\n\n    \
+                           fn note(entry: String) -> () {\n        \
+                           entries = entries\n    }\n}\n";
+
+#[test]
+fn state_given_a_value_says_where_the_value_goes() {
+    let (sources, parsed) = parse_source(INITIALISED);
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::STATE_INITIALISER]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("not given its value here"), "{text}");
+    assert!(text.contains("with H { count: 0 }"), "{text}");
+}
+
+/// The point of reading it rather than stopping: the handler still has its
+/// state and its operations, so nothing downstream says it implements nothing.
+#[test]
+fn the_handler_survives_the_initialiser() {
+    let (_, parsed) = parse_source(INITIALISED);
+    let handler = parsed
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            deed_ast::Item::Handler(handler) => Some(handler),
+            _ => None,
+        })
+        .expect("the handler should have parsed");
+    assert_eq!(handler.state.len(), 1);
+    assert_eq!(handler.operations.len(), 1);
+}
