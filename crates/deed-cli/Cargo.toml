@@ -25,5 +25,11 @@ deed-lsp = { path = "../deed-lsp" }
 deed-mcp = { path = "../deed-mcp" }
 deed-typeck = { path = "../deed-typeck" }
 
+[dev-dependencies]
+# The artifact a page and an agent run, held against this binary by
+# `tests/surfaces.rs`. A dev-dependency because nothing the tool does at run
+# time goes through it.
+deed-wasm = { path = "../deed-wasm" }
+
 [lints]
 workspace = true
