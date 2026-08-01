@@ -2411,13 +2411,39 @@ impl<'a> Parser<'a> {
             let pattern = self.parse_arm_pattern();
             self.expect(TokenKind::FatArrow, "a match arm");
             let body = self.parse_expr();
+            let after = body.span().end;
             arms.push(MatchArm {
                 span: pattern.span().to(body.span()),
                 pattern,
                 body,
             });
             if !self.eat(&TokenKind::Comma) {
-                break;
+                // No comma, and another arm sitting there anyway. Saying so
+                // here and carrying on is the difference between one
+                // diagnostic and the rest of the match read as statements.
+                if !self.another_arm_follows() {
+                    break;
+                }
+                let at = Span::new(after, after);
+                self.emit(
+                    Diagnostic::error(
+                        codes::MISSING_ARM_COMMA,
+                        self.file,
+                        at,
+                        "match arms are separated by commas",
+                    )
+                    .with_primary_label("a comma goes here")
+                    .with_note(
+                        "an arm ends where its body ends, and without the comma the arms \
+                         after this one are read as ordinary statements",
+                    )
+                    .with_fix(
+                        "add the comma",
+                        at,
+                        ",",
+                        Applicability::MachineApplicable,
+                    ),
+                );
             }
             if self.pos == before {
                 break;
@@ -2433,6 +2459,33 @@ impl<'a> Parser<'a> {
             arms,
             span: start.to(end),
         }
+    }
+
+    /// Whether what comes next is another match arm rather than the end of
+    /// the match.
+    ///
+    /// The rest of the line, looking for the `=>` that makes an arm an arm.
+    /// A pattern can hold braces (`Some { value } => ...`), so this reads to
+    /// the end of the line rather than stopping at one, and an expression
+    /// ends at the end of its line in this language, so the line is exactly
+    /// the arm.
+    fn another_arm_follows(&self) -> bool {
+        let mut index = self.pos;
+        let mut first = true;
+        while let Some(token) = self.tokens.get(index) {
+            if matches!(token.kind, TokenKind::Eof) {
+                return false;
+            }
+            if !first && token.starts_line {
+                return false;
+            }
+            if matches!(token.kind, TokenKind::FatArrow) {
+                return true;
+            }
+            first = false;
+            index += 1;
+        }
+        false
     }
 
     fn parse_with(&mut self) -> Expr {
