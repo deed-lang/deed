@@ -246,8 +246,13 @@ fn a_generic_builtin_is_not_a_value_either() {
             "module a\n\nfn f(n: Int) -> Bool {{ {name} == n }}\n"
         ));
         assert!(text.contains("DEED4019"), "{name}: {text}");
-        assert!(text.contains("works on any type"), "{name}: {text}");
-        assert!(text.contains(name), "{name}: {text}");
+        // The message, not the note. The note is added from the same list by a
+        // separate test, so asking only for it let the refusal fall through to
+        // the arm that calls these a type and still pass.
+        assert!(
+            text.contains(&format!("`{name}` is a builtin that works on any type")),
+            "{name}: {text}"
+        );
     }
 }
 
@@ -261,6 +266,10 @@ fn a_generic_builtin_is_not_a_value_in_a_contract_clause() {
          fn f(n: Int) -> Int\n    ensures ok => at == n\n{\n    n\n}\n",
     );
     assert!(text.contains("DEED4019"), "{text}");
+    assert!(
+        text.contains("`at` is a builtin that works on any type"),
+        "{text}"
+    );
     assert!(text.contains("call it rather than naming it"), "{text}");
 }
 
