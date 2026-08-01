@@ -1946,3 +1946,108 @@ fn the_last_item_of_a_declaration_needs_no_comma() {
     );
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 }
+
+// -- the other arrow -------------------------------------------------------
+//
+// `->` where `=>` belongs. Both arrows are in the language and they are one
+// key apart, and the arm used to end at the pattern, so the body after it was
+// read as a statement and one slip cost four diagnostics.
+
+const THIN: &str = "module a\n\nchoice Grade {\n    Low,\n    High,\n}\n\n\
+                    fn describe(mark: Grade) -> String {\n    match mark {\n        \
+                    Low -> \"low\",\n        High -> \"high\",\n    }\n}\n";
+
+#[test]
+fn a_match_arm_written_with_the_thin_arrow_says_which_arrow_it_wants() {
+    let (sources, parsed) = parse_source(THIN);
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::WRONG_ARROW, codes::WRONG_ARROW],
+        "one per arm, and nothing else"
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("written with `=>`"), "{text}");
+    assert!(text.contains("`->` is the one in a signature"), "{text}");
+}
+
+/// Stepped over rather than stopped at, so the body is still the arm's body.
+#[test]
+fn the_arms_written_with_the_thin_arrow_are_still_arms() {
+    let (_, parsed) = parse_source(THIN);
+    let mut counted = 0;
+    for item in &parsed.module.items {
+        if let deed_ast::Item::Function(function) = item
+            && let Some(deed_ast::Expr::Match { arms, .. }) = function.body.tail.as_deref()
+        {
+            counted = arms.len();
+        }
+    }
+    assert_eq!(counted, 2, "both arms should have been read");
+}
+
+/// And it is offered, so `deed fix` puts it right without the author reading
+/// anything.
+#[test]
+fn the_thin_arrow_comes_with_the_right_one() {
+    let (_, parsed) = parse_source(THIN);
+    let fix = parsed.diagnostics[0]
+        .fix
+        .as_ref()
+        .expect("the arrow should come with a fix");
+    assert_eq!(fix.edits[0].replacement, "=>");
+}
+
+// -- an obligation with no outcome -----------------------------------------
+
+#[test]
+fn an_ensures_with_no_outcome_says_the_outcome_is_missing() {
+    let (sources, parsed) =
+        parse_source("module a\n\nfn f(n: Int) -> Int\n  ensures\n    result == n,\n{ n }\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::INVALID_ENSURES_OUTCOME],
+        "one gap, one diagnostic: the missing `=>` is the same mistake"
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("does not say which outcome"), "{text}");
+    let fix = parsed.diagnostics[0]
+        .fix
+        .as_ref()
+        .expect("the outcome should come with a fix");
+    assert_eq!(fix.edits[0].replacement, "ok => ");
+}
+
+/// What stood there was the condition, and reading it as one is the recovery.
+#[test]
+fn the_condition_of_an_outcomeless_ensures_is_still_read() {
+    let (_, parsed) =
+        parse_source("module a\n\nfn f(n: Int) -> Int\n  ensures\n    result == n,\n{ n }\n");
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.contract.ensures.len(), 1);
+    assert_eq!(function.contract.ensures[0].outcome, Outcome::Ok);
+    assert!(matches!(
+        function.contract.ensures[0].condition,
+        Expr::Binary { .. }
+    ));
+}
+
+/// The third shape: no outcome but the `=>` still there. The word that was
+/// meant to be the outcome is missing rather than wrong, so there is nothing
+/// to step over, and stepping anyway would eat the arrow and cost a second
+/// diagnostic about the arrow that is sitting right there.
+#[test]
+fn an_ensures_that_kept_its_arrow_is_still_one_diagnostic() {
+    let (_, parsed) = parse_source("module a\n\nfn f() -> Int\n  ensures\n    => true,\n{ 0 }\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::INVALID_ENSURES_OUTCOME]
+    );
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.contract.ensures.len(), 1);
+}

@@ -1285,30 +1285,71 @@ impl<'a> Parser<'a> {
         // they are in `SOFT_KEYWORDS` with the rest of the words that are
         // syntax in one place and nothing in particular in the others.
         let outcome = if self.eat_named("ok") {
-            Outcome::Ok
+            Some(Outcome::Ok)
         } else if self.eat_named("err") {
-            Outcome::Err
+            Some(Outcome::Err)
         } else {
-            let found = self.kind().describe();
-            self.emit(
-                Diagnostic::error(
-                    codes::INVALID_ENSURES_OUTCOME,
-                    self.file,
-                    outcome_span,
-                    format!("expected `ok` or `err`, found {found}"),
-                )
-                .with_primary_label("not an outcome")
-                .with_note(
-                    "obligations are stated per outcome so that neither the success case nor the failure case can be left unsaid",
-                ),
-            );
-            // Consume it anyway. Whatever it was, it stood where the outcome
-            // belongs, and leaving it would derail the `=>` that follows into
-            // a second diagnostic about the same mistake.
-            if !self.at_eof() && !self.at(&TokenKind::FatArrow) {
-                self.bump();
+            None
+        };
+
+        // With the outcome missing, whether the `=>` is still there says which
+        // of two mistakes this is: a wrong word standing in the outcome's
+        // place, or a condition written where the whole `ok =>` belongs.
+        let outcome = match outcome {
+            Some(outcome) => outcome,
+            None if self.an_arrow_follows() => {
+                let found = self.kind().describe();
+                self.emit(
+                    Diagnostic::error(
+                        codes::INVALID_ENSURES_OUTCOME,
+                        self.file,
+                        outcome_span,
+                        format!("expected `ok` or `err`, found {found}"),
+                    )
+                    .with_primary_label("not an outcome")
+                    .with_note(
+                        "obligations are stated per outcome so that neither the success case nor the failure case can be left unsaid",
+                    ),
+                );
+                // Consume it anyway. Whatever it was, it stood where the
+                // outcome belongs, and leaving it would derail the `=>` that
+                // follows into a second diagnostic about the same mistake.
+                if !self.at_eof() && !self.at(&TokenKind::FatArrow) {
+                    self.bump();
+                }
+                Outcome::Ok
             }
-            Outcome::Ok
+            None => {
+                let at = Span::new(outcome_span.start, outcome_span.start);
+                self.emit(
+                    Diagnostic::error(
+                        codes::INVALID_ENSURES_OUTCOME,
+                        self.file,
+                        outcome_span,
+                        "this obligation does not say which outcome it holds for",
+                    )
+                    .with_primary_label("`ok =>` or `err =>` goes before this")
+                    .with_note(
+                        "obligations are stated per outcome so that neither the success case nor the failure case can be left unsaid",
+                    )
+                    .with_fix(
+                        "say it holds when the call succeeds",
+                        at,
+                        "ok => ",
+                        Applicability::MaybeIncorrect,
+                    ),
+                );
+                // Nothing is consumed and no `=>` is expected: what is sitting
+                // there is the condition, and reading it as one is both the
+                // recovery and the reading the author meant.
+                let condition = self.parse_expr_no_struct();
+                return Ensures {
+                    outcome: Outcome::Ok,
+                    outcome_span,
+                    span: outcome_span.to(condition.span()),
+                    condition,
+                };
+            }
         };
 
         self.expect(TokenKind::FatArrow, "an `ensures` obligation");
@@ -2416,7 +2457,7 @@ impl<'a> Parser<'a> {
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
             let pattern = self.parse_arm_pattern();
-            self.expect(TokenKind::FatArrow, "a match arm");
+            self.expect_arm_arrow();
             let body = self.parse_expr();
             let after = body.span().end;
             arms.push(MatchArm {
@@ -2428,7 +2469,7 @@ impl<'a> Parser<'a> {
                 // No comma, and another arm sitting there anyway. Saying so
                 // here and carrying on is the difference between one
                 // diagnostic and the rest of the match read as statements.
-                if !self.another_arm_follows() {
+                if !self.an_arrow_follows() {
                     break;
                 }
                 self.missing_comma(after, "match arms");
@@ -2449,15 +2490,41 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Whether what comes next is another match arm rather than the end of
-    /// the match.
+    /// The `=>` of a match arm, naming `->` when that is what was written.
     ///
-    /// The rest of the line, looking for the `=>` that makes an arm an arm.
-    /// A pattern can hold braces (`Some { value } => ...`), so this reads to
-    /// the end of the line rather than stopping at one, and an expression
-    /// ends at the end of its line in this language, so the line is exactly
-    /// the arm.
-    fn another_arm_follows(&self) -> bool {
+    /// `->` is the other arrow in the language and it is one key away, so it
+    /// gets its own sentence and its own repair rather than the general
+    /// "expected `=>`", and it is stepped over so the body after it is still
+    /// read as the arm's body.
+    fn expect_arm_arrow(&mut self) {
+        if self.at(&TokenKind::Arrow) {
+            let at = self.span();
+            self.emit(
+                Diagnostic::error(
+                    codes::WRONG_ARROW,
+                    self.file,
+                    at,
+                    "a match arm is written with `=>`",
+                )
+                .with_primary_label("this is the other arrow")
+                .with_note("`->` is the one in a signature, before the type a function hands back")
+                .with_fix("use `=>`", at, "=>", Applicability::MachineApplicable),
+            );
+            self.bump();
+            return;
+        }
+        self.expect(TokenKind::FatArrow, "a match arm");
+    }
+
+    /// Whether an `=>` comes before the end of this line.
+    ///
+    /// It is what makes an arm an arm and what makes an obligation an
+    /// obligation, so it answers both "is there another arm here" and "was the
+    /// outcome left out". A pattern can hold braces (`Some { value } => ...`),
+    /// so this reads to the end of the line rather than stopping at one, and
+    /// an expression ends at the end of its line in this language, so the line
+    /// is exactly the arm.
+    fn an_arrow_follows(&self) -> bool {
         let mut index = self.pos;
         let mut first = true;
         while let Some(token) = self.tokens.get(index) {

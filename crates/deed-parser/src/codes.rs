@@ -15,6 +15,12 @@ pub const EXPECTED_DECLARATION: &str = "DEED2003";
 pub const DUPLICATE_CONTRACT_CLAUSE: &str = "DEED2004";
 
 /// An `ensures` obligation whose outcome is neither `ok` nor `err`.
+///
+/// Also the clause that names no outcome at all, where the condition itself
+/// stands where `ok =>` belongs. It is the same gap seen from the other side,
+/// and it used to be reported twice: once for the word in the outcome's place
+/// and once for the `=>` that never came. Now the parser reads the rest as the
+/// condition it plainly is, and there is one sentence and one repair.
 pub const INVALID_ENSURES_OUTCOME: &str = "DEED2005";
 
 /// Contract clauses written in an order other than `where`, `uses`, `ensures`.
@@ -111,3 +117,16 @@ pub const NO_DETACHED_SPAWN: &str = "DEED2014";
 /// They are the same mistake and the same repair, and the word that changes is
 /// the name of the thing being separated.
 pub const MISSING_COMMA: &str = "DEED2015";
+
+/// A match arm written with `->` instead of `=>`.
+///
+/// Both arrows are in the language and they are a line apart: `->` is the one
+/// in a signature, before the type a function hands back, and `=>` is the one
+/// in an arm and in an obligation. Reaching for the wrong one is a slip of the
+/// hand rather than a misunderstanding, and it used to cost four diagnostics,
+/// because the arm ended at the pattern and the body after it was read as a
+/// statement of the match's block.
+///
+/// So it is named, repaired and stepped over, and the arm goes on being read
+/// as an arm.
+pub const WRONG_ARROW: &str = "DEED2016";
