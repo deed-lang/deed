@@ -46,6 +46,12 @@
 //! `properties.rs`; and the row a run did not keep, in
 //! `deed-driver/tests/rows_at_runtime.rs`.
 //!
+//! One message cannot be read here at all: the effect that reached `main` and
+//! is therefore the host's. It needs a real declared row to recognise itself,
+//! and everything below hands `Program::add` an empty one. It is read in
+//! `deed-driver/tests/host.rs`, next to what the compiled backend asks a host
+//! for, which is the other half of the same claim.
+//!
 //! Two messages are here in prose only, because nothing can reach them:
 //! `this effect operation`, which needs an effect operation whose definition
 //! has no parent, and `a closure the interpreter lost track of`, which needs

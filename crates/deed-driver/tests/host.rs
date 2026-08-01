@@ -14,9 +14,12 @@
 //! refuses anything not on it. A module without an import has no index in its
 //! own index space to call it through, so a host that offers it cannot help.
 
+use std::path::Path;
+
 use deed_codegen::{Host, Trap, Value, call, compile};
-use deed_diagnostics::SourceMap;
+use deed_diagnostics::{SourceMap, render_human};
 use deed_driver::check_all;
+use deed_interp::{Program, run_main};
 
 fn module_for(source: &str) -> deed_codegen::Module {
     let mut sources = SourceMap::new();
@@ -200,5 +203,68 @@ fn a_component_asking_for_what_the_host_does_not_offer_is_refused_at_load() {
         err.module.starts_with("deed:"),
         "the unsatisfied import is from a deed namespace: {}",
         err.module
+    );
+}
+
+/// The interpreter is not a host, and now says so.
+///
+/// A user effect that reaches `main` is the same thing `Io.write` is: an entry
+/// in the world a host answers. The interpreter has no host, so it cannot run
+/// this program, but it used to report that as "no handler is installed" with
+/// a note saying to wrap the call in a `with` block. That is one of two
+/// readings and it is the one that changes what the program is: a `with` block
+/// here would discharge the effect and take the import out of the world.
+#[test]
+fn an_effect_that_reaches_main_is_reported_as_the_host_s_rather_than_as_a_missing_handler() {
+    const ESCAPES: &str = "module a\n\n\
+effect Log {\n\
+    fn note(line: String) -> ()\n\
+}\n\n\
+fn main() -> Int\n\
+  uses\n\
+    Log.note,\n\
+{\n\
+    Log.note(\"hi\")\n\
+    0\n\
+}\n";
+
+    let mut sources = SourceMap::new();
+    let id = sources.add("host.deed".to_string(), ESCAPES.to_string());
+    let mut all = check_all(&sources, &[id]);
+    let one = all.pop().expect("one file in, one result out");
+    assert!(
+        !one.has_errors(),
+        "this program is well formed and has a world: {:?}",
+        one.diagnostics
+    );
+    assert!(
+        deed_driver::wit_world_for(&one).contains("import deed:log.note;"),
+        "the effect is an import, which is the whole reason this is not a mistake"
+    );
+
+    let mut program = Program::new();
+    program.add(
+        one.file,
+        &one.module,
+        &one.resolutions,
+        one.guards(),
+        one.rows(),
+    );
+    let run = run_main(&program, one.file, Path::new("."), &[]).expect("there is a `main`");
+    let failure = run.result.expect_err("no host means it cannot run");
+
+    assert_eq!(failure.code, "DEED6005");
+    let text = render_human(&sources, &failure);
+    assert!(
+        text.contains("is in `main`'s row"),
+        "it should say where the effect got to: {text}"
+    );
+    assert!(
+        text.contains("import deed:log.note"),
+        "it should name the import a host would answer: {text}"
+    );
+    assert!(
+        text.contains("`deed run` is not a host"),
+        "it should say why this run in particular could not answer: {text}"
     );
 }

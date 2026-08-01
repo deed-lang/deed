@@ -290,6 +290,7 @@ fn run_main_with_profile(
     if profile {
         interp.profile = Some(ProfileState::new());
     }
+    interp.entry = interp.promise_of(main);
     interp.root = sandbox::root(root).ok().map(Rc::from);
     interp.arguments = arguments
         .iter()
@@ -555,6 +556,15 @@ pub(crate) struct Interp<'a> {
     /// What each active call is allowed to perform, and what was already
     /// handled when it started. See [`Interp::check_row`].
     rows: Vec<RowFrame>,
+    /// What the entry point declared, when this run has one.
+    ///
+    /// The row `main` writes down is the program's boundary: `deed build`
+    /// turns each entry in it into an import in the component's world. So an
+    /// effect that reaches here unhandled is a different situation from one
+    /// that got loose inside the program, and the two want different
+    /// sentences. `None` while running tests, which have no entry point and
+    /// no boundary to reach.
+    entry: Option<Promise>,
     /// How deep inside a contract clause the running code is.
     ///
     /// Contracts do not contribute to a row, so performing an effect while
@@ -643,6 +653,7 @@ impl<'a> Interp<'a> {
             by_path,
             frames: vec![Frame::default()],
             rows: Vec::new(),
+            entry: None,
             in_contract: 0,
             handlers: Vec::new(),
             inside_handler: Vec::new(),
@@ -1760,6 +1771,26 @@ impl<'a> Interp<'a> {
             .as_ref()
             .and_then(|id| self.handlers.iter().rposition(|found| found.effect == *id))
         else {
+            if let Some(id) = &id
+                && self.reaches_the_boundary(id, &name)
+            {
+                return Err(self.fail(
+                    Diagnostic::error(
+                        codes::NO_HANDLER,
+                        self.file(),
+                        span,
+                        format!("`{effect_name}.{name}` is in `main`'s row, so the host answers it"),
+                    )
+                    .with_primary_label("nothing here answers this")
+                    .with_note(format!(
+                        "an effect that reaches `main` is the program's boundary, and `deed build` turns it into `import deed:{}.{name}` in the component's world",
+                        effect_name.to_lowercase()
+                    ))
+                    .with_note(
+                        "`deed run` is not a host and installs nothing, so either give the component to one, or handle the effect inside the program with a `with` block",
+                    ),
+                ));
+            }
             return Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,
@@ -2153,6 +2184,21 @@ impl<'a> Interp<'a> {
         let current = self.current;
         self.modules[current].plans.insert(span, Rc::clone(&plan));
         plan
+    }
+
+    /// Whether this operation is one the entry point's row hands to the host.
+    ///
+    /// Asked of the row `main` wrote rather than of the frames on the stack:
+    /// the question is what the program admits to at its boundary, and that is
+    /// a property of one declaration. A run with no entry point, which is what
+    /// running a test is, answers no.
+    fn reaches_the_boundary(&self, effect: &Origin, operation: &str) -> bool {
+        let Some(entry) = &self.entry else {
+            return false;
+        };
+        entry.allowed.iter().any(|(declared, op)| {
+            declared == effect && op.as_deref().is_none_or(|name| name == operation)
+        })
     }
 
     /// The row a declaration wrote down, when it says something a call can be

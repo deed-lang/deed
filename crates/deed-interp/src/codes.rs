@@ -34,11 +34,15 @@ pub const REFINEMENT_FAILED: &str = "DEED6004";
 
 /// An effect that could not be performed by anything installed.
 ///
-/// Three messages, and only the first is about the program: no handler for the
-/// effect at all. The other two are about the compiler. A handler that leaves
-/// an operation out is refused by `DEED4029`, and an `Io` operation handed the
-/// wrong kind of capability is a type error, so a run that meets either has
-/// been given a file the checker would not have accepted.
+/// Four messages. Two are about the program and they are opposite readings of
+/// the same situation, which is why they are separate sentences. An effect
+/// that reached `main` is in the row a component's world is derived from, so
+/// nothing inside the program was ever going to answer it and a host is meant
+/// to; an effect loose anywhere else is a missing `with` block. The other two
+/// are about the compiler: a handler that leaves an operation out is refused
+/// by `DEED4029`, and an `Io` operation handed the wrong kind of capability is
+/// a type error, so a run that meets either has been given a file the checker
+/// would not have accepted.
 pub const NO_HANDLER: &str = "DEED6005";
 
 /// Something the run could not do.
