@@ -20,10 +20,15 @@ from mcp.client.stdio import stdio_client
 # Checks cleanly, states an obligation and carries a test, so one module
 # proves every half an agent reads: the diagnostics, the tier the checker
 # settled on, and a test that runs.
+#
+# The upper bound on `n` is not decoration. Without it `n + n` overflows near
+# the top of the range and the `ensures` is not true for every `n > 0`, which
+# is what the generated property found the first time this file ran one. It
+# had been sitting here since the file was written, passing.
 CLEAN = """module smoke
 
 fn twice(n: Int) -> Int
-    where n > 0
+    where n > 0, n < 1000000000
     ensures ok => result > n
 {
     n + n
@@ -111,6 +116,12 @@ async def main(binary: str) -> int:
 
             tested = lines(await session.call_tool("deed_test", {"source": CLEAN}))
             assert [x for x in tested if x["kind"] == "test" and x["passed"]], tested
+            # The one nobody wrote. `deed test` runs it from the terminal, so a
+            # surface that skipped it would answer a narrower question under
+            # the same name.
+            properties = [x for x in tested if x["kind"] == "property"]
+            assert len(properties) == 1 and properties[0]["passed"], tested
+            assert properties[0]["seed"], "a property run you cannot reproduce is a rumour"
             # The summary is what tells a client the difference between a file
             # whose tests all passed and a file with no tests in it. Without
             # it both answers are the same absence.

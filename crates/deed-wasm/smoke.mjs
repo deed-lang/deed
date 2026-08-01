@@ -103,6 +103,13 @@ check(
   call("deed_test", "module main\n\nfn f() -> Int {\n    1\n}\n").includes('"kind":"summary","passed":0,"failed":0'),
   call("deed_test", "module main\n\nfn f() -> Int {\n    1\n}\n"),
 );
+{
+  // The test nobody wrote. `deed test` runs it from a terminal, so an
+  // artifact that skipped it would answer a narrower question under the
+  // same name.
+  const source = "module main\n\nfn keep(n: Int) -> Int\n  ensures\n    ok  => result == n,\n{\n    n\n}\n";
+  check("a contract's own property runs", call("deed_test", source).includes('"kind":"property","function":"keep"'), call("deed_test", source));
+}
 check(
   "a program that does not check is refused rather than run",
   call("deed_run", "module main\n\nfn main() -> Int {\n    nonesuch\n}\n").includes('"kind":"refused"'),
