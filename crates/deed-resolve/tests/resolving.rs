@@ -425,13 +425,16 @@ fn a_name_from_another_language_is_answered_instead_of_guessed_at() {
 
 /// The one shape a walk cannot be written around.
 ///
-/// `for` already carries an accumulator, so a total is a loop rather than a
+/// `for` already carries an accumulator, so an average is a loop rather than a
 /// name, and there is nothing in scope for the suggester to reach for either:
-/// `sum` used to come back with the caret and nothing under it.
+/// it used to come back with the caret and nothing under it.
+///
+/// `sum` was the example here until `std/list` grew one. A name the library
+/// has is an import rather than a rewrite, and `deed-driver` answers that.
 #[test]
 fn an_aggregate_this_language_does_not_have_is_answered_with_the_walk() {
     let (sources, _, resolved) =
-        resolve_source("module a\n\nfn f(numbers: List<Int>) -> Int { sum(numbers) }\n");
+        resolve_source("module a\n\nfn f(numbers: List<Int>) -> Int { average(numbers) }\n");
     assert_eq!(codes_of(&resolved.diagnostics), vec![codes::UNKNOWN_NAME]);
 
     let text = render_human(&sources, &resolved.diagnostics[0]);
@@ -440,6 +443,36 @@ fn an_aggregate_this_language_does_not_have_is_answered_with_the_walk() {
         "{text}"
     );
     assert!(resolved.diagnostics[0].fix.is_none(), "{text}");
+}
+
+/// And the one the library does have under another name.
+#[test]
+fn asking_for_a_maximum_is_pointed_at_the_function_that_takes_an_order() {
+    let (sources, _, resolved) =
+        resolve_source("module a\n\nfn f(numbers: List<Int>) -> Int { max(numbers) }\n");
+    let text = render_human(&sources, &resolved.diagnostics[0]);
+    assert!(text.contains("`largest` from `std/list`"), "{text}");
+}
+
+/// The oldest of these arms, and nothing had read it.
+///
+/// A reader who writes `self` is not making a typo, they are expecting the
+/// thing they are working on to be in scope because a method would have put it
+/// there. The suggester would answer that with whatever short name was nearby.
+#[test]
+fn reaching_for_a_receiver_is_told_there_are_no_methods() {
+    for word in ["self", "this"] {
+        let source = format!("module a\n\nfn f(n: Int) -> Int {{ {word} }}\n");
+        let (sources, _, resolved) = resolve_source(&source);
+        let named = resolved
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains(&format!("cannot find `{word}`")))
+            .unwrap_or_else(|| panic!("`{word}` should not resolve"));
+
+        let text = render_human(&sources, named);
+        assert!(text.contains("there are no methods"), "{text}");
+    }
 }
 
 #[test]

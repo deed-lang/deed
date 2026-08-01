@@ -1473,10 +1473,16 @@ fn name_from_elsewhere(name: &str) -> Option<Elsewhere> {
             "there are no methods, so a function takes the thing it works on as an argument \
              like anything else",
         ),
-        // The prelude has `length` and nothing else that reduces a list, which
-        // is the one shape a walk cannot be written around: `for` already
-        // carries an accumulator, so a total is a loop rather than a name.
-        "sum" | "max" | "min" | "product" | "average" | "reduce" => Elsewhere::Absent(
+        // `sum` used to be here too, saying to write the walk out. `std/list`
+        // has it now, so the answer is an import and the driver writes it.
+        "max" | "min" => Elsewhere::Absent(
+            "the largest by an order you pass is `largest` from `std/list`, and handing it \
+             the opposite comparator gives the other end",
+        ),
+        // The prelude has `length` and nothing else that reduces a list, and
+        // `for` already carries an accumulator, so the rest of these are the
+        // walk rather than a name.
+        "product" | "average" | "reduce" => Elsewhere::Absent(
             "a value folded out of a list is written as the walk that folds it, \
              `for n in numbers with total = 0 { total + n }`, or with `fold` from `std/list`",
         ),
