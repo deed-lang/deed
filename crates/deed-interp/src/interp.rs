@@ -290,6 +290,7 @@ fn run_main_with_profile(
     if profile {
         interp.profile = Some(ProfileState::new());
     }
+    interp.entry = interp.promise_of(main);
     interp.root = sandbox::root(root).ok().map(Rc::from);
     interp.arguments = arguments
         .iter()
@@ -500,6 +501,18 @@ struct Promise {
     allowed: Vec<(Origin, Option<String>)>,
 }
 
+impl Promise {
+    /// Whether this row admits performing one operation.
+    ///
+    /// An entry naming the whole effect admits every operation on it, which is
+    /// what `uses Log` means next to `uses Log.note`.
+    fn covers(&self, effect: &Origin, operation: &str) -> bool {
+        self.allowed.iter().any(|(declared, op)| {
+            declared == effect && op.as_deref().is_none_or(|name| name == operation)
+        })
+    }
+}
+
 /// What every call to one function needs before its body can run.
 ///
 /// All of it is a property of the declaration rather than of the call, and it
@@ -555,6 +568,15 @@ pub(crate) struct Interp<'a> {
     /// What each active call is allowed to perform, and what was already
     /// handled when it started. See [`Interp::check_row`].
     rows: Vec<RowFrame>,
+    /// What the entry point declared, when this run has one.
+    ///
+    /// The row `main` writes down is the program's boundary: `deed build`
+    /// turns each entry in it into an import in the component's world. So an
+    /// effect that reaches here unhandled is a different situation from one
+    /// that got loose inside the program, and the two want different
+    /// sentences. `None` while running tests, which have no entry point and
+    /// no boundary to reach.
+    entry: Option<Promise>,
     /// How deep inside a contract clause the running code is.
     ///
     /// Contracts do not contribute to a row, so performing an effect while
@@ -643,6 +665,7 @@ impl<'a> Interp<'a> {
             by_path,
             frames: vec![Frame::default()],
             rows: Vec::new(),
+            entry: None,
             in_contract: 0,
             handlers: Vec::new(),
             inside_handler: Vec::new(),
@@ -1760,6 +1783,26 @@ impl<'a> Interp<'a> {
             .as_ref()
             .and_then(|id| self.handlers.iter().rposition(|found| found.effect == *id))
         else {
+            if let Some(id) = &id
+                && self.reaches_the_boundary(id, &name)
+            {
+                return Err(self.fail(
+                    Diagnostic::error(
+                        codes::NO_HANDLER,
+                        self.file(),
+                        span,
+                        format!("`{effect_name}.{name}` is in `main`'s row, so the host answers it"),
+                    )
+                    .with_primary_label("nothing here answers this")
+                    .with_note(format!(
+                        "an effect that reaches `main` is the program's boundary, and `deed build` turns it into `import deed:{}.{name}` in the component's world",
+                        effect_name.to_lowercase()
+                    ))
+                    .with_note(
+                        "`deed run` is not a host and installs nothing, so either give the component to one, or handle the effect inside the program with a `with` block",
+                    ),
+                ));
+            }
             return Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,
@@ -2155,6 +2198,22 @@ impl<'a> Interp<'a> {
         plan
     }
 
+    /// Whether this operation is one the entry point's row hands to the host.
+    ///
+    /// Asked of the row `main` wrote rather than of the frames on the stack:
+    /// the question is what the program admits to at its boundary, and that is
+    /// a property of one declaration. A run with no entry point, which is what
+    /// running a test is, answers no.
+    ///
+    /// The same predicate [`Interp::check_row`] holds every active call to,
+    /// rather than a second copy of it. Two copies of "does this row admit
+    /// this" would be two chances to disagree about a row.
+    fn reaches_the_boundary(&self, effect: &Origin, operation: &str) -> bool {
+        self.entry
+            .as_ref()
+            .is_some_and(|entry| entry.covers(effect, operation))
+    }
+
     /// The row a declaration wrote down, when it says something a call can be
     /// held to.
     fn promise_of(&self, function: &'a FnDecl) -> Option<Promise> {
@@ -2213,13 +2272,9 @@ impl<'a> Interp<'a> {
 
             if frame.handled <= barrier
                 && let Some(promise) = &frame.promise
+                && !promise.covers(effect, operation)
             {
-                let covered = promise.allowed.iter().any(|(declared, op)| {
-                    declared == effect && op.as_deref().is_none_or(|name| name == operation)
-                });
-                if !covered {
-                    return Some(promise.name.clone());
-                }
+                return Some(promise.name.clone());
             }
 
             // A handler operation. What it performs belongs to the `with` that
@@ -3053,11 +3108,45 @@ fn collect_olds<'a>(expr: &'a Expr, out: &mut Vec<(Span, &'a Expr)>) {
 
 #[cfg(test)]
 mod tests {
-    use super::Interp;
+    use super::{Interp, Promise};
     use crate::{DeclaredRows, Guards, Program};
     use deed_ast::Item;
     use deed_diagnostics::SourceMap;
     use deed_resolve::Universe;
+
+    /// Both halves of what a row entry admits.
+    ///
+    /// Read here rather than through a program, because the two ways it can
+    /// say no cannot both be reached from a file the checker accepts: a row
+    /// that does not cover what the body performs is refused long before
+    /// anything runs. The predicate answers `check_row`, which is the runtime
+    /// invariant that found five escaped effects in #131, so a version of it
+    /// that took any operation with the right name under the wrong effect
+    /// would be that invariant quietly agreeing with anything.
+    #[test]
+    fn a_row_entry_admits_its_own_effect_and_no_other() {
+        let log = (std::rc::Rc::from("a"), "Log".to_string());
+        let other = (std::rc::Rc::from("a"), "Ledger".to_string());
+
+        let one = Promise {
+            name: "f".to_string(),
+            allowed: vec![(log.clone(), Some("note".to_string()))],
+        };
+        assert!(one.covers(&log, "note"));
+        assert!(!one.covers(&log, "other"), "a different operation");
+        assert!(
+            !one.covers(&other, "note"),
+            "the same operation name under another effect"
+        );
+
+        let whole = Promise {
+            name: "f".to_string(),
+            allowed: vec![(log.clone(), None)],
+        };
+        assert!(whole.covers(&log, "note"), "`uses Log` admits every one");
+        assert!(whole.covers(&log, "anything"));
+        assert!(!whole.covers(&other, "note"));
+    }
 
     /// Runs the first `test` block and reads something off the interpreter
     /// that ran it, which is the only way to see a table nothing outside the
