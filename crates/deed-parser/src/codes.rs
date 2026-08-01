@@ -93,16 +93,21 @@ pub const UNKNOWN_EDITION: &str = "DEED2013";
 /// statement level followed by an argument list on the same line.
 pub const NO_DETACHED_SPAWN: &str = "DEED2014";
 
-/// Match arms written one to a line with no comma between them.
+/// A comma-separated list written one to a line with no commas.
 ///
-/// A separator nobody wrote is a whole file's worth of complaints. The first
-/// arm swallows the rest of the match, the arms after it are read as
+/// A separator nobody wrote is a whole file's worth of complaints. In a match
+/// the first arm swallows the rest of it, the arms after are read as
 /// statements, and what comes back is an inexhaustive match, an unread value
 /// per arm, an expected `}`, an expected expression at each `=>` and a
 /// declaration that is a closing brace. Nine diagnostics for one comma, and
-/// none of them said comma.
+/// none of them said comma. A `choice` written the same way says "insert `}`",
+/// which is an answer to a question nobody asked.
 ///
 /// Reported where the comma should have gone rather than where the parser
-/// noticed, and it goes on reading arms afterwards, so a match missing three
+/// noticed, and it goes on reading the list afterwards, so three missing
 /// commas is three of these rather than one and then rubble.
-pub const MISSING_ARM_COMMA: &str = "DEED2015";
+///
+/// Three sentences under one code, one per list: arms, variants and fields.
+/// They are the same mistake and the same repair, and the word that changes is
+/// the name of the thing being separated.
+pub const MISSING_COMMA: &str = "DEED2015";

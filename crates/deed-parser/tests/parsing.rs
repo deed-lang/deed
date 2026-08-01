@@ -1820,7 +1820,7 @@ fn a_match_arm_with_no_comma_says_so_and_says_where() {
     let (sources, parsed) = parse_source(ARMS);
     assert_eq!(
         codes_of(&parsed.diagnostics),
-        vec![codes::MISSING_ARM_COMMA],
+        vec![codes::MISSING_COMMA],
         "one comma, one diagnostic"
     );
 
@@ -1860,7 +1860,7 @@ fn every_missing_comma_is_reported() {
     );
     assert_eq!(
         codes_of(&parsed.diagnostics),
-        vec![codes::MISSING_ARM_COMMA, codes::MISSING_ARM_COMMA]
+        vec![codes::MISSING_COMMA, codes::MISSING_COMMA]
     );
 }
 
@@ -1872,6 +1872,77 @@ fn the_last_arm_needs_no_comma() {
         "module a\n\nchoice Grade {\n    Low,\n    High,\n}\n\n\
          fn describe(mark: Grade) -> String {\n    match mark {\n        \
          Low => \"low\",\n        High => \"high\"\n    }\n}\n",
+    );
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}
+
+/// A `choice` written the same way used to say "insert `}`", which is an
+/// answer to a question nobody asked. It is the first thing a model wrote on
+/// the grade task.
+#[test]
+fn a_choice_variant_with_no_comma_says_so() {
+    let (sources, parsed) =
+        parse_source("module a\n\nchoice Grade {\n    Low\n    Mid\n    High,\n}\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::MISSING_COMMA, codes::MISSING_COMMA]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("choice variants are separated"), "{text}");
+}
+
+/// And the variants after it are still variants, which is what stops the rest
+/// of the file being about a choice with one case in it.
+#[test]
+fn the_variants_after_the_missing_comma_are_still_variants() {
+    let (_, parsed) = parse_source("module a\n\nchoice Grade {\n    Low\n    Mid\n    High,\n}\n");
+    let counted = parsed
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            deed_ast::Item::Choice(choice) => Some(choice.variants.len()),
+            _ => None,
+        })
+        .expect("the choice should have parsed");
+    assert_eq!(counted, 3);
+}
+
+#[test]
+fn a_record_field_with_no_comma_says_so() {
+    let (sources, parsed) =
+        parse_source("module a\n\nrecord Point {\n    x: Int\n    y: Int,\n}\n");
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::MISSING_COMMA]);
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("record fields are separated"), "{text}");
+}
+
+/// A variant with fields ends at its closing brace, so that is where the comma
+/// goes. Measuring to the name would put it in the middle of the variant.
+#[test]
+fn the_comma_after_a_variant_with_fields_goes_after_the_fields() {
+    let (sources, parsed) = parse_source(
+        "module a\n\nchoice Shape {\n    Circle { radius: Int }\n    Square { side: Int },\n}\n",
+    );
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::MISSING_COMMA]);
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("Circle { radius: Int }"), "{text}");
+}
+
+/// The last one goes without, in both, and the closing brace on its own line
+/// is not the next item.
+///
+/// The half that says this is a repair rather than a new rule: every
+/// declaration in this repository is written without the trailing comma
+/// somewhere, and a check that asked for one would be asking the corpus to
+/// change.
+#[test]
+fn the_last_item_of_a_declaration_needs_no_comma() {
+    let (_, parsed) = parse_source(
+        "module a\n\nchoice Grade {\n    Low,\n    High\n}\n\n\
+         record Point {\n    x: Int,\n    y: Int\n}\n",
     );
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 }

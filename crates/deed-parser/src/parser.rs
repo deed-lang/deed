@@ -773,13 +773,17 @@ impl<'a> Parser<'a> {
                 break;
             }
             let ty = self.parse_type();
+            let after = ty.span().end;
             fields.push(FieldDecl {
                 span: name.span.to(ty.span()),
                 name,
                 ty,
             });
             if !self.eat(&TokenKind::Comma) {
-                break;
+                if !self.another_item_follows() {
+                    break;
+                }
+                self.missing_comma(after, "record fields");
             }
             if self.pos == before {
                 break;
@@ -870,7 +874,10 @@ impl<'a> Parser<'a> {
             });
 
             if !self.eat(&TokenKind::Comma) {
-                break;
+                if !self.another_item_follows() {
+                    break;
+                }
+                self.missing_comma(end.end, "choice variants");
             }
             if self.pos == before {
                 break;
@@ -2424,26 +2431,7 @@ impl<'a> Parser<'a> {
                 if !self.another_arm_follows() {
                     break;
                 }
-                let at = Span::new(after, after);
-                self.emit(
-                    Diagnostic::error(
-                        codes::MISSING_ARM_COMMA,
-                        self.file,
-                        at,
-                        "match arms are separated by commas",
-                    )
-                    .with_primary_label("a comma goes here")
-                    .with_note(
-                        "an arm ends where its body ends, and without the comma the arms \
-                         after this one are read as ordinary statements",
-                    )
-                    .with_fix(
-                        "add the comma",
-                        at,
-                        ",",
-                        Applicability::MachineApplicable,
-                    ),
-                );
+                self.missing_comma(after, "match arms");
             }
             if self.pos == before {
                 break;
@@ -2486,6 +2474,37 @@ impl<'a> Parser<'a> {
             index += 1;
         }
         false
+    }
+
+    /// Whether the next thing is another item of a declaration's list.
+    ///
+    /// A name on a line of its own, which is what a variant and a field both
+    /// open with. Cheaper than the arm case and it does not need to be
+    /// cleverer: inside `{ ... }` of a `record` or a `choice` there is nothing
+    /// else a bare name at the start of a line can be.
+    fn another_item_follows(&self) -> bool {
+        self.tokens
+            .get(self.pos)
+            .is_some_and(|token| token.starts_line && matches!(token.kind, TokenKind::Ident(_)))
+    }
+
+    /// Says a comma is missing, where it should have gone, and offers it.
+    fn missing_comma(&mut self, after: u32, what: &str) {
+        let at = Span::new(after, after);
+        self.emit(
+            Diagnostic::error(
+                codes::MISSING_COMMA,
+                self.file,
+                at,
+                format!("{what} are separated by commas"),
+            )
+            .with_primary_label("a comma goes here")
+            .with_note(
+                "without it the parser reads what comes next as part of this one, and \
+                 everything after that is about the wrong program",
+            )
+            .with_fix("add the comma", at, ",", Applicability::MachineApplicable),
+        );
     }
 
     fn parse_with(&mut self) -> Expr {
