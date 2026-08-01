@@ -53,6 +53,19 @@ is the same rule the compiler itself follows. Producing the answers is the
 caller's job, and `deed mcp` is the intended way to let something produce them
 against the real compiler rather than against its memory of one.
 
+And it does not measure most of that server. Every prompt asks for a module and
+says "no tests", which is what stops an answer passing tests it wrote for
+itself, and the cost is that the answer has nothing to test and no `main` to
+run. So `deed_test`, `deed_run` and `deed_fmt` have nothing to do here, and a
+transcript of a run is evidence about `deed_check` and about very little else.
+
+That is worth saying because the mistake is easy and I made it. A run came back
+with sixty-five `deed_check` calls and no `deed_test` calls, and I read the
+second number as the server failing to point at a tool. It was the tasks: there
+was nothing to test. If a task ever asks for tests, that reading becomes right
+and this paragraph becomes wrong, which is why
+`crates/deed-driver/tests/benchmark.rs` holds the two together.
+
 ## The tasks
 
 Each directory under `tasks/` holds three files:
