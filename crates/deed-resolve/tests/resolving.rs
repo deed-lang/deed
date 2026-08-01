@@ -423,6 +423,25 @@ fn a_name_from_another_language_is_answered_instead_of_guessed_at() {
     assert!(!text.contains("there is a `f` in scope"), "{text}");
 }
 
+/// The one shape a walk cannot be written around.
+///
+/// `for` already carries an accumulator, so a total is a loop rather than a
+/// name, and there is nothing in scope for the suggester to reach for either:
+/// `sum` used to come back with the caret and nothing under it.
+#[test]
+fn an_aggregate_this_language_does_not_have_is_answered_with_the_walk() {
+    let (sources, _, resolved) =
+        resolve_source("module a\n\nfn f(numbers: List<Int>) -> Int { sum(numbers) }\n");
+    assert_eq!(codes_of(&resolved.diagnostics), vec![codes::UNKNOWN_NAME]);
+
+    let text = render_human(&sources, &resolved.diagnostics[0]);
+    assert!(
+        text.contains("for n in numbers with total = 0 { total + n }"),
+        "{text}"
+    );
+    assert!(resolved.diagnostics[0].fix.is_none(), "{text}");
+}
+
 #[test]
 fn a_word_for_an_operator_is_answered_with_the_operator() {
     for (word, op) in [("and", "&&"), ("or", "||"), ("not", "!")] {

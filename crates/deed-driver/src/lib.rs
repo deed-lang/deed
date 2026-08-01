@@ -22,6 +22,7 @@ pub mod docs;
 pub mod fix;
 mod imports;
 mod inputs;
+mod library;
 pub mod manifest;
 pub mod program_gen;
 mod report;
@@ -497,6 +498,10 @@ fn check_parsed(
         &trivia,
     );
     imports::attach_fixes(&mut diagnostics, &module, source, &trivia);
+
+    // The resolver is right that the name is not in scope and cannot know the
+    // compiler is carrying it. This is the layer that has the shipped table.
+    library::attach(&mut diagnostics, &module, source, &trivia);
 
     let parsed_module = module;
     let mut obligations: Vec<ObligationReport> = checked

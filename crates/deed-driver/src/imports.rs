@@ -111,7 +111,7 @@ pub(crate) fn attach_fixes(
 }
 
 /// The offset just past the newline that ends the line `offset` is on.
-fn line_end(source: &str, offset: u32) -> u32 {
+pub(crate) fn line_end(source: &str, offset: u32) -> u32 {
     match source[offset as usize..].find('\n') {
         Some(index) => offset + index as u32 + 1,
         None => source.len() as u32,
@@ -122,7 +122,7 @@ fn line_end(source: &str, offset: u32) -> u32 {
 ///
 /// A `Use` span begins at the path rather than at the keyword, because that is
 /// where the parser starts building one. The line is what has to be replaced.
-fn line_start(source: &str, offset: u32) -> u32 {
+pub(crate) fn line_start(source: &str, offset: u32) -> u32 {
     match source[..offset as usize].rfind('\n') {
         Some(index) => index as u32 + 1,
         None => 0,
