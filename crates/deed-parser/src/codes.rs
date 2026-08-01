@@ -130,3 +130,17 @@ pub const MISSING_COMMA: &str = "DEED2015";
 /// So it is named, repaired and stepped over, and the arm goes on being read
 /// as an arm.
 pub const WRONG_ARROW: &str = "DEED2016";
+
+/// A constraint written on a parameter rather than in the function's `where`.
+///
+/// A `type` carries its refinement inline (`type InStock = Int where value >
+/// 0`), so writing the same thing on a parameter is a fair guess rather than a
+/// misunderstanding. A function carries its constraints in the clause after
+/// the signature instead, which is the only place every parameter is in scope
+/// at once, and `restock(count: Int where count + delivered > 0, ...)` is the
+/// case that makes the difference obvious.
+///
+/// Named, and then put where it belongs: the expression is read into the
+/// function's `where` clause, so the names in it resolve and the four
+/// diagnostics this used to cost come down to this one.
+pub const PARAMETER_CONSTRAINT: &str = "DEED2017";
