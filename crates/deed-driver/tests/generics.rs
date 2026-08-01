@@ -235,6 +235,45 @@ fn a_type_parameter_is_not_a_free_pass_inside_the_body() {
 }
 
 #[test]
+fn a_generic_builtin_is_not_a_value_either() {
+    // The same rule as the test above, on the prelude's own generic names.
+    // They have no signature to hand back, and the unknown that stood in for
+    // one absorbed, so each of these compared equal to an `Int` and reached an
+    // interpreter with no value to give it. Named one at a time so a missing
+    // one says which.
+    for name in ["ok", "err", "at", "push", "repeat"] {
+        let text = expect_refused(&format!(
+            "module a\n\nfn f(n: Int) -> Bool {{ {name} == n }}\n"
+        ));
+        assert!(text.contains("DEED4019"), "{name}: {text}");
+        // The message, not the note. The note is added from the same list by a
+        // separate test, so asking only for it let the refusal fall through to
+        // the arm that calls these a type and still pass.
+        assert!(
+            text.contains(&format!("`{name}` is a builtin that works on any type")),
+            "{name}: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_generic_builtin_is_not_a_value_in_a_contract_clause() {
+    // #818, and the whole of why this one was missed: a model reached for `at`
+    // as a way to say `result`, the check said nothing nine times over, and the
+    // interpreter refused it with a note saying the check had a hole.
+    let text = expect_refused(
+        "module a\n\n\
+         fn f(n: Int) -> Int\n    ensures ok => at == n\n{\n    n\n}\n",
+    );
+    assert!(text.contains("DEED4019"), "{text}");
+    assert!(
+        text.contains("`at` is a builtin that works on any type"),
+        "{text}"
+    );
+    assert!(text.contains("call it rather than naming it"), "{text}");
+}
+
+#[test]
 fn a_type_parameter_shadowing_a_type_is_said_out_loud() {
     let (sources, checked) = check("module a\n\nfn f<Int>(value: Int) -> Int { value }\n");
     let text = rendered(&sources, &checked.diagnostics);
