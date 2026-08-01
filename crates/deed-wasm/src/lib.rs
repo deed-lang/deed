@@ -993,6 +993,10 @@ mod tests {
             )),
             "the seed should be on the line: {json}"
         );
+        assert!(
+            json.contains("{\"kind\":\"summary\",\"passed\":1,\"failed\":0}"),
+            "a property that passed counts like anything else that ran: {json}"
+        );
     }
 
     #[test]
