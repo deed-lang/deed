@@ -1,6 +1,7 @@
 {
   "name": "Deed — Cipher",
   "short_name": "Deed",
+  "start_url": "/",
   "icons": [
     {
       "src": "deed-cipher-192.png",
@@ -14,7 +15,7 @@
       "purpose": "any maskable"
     }
   ],
-  "theme_color": "#07865F",
+  "theme_color": "#24d05a",
   "background_color": "#F7F8F4",
   "display": "standalone"
 }
