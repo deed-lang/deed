@@ -1803,3 +1803,75 @@ fn an_empty_file_reports_only_the_missing_module() {
     );
     assert!(parsed.module.items.is_empty());
 }
+
+// -- a match with no commas ---------------------------------------------------
+//
+// Arms one to a line and nothing between them is what a reader arriving from a
+// language whose arms end at the newline writes. Before this, the first arm
+// swallowed the rest of the match and what came back was nine diagnostics for
+// one comma, none of which said comma.
+
+const ARMS: &str = "module a\n\nchoice Grade {\n    Low,\n    High,\n}\n\n\
+                    fn describe(mark: Grade) -> String {\n    match mark {\n        \
+                    Low => \"low\"\n        High => \"high\"\n    }\n}\n";
+
+#[test]
+fn a_match_arm_with_no_comma_says_so_and_says_where() {
+    let (sources, parsed) = parse_source(ARMS);
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::MISSING_ARM_COMMA],
+        "one comma, one diagnostic"
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("separated by commas"), "{text}");
+}
+
+/// The point of carrying on rather than stopping: the arms after the missing
+/// comma are arms, so the match is whole and every later pass sees the program
+/// that was meant.
+#[test]
+fn the_arms_after_the_missing_comma_are_still_arms() {
+    let (_, parsed) = parse_source(ARMS);
+    let mut counted = 0;
+    for item in &parsed.module.items {
+        if let deed_ast::Item::Function(function) = item {
+            for statement in &function.body.stmts {
+                if let deed_ast::Stmt::Expr(deed_ast::Expr::Match { arms, .. }) = statement {
+                    counted = arms.len();
+                }
+            }
+            if let Some(deed_ast::Expr::Match { arms, .. }) = function.body.tail.as_deref() {
+                counted = arms.len();
+            }
+        }
+    }
+    assert_eq!(counted, 2, "both arms should have been read");
+}
+
+/// Three arms with no commas is two commas missing, not one and then rubble.
+#[test]
+fn every_missing_comma_is_reported() {
+    let (_, parsed) = parse_source(
+        "module a\n\nchoice Grade {\n    Low,\n    Mid,\n    High,\n}\n\n\
+         fn describe(mark: Grade) -> String {\n    match mark {\n        \
+         Low => \"low\"\n        Mid => \"mid\"\n        High => \"high\"\n    }\n}\n",
+    );
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::MISSING_ARM_COMMA, codes::MISSING_ARM_COMMA]
+    );
+}
+
+/// The last arm is allowed to go without one, which is what the corpus writes
+/// and what the formatter prints.
+#[test]
+fn the_last_arm_needs_no_comma() {
+    let (_, parsed) = parse_source(
+        "module a\n\nchoice Grade {\n    Low,\n    High,\n}\n\n\
+         fn describe(mark: Grade) -> String {\n    match mark {\n        \
+         Low => \"low\",\n        High => \"high\"\n    }\n}\n",
+    );
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}

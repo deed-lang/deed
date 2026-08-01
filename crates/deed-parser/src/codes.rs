@@ -92,3 +92,17 @@ pub const UNKNOWN_EDITION: &str = "DEED2013";
 /// The pattern is detected at `spawn(expr)` where `spawn` is an identifier at
 /// statement level followed by an argument list on the same line.
 pub const NO_DETACHED_SPAWN: &str = "DEED2014";
+
+/// Match arms written one to a line with no comma between them.
+///
+/// A separator nobody wrote is a whole file's worth of complaints. The first
+/// arm swallows the rest of the match, the arms after it are read as
+/// statements, and what comes back is an inexhaustive match, an unread value
+/// per arm, an expected `}`, an expected expression at each `=>` and a
+/// declaration that is a closing brace. Nine diagnostics for one comma, and
+/// none of them said comma.
+///
+/// Reported where the comma should have gone rather than where the parser
+/// noticed, and it goes on reading arms afterwards, so a match missing three
+/// commas is three of these rather than one and then rubble.
+pub const MISSING_ARM_COMMA: &str = "DEED2015";
