@@ -289,7 +289,7 @@ fn tests_run_and_report_one_line_each() {
     let answers = session(&[hello(), &call(2, "deed_test", "source", source)]);
     let text = content(&answers[1]);
 
-    assert_eq!(text.lines().count(), 2, "{text}");
+    assert_eq!(text.lines().count(), 3, "{text}");
     assert!(
         text.contains("\"name\":\"doubles\",\"passed\":true"),
         "{text}"
@@ -297,6 +297,45 @@ fn tests_run_and_report_one_line_each() {
     assert!(
         text.contains("\"name\":\"and again\",\"passed\":true"),
         "{text}"
+    );
+    assert!(
+        text.contains("{\"kind\":\"summary\",\"passed\":2,\"failed\":0}"),
+        "{text}"
+    );
+}
+
+/// An agent cannot count what it was not told. `deed_check` on this server
+/// answers a well formed program with silence, so `deed_test` answering a
+/// file with no tests the same way would leave the two readings of an empty
+/// answer sitting on top of each other.
+#[test]
+fn a_program_with_no_tests_in_it_says_so() {
+    let source = "module p\n\nfn twice(n: Int) -> Int {\n    n * 2\n}\n";
+
+    let answers = session(&[hello(), &call(2, "deed_test", "source", source)]);
+    let text = content(&answers[1]);
+
+    assert_eq!(
+        text.trim_end(),
+        "{\"kind\":\"summary\",\"passed\":0,\"failed\":0}",
+        "{text}"
+    );
+}
+
+/// The one that was wrong: this program does not check, and the server used
+/// to run its test and report that it passed.
+#[test]
+fn a_program_that_does_not_check_is_refused_rather_than_tested() {
+    let source = "module p\n\nfn twice(n: Int) -> Int {\n    nonesuch\n}\n\n\
+                  test \"doubles\" {\n    assert 1 == 1\n}\n";
+
+    let answers = session(&[hello(), &call(2, "deed_test", "source", source)]);
+    let text = content(&answers[1]);
+
+    assert!(text.contains("\"kind\":\"refused\""), "{text}");
+    assert!(
+        !text.contains("\"passed\":true"),
+        "a test in a file that does not check was reported as passing: {text}"
     );
 }
 
@@ -320,15 +359,26 @@ fn running_a_program_prints_what_it_printed() {
 /// This server hands out no directory, so a program whose row reaches one is
 /// refused before it runs rather than failing part way through. That is the
 /// same order `design/04-capabilities.md` puts the two in.
+///
+/// The program checks cleanly, which it has to: a file the checker rejects is
+/// refused for that reason first, and this test would then be passing on the
+/// wrong refusal.
 #[test]
 fn a_program_that_wants_a_file_is_refused_before_it_runs() {
     let source = "module p\n\nfn main(sys: System) -> () uses Io.write, Io.read {\n    \
-                  Io.write(sys.console, \"before\")\n}\n";
+                  Io.write(sys.console, \"before\")\n    \
+                  match Io.read(sys.files, \"nothing.txt\") {\n        \
+                  ok(text) => Io.write(sys.console, text),\n        \
+                  err(why) => Io.write(sys.console, why),\n    }\n}\n";
 
     let answers = session(&[hello(), &call(2, "deed_run", "source", source)]);
     let text = content(&answers[1]);
 
     assert!(text.contains("\"kind\":\"capability\""), "{text}");
+    assert!(
+        !text.contains("\"kind\":\"refused\""),
+        "it was refused for the wrong reason: {text}"
+    );
     assert!(
         !text.contains("\"kind\":\"output\""),
         "it printed something before refusing: {text}"

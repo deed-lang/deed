@@ -42,15 +42,18 @@ const TOOLS: &[Tool] = &[
         name: "deed_test",
         description: "Run every `test` block in a Deed program. Writes one JSON object a line \
                       with the test's name and whether it passed, and the failing diagnostic \
-                      when it did not.",
+                      when it did not, then a `summary` line counting them, so a program with no \
+                      tests in it says so rather than answering with nothing. Refuses without \
+                      running when the program does not check: ask `deed_check` for what is \
+                      wrong with it.",
         argument: ("source", "The whole text of one Deed module."),
     },
     Tool {
         name: "deed_run",
         description: "Run a Deed program's `main` and report what it printed. Refuses before \
-                      running if `main`'s row asks for a capability this server does not hand \
-                      out: there is no filesystem here, so a program that reads or writes files \
-                      is refused rather than failed.",
+                      running if the program does not check, or if `main`'s row asks for a \
+                      capability this server does not hand out: there is no filesystem here, so \
+                      a program that reads or writes files is refused rather than failed.",
         argument: ("source", "The whole text of one Deed module."),
     },
     Tool {

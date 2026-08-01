@@ -292,6 +292,17 @@ pub fn check(sources: &SourceMap, file: FileId) -> Checked {
 /// mistake.
 pub const NOTHING_TO_RUN: &str = "no `main` found, so there is nothing to run";
 
+/// What every entry point says when it is asked to run a file the checker
+/// rejected.
+///
+/// The command line has refused this since there has been a command line, and
+/// the reason is in `deed-cli`: running code that does not check answers a
+/// question nobody asked, and the failure it produces is about the wrong
+/// thing. The sentence lives here so the artifact a page and an agent talk to
+/// gives the same answer rather than running anyway.
+pub const DOES_NOT_CHECK: &str =
+    "this program does not check, and running it would report the wrong mistake";
+
 /// Runs the whole pipeline over a set of files that see each other.
 ///
 /// Three passes over the list: parse everything, work out what each module

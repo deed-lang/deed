@@ -98,6 +98,16 @@ for (const [verb, source] of [
 check("check is quiet about a clean program", call("deed_check", HELLO).includes('"kind":"obligation"') || call("deed_check", HELLO) === "", "");
 check("run reports what the program printed", call("deed_run", HELLO).includes('"kind":"output"'), call("deed_run", HELLO));
 check("test reports a passing test", call("deed_test", 'module main\n\ntest "one" {\n    assert 1 == 1\n}\n').includes('"passed":true'), "");
+check(
+  "a file with no tests says so rather than answering with nothing",
+  call("deed_test", "module main\n\nfn f() -> Int {\n    1\n}\n").includes('"kind":"summary","passed":0,"failed":0'),
+  call("deed_test", "module main\n\nfn f() -> Int {\n    1\n}\n"),
+);
+check(
+  "a program that does not check is refused rather than run",
+  call("deed_run", "module main\n\nfn main() -> Int {\n    nonesuch\n}\n").includes('"kind":"refused"'),
+  call("deed_run", "module main\n\nfn main() -> Int {\n    nonesuch\n}\n"),
+);
 check("fmt hands back a program", call("deed_fmt", "module main\n\n\n\nfn main( ) -> Int {\n  1\n}\n").includes('"kind":"formatted"'), "");
 check(
   "a program that does not parse is refused rather than reshaped",
