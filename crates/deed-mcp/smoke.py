@@ -110,7 +110,15 @@ async def main(binary: str) -> int:
             assert settled[0]["reason"], "a guarded obligation says nothing about why"
 
             tested = lines(await session.call_tool("deed_test", {"source": CLEAN}))
-            assert tested, "running the tests reported nothing at all"
+            assert [x for x in tested if x["kind"] == "test" and x["passed"]], tested
+            # The summary is what tells a client the difference between a file
+            # whose tests all passed and a file with no tests in it. Without
+            # it both answers are the same absence.
+            summary = [x for x in tested if x["kind"] == "summary"]
+            assert len(summary) == 1 and summary[0]["failed"] == 0, tested
+
+            refused = lines(await session.call_tool("deed_test", {"source": "module x\n\nfn f() -> Int {\n    nonesuch\n}\n\ntest \"t\" {\n    assert 1 == 1\n}\n"}))
+            assert [x["kind"] for x in refused] == ["refused"], refused
 
             page = lines(await session.call_tool("deed_explain", {"code": "DEED4025"}))
             assert page[0]["code"] == "DEED4025", page

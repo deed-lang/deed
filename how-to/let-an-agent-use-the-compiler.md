@@ -24,7 +24,7 @@ existing anywhere.
 | Tool | Argument | What comes back |
 | --- | --- | --- |
 | `deed_check` | `source` | One JSON object a line: `diagnostic` for anything wrong, `obligation` for every contract clause the checker looked at. Silence means the program is well formed. |
-| `deed_test` | `source` | One line per `test` block, with the failing diagnostic when one failed. |
+| `deed_test` | `source` | One line per `test` block, with the failing diagnostic when one failed, then a `summary` line counting them. |
 | `deed_run` | `source` | The lines `main` printed, then whether it finished. |
 | `deed_fmt` | `source` | The one layout the formatter chooses, or the parse diagnostics. |
 | `deed_fix` | `source` | The program with every machine-applicable repair applied, and how many went in. |
@@ -67,6 +67,19 @@ to be. Here it is that nothing told the checker `n` is positive, so adding `wher
 
 That is the difference between "the compiler could not prove this" and "here is what to do
 about it".
+
+## Check first, and it will hold you to it
+
+`deed_test` and `deed_run` refuse a program that does not check, with one line:
+
+```json
+{"kind":"refused","errors":2,"message":"this program does not check, and running it would report the wrong mistake"}
+```
+
+They could run it. The interpreter would get partway in and complain about whatever it hit
+first, which is a real sentence about the wrong thing: an agent reading it goes looking for a
+bug in the code it was executing, when the answer was two lines up in `deed_check`. The
+command line has refused this for the same reason since it had a `test` subcommand.
 
 ## What it may not do
 

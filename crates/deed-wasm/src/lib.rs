@@ -227,8 +227,16 @@ pub fn unsupported_capabilities(checked: &Checked) -> Vec<String> {
 /// No capability decision applies here: a `test` block takes no parameters,
 /// so there is no way for one to hold a capability at all, the same reason
 /// `deed test` never asks for a directory to run one in.
+///
+/// The summary line is always written, including when nothing ran. Silence
+/// already means "well formed" on this surface, so letting it also mean
+/// "nothing to run" would leave a reader unable to tell a clean pass from a
+/// file with no tests in it.
 pub fn test_source(source: &str) -> String {
     let (sources, checks) = checked_of(source);
+    if let Some(refusal) = refuse_unchecked(&checks) {
+        return refusal;
+    }
     let subject = &checks[0];
 
     let mut program = Program::new();
@@ -243,20 +251,47 @@ pub fn test_source(source: &str) -> String {
     }
 
     let mut out = String::new();
+    let (mut passed, mut failed) = (0usize, 0usize);
     for outcome in run_tests(&program, subject.file) {
         match outcome.failure {
-            None => out.push_str(&format!(
-                "{{\"kind\":\"test\",\"name\":{},\"passed\":true}}\n",
-                json_string(&outcome.name)
-            )),
-            Some(failure) => out.push_str(&format!(
-                "{{\"kind\":\"test\",\"name\":{},\"passed\":false,\"diagnostic\":{}}}\n",
-                json_string(&outcome.name),
-                render_json(&sources, &failure)
-            )),
+            None => {
+                passed += 1;
+                out.push_str(&format!(
+                    "{{\"kind\":\"test\",\"name\":{},\"passed\":true}}\n",
+                    json_string(&outcome.name)
+                ));
+            }
+            Some(failure) => {
+                failed += 1;
+                out.push_str(&format!(
+                    "{{\"kind\":\"test\",\"name\":{},\"passed\":false,\"diagnostic\":{}}}\n",
+                    json_string(&outcome.name),
+                    render_json(&sources, &failure)
+                ));
+            }
         }
     }
+    out.push_str(&format!(
+        "{{\"kind\":\"summary\",\"passed\":{passed},\"failed\":{failed}}}\n"
+    ));
     out
+}
+
+/// One line saying the file did not check, when it did not.
+///
+/// One line rather than the diagnostics themselves: [`check_source`] is the
+/// verb that answers what is wrong, and repeating its answer here would give a
+/// reader two places to look for one list. The count is in the line so that
+/// "go and check" is a claim the caller can see the size of.
+fn refuse_unchecked(checks: &[Checked]) -> Option<String> {
+    let errors: usize = checks.iter().map(Checked::error_count).sum();
+    if errors == 0 {
+        return None;
+    }
+    Some(format!(
+        "{{\"kind\":\"refused\",\"errors\":{errors},\"message\":{}}}\n",
+        json_string(deed_driver::DOES_NOT_CHECK)
+    ))
 }
 
 /// Runs the page's `main`, refusing first if its row asks for a capability
@@ -267,6 +302,9 @@ pub fn test_source(source: &str) -> String {
 /// whose row could reach it was already refused above.
 pub fn run_source(source: &str) -> String {
     let (sources, checks) = checked_of(source);
+    if let Some(refusal) = refuse_unchecked(&checks) {
+        return refusal;
+    }
     let subject = &checks[0];
 
     let refused = unsupported_capabilities(subject);
@@ -452,7 +490,10 @@ pub unsafe extern "C" fn deed_check(ptr: *const u8, len: usize) {
 /// The `test` entry point: same input shape as [`deed_check`], and leaves
 /// one JSON object a line at [`deed_result_ptr`]/[`deed_result_len`], one per
 /// `test` block: `{"kind":"test","name":...,"passed":bool}`, with a
-/// `"diagnostic"` key added when it failed.
+/// `"diagnostic"` key added when it failed, and then one
+/// `{"kind":"summary","passed":N,"failed":M}` line. A file that does not
+/// check answers with one `{"kind":"refused",...}` line instead, and nothing
+/// runs.
 ///
 /// # Safety
 ///
@@ -469,7 +510,9 @@ pub unsafe extern "C" fn deed_test(ptr: *const u8, len: usize) {
 /// JSON at [`deed_result_ptr`]/[`deed_result_len`]: zero or more
 /// `{"kind":"output",...}` lines, then one `{"kind":"result",...}` line, or
 /// one `{"kind":"capability",...}` line per capability #591 does not offer
-/// when `main`'s row asks for one, in which case nothing runs.
+/// when `main`'s row asks for one, in which case nothing runs. A file that
+/// does not check answers with one `{"kind":"refused",...}` line, also
+/// without running.
 ///
 /// # Safety
 ///
@@ -789,8 +832,18 @@ mod tests {
         let json = test_source("module main\n\ntest \"one is one\" {\n    assert 1 == 1\n}\n");
         assert_eq!(
             json,
-            "{\"kind\":\"test\",\"name\":\"one is one\",\"passed\":true}\n"
+            "{\"kind\":\"test\",\"name\":\"one is one\",\"passed\":true}\n\
+             {\"kind\":\"summary\",\"passed\":1,\"failed\":0}\n"
         );
+    }
+
+    /// The verb next to this one uses silence to mean the program is well
+    /// formed. Letting silence also mean nothing ran would leave a reader
+    /// holding two opposite readings of the same empty answer.
+    #[test]
+    fn a_file_with_no_tests_says_so_rather_than_answering_with_nothing() {
+        let json = test_source("module main\n\nfn f() -> Int {\n    1\n}\n");
+        assert_eq!(json, "{\"kind\":\"summary\",\"passed\":0,\"failed\":0}\n");
     }
 
     #[test]
@@ -800,6 +853,54 @@ mod tests {
             json.contains("\"passed\":false") && json.contains("\"diagnostic\":"),
             "a failing test should carry a diagnostic, got {json:?}"
         );
+        assert!(
+            json.contains("{\"kind\":\"summary\",\"passed\":0,\"failed\":1}"),
+            "the summary should count it, got {json:?}"
+        );
+    }
+
+    /// The bad answer this replaced: the program did not check, and the
+    /// server said the test passed.
+    #[test]
+    fn a_file_that_does_not_check_is_refused_rather_than_tested() {
+        let json = test_source(
+            "module main\n\nfn f() -> Int {\n    nonesuch\n}\n\ntest \"t\" {\n    assert 1 == 1\n}\n",
+        );
+        assert_eq!(
+            json,
+            format!(
+                "{{\"kind\":\"refused\",\"errors\":1,\"message\":{}}}\n",
+                json_string(deed_driver::DOES_NOT_CHECK)
+            )
+        );
+    }
+
+    /// Running it produced DEED6006, whose own note offers the reader two
+    /// explanations: the file was not checked, or the check has a hole. Only
+    /// the first was ever true here, and nothing said which.
+    #[test]
+    fn a_file_that_does_not_check_is_refused_rather_than_run() {
+        let json = run_source("module main\n\nfn main() -> Int {\n    nonesuch\n}\n");
+        assert!(
+            json.starts_with("{\"kind\":\"refused\","),
+            "the refusal should come first and alone, got {json:?}"
+        );
+        assert!(
+            !json.contains("DEED6006"),
+            "nothing should have reached the interpreter, got {json:?}"
+        );
+    }
+
+    /// A warning is not a refusal. The corpus produces them on purpose, and a
+    /// guarded obligation is a thing to read rather than a thing to fix.
+    #[test]
+    fn a_warning_does_not_stop_a_program_from_running() {
+        let json = run_source(
+            "module main\n\ntype Positive = Int where value > 0\n\n\
+             fn keep(n: Int) -> Positive {\n    n\n}\n\n\
+             fn main() -> Positive {\n    keep(1)\n}\n",
+        );
+        assert_eq!(json, "{\"kind\":\"result\",\"ok\":true}\n");
     }
 
     #[test]
@@ -814,11 +915,15 @@ mod tests {
         // recursion, and the interpreter's own depth limit (`MAX_DEPTH`,
         // deed-interp) already turns that into an error rather than a hang.
         // A page is never left waiting on a call that cannot return.
+        //
+        // `main` declares `Diverge` too. It used to leave it off and the
+        // artifact ran the program anyway, so this test was reaching the
+        // depth limit through a file the checker had already rejected.
         let json = run_source(
             "module main\n\n\
              fn a() -> Int\n  uses\n    Diverge,\n{\n    b()\n}\n\n\
              fn b() -> Int\n  uses\n    Diverge,\n{\n    a()\n}\n\n\
-             fn main() -> Int {\n    a()\n}\n",
+             fn main() -> Int\n  uses\n    Diverge,\n{\n    a()\n}\n",
         );
         assert!(
             json.contains("\"kind\":\"result\",\"ok\":false"),
