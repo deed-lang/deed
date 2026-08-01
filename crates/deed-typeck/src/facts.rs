@@ -2019,6 +2019,32 @@ mod tests {
         assert_eq!(facts.difference(a, b), Range::ANY);
     }
 
+    /// And a total is a fact about the old meaning of the name just as much.
+    /// Both orders, because a total is stored both ways round and keeping
+    /// either one would keep the fact.
+    #[test]
+    fn a_binding_does_not_inherit_the_totals_of_the_name_it_replaces() {
+        let (a, b) = (name(0), name(1));
+        let mut facts = Facts::new();
+        facts.narrow_total(a, b, Range::between(1, i64::MAX));
+        facts.set(DefId::from_raw(0), Range::ANY);
+        assert_eq!(facts.total(a, b), Range::ANY);
+        assert_eq!(facts.total(b, a), Range::ANY);
+    }
+
+    /// What both branches of an `if` know about a total is still known after
+    /// it, which is the whole point of joining rather than dropping.
+    #[test]
+    fn a_total_both_branches_know_survives_the_join() {
+        let (a, b) = (name(0), name(1));
+        let mut left = Facts::new();
+        left.narrow_total(a, b, Range::between(1, 10));
+        let mut right = Facts::new();
+        right.narrow_total(a, b, Range::between(5, 20));
+
+        assert_eq!(left.join(&right).total(a, b), Range::between(1, 20));
+    }
+
     #[test]
     fn a_length_is_not_negative_without_anybody_saying_so() {
         // The default is the fact. A list with fewer than no things in it does
