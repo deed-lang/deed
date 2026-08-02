@@ -184,13 +184,13 @@ fn every_refusal_says_what_it_found() {
 /// last commit of whatever PR made the file compile, not a cleanup
 /// afterwards.
 ///
-/// The files not in this list are refused for one of two reasons, both
-/// tracked as their own issue rather than repeated here per file: a prelude
-/// function the backend does not compile yet (#621, everything but `ok`,
-/// `err` and `length`), or early `return` (#620, `counter.deed`,
-/// `transfer.deed` and `proven.deed` specifically). A file refused for a
-/// third reason should say so in `every_refusal_says_what_it_found`'s
-/// output before it is worth chasing further.
+/// The files not in this list are refused for a handful of reasons, tracked
+/// together under #877 rather than repeated here per file: a call into
+/// another module, a name bound to a function value, a generic type, an
+/// expression the lowering has no arm for, or two boxed values compared.
+/// A file refused for a reason not on that list should say so in
+/// `every_refusal_says_what_it_found`'s output before it is worth chasing
+/// further.
 #[test]
 fn the_backend_still_compiles_what_it_used_to() {
     let outcomes = walked();
@@ -209,9 +209,13 @@ fn the_backend_still_compiles_what_it_used_to() {
         "generics.deed",
         // A program that writes a line, which the module asks its host for.
         "hello.deed",
+        "journal.deed",
         "list.deed",
+        "lists.deed",
         "map.deed",
         "names.deed",
+        "ratio.deed",
+        "strings.deed",
         "table.deed",
         "tree.deed",
     ];

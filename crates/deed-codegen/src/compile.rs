@@ -144,7 +144,8 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
 
     for helper in &helpers {
         let type_index = module.intern_type(helper.signature());
-        let (locals, body) = helper.compile();
+        let mut at = crate::runtime::Where::new(&where_helpers, &mut strings);
+        let (locals, body) = helper.compile(&mut at);
         let func_index = module.add_func(Func {
             type_index,
             locals,
@@ -305,6 +306,26 @@ fn helpers_used(program: &Program) -> Vec<Helper> {
                 found.push(helper);
             }
         });
+        walk_block(&function.body, &mut |expr| {
+            if let Expr::Runtime { name, .. } = expr
+                && let Some(helper) = Helper::named(name)
+                && !found.contains(&helper)
+            {
+                found.push(helper);
+            }
+        });
+    }
+
+    // Whatever those call, and whatever those call. A helper missing from the
+    // module is a call to an index that is something else.
+    let mut at = 0;
+    while at < found.len() {
+        for also in found[at].needs() {
+            if !found.contains(also) {
+                found.push(*also);
+            }
+        }
+        at += 1;
     }
 
     // Emitted in a fixed order, so the same program compiles to the same
@@ -386,12 +407,11 @@ fn index_of_signature(module: &mut Module, function: &Function) -> u32 {
 /// nothing at runtime and a function that returns one does no work at all.
 /// Building it on the heap instead would allocate once per call for a value
 /// that is the same every time.
-struct Strings {
+pub(crate) struct Strings {
     next: u32,
     data: Vec<(u32, Vec<u8>)>,
     placed: Vec<(String, u32)>,
 }
-
 #[derive(Clone, Copy)]
 struct SiteDraft {
     span: Span,
@@ -408,7 +428,7 @@ impl Strings {
     }
 
     /// Where this string lives, placing it if it is new.
-    fn place(&mut self, text: &str) -> u32 {
+    pub(crate) fn place(&mut self, text: &str) -> u32 {
         if let Some((_, at)) = self.placed.iter().find(|(seen, _)| seen == text) {
             return *at;
         }
@@ -1299,7 +1319,7 @@ impl<'a> Builder<'a> {
                 });
             }
             Expr::Block(block) => self.block(block)?,
-            Expr::Runtime { name, args, .. } => {
+            Expr::Runtime { name, args, ret } => {
                 use deed_mir::runtime;
                 match *name {
                     // Both of these are the first word of what they point at,
@@ -1310,7 +1330,26 @@ impl<'a> Builder<'a> {
                         self.instructions.push(Ins::I32WrapI64);
                         self.instructions.push(Ins::I64Load(0));
                     }
-                    other => return Err(self.fail(&format!("the runtime function `{other}`"))),
+                    other => {
+                        let Some(helper) = Helper::named(other) else {
+                            return Err(self.fail(&format!("the runtime function `{other}`")));
+                        };
+                        // Every helper speaks in words, because everything it
+                        // touches is either a number or an address. A `Bool`
+                        // is narrower than that on the stack, so it is widened
+                        // going in and narrowed coming back.
+                        for arg in args {
+                            self.expr(arg)?;
+                            if matches!(val_type(&self.ty_of(arg)?), Some(ValType::I32)) {
+                                self.instructions.push(Ins::I64ExtendI32S);
+                            }
+                        }
+                        let at = self.helper(helper)?;
+                        self.instructions.push(Ins::Call(at));
+                        if matches!(val_type(ret), Some(ValType::I32)) {
+                            self.instructions.push(Ins::I32WrapI64);
+                        }
+                    }
                 }
             }
             Expr::ElementAt {

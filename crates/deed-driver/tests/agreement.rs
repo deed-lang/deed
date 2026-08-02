@@ -242,6 +242,130 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 1,
         },
+        // The prelude's own functions, each of which is a loop the backend
+        // writes. What they answer is the interpreter's answer: both engines
+        // run every one of these.
+        Agreed {
+            name: "a number written out",
+            source: "module a\n\nfn answer() -> Int {\n    if to_string(0) == \"0\" && to_string(42) == \"42\" && to_string(0 - 7) == \"-7\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"a sign and a zero are both digits somebody has to write\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        Agreed {
+            name: "the smallest number written out",
+            source: "module a\n\nfn answer() -> Int { length(to_string(0 - 9223372036854775807 - 1)) }\n\ntest \"the number with no positive counterpart\" {\n    assert to_string(0 - 9223372036854775807 - 1) == \"-9223372036854775808\"\n    assert answer() == 20\n}\n",
+            call: "answer",
+            expect: 20,
+        },
+        Agreed {
+            name: "the same value a number of times",
+            source: "module a\n\nfn answer() -> Int {\n    length(repeat(\"ab\", 3)) + length(repeat(\"ab\", 0)) + length(repeat(\"ab\", 0 - 4))\n}\n\ntest \"a count that went negative is no padding rather than a refusal\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        Agreed {
+            name: "one more on the end",
+            source: "module a\n\nfn answer() -> Int {\n    let grown = push(push([], 4), 5)\n    length(grown)\n}\n\ntest \"pushing onto nothing gives one\" {\n    assert answer() == 2\n}\n",
+            call: "answer",
+            expect: 2,
+        },
+        Agreed {
+            name: "what push put there is what comes back",
+            source: "module a\n\nfn answer() -> Int {\n    let grown = push(push([1], 2), 3)\n    match at(grown, 2) {\n        ok(n) => n,\n        err(why) => 0 - 1,\n    }\n}\n\ntest \"the list that went in is still in front\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        // An index nobody promised is there, and the sentence both engines
+        // answer with. Two engines writing two different strings here is a
+        // difference a program can read.
+        Agreed {
+            name: "an index that is not there",
+            source: "module a\n\nfn answer() -> Int {\n    match at([1, 2], 5) {\n        ok(n) => 0,\n        err(why) => length(why),\n    }\n}\n\ntest \"the message names the index and the length\" {\n    let said = match at([1, 2], 5) {\n        ok(n) => \"\",\n        err(why) => why,\n    }\n    assert said == \"index 5 is outside a list of 2\"\n    assert answer() == 30\n}\n",
+            call: "answer",
+            expect: 30,
+        },
+        Agreed {
+            name: "an index below the start",
+            source: "module a\n\nfn answer() -> Int {\n    match at([1, 2], 0 - 1) {\n        ok(n) => 0,\n        err(why) => length(why),\n    }\n}\n\ntest \"a negative index is outside too\" {\n    let said = match at([1, 2], 0 - 1) {\n        ok(n) => \"\",\n        err(why) => why,\n    }\n    assert said == \"index -1 is outside a list of 2\"\n    assert answer() == 31\n}\n",
+            call: "answer",
+            expect: 31,
+        },
+        // A list of booleans is narrower on the stack than in memory, so
+        // something has to widen it going in and narrow it coming out.
+        Agreed {
+            name: "a list of booleans keeps its width",
+            source: "module a\n\nfn count(flag: Bool) -> Int {\n    if flag {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    let flags = push([true, false], true)\n    match at(flags, 2) {\n        ok(flag) => count(flag),\n        err(why) => 0 - 1,\n    }\n}\n\ntest \"a boolean survives a list\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // Text taken apart and put back together, which is most of what a
+        // program that reads anything does.
+        Agreed {
+            name: "text taken apart",
+            source: "module a\n\nfn answer() -> Int { length(split(\"a,b,c\", \",\")) }\n\ntest \"three pieces\" {\n    assert join(split(\"a,b,c\", \",\"), \",\") == \"a,b,c\"\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        // A separator at an edge leaves an empty piece, which is what makes
+        // `split` and `join` inverses rather than nearly so.
+        Agreed {
+            name: "a separator at the edge",
+            source: "module a\n\nfn answer() -> Int { length(split(\",a,\", \",\")) }\n\ntest \"an empty piece either side\" {\n    assert join(split(\",a,\", \",\"), \",\") == \",a,\"\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        // An empty separator gives the characters, which is the prelude's
+        // answer and the reason walking a string needs no second name.
+        Agreed {
+            name: "an empty separator gives the characters",
+            source: "module a\n\nfn answer() -> Int { length(split(\"añb\", \"\")) }\n\ntest \"three characters, four bytes\" {\n    assert join(split(\"añb\", \"\"), \"-\") == \"a-ñ-b\"\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        Agreed {
+            name: "a separator longer than one character",
+            source: "module a\n\nfn answer() -> Int { length(split(\"a--b--c\", \"--\")) }\n\ntest \"the whole separator has to match\" {\n    assert join(split(\"a--b--c\", \"--\"), \"|\") == \"a|b|c\"\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        Agreed {
+            name: "nothing to split on",
+            source: "module a\n\nfn answer() -> Int { length(split(\"abc\", \",\")) }\n\ntest \"one piece, which is the whole thing\" {\n    assert join(split(\"abc\", \",\"), \",\") == \"abc\"\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        Agreed {
+            name: "the ends taken off",
+            source: "module a\n\nfn answer() -> Int { length(trim(\"  \\t hi \\n\")) }\n\ntest \"four characters and not the Unicode table\" {\n    assert trim(\"  hi \") == \"hi\"\n    assert trim(\"   \") == \"\"\n    assert trim(\"hi\") == \"hi\"\n    assert answer() == 2\n}\n",
+            call: "answer",
+            expect: 2,
+        },
+        Agreed {
+            name: "the twenty-six letters",
+            source: "module a\n\nfn answer() -> Int { length(upper(\"añb1\")) }\n\ntest \"everything else comes back as it went in\" {\n    assert upper(\"añb1\") == \"AñB1\"\n    assert lower(\"AñB1\") == \"añb1\"\n    assert answer() == 4\n}\n",
+            call: "answer",
+            expect: 4,
+        },
+        // The other half of `to_string`, and the two are inverses over every
+        // number either of them can write.
+        Agreed {
+            name: "a number read out of text",
+            source: "module a\n\nfn answer() -> Int {\n    match to_int(\"42\") {\n        ok(n) => n,\n        err(why) => 0 - 1,\n    }\n}\n\ntest \"a sign is allowed and nothing else is\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
+        Agreed {
+            name: "text that is not a number",
+            source: "module a\n\nfn answer() -> Int {\n    match to_int(\"4x\") {\n        ok(n) => n,\n        err(why) => length(why),\n    }\n}\n\ntest \"the message quotes what it was given\" {\n    let said = match to_int(\"4x\") {\n        ok(n) => \"\",\n        err(why) => why,\n    }\n    assert said == \"`4x` is not a number\"\n    assert answer() == 20\n}\n",
+            call: "answer",
+            expect: 20,
+        },
+        Agreed {
+            name: "the boundaries a number can be read at",
+            source: "module a\n\nfn read(text: String) -> Int {\n    match to_int(text) {\n        ok(n) => n,\n        err(why) => 0,\n    }\n}\n\nfn failed(text: String) -> Int {\n    match to_int(text) {\n        ok(n) => 0,\n        err(why) => 1,\n    }\n}\n\nfn answer() -> Int {\n    failed(\"\") + failed(\"-\") + failed(\" 1\") + failed(\"9223372036854775808\")\n}\n\ntest \"the edges, from both sides\" {\n    assert read(\"-9223372036854775808\") == 0 - 9223372036854775807 - 1\n    assert read(\"9223372036854775807\") == 9223372036854775807\n    assert read(\"+7\") == 7\n    assert read(\"-0\") == 0\n    assert answer() == 4\n}\n",
+            call: "answer",
+            expect: 4,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",

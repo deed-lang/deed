@@ -59,6 +59,13 @@ release notes.
 
 ### Tools
 
+- The compiled backend has all thirteen prelude functions. `at`, `push`,
+  `repeat`, `split`, `join`, `trim`, `upper`, `lower`, `to_string` and `to_int`
+  used to exist only in the interpreter, so a program that called one ran under
+  `deed run` and refused under `deed build`. Each is now written in
+  WebAssembly directly and emitted only when reached. Thirteen of the
+  thirty-four programs in the corpus compile, up from seven, and every shape
+  that started compiling is answered the same way by both engines first.
 - The compiled backend joins two strings, compares them and orders them.
   `deed build` used to refuse any program that put two pieces of text together
   or asked which came first, which is most programs that touch text at all.

@@ -1501,14 +1501,30 @@ impl Lowering<'_> {
                         let which = match (name.name.as_str(), &subject) {
                             ("length", Ty::Str) => crate::runtime::STR_LEN,
                             ("length", Ty::List(_)) => crate::runtime::LIST_LEN,
+                            ("at", _) => crate::runtime::LIST_AT,
+                            ("push", _) => crate::runtime::LIST_PUSH,
+                            ("repeat", _) => crate::runtime::LIST_REPEAT,
+                            ("split", _) => crate::runtime::STR_SPLIT,
+                            ("join", _) => crate::runtime::STR_JOIN,
+                            ("trim", _) => crate::runtime::STR_TRIM,
+                            ("upper", _) => crate::runtime::STR_UPPER,
+                            ("lower", _) => crate::runtime::STR_LOWER,
+                            ("to_string", _) => crate::runtime::INT_TO_STR,
+                            ("to_int", _) => crate::runtime::STR_TO_INT,
                             (other, _) => {
                                 return Err(unlowered(&format!("a call to `{other}`"), name.span));
                             }
                         };
+                        // What the checker recorded for the call, rather than
+                        // a type written here per name: `at` on a list of
+                        // records and `at` on a list of numbers hand back
+                        // different `Result`s and only the checker knows
+                        // which.
+                        let ret = self.ty_at(*span)?;
                         Expr::Runtime {
                             name: which,
                             args: lowered,
-                            ret: Box::new(Ty::Int),
+                            ret: Box::new(ret),
                         }
                     }
                 }

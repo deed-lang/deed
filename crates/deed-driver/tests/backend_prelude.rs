@@ -121,14 +121,17 @@ fn probe_for_io(operation: &str) -> &'static str {
 /// Every prelude name the table above has a probe for, and whether the
 /// backend compiles it, pinned by name.
 ///
-/// This is a floor, the same way `corpus_backend.rs`'s count is: the backend
-/// compiles a subset on purpose, and a name moving from one column to the
-/// other is news either way, not a failure to chase back to green by
-/// deleting the assertion.
+/// All thirteen do, as of #877. The list stays because the failure it rules
+/// out has not gone anywhere: a name that quietly stops compiling is a
+/// regression, and a name added to the prelude without a backend answer
+/// should be visible here rather than found by whoever runs `deed build`
+/// first.
 #[test]
 fn every_callable_prelude_name_is_named_by_whether_the_backend_compiles_it() {
-    let compiles = ["ok", "err", "length"];
-    let does_not_yet = [
+    let compiles = [
+        "ok",
+        "err",
+        "length",
         "at",
         "push",
         "repeat",
@@ -140,6 +143,7 @@ fn every_callable_prelude_name_is_named_by_whether_the_backend_compiles_it() {
         "to_string",
         "to_int",
     ];
+    let does_not_yet: [&str; 0] = [];
 
     let mut checked = 0;
     for name in PRELUDE {
@@ -156,8 +160,8 @@ fn every_callable_prelude_name_is_named_by_whether_the_backend_compiles_it() {
         } else if does_not_yet.contains(name) {
             assert!(
                 outcome.is_err(),
-                "`{name}` now compiles; move it out of `does_not_yet` and into `compiles`, \
-                 and open the issue #621 asks for on whatever change did it"
+                "`{name}` now compiles; move it out of `does_not_yet` and into `compiles` \
+                 in the same change that made it compile"
             );
         } else {
             panic!("`{name}` has a probe but is in neither list above, name it in one");

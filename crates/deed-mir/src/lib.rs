@@ -530,10 +530,18 @@ pub mod runtime {
     pub const STR_EQ: &str = "deed_rt_str_eq";
     pub const STR_CMP: &str = "deed_rt_str_cmp";
     pub const STR_LEN: &str = "deed_rt_str_len";
+    pub const STR_SPLIT: &str = "deed_rt_str_split";
+    pub const STR_JOIN: &str = "deed_rt_str_join";
+    pub const STR_TRIM: &str = "deed_rt_str_trim";
+    pub const STR_UPPER: &str = "deed_rt_str_upper";
+    pub const STR_LOWER: &str = "deed_rt_str_lower";
+    pub const STR_TO_INT: &str = "deed_rt_str_to_int";
+    pub const INT_TO_STR: &str = "deed_rt_int_to_str";
     pub const LIST_NEW: &str = "deed_rt_list_new";
     pub const LIST_PUSH: &str = "deed_rt_list_push";
     pub const LIST_AT: &str = "deed_rt_list_at";
     pub const LIST_LEN: &str = "deed_rt_list_len";
+    pub const LIST_REPEAT: &str = "deed_rt_list_repeat";
     pub const CONTRACT_FAILED: &str = "deed_rt_contract_failed";
 
     /// Every name above, so something can check a call against the set.
@@ -542,10 +550,18 @@ pub mod runtime {
         STR_EQ,
         STR_CMP,
         STR_LEN,
+        STR_SPLIT,
+        STR_JOIN,
+        STR_TRIM,
+        STR_UPPER,
+        STR_LOWER,
+        STR_TO_INT,
+        INT_TO_STR,
         LIST_NEW,
         LIST_PUSH,
         LIST_AT,
         LIST_LEN,
+        LIST_REPEAT,
         CONTRACT_FAILED,
     ];
 }
