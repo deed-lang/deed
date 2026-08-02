@@ -2489,3 +2489,28 @@ fn an_outcome_on_an_ensures_clause_is_left_alone() {
         parse_ok("module a\n\nfn f(n: Int) -> Int\n  ensures ok => result == n\n{\n    n\n}\n");
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 }
+
+/// Both halves of the shape are asked for. The word on its own is somebody
+/// naming a builtin, which the type checker answers, and an `=>` after
+/// something that is not an outcome is not this mistake either.
+#[test]
+fn only_an_outcome_with_an_arrow_after_it_is_this_mistake() {
+    let (_, parsed) = parse_source("module a\n\nfn f(n: Int) -> Int\n  where ok\n{\n    n\n}\n");
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "a word on its own is not this: {:?}",
+        codes_of(&parsed.diagnostics)
+    );
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.contract.requires.len(), 1);
+
+    let (_, parsed) =
+        parse_source("module a\n\nfn f(n: Int) -> Int\n  where n => 1\n{\n    n\n}\n");
+    assert!(
+        !codes_of(&parsed.diagnostics).contains(&codes::OUTCOME_IN_WHERE),
+        "an arrow after an ordinary name is not this: {:?}",
+        codes_of(&parsed.diagnostics)
+    );
+}
