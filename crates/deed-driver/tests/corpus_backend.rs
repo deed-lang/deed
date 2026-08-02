@@ -234,6 +234,7 @@ fn the_backend_still_compiles_what_it_used_to() {
         "list.deed",
         "lists.deed",
         "map.deed",
+        "markdown.deed",
         "names.deed",
         "proven.deed",
         "ratio.deed",
