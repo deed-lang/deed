@@ -300,71 +300,56 @@ fn programs() -> Vec<Agreed> {
         },
         // Text taken apart and put back together, which is most of what a
         // program that reads anything does.
+        //
+        // What `answer` returns is the only thing the compiled side is asked
+        // for, so an assertion that sits in the `test` block alone is checked
+        // against the interpreter and nothing else. Each of these folds the
+        // comparison into the answer instead, and counts how many held.
         Agreed {
-            name: "text taken apart",
-            source: "module a\n\nfn answer() -> Int { length(split(\"a,b,c\", \",\")) }\n\ntest \"three pieces\" {\n    assert join(split(\"a,b,c\", \",\"), \",\") == \"a,b,c\"\n    assert answer() == 3\n}\n",
+            name: "text taken apart and put back together",
+            source: "module a\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(join(split(\"a,b,c\", \",\"), \"-\"), \"a-b-c\") +\n        same(join(split(\",a,\", \",\"), \"-\"), \"-a-\") +\n        same(join(split(\"añb\", \"\"), \"-\"), \"a-ñ-b\") +\n        same(join(split(\"a--b--c\", \"--\"), \"|\"), \"a|b|c\") +\n        same(join(split(\"abc\", \",\"), \",\"), \"abc\") +\n        same(join(split(\"\", \",\"), \",\"), \"\")\n}\n\ntest \"a separator at an edge leaves an empty piece\" {\n    assert answer() == 6\n}\n",
             call: "answer",
-            expect: 3,
+            expect: 6,
         },
-        // A separator at an edge leaves an empty piece, which is what makes
-        // `split` and `join` inverses rather than nearly so.
+        // How many pieces each of those came apart into, which `join` puts
+        // back together whether it is right or not.
         Agreed {
-            name: "a separator at the edge",
-            source: "module a\n\nfn answer() -> Int { length(split(\",a,\", \",\")) }\n\ntest \"an empty piece either side\" {\n    assert join(split(\",a,\", \",\"), \",\") == \",a,\"\n    assert answer() == 3\n}\n",
+            name: "how many pieces text comes apart into",
+            source: "module a\n\nfn answer() -> Int {\n    length(split(\"a,b,c\", \",\")) +\n        length(split(\",a,\", \",\")) +\n        length(split(\"añb\", \"\")) +\n        length(split(\"a--b--c\", \"--\")) +\n        length(split(\"abc\", \",\")) +\n        length(split(\"\", \",\"))\n}\n\ntest \"an empty separator gives characters, not bytes\" {\n    assert length(split(\"añb\", \"\")) == 3\n    assert answer() == 14\n}\n",
             call: "answer",
-            expect: 3,
-        },
-        // An empty separator gives the characters, which is the prelude's
-        // answer and the reason walking a string needs no second name.
-        Agreed {
-            name: "an empty separator gives the characters",
-            source: "module a\n\nfn answer() -> Int { length(split(\"añb\", \"\")) }\n\ntest \"three characters, four bytes\" {\n    assert join(split(\"añb\", \"\"), \"-\") == \"a-ñ-b\"\n    assert answer() == 3\n}\n",
-            call: "answer",
-            expect: 3,
-        },
-        Agreed {
-            name: "a separator longer than one character",
-            source: "module a\n\nfn answer() -> Int { length(split(\"a--b--c\", \"--\")) }\n\ntest \"the whole separator has to match\" {\n    assert join(split(\"a--b--c\", \"--\"), \"|\") == \"a|b|c\"\n    assert answer() == 3\n}\n",
-            call: "answer",
-            expect: 3,
-        },
-        Agreed {
-            name: "nothing to split on",
-            source: "module a\n\nfn answer() -> Int { length(split(\"abc\", \",\")) }\n\ntest \"one piece, which is the whole thing\" {\n    assert join(split(\"abc\", \",\"), \",\") == \"abc\"\n    assert answer() == 1\n}\n",
-            call: "answer",
-            expect: 1,
+            expect: 14,
         },
         Agreed {
             name: "the ends taken off",
-            source: "module a\n\nfn answer() -> Int { length(trim(\"  \\t hi \\n\")) }\n\ntest \"four characters and not the Unicode table\" {\n    assert trim(\"  hi \") == \"hi\"\n    assert trim(\"   \") == \"\"\n    assert trim(\"hi\") == \"hi\"\n    assert answer() == 2\n}\n",
+            source: "module a\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(trim(\"  hi \\t\\n\"), \"hi\") +\n        same(trim(\"   \"), \"\") +\n        same(trim(\"hi\"), \"hi\") +\n        same(trim(\"\"), \"\") +\n        same(trim(\" a b \"), \"a b\") +\n        same(trim(\"\\r\\nx\\r\\n\"), \"x\")\n}\n\ntest \"four characters and not the Unicode table\" {\n    assert answer() == 6\n}\n",
             call: "answer",
-            expect: 2,
+            expect: 6,
+        },
+        // The bytes either side of the two ranges, because a shift applied
+        // one place too far is the way this gets written wrong.
+        Agreed {
+            name: "the twenty-six letters and nothing else",
+            source: "module a\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(upper(\"añb1\"), \"AñB1\") +\n        same(lower(\"AñB1\"), \"añb1\") +\n        same(upper(\"az\"), \"AZ\") +\n        same(lower(\"AZ\"), \"az\") +\n        same(upper(\"`{\"), \"`{\") +\n        same(lower(\"@[\"), \"@[\")\n}\n\ntest \"text in a script with no case survives\" {\n    assert answer() == 6\n}\n",
+            call: "answer",
+            expect: 6,
         },
         Agreed {
-            name: "the twenty-six letters",
-            source: "module a\n\nfn answer() -> Int { length(upper(\"añb1\")) }\n\ntest \"everything else comes back as it went in\" {\n    assert upper(\"añb1\") == \"AñB1\"\n    assert lower(\"AñB1\") == \"añb1\"\n    assert answer() == 4\n}\n",
+            name: "a number written out",
+            source: "module a\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(to_string(0), \"0\") +\n        same(to_string(7), \"7\") +\n        same(to_string(0 - 7), \"-7\") +\n        same(to_string(9223372036854775807), \"9223372036854775807\") +\n        same(to_string(0 - 9223372036854775807 - 1), \"-9223372036854775808\")\n}\n\ntest \"the smallest number has no positive to negate\" {\n    assert answer() == 5\n}\n",
             call: "answer",
-            expect: 4,
-        },
-        // The other half of `to_string`, and the two are inverses over every
-        // number either of them can write.
-        Agreed {
-            name: "a number read out of text",
-            source: "module a\n\nfn answer() -> Int {\n    match to_int(\"42\") {\n        ok(n) => n,\n        err(why) => 0 - 1,\n    }\n}\n\ntest \"a sign is allowed and nothing else is\" {\n    assert answer() == 42\n}\n",
-            call: "answer",
-            expect: 42,
+            expect: 5,
         },
         Agreed {
             name: "text that is not a number",
-            source: "module a\n\nfn answer() -> Int {\n    match to_int(\"4x\") {\n        ok(n) => n,\n        err(why) => length(why),\n    }\n}\n\ntest \"the message quotes what it was given\" {\n    let said = match to_int(\"4x\") {\n        ok(n) => \"\",\n        err(why) => why,\n    }\n    assert said == \"`4x` is not a number\"\n    assert answer() == 20\n}\n",
+            source: "module a\n\nfn said(text: String) -> String {\n    match to_int(text) {\n        ok(n) => \"\",\n        err(why) => why,\n    }\n}\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(said(\"4x\"), \"`4x` is not a number\") +\n        same(said(\"\"), \"`` is not a number\") +\n        same(said(\" 1\"), \"` 1` is not a number\") +\n        same(said(\"42\"), \"\")\n}\n\ntest \"the message quotes what it was given\" {\n    assert answer() == 4\n}\n",
             call: "answer",
-            expect: 20,
+            expect: 4,
         },
         Agreed {
             name: "the boundaries a number can be read at",
-            source: "module a\n\nfn read(text: String) -> Int {\n    match to_int(text) {\n        ok(n) => n,\n        err(why) => 0,\n    }\n}\n\nfn failed(text: String) -> Int {\n    match to_int(text) {\n        ok(n) => 0,\n        err(why) => 1,\n    }\n}\n\nfn answer() -> Int {\n    failed(\"\") + failed(\"-\") + failed(\" 1\") + failed(\"9223372036854775808\")\n}\n\ntest \"the edges, from both sides\" {\n    assert read(\"-9223372036854775808\") == 0 - 9223372036854775807 - 1\n    assert read(\"9223372036854775807\") == 9223372036854775807\n    assert read(\"+7\") == 7\n    assert read(\"-0\") == 0\n    assert answer() == 4\n}\n",
+            source: "module a\n\nfn read(text: String) -> Int {\n    match to_int(text) {\n        ok(n) => n,\n        err(why) => 0,\n    }\n}\n\nfn failed(text: String) -> Int {\n    match to_int(text) {\n        ok(n) => 0,\n        err(why) => 1,\n    }\n}\n\nfn is(got: Int, want: Int) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    failed(\"\") + failed(\"-\") + failed(\" 1\") + failed(\"9223372036854775808\") +\n        is(read(\"-9223372036854775808\"), 0 - 9223372036854775807 - 1) +\n        is(read(\"9223372036854775807\"), 9223372036854775807) +\n        is(read(\"+7\"), 7) +\n        is(read(\"-0\"), 0)\n}\n\ntest \"the edges, from both sides\" {\n    assert answer() == 8\n}\n",
             call: "answer",
-            expect: 4,
+            expect: 8,
         },
         Agreed {
             name: "a match on a choice",

@@ -1785,7 +1785,14 @@ fn text_number(at: &mut Where<'_>) -> (Vec<ValType>, Vec<Ins>) {
         Ins::I64Sub,
         Ins::LocalSet(ACC),
     ]);
-    body.extend(count_to(I, N, digit));
+    // Not `count_to`, which starts its counter at zero: the sign has already
+    // moved `I` past the first byte and starting over would read the sign as
+    // a digit.
+    body.extend(walk_while(
+        I,
+        vec![Ins::LocalGet(I), Ins::LocalGet(N), Ins::I32LtS],
+        digit,
+    ));
 
     // A positive answer is the accumulator turned round, and the smallest
     // `Int` has no positive counterpart to turn into.
@@ -1823,4 +1830,53 @@ fn text_number(at: &mut Where<'_>) -> (Vec<ValType>, Vec<Ins>) {
         ],
         body,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Helper, STR_FIND, STR_SLICE};
+
+    /// Every helper is found again by the name it carries.
+    ///
+    /// The two directions are written separately and there is nothing making
+    /// them agree, so a name added to one and not the other compiles: the
+    /// module would say it calls `deed_rt_str_trim` and the IR asking for
+    /// `deed_rt_str_trim` would get nothing back.
+    #[test]
+    fn every_helper_is_found_again_by_the_name_it_carries() {
+        for &helper in Helper::ALL {
+            let name = helper.name();
+            if name == STR_SLICE || name == STR_FIND {
+                // Two the backend only ever calls itself. No prelude
+                // function lowers to either, so there is no name to look up
+                // and `named` saying so is the answer.
+                assert_eq!(
+                    Helper::named(name),
+                    None,
+                    "`{name}` is reachable from the IR now; if that is on \
+                     purpose it needs a prelude function behind it"
+                );
+                continue;
+            }
+            assert_eq!(
+                Helper::named(name),
+                Some(helper),
+                "`{name}` is the name {helper:?} carries and nothing finds it"
+            );
+        }
+    }
+
+    /// No two helpers answer to the same name.
+    #[test]
+    fn no_two_helpers_carry_the_same_name() {
+        let mut seen: Vec<&str> = Helper::ALL.iter().map(|one| one.name()).collect();
+        let count = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            count,
+            seen.len(),
+            "two helpers carry the same name: {seen:?}"
+        );
+    }
 }
