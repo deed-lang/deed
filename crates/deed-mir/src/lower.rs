@@ -1051,18 +1051,20 @@ fn bind_checked(
     let ast::Type::Named { name, args, .. } = written else {
         return;
     };
-    if args.is_empty() && generics.iter().any(|one| one.name == name.name) {
-        out.push((name.name.to_string(), actual.clone()));
+    if args.is_empty() {
+        if generics.iter().any(|one| one.name == name.name) {
+            out.push((name.name.to_string(), actual.clone()));
+        }
         return;
     }
-    let actual_args: Vec<CheckedTy> = match actual {
-        CheckedTy::Named { args, .. } => args.clone(),
-        CheckedTy::External { args, .. } => args.clone(),
-        CheckedTy::List(element) => vec![(**element).clone()],
-        CheckedTy::Result(ok, err) => vec![(**ok).clone(), (**err).clone()],
+    // Only what somebody declared. A `List` or a `Result` says what it holds
+    // at this layer too, so nothing gets here needing those: what the value
+    // came out as answered first.
+    let actual_args = match actual {
+        CheckedTy::Named { args, .. } | CheckedTy::External { args, .. } => args,
         _ => return,
     };
-    for (written, actual) in args.iter().zip(&actual_args) {
+    for (written, actual) in args.iter().zip(actual_args) {
         bind_checked(written, actual, generics, out);
     }
 }
