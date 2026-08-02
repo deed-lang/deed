@@ -36,6 +36,11 @@ release notes.
   the arrow where the body should have begun, so the message was about a brace
   and the function went on to have no return type and a body that did not match
   the one it was missing.
+- `Int.max` and `Int.min` get DEED4031, which names the number and writes it.
+  The answer used to be that `Int` is a type and not a value, which is true and
+  is not the question. Ten of the recorded model turns reached for one of the
+  two, all of them writing a `where` clause that had to keep a sum inside the
+  type.
 ### Standard library
 
 - None yet.
