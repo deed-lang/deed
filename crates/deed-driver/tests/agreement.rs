@@ -744,6 +744,57 @@ fn a_proven_precondition_compiles_to_nothing_and_a_guarded_one_does_not() {
     );
 }
 
+/// An `assert refuses` keeps the check it is aiming at, and only that one.
+///
+/// The check is dropped when every recorded call proved the clause, and the
+/// checker records no tier for a call inside `assert refuses`: a
+/// precondition meant to fail is not an obligation anybody discharged. So
+/// the one caller that needs the check is the one caller nothing knew about,
+/// and the clause it aims at has to be named rather than inferred from the
+/// tiers.
+///
+/// Both halves matter. A backend that kept every check whenever any `assert
+/// refuses` appeared would pass the first assertion and lose what the tier
+/// is worth, which is the claim `design/05-backend.md` makes.
+#[test]
+fn an_assert_refuses_keeps_the_check_it_aims_at_and_no_other() {
+    let source = "module a\n\n\
+fn halve(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n / 2\n}\n\n\
+fn twice(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n + n\n}\n\n\
+fn answer() -> Int { twice(4) }\n\n\
+test \"a negative one is turned down\" {\n    assert refuses halve(0 - 1)\n}\n";
+
+    let (_, one) = checked(source);
+    let lowered = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+    let sizes: Vec<usize> = lowered
+        .functions
+        .iter()
+        .map(|function| function.body.stmts.len())
+        .collect();
+
+    let halve = lowered
+        .functions
+        .iter()
+        .position(|function| function.name == "halve")
+        .expect("`halve` is declared");
+    let twice = lowered
+        .functions
+        .iter()
+        .position(|function| function.name == "twice")
+        .expect("`twice` is declared");
+
+    assert!(
+        sizes[halve] > sizes[twice],
+        "`halve` is what the `assert refuses` aims at, so it keeps its check \
+         and `twice` does not: {sizes:?}"
+    );
+    assert_eq!(
+        sizes[twice], 0,
+        "every call to `twice` proved its clause, so it should compile to no \
+         check at all: {sizes:?}"
+    );
+}
+
 /// A program the backend cannot compile has to say so, rather than compile
 /// into something that runs and answers wrongly.
 #[test]
