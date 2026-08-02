@@ -1738,9 +1738,13 @@ impl Lowering<'_> {
                 None => return Err(unlowered(&format!("the type `{name}`"), span)),
             },
             // An empty list's element type is never known and never read,
-            // because there is no element to read it off.
+            // because there is no element to read it off. It stands in as a
+            // number rather than as `()`: a `()` has no representation at
+            // all, so a walk over one counts elements that take no room, and
+            // `filter([], ...)` came out as a function whose body disagreed
+            // with itself about how much of the stack it had.
             CheckedTy::List(element) if matches!(**element, CheckedTy::Unknown) => {
-                Ty::List(Box::new(Ty::Unit))
+                Ty::List(Box::new(Ty::Int))
             }
             CheckedTy::List(element) => Ty::List(Box::new(self.convert(element, span)?)),
             // A choice with two variants that nobody wrote down. See
@@ -2635,6 +2639,14 @@ impl Lowering<'_> {
         // Every operation the effect declares, in that order, so dispatch
         // can index rather than search. A handler that leaves one out did
         // not pass the checker.
+        // Every operation gets its place in the list before any body is
+        // lowered. A body may lift something of its own, a closure or a copy
+        // of a generic function or a function from another module, and each
+        // of those is pushed here too. So the second operation of a handler
+        // whose first one lifted anything landed one slot past where the
+        // numbers above said it was, and every `perform` after it reached a
+        // function that answers a different question.
+        let mut places = Vec::new();
         for signature in &declared.operations {
             let body = handler
                 .operations
@@ -2676,8 +2688,10 @@ impl Lowering<'_> {
                 params.clone(),
                 ret.clone(),
             ));
-            let at = self.lifted.len() - 1;
+            places.push((self.lifted.len() - 1, body, params, ret));
+        }
 
+        for (at, body, params, ret) in places {
             let outer_slots = std::mem::take(&mut self.slots);
             let outer_state = self.state.replace((shape, Local(0)));
             let outer_function =

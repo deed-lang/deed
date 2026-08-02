@@ -1723,10 +1723,10 @@ fn build_writes_what_it_can_and_names_what_it_cannot() {
 
 /// A program the backend does not compile, for the two tests above.
 ///
-/// Comparing two records is structural in this language, and two addresses
-/// being equal is not two records being equal, so the backend refuses rather
-/// than answering the wrong question.
-const REFUSED: &str = "module hard\n\nrecord Point {\n    x: Int,\n}\n\nfn same(one: Point, other: Point) -> Bool { one == other }\n";
+/// Two function values, compared. What two of them hold is a code pointer and
+/// an environment, and neither says whether the two would answer the same
+/// way, so the backend refuses rather than answering the wrong question.
+const REFUSED: &str = "module hard\n\nfn twice(n: Int) -> Int { n + n }\n\nfn same(one: Fn(Int) -> Int, other: Fn(Int) -> Int) -> Bool { one == other }\n\nfn holds(step: Fn(Int) -> Int) -> Bool { same(step, step) }\n";
 
 /// A file that calls into another one builds, and the other one is not
 /// written next to somebody else's source.

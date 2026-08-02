@@ -374,7 +374,17 @@ impl<'m> Checker<'m> {
 /// Checks every function this backend emits against the module's own
 /// declared types, the way loading the module for real would.
 pub fn validate(module: &Module) -> Result<(), Invalid> {
-    for func in &module.funcs {
+    for (at, func) in module.funcs.iter().enumerate() {
+        let named = |why: Invalid| {
+            let index = module.imports.len() + at;
+            let name = module
+                .names
+                .iter()
+                .find(|(one, _)| *one as usize == index)
+                .map(|(_, name)| name.as_str())
+                .unwrap_or("a function with no name");
+            Invalid(format!("in `{name}`: {}", why.0))
+        };
         let signature = module.types.get(func.type_index as usize).ok_or_else(|| {
             Invalid(format!(
                 "a function names a type index ({}) the module does not have",
@@ -393,9 +403,9 @@ pub fn validate(module: &Module) -> Result<(), Invalid> {
         };
         checker.push_frame(signature.results.clone(), signature.results.clone());
         for ins in &func.body {
-            checker.instruction(ins)?;
+            checker.instruction(ins).map_err(named)?;
         }
-        checker.pop_frame()?;
+        checker.pop_frame().map_err(named)?;
     }
 
     for index in &module.table {

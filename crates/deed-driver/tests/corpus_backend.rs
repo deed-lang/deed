@@ -184,90 +184,32 @@ fn every_refusal_says_what_it_found() {
     }
 }
 
-/// The corpus is mostly beyond this backend, and that is written down rather
-/// than discovered.
+/// Every file in the corpus that checks on its own compiles.
 ///
-/// A floor rather than a target, and named rather than counted: a list says
-/// which file stopped compiling, and a number only says that one did. What
-/// it catches is a change that quietly stops compiling things that used to,
-/// which is the direction a backend regresses in.
+/// This was a list of names and a floor, because the backend compiled seven
+/// of the thirty-five and the interesting question was which. It is all of
+/// them now (#877), so the list is the corpus and what is written down is
+/// that nothing is refused.
 ///
-/// #623: the other direction regresses just as quietly, so this checks it
-/// too. Every file the backend compiles today has to be in the list below,
-/// not only every file in the list has to compile: a file that starts
-/// compiling and is not added here passes silently, and six months later
-/// nobody remembers whether that was on purpose. Growing this list is the
-/// last commit of whatever PR made the file compile, not a cleanup
-/// afterwards.
-///
-/// The files not in this list are refused for a handful of reasons, tracked
-/// together under #877 rather than repeated here per file: a call into
-/// another module, a name bound to a function value, a generic type, an
-/// expression the lowering has no arm for, or two boxed values compared.
-/// A file refused for a reason not on that list should say so in
-/// `every_refusal_says_what_it_found`'s output before it is worth chasing
-/// further.
+/// What it catches is the same thing the list caught, from the other end: a
+/// change that stops compiling something. The name of whatever stopped is in
+/// the failure, along with what stopped it, which is what the list existed to
+/// say.
 #[test]
-fn the_backend_still_compiles_what_it_used_to() {
+fn the_backend_compiles_the_whole_corpus() {
     let outcomes = walked();
-    let mut compiled: Vec<&str> = outcomes
+    let refused: Vec<String> = outcomes
         .iter()
-        .filter(|one| one.refused.is_none())
-        .map(|one| one.name.as_str())
+        .filter_map(|one| {
+            let why = one.refused.as_deref()?;
+            Some(format!("`{}`: {why}", one.name))
+        })
         .collect();
-    compiled.sort_unstable();
 
-    let mut expected = vec![
-        "calculator.deed",
-        "closures.deed",
-        // The capability example: a program that reads a file it was given
-        // access to and cannot read one it was not.
-        "config.deed",
-        "counter.deed",
-        "date.deed",
-        "diverge.deed",
-        "generator.deed",
-        "generic_types.deed",
-        "generics.deed",
-        // A program that writes a line, which the module asks its host for.
-        "hello.deed",
-        "journal.deed",
-        "json.deed",
-        "kv_store.deed",
-        "list.deed",
-        "lists.deed",
-        "logs.deed",
-        "map.deed",
-        "markdown.deed",
-        "names.deed",
-        "proven.deed",
-        "ranking.deed",
-        "ratio.deed",
-        "scheduler.deed",
-        "sink.deed",
-        "stack_machine.deed",
-        "string.deed",
-        "strings.deed",
-        "table.deed",
-        "tic_tac_toe.deed",
-        "todo.deed",
-        "tree.deed",
-        "using_list.deed",
-        "workers.deed",
-    ];
-    expected.sort_unstable();
-
-    for name in &expected {
-        assert!(
-            compiled.contains(name),
-            "`{name}` used to compile and does not any more; the corpus now compiles {compiled:?}"
-        );
-    }
-
-    assert_eq!(
-        compiled, expected,
-        "the corpus now compiles a file this list does not name; add it to `expected` \
-         in the same change that made it compile, so the next reader does not have to \
-         rediscover which files the backend handles"
+    assert!(
+        refused.is_empty(),
+        "the backend compiles every file in the corpus and now refuses {}:\n{}",
+        refused.len(),
+        refused.join("\n")
     );
 }

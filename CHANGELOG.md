@@ -68,6 +68,28 @@ release notes.
 
 ### Tools
 
+- `deed build` compiles every program in the corpus. It compiled seven of the
+  thirty-five when #877 was opened; the rest were refused for a dozen separate
+  reasons and each one is closed. What `deed run` interprets and what
+  `deed build` produces are the same language now, which is the difference
+  between a program you can write and a program you can hand to somebody.
+- Two values that live in memory compare by what they hold. Equality is
+  structural in this language and two addresses being equal is not two records
+  being equal, so the backend refused rather than answering the wrong
+  question. It writes a comparison per shape now: a record knows its fields, a
+  choice knows its variants, a list knows what it holds, and a shape holding
+  another calls that shape's comparison.
+- A handler whose first operation lifts a function of its own dispatches the
+  rest of its operations to the right bodies. Each operation was told where it
+  would be before any of them was lowered, and a body that added a function
+  after itself moved every operation after it, so `Queue.more()` reached
+  whatever the operation before it had lifted.
+- A field with no representation is not read. `ok(nothing)` on a call that
+  answers with `()` bound a name to a word that was never a value, and left it
+  behind on the stack.
+- An empty list's element stands in as a number rather than as `()`. A `()`
+  takes no room, so a walk over a list of them counted elements of nothing and
+  the function disagreed with itself about how much of the stack it had.
 - A pattern that reaches one level in compiles.
   `err(OverLimit { limit: reached })` names a field of the record the failure
   holds, and what it reads is the same read twice over.

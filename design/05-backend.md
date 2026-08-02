@@ -315,6 +315,21 @@ function nobody called would be wrong. And a callee's `where` clause is kept wha
 other side worked out about its own callers: the call that could break it was answered for
 in the caller's table, which the callee's module never saw.
 
+## Comparing two values that live in memory
+
+Equality is structural in this language, and two addresses being equal is not two records
+being equal, so the backend refused every comparison of a boxed value rather than answering
+the wrong question. Text was the exception, because text had a helper.
+
+What it needed was a comparison per shape, because none of what decides the answer survives
+into a value at runtime: a record knows its fields, a choice knows its variants, a list
+knows what it holds, and a value knows none of that. So `deed-codegen/src/equality.rs`
+writes one function per shape a program compares two of, closed over transitively, numbered
+after the runtime helpers. A shape holding another calls that shape's function.
+
+The reason this is the last thing #877 closed is that it is the only refusal that was a
+decision rather than a gap. The others were the backend not having got somewhere yet.
+
 ## What a tier costs at runtime, measured in both engines
 
 `design/02-syntax.md` says an obligation the checker proves costs nothing at runtime and
