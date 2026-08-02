@@ -425,6 +425,15 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 45,
         },
+        // A walk whose accumulator only the context says the type of. `None`
+        // says nothing about what an `Option` holds, and the walk reads the
+        // accumulator in its `while` before the body has settled anything.
+        Agreed {
+            name: "a walk that carries what the return type says",
+            source: "module a\n\nchoice Found {\n    Nothing,\n    At { index: Int },\n}\n\nfn is_nothing(found: Found) -> Bool {\n    match found {\n        Nothing => true,\n        At { index } => false,\n    }\n}\n\nfn first_over(xs: List<Int>, bar: Int) -> Found {\n    for x at i in xs with seen = Nothing while is_nothing(seen) {\n        if x > bar {\n            At { index: i }\n        } else {\n            seen\n        }\n    }\n}\n\nfn where_at(xs: List<Int>, bar: Int) -> Int {\n    match first_over(xs, bar) {\n        Nothing => 0 - 1,\n        At { index } => index,\n    }\n}\n\nfn answer() -> Int {\n    where_at([1, 5, 9], 4) + where_at([1, 2], 4) + where_at([7], 4)\n}\n\ntest \"the accumulator is what the walk has to produce\" {\n    assert where_at([1, 5, 9], 4) == 1\n    assert where_at([1, 2], 4) == 0 - 1\n    assert answer() == 0\n}\n",
+            call: "answer",
+            expect: 0,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",

@@ -238,6 +238,7 @@ fn compiled_tests_run_in_the_expected_files() {
         "json.deed",
         "markdown.deed",
         "proven.deed",
+        "ranking.deed",
         "tic_tac_toe.deed",
     ];
     expected.sort_unstable();

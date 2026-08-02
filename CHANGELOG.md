@@ -64,6 +64,11 @@ release notes.
 
 ### Tools
 
+- A `for` whose accumulator only the surrounding type says the shape of is
+  checked against that shape. `with seen = Nothing` says nothing about what
+  the choice holds, and the `while` above the body reads the accumulator
+  before anything has settled it, so every read of it was a value the compiler
+  knew nothing about and the backend could not compile.
 - A record, a choice, an alias, an effect or a handler declared in one module
   and used in another compiles. A type crosses a boundary the same way a
   function does, and what it comes out as is what the module that declared it
