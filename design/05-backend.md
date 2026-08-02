@@ -296,6 +296,25 @@ both engines and compares. Type names (`Int`, `String`, `Bool`, `Result`, `List`
 of them passes through the backend is a different, already-answered question (`generics.rs`,
 `result.rs`, `lists.rs`, `host.rs`), not one a function call can ask.
 
+## One module at a time was the largest thing between the backend and the corpus
+
+The interpreter has always been handed every file the compiler checked. The lowering was
+handed one, so a program with a `use` in it was refused, which is most programs that do
+any real work: eight of the thirty-four files in the corpus were waiting on this and
+nothing else.
+
+What made it more than plumbing is that a `DefId` is an index into one module's table and a
+`Span` is an offset into one file, so neither means anything on the other side. A body from
+another module has to be read with that module's resolutions and that module's types, and
+the lowering swaps them in around the call rather than looking them up per read.
+
+Two decisions worth writing down. Only what is reached is lowered, so a module that ships
+thirty functions and is imported for one contributes one, which matters because the rest of
+it may use shapes this backend cannot compile and refusing the whole program over a
+function nobody called would be wrong. And a callee's `where` clause is kept whatever the
+other side worked out about its own callers: the call that could break it was answered for
+in the caller's table, which the callee's module never saw.
+
 ## What a tier costs at runtime, measured in both engines
 
 `design/02-syntax.md` says an obligation the checker proves costs nothing at runtime and

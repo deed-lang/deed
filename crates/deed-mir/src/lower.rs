@@ -56,6 +56,18 @@ impl Nominal<'_> {
     }
 }
 
+/// One checked module, for a caller that has more than one.
+///
+/// A call into another module needs that module's syntax to lower a body
+/// from, and its own resolutions and types to read it with. A `DefId` is an
+/// index into one module's table and a `Span` is an offset into one file, so
+/// neither means anything on the other side and the three travel together.
+pub struct Alongside<'a> {
+    pub module: &'a Module,
+    pub resolutions: &'a Resolutions,
+    pub types: &'a Types,
+}
+
 /// Lowers every function a module declares.
 ///
 /// Takes the whole checked module rather than one function, because a call
@@ -68,7 +80,22 @@ pub fn lower(
     resolutions: &Resolutions,
     types: &Types,
 ) -> Result<Program, Unlowered> {
-    lower_impl(module, resolutions, types, false)
+    lower_impl(module, resolutions, types, &[], false)
+}
+
+/// Lowers a module that calls into others, with those others alongside.
+///
+/// Only what is reached is lowered. A module that ships thirty functions and
+/// is imported for one contributes one, which matters because the rest of it
+/// may use shapes this backend cannot compile and refusing the whole program
+/// over a function nobody called would be wrong.
+pub fn lower_alongside(
+    module: &Module,
+    resolutions: &Resolutions,
+    types: &Types,
+    alongside: &[Alongside<'_>],
+) -> Result<Program, Unlowered> {
+    lower_impl(module, resolutions, types, alongside, false)
 }
 
 /// Lowers every function a module declares, and also lowers test blocks.
@@ -83,17 +110,54 @@ pub fn lower_with_tests(
     resolutions: &Resolutions,
     types: &Types,
 ) -> Result<Program, Unlowered> {
-    lower_impl(module, resolutions, types, true)
+    lower_impl(module, resolutions, types, &[], true)
 }
 
-fn lower_impl(
+/// The same, with the modules this one calls into alongside.
+pub fn lower_with_tests_alongside(
     module: &Module,
     resolutions: &Resolutions,
     types: &Types,
-    include_tests: bool,
+    alongside: &[Alongside<'_>],
 ) -> Result<Program, Unlowered> {
-    let mut program = Program::new();
+    lower_impl(module, resolutions, types, alongside, true)
+}
 
+/// Everything about one module that lowering a body from it needs.
+///
+/// Built for every module the caller handed over, before any body is
+/// lowered, because a call into another module has to be able to read that
+/// module's syntax with that module's tables and no others.
+struct Unit<'a> {
+    /// What the module calls itself, which is what a `use` on the other side
+    /// names it by.
+    path: String,
+    resolutions: &'a Resolutions,
+    types: &'a Types,
+    layouts: HashMap<String, crate::LayoutId>,
+    alias_types: HashMap<String, Ty>,
+    aliases: HashMap<String, &'a ast::TypeAlias>,
+    nominals: HashMap<String, Nominal<'a>>,
+    /// Every function the module declares, in the order it declares them.
+    order: Vec<&'a ast::FnDecl>,
+    declarations: HashMap<String, &'a ast::FnDecl>,
+    effects: HashMap<String, crate::EffectId>,
+    signatures: HashMap<String, &'a ast::EffectDecl>,
+    handlers: HashMap<String, &'a ast::HandlerDecl>,
+    guards: HashMap<Span, Guard>,
+    refinements: HashMap<DefId, Refinement<'a>>,
+}
+
+/// Reads one module into the tables lowering a body from it needs.
+///
+/// Adds the layouts and effects it declares to `program`, so a layout id
+/// means the same thing whichever module it came from.
+fn tables<'a>(
+    module: &'a Module,
+    resolutions: &'a Resolutions,
+    types: &'a Types,
+    program: &mut Program,
+) -> Result<Unit<'a>, Unlowered> {
     // Every record and choice first, so a signature naming one can find it.
     // Two passes, and for the same reason as functions below: a record may
     // hold one declared under it.
@@ -203,9 +267,11 @@ fn lower_impl(
     program.layouts = shapes;
 
     let mut order: Vec<&ast::FnDecl> = Vec::new();
+    let mut declarations: HashMap<String, &ast::FnDecl> = HashMap::new();
     for item in &module.items {
         if let Item::Function(function) = item {
             order.push(function);
+            declarations.insert(function.sig.name.name.to_string(), function);
         }
     }
 
@@ -255,6 +321,7 @@ fn lower_impl(
             alias_types.insert(name.clone(), lowered);
         }
     }
+    program.layouts = shapes;
 
     // What each refinement says, and what it says it about. `value` is the
     // only name the language introduces on its own, and resolution gives it a
@@ -303,12 +370,56 @@ fn lower_impl(
         })
         .collect();
 
+    Ok(Unit {
+        path: module
+            .name
+            .as_ref()
+            .map(ast::ModulePath::to_string_path)
+            .unwrap_or_default(),
+        resolutions,
+        types,
+        layouts,
+        alias_types,
+        aliases,
+        nominals,
+        order,
+        declarations,
+        effects,
+        signatures,
+        handlers,
+        guards,
+        refinements,
+    })
+}
+
+fn lower_impl(
+    module: &Module,
+    resolutions: &Resolutions,
+    types: &Types,
+    alongside: &[Alongside<'_>],
+    include_tests: bool,
+) -> Result<Program, Unlowered> {
+    let mut program = Program::new();
+
+    let mut units = vec![tables(module, resolutions, types, &mut program)?];
+    for extra in alongside {
+        // A module that cannot be read at all is one nothing here can call
+        // into, which is a refusal at the call rather than at the file: a
+        // program that imports something for one function should not be
+        // turned away over the rest of it.
+        if let Ok(unit) = tables(extra.module, extra.resolutions, extra.types, &mut program) {
+            units.push(unit);
+        }
+    }
+
+    let mut shapes = std::mem::take(&mut program.layouts);
+
     // Two passes over functions: every signature first, so a body can call
     // anything the module declares regardless of where it sits in the file.
     // One pass would make calling forward an error, which is a rule this
     // language does not have.
     let mut by_def: HashMap<DefId, crate::FuncId> = HashMap::new();
-    for declaration in &order {
+    for declaration in &units[0].order {
         // A generic declaration has no one signature until a call says what
         // its parameters stand for, so it is lowered per instantiation
         // rather than once here.
@@ -323,9 +434,9 @@ fn lower_impl(
             };
             params.push(written(
                 ty,
-                &layouts,
-                &aliases,
-                &nominals,
+                &units[0].layouts,
+                &units[0].aliases,
+                &units[0].nominals,
                 &HashMap::new(),
                 &mut shapes,
             )?);
@@ -334,9 +445,9 @@ fn lower_impl(
             None => Ty::Unit,
             Some(ty) => written(
                 ty,
-                &layouts,
-                &aliases,
-                &nominals,
+                &units[0].layouts,
+                &units[0].aliases,
+                &units[0].nominals,
                 &HashMap::new(),
                 &mut shapes,
             )?,
@@ -349,10 +460,6 @@ fn lower_impl(
     program.layouts = shapes;
 
     let mut lifted: Vec<Function> = Vec::new();
-    let mut declarations: HashMap<String, &ast::FnDecl> = HashMap::new();
-    for declaration in &order {
-        declarations.insert(declaration.sig.name.name.to_string(), declaration);
-    }
     let mut instantiated: HashMap<String, crate::FuncId> = HashMap::new();
     let mut answered: HashMap<String, (crate::EffectId, crate::LayoutId, Vec<crate::FuncId>)> =
         HashMap::new();
@@ -360,38 +467,24 @@ fn lower_impl(
     // Only the ones that got a signature above, in the same order, since a
     // generic declaration is lowered by the calls that name it rather than
     // once here.
-    let concrete: Vec<&&ast::FnDecl> = order
+    let concrete: Vec<&&ast::FnDecl> = units[0]
+        .order
         .iter()
         .filter(|declaration| declaration.sig.generics.is_empty())
         .collect();
 
     for (index, declaration) in concrete.iter().enumerate() {
         let id = crate::FuncId(index);
-        let mut lowering = Lowering {
-            resolutions,
-            types,
-            by_def: &by_def,
-            layouts: &layouts,
-            alias_types: &alias_types,
-            shapes: program.layouts.clone(),
-            declared: program.functions.len() + lifted.len(),
-            lifted: Vec::new(),
-            bindings: HashMap::new(),
-            declarations: &declarations,
-            instantiated: &mut instantiated,
-            effects: &effects,
-            signatures: &signatures,
-            handlers: &handlers,
-            aliases: &aliases,
-            nominals: &nominals,
-            answered: &mut answered,
-            state: None,
-            function: program.functions[index].clone(),
-            slots: HashMap::new(),
-            guards: &guards,
-            refinements: &refinements,
-            checking: false,
-        };
+        let mut lowering = Lowering::at(
+            &units,
+            0,
+            &by_def,
+            program.layouts.clone(),
+            program.functions.len() + lifted.len(),
+            &mut instantiated,
+            &mut answered,
+            program.functions[index].clone(),
+        );
 
         for (position, param) in declaration.sig.params.iter().enumerate() {
             if let Some(def) = resolutions.resolution(param.name.span) {
@@ -452,31 +545,16 @@ fn lower_impl(
                         vec![],
                         Ty::Unit,
                     ));
-                    let mut lowering = Lowering {
-                        resolutions,
-                        types,
-                        by_def: &by_def,
-                        layouts: &layouts,
-                        alias_types: &alias_types,
-                        shapes: program.layouts.clone(),
-                        declared: program.functions.len(),
-                        lifted: Vec::new(),
-                        bindings: HashMap::new(),
-                        declarations: &declarations,
-                        instantiated: &mut instantiated,
-                        effects: &effects,
-                        signatures: &signatures,
-                        handlers: &handlers,
-                        aliases: &aliases,
-                        nominals: &nominals,
-                        answered: &mut answered,
-                        state: None,
-                        function: program.functions[probe_id.0].clone(),
-                        slots: HashMap::new(),
-                        guards: &guards,
-                        refinements: &refinements,
-                        checking: false,
-                    };
+                    let mut lowering = Lowering::at(
+                        &units,
+                        0,
+                        &by_def,
+                        program.layouts.clone(),
+                        program.functions.len(),
+                        &mut instantiated,
+                        &mut answered,
+                        program.functions[probe_id.0].clone(),
+                    );
                     let value = match lowering.expr(subject) {
                         Ok(v) => v,
                         Err(_) => break 'block None,
@@ -509,31 +587,16 @@ fn lower_impl(
                     tail: test.body.tail.clone(),
                     span: test.body.span,
                 };
-                let mut lowering = Lowering {
-                    resolutions,
-                    types,
-                    by_def: &by_def,
-                    layouts: &layouts,
-                    alias_types: &alias_types,
-                    shapes: program.layouts.clone(),
-                    declared: program.functions.len(),
-                    lifted: Vec::new(),
-                    bindings: HashMap::new(),
-                    declarations: &declarations,
-                    instantiated: &mut instantiated,
-                    effects: &effects,
-                    signatures: &signatures,
-                    handlers: &handlers,
-                    aliases: &aliases,
-                    nominals: &nominals,
-                    answered: &mut answered,
-                    state: None,
-                    function: program.functions[body_id.0].clone(),
-                    slots: HashMap::new(),
-                    guards: &guards,
-                    refinements: &refinements,
-                    checking: false,
-                };
+                let mut lowering = Lowering::at(
+                    &units,
+                    0,
+                    &by_def,
+                    program.layouts.clone(),
+                    program.functions.len(),
+                    &mut instantiated,
+                    &mut answered,
+                    program.functions[body_id.0].clone(),
+                );
                 let body = match lowering.block(&filtered) {
                     Ok(b) => b,
                     Err(_) => break 'block None,
@@ -793,6 +856,16 @@ fn lower_ty(ty: &CheckedTy, span: Span) -> Result<Ty, Unlowered> {
 }
 
 struct Lowering<'a> {
+    /// Every module the caller handed over, subject first.
+    units: &'a [Unit<'a>],
+    /// Which of them the body being lowered is written in.
+    ///
+    /// The fields below are that unit's, swapped in and out around a body
+    /// from another module rather than looked up on every read: a `Span` is
+    /// an offset into one file and a `DefId` is an index into one table, so
+    /// reading a body with the wrong module's tables would answer rather than
+    /// fail.
+    at: usize,
     resolutions: &'a Resolutions,
     types: &'a Types,
     by_def: &'a HashMap<DefId, crate::FuncId>,
@@ -1007,6 +1080,104 @@ fn names_in_block(block: &ast::Block, out: &mut Vec<Span>) {
     }
 }
 
+impl<'a> Lowering<'a> {
+    /// A lowering that reads bodies from one of the modules handed over.
+    #[allow(clippy::too_many_arguments)]
+    fn at(
+        units: &'a [Unit<'a>],
+        at: usize,
+        by_def: &'a HashMap<DefId, crate::FuncId>,
+        shapes: Vec<crate::Layout>,
+        declared: usize,
+        instantiated: &'a mut HashMap<String, crate::FuncId>,
+        answered: &'a mut HashMap<String, (crate::EffectId, crate::LayoutId, Vec<crate::FuncId>)>,
+        function: Function,
+    ) -> Self {
+        let unit = &units[at];
+        Lowering {
+            units,
+            at,
+            resolutions: unit.resolutions,
+            types: unit.types,
+            by_def,
+            layouts: &unit.layouts,
+            alias_types: &unit.alias_types,
+            shapes,
+            declared,
+            lifted: Vec::new(),
+            bindings: HashMap::new(),
+            declarations: &unit.declarations,
+            instantiated,
+            effects: &unit.effects,
+            signatures: &unit.signatures,
+            handlers: &unit.handlers,
+            aliases: &unit.aliases,
+            nominals: &unit.nominals,
+            answered,
+            state: None,
+            function,
+            slots: HashMap::new(),
+            guards: &unit.guards,
+            refinements: &unit.refinements,
+            checking: false,
+        }
+    }
+
+    /// Swaps in another module's tables, and hands back what was there.
+    fn enter(&mut self, at: usize) -> Entered<'a> {
+        let unit = &self.units[at];
+        Entered {
+            at: std::mem::replace(&mut self.at, at),
+            resolutions: std::mem::replace(&mut self.resolutions, unit.resolutions),
+            types: std::mem::replace(&mut self.types, unit.types),
+            layouts: std::mem::replace(&mut self.layouts, &unit.layouts),
+            alias_types: std::mem::replace(&mut self.alias_types, &unit.alias_types),
+            declarations: std::mem::replace(&mut self.declarations, &unit.declarations),
+            effects: std::mem::replace(&mut self.effects, &unit.effects),
+            signatures: std::mem::replace(&mut self.signatures, &unit.signatures),
+            handlers: std::mem::replace(&mut self.handlers, &unit.handlers),
+            aliases: std::mem::replace(&mut self.aliases, &unit.aliases),
+            nominals: std::mem::replace(&mut self.nominals, &unit.nominals),
+            guards: std::mem::replace(&mut self.guards, &unit.guards),
+            refinements: std::mem::replace(&mut self.refinements, &unit.refinements),
+        }
+    }
+
+    /// Puts back what [`Self::enter`] took.
+    fn leave(&mut self, was: Entered<'a>) {
+        self.at = was.at;
+        self.resolutions = was.resolutions;
+        self.types = was.types;
+        self.layouts = was.layouts;
+        self.alias_types = was.alias_types;
+        self.declarations = was.declarations;
+        self.effects = was.effects;
+        self.signatures = was.signatures;
+        self.handlers = was.handlers;
+        self.aliases = was.aliases;
+        self.nominals = was.nominals;
+        self.guards = was.guards;
+        self.refinements = was.refinements;
+    }
+}
+
+/// One module's tables, held while another module's are in place.
+struct Entered<'a> {
+    at: usize,
+    resolutions: &'a Resolutions,
+    types: &'a Types,
+    layouts: &'a HashMap<String, crate::LayoutId>,
+    alias_types: &'a HashMap<String, Ty>,
+    declarations: &'a HashMap<String, &'a ast::FnDecl>,
+    effects: &'a HashMap<String, crate::EffectId>,
+    signatures: &'a HashMap<String, &'a ast::EffectDecl>,
+    handlers: &'a HashMap<String, &'a ast::HandlerDecl>,
+    aliases: &'a HashMap<String, &'a ast::TypeAlias>,
+    nominals: &'a HashMap<String, Nominal<'a>>,
+    guards: &'a HashMap<Span, Guard>,
+    refinements: &'a HashMap<DefId, Refinement<'a>>,
+}
+
 impl Lowering<'_> {
     /// The copy of a generic function this call goes to, lowering it if this
     /// is the first call with these type arguments.
@@ -1032,14 +1203,7 @@ impl Lowering<'_> {
             .get(name)
             .ok_or_else(|| unlowered("a call to something not declared here", span))?;
 
-        let mut bindings: HashMap<String, Ty> = HashMap::new();
-        for (param, arg) in declaration.sig.params.iter().zip(args) {
-            let Some(written) = &param.ty else {
-                continue;
-            };
-            let actual = self.ty_at(arg.span())?;
-            bind(written, &actual, generics, &mut bindings);
-        }
+        let bindings = self.type_arguments(declaration, generics, args, span)?;
 
         let mut spelled: Vec<String> = generics
             .iter()
@@ -1062,6 +1226,56 @@ impl Lowering<'_> {
             ));
         }
 
+        self.copy_of(declaration, copy, bindings)
+    }
+
+    /// What each type parameter stands for at this call.
+    ///
+    /// Read in the caller's tables, because the arguments are the caller's
+    /// and their types are what say what the parameters stand for. Split out
+    /// so a call into another module can work them out here and then lower
+    /// the body over there.
+    ///
+    /// The return type is read as well as the arguments. A parameter that
+    /// only appears inside a callback's type cannot be read off an argument,
+    /// because a function value reaches this layer as one shape whatever it
+    /// takes and hands back, and `map`'s `B` is exactly that. What the call
+    /// itself came out as says it.
+    fn type_arguments(
+        &mut self,
+        declaration: &ast::FnDecl,
+        generics: &[ast::Ident],
+        args: &[ast::Expr],
+        span: Span,
+    ) -> Result<HashMap<String, Ty>, Unlowered> {
+        let mut bindings: HashMap<String, Ty> = HashMap::new();
+        for (param, arg) in declaration.sig.params.iter().zip(args) {
+            let Some(written) = &param.ty else {
+                continue;
+            };
+            let actual = self.ty_at(arg.span())?;
+            bind(written, &actual, generics, &mut bindings);
+        }
+        if bindings.len() != generics.len()
+            && let Some(written) = &declaration.sig.ret
+            && let Ok(actual) = self.ty_at(span)
+        {
+            bind(written, &actual, generics, &mut bindings);
+        }
+        Ok(bindings)
+    }
+
+    /// Lowers one copy of a declaration and hands back where it landed.
+    ///
+    /// The declaration is read in whatever tables are in place, so a call
+    /// into another module enters that module first and this is the same
+    /// piece of work either way.
+    fn copy_of(
+        &mut self,
+        declaration: &ast::FnDecl,
+        copy: String,
+        bindings: HashMap<String, Ty>,
+    ) -> Result<crate::FuncId, Unlowered> {
         let params = declaration
             .sig
             .params
@@ -1108,15 +1322,80 @@ impl Lowering<'_> {
             }
         }
 
-        let body = self.block(&declaration.body)?;
+        let body = self.block(&declaration.body);
+        let contract = body.and_then(|body| Ok((self.contract(declaration)?, body)));
         let lowered = std::mem::replace(&mut self.function, outer_function);
         self.slots = outer_slots;
         self.bindings = outer_bindings;
+        let (contract, body) = contract?;
 
         let at = id.0 - self.declared;
         self.lifted[at].locals = lowered.locals;
-        self.lifted[at].body = body;
+        self.lifted[at].body = Block {
+            stmts: contract.into_iter().chain(body.stmts).collect(),
+            value: body.value,
+        };
         Ok(id)
+    }
+
+    /// A call into another module.
+    ///
+    /// The callee is lowered from its own syntax with its own tables, and
+    /// only when something reaches it: a module that ships thirty functions
+    /// and is imported for one contributes one, which matters because the
+    /// rest of it may use shapes this backend cannot compile.
+    fn crossed(
+        &mut self,
+        def: DefId,
+        args: &[ast::Expr],
+        span: Span,
+    ) -> Result<Option<crate::FuncId>, Unlowered> {
+        if self.resolutions.def(def).kind != deed_resolve::DefKind::Import {
+            return Ok(None);
+        }
+        let name = self.resolutions.def(def).name.clone();
+        let Some(path) = self.resolutions.import_module(def) else {
+            return Ok(None);
+        };
+        let path = path.to_string();
+        let Some(at) = self.units.iter().position(|unit| unit.path == path) else {
+            return Err(unlowered(
+                &format!("a call to `{name}`, whose module `{path}` was not compiled alongside"),
+                span,
+            ));
+        };
+        let Some(declaration) = self.units[at].declarations.get(&name).copied() else {
+            return Ok(None);
+        };
+
+        // What the type parameters stand for is read here, in the caller's
+        // tables, because the arguments are the caller's.
+        let generics = declaration.sig.generics.clone();
+        let bindings = self.type_arguments(declaration, &generics, args, span)?;
+        if bindings.len() != generics.len() {
+            return Err(unlowered(
+                &format!("a call to `{name}` whose type arguments this cannot work out"),
+                span,
+            ));
+        }
+
+        let mut spelled: Vec<String> = generics
+            .iter()
+            .map(|generic| match bindings.get(generic.name.as_str()) {
+                Some(ty) => format!("{ty:?}"),
+                None => "?".to_string(),
+            })
+            .collect();
+        spelled.sort();
+        let copy = format!("{path}/{name}<{}>", spelled.join(", "));
+        if let Some(found) = self.instantiated.get(&copy) {
+            return Ok(Some(*found));
+        }
+
+        let was = self.enter(at);
+        let lowered = self.copy_of(declaration, copy, bindings);
+        self.leave(was);
+        lowered.map(Some)
     }
 
     fn layout(&self, id: crate::LayoutId) -> &crate::Layout {
@@ -1147,7 +1426,11 @@ impl Lowering<'_> {
     /// break, so the check that is skipped is one that would have passed.
     fn contract(&mut self, declaration: &ast::FnDecl) -> Result<Vec<Stmt>, Unlowered> {
         let name = declaration.sig.name.name.as_str();
-        if self.every_caller_proved(name) {
+        // Only for a callee in the module being compiled. A call that came
+        // from another module was answered for in the caller's table, which
+        // the callee's own module never saw, so "every caller proved it" over
+        // there is a statement about the wrong set of callers.
+        if self.at == 0 && self.every_caller_proved(name) {
             return Ok(Vec::new());
         }
 
@@ -1694,6 +1977,16 @@ impl Lowering<'_> {
                     // provides, and only the ones whose answer is already
                     // sitting in memory are here.
                     None => {
+                        // A call into another module, lowered from the
+                        // module it was written in.
+                        if let Some(func) = self.crossed(def, args, *span)? {
+                            return Ok(Expr::Call {
+                                func,
+                                args: lowered,
+                                span: *span,
+                            });
+                        }
+
                         if let Some(found) = self.declarations.get(name.name.as_str())
                             && !found.sig.generics.is_empty()
                         {

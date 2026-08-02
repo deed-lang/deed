@@ -694,6 +694,138 @@ fn the_agreement_covers_more_than_one_program() {
     );
 }
 
+/// A call into another module answers the same in both engines.
+///
+/// The interpreter has always been handed every file at once. The backend
+/// was handed one, so a program that imported anything was refused, which is
+/// most programs that do real work. What is lowered is what is reached: the
+/// module below declares two functions and only the one called comes across.
+#[test]
+fn a_call_into_another_module_answers_the_same_thing() {
+    let library = "module tools\n\n\
+fn twice(n: Int) -> Int { n + n }\n\n\
+fn wrapped<T>(item: T) -> List<T> { [item] }\n\n\
+fn never_called(n: Int) -> Int { n * 1000 }\n";
+    let caller = "module a\n\n\
+use tools.{twice, wrapped}\n\n\
+fn answer() -> Int {\n\
+\x20   twice(3) + length(wrapped(\"x\")) + length(wrapped(1)) + twice(1)\n\
+}\n\n\
+test \"a call across a file boundary\" {\n\
+\x20   assert answer() == 10\n\
+}\n";
+
+    let mut sources = SourceMap::new();
+    let ids = vec![
+        sources.add("a.deed".to_string(), caller.to_string()),
+        sources.add("tools.deed".to_string(), library.to_string()),
+    ];
+    let checks = check_all(&sources, &ids);
+    assert!(
+        !checks[0].has_errors(),
+        "the caller should check: {:?}",
+        checks[0].diagnostics
+    );
+
+    let mut interpreted = Interpreted::new();
+    for checked in &checks {
+        interpreted.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+            checked.rows(),
+        );
+    }
+    let outcomes = run_tests(&interpreted, checks[0].file);
+    assert_eq!(outcomes.len(), 1);
+    assert!(
+        outcomes[0].failure.is_none(),
+        "the interpreter should agree: {:?}",
+        outcomes[0].failure
+    );
+
+    let alongside = vec![deed_mir::Alongside {
+        module: &checks[1].module,
+        resolutions: &checks[1].resolutions,
+        types: &checks[1].types,
+    }];
+    let lowered = deed_mir::lower_alongside(
+        &checks[0].module,
+        &checks[0].resolutions,
+        &checks[0].types,
+        &alongside,
+    )
+    .expect("this lowers");
+
+    assert!(
+        !lowered
+            .functions
+            .iter()
+            .any(|function| function.name.contains("never_called")),
+        "only what is reached is lowered, and nothing reaches `never_called`: {:?}",
+        lowered
+            .functions
+            .iter()
+            .map(|function| function.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let module = compile(&lowered).expect("this compiles");
+    assert_eq!(
+        call(&module, "answer", &[]).expect("this runs"),
+        Some(Value::I64(10))
+    );
+}
+
+/// A contract on the other side of a boundary is checked here.
+///
+/// A callee's `where` clause is dropped when every call the checker recorded
+/// proved it, and the calls that reach an imported function were answered for
+/// in the caller's table, which the callee's own module never saw. So the
+/// check stays whatever the other side worked out about its own callers.
+#[test]
+fn a_contract_across_a_boundary_is_still_checked() {
+    let library = "module tools\n\n\
+fn halve(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n / 2\n}\n\n\
+fn safe() -> Int { halve(8) }\n";
+    let caller = "module a\n\n\
+use tools.{halve}\n\n\
+fn answer(n: Int) -> Int { halve(n) }\n";
+
+    let mut sources = SourceMap::new();
+    let ids = vec![
+        sources.add("a.deed".to_string(), caller.to_string()),
+        sources.add("tools.deed".to_string(), library.to_string()),
+    ];
+    let checks = check_all(&sources, &ids);
+    let alongside = vec![deed_mir::Alongside {
+        module: &checks[1].module,
+        resolutions: &checks[1].resolutions,
+        types: &checks[1].types,
+    }];
+    let lowered = deed_mir::lower_alongside(
+        &checks[0].module,
+        &checks[0].resolutions,
+        &checks[0].types,
+        &alongside,
+    )
+    .expect("this lowers");
+    let module = compile(&lowered).expect("this compiles");
+
+    assert_eq!(
+        call(&module, "answer", &[Value::I64(8)]).expect("this runs"),
+        Some(Value::I64(4))
+    );
+    let trap = call(&module, "answer", &[Value::I64(-2)])
+        .expect_err("the clause is not settled from here");
+    let Trap::Failed { code, message, .. } = trap else {
+        panic!("a broken precondition should say what it was, not {trap}");
+    };
+    assert_eq!(code, codes::PRECONDITION_FAILED);
+    assert!(message.contains("halve"), "{message}");
+}
+
 /// A proof about `Int` is only sound if every engine shares the same boundary.
 ///
 /// `grow` is Proven because `Int` does not wrap: `n + 1` either answers with

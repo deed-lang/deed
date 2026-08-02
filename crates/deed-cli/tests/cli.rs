@@ -1728,6 +1728,39 @@ fn build_writes_what_it_can_and_names_what_it_cannot() {
 /// than answering the wrong question.
 const REFUSED: &str = "module hard\n\nrecord Point {\n    x: Int,\n}\n\nfn same(one: Point, other: Point) -> Bool { one == other }\n";
 
+/// A file that calls into another one builds, and the other one is not
+/// written next to somebody else's source.
+///
+/// The backend is handed the files that came in because an import wanted
+/// them, alongside the file somebody named. Handing it the named file twice
+/// would compile the same way for anything with no imports in it, which is
+/// most of what is tested elsewhere, so this asks for the case that tells
+/// them apart.
+#[test]
+fn build_compiles_a_file_that_calls_into_another() {
+    let scratch = Scratch::new("build-import");
+    scratch.write(
+        "tools.deed",
+        "module tools\n\nfn twice(n: Int) -> Int { n + n }\n",
+    );
+    let source = scratch.write(
+        "caller.deed",
+        "module caller\n\nuse tools.{twice}\n\nfn answer() -> Int { twice(3) }\n",
+    );
+
+    let output = run(&["build", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        scratch.path().join("caller.wasm").is_file(),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        !scratch.path().join("tools.wasm").exists(),
+        "a module that came in for an import is context, not something to write"
+    );
+}
+
 // -- building a component --------------------------------------------------
 
 /// `deed build --component` writes both a `.wasm` module and a `.wit` world.

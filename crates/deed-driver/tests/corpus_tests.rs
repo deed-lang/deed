@@ -103,12 +103,23 @@ fn walked() -> Vec<Outcome> {
         }
 
         // lower_with_tests silently skips blocks the backend cannot lower.
-        let lowered =
-            match deed_mir::lower_with_tests(&subject.module, &subject.resolutions, &subject.types)
-            {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
+        let alongside: Vec<deed_mir::Alongside<'_>> = checks[1..]
+            .iter()
+            .map(|checked| deed_mir::Alongside {
+                module: &checked.module,
+                resolutions: &checked.resolutions,
+                types: &checked.types,
+            })
+            .collect();
+        let lowered = match deed_mir::lower_with_tests_alongside(
+            &subject.module,
+            &subject.resolutions,
+            &subject.types,
+            &alongside,
+        ) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
 
         if lowered.tests.is_empty() {
             continue;
@@ -220,7 +231,13 @@ fn compiled_tests_run_in_the_expected_files() {
         .collect();
     ran.sort_unstable();
 
-    let mut expected = vec!["closures.deed", "diverge.deed", "proven.deed"];
+    let mut expected = vec![
+        "closures.deed",
+        "diverge.deed",
+        "json.deed",
+        "proven.deed",
+        "tic_tac_toe.deed",
+    ];
     expected.sort_unstable();
 
     for name in &expected {

@@ -105,7 +105,23 @@ fn walked() -> Vec<Outcome> {
             continue;
         }
 
-        let refused = match deed_mir::lower(&subject.module, &subject.resolutions, &subject.types) {
+        // The modules this one imports, since a call into one is lowered from
+        // that module's own syntax.
+        let alongside: Vec<deed_mir::Alongside<'_>> = checks[1..]
+            .iter()
+            .map(|checked| deed_mir::Alongside {
+                module: &checked.module,
+                resolutions: &checked.resolutions,
+                types: &checked.types,
+            })
+            .collect();
+
+        let refused = match deed_mir::lower_alongside(
+            &subject.module,
+            &subject.resolutions,
+            &subject.types,
+            &alongside,
+        ) {
             Err(why) => Some(why.to_string()),
             Ok(lowered) => match compile(&lowered) {
                 Err(why) => Some(why.to_string()),
@@ -212,6 +228,7 @@ fn the_backend_still_compiles_what_it_used_to() {
         // A program that writes a line, which the module asks its host for.
         "hello.deed",
         "journal.deed",
+        "json.deed",
         "list.deed",
         "lists.deed",
         "map.deed",
@@ -222,7 +239,9 @@ fn the_backend_still_compiles_what_it_used_to() {
         "sink.deed",
         "strings.deed",
         "table.deed",
+        "tic_tac_toe.deed",
         "tree.deed",
+        "using_list.deed",
         "workers.deed",
     ];
     expected.sort_unstable();
