@@ -65,9 +65,14 @@ release notes.
 ### Tools
 
 - A generic function whose type parameter appears only inside a type somebody
-  declared compiles. `Option<Int>` and `Option<String>` become two layouts and
-  neither says what it holds, so what the parameter stood for cannot be read
-  off the value the way it can off a `List`. What the checker recorded says it.
+  declared, or only inside an alias for one, compiles. `Option<Int>` and
+  `Option<String>` become two layouts and neither says what it holds, so what
+  the parameter stood for cannot be read off the value the way it can off a
+  `List`. What the checker recorded says it, and an alias is followed to
+  whatever it is written over.
+- A type a module borrowed brings whatever it is written over with it.
+  `use std/table.{Table}` is enough to need `Entry`, which nobody writes down
+  on the borrowing side and the backend had no way to find.
 - A `for` whose accumulator only the surrounding type says the shape of is
   checked against that shape. `with seen = Nothing` says nothing about what
   the choice holds, and the `while` above the body reads the accumulator

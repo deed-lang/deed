@@ -444,6 +444,23 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 21,
         },
+        // A type parameter that appears only inside an alias. `Pairs<K, V>`
+        // says nothing on its own: what `V` stands for is inside what the
+        // alias is written over, under whatever the alias called it.
+        Agreed {
+            name: "a type parameter behind an alias",
+            source: "module a\n\nrecord Pair<K, V> {\n    key: K,\n    value: V,\n}\n\ntype Pairs<K, V> = List<Pair<K, V>>\n\nfn value_of<K, V>(pairs: Pairs<K, V>, fallback: V) -> V {\n    for one in pairs with found = fallback {\n        one.value\n    }\n}\n\nfn answer() -> Int {\n    let numbers = [Pair { key: \"a\", value: 1 }, Pair { key: \"b\", value: 2 }]\n    let words = [Pair { key: 1, value: \"xyz\" }]\n    value_of(numbers, 0) + length(value_of(words, \"\"))\n}\n\ntest \"one alias, two sets of arguments\" {\n    assert value_of([], 7) == 7\n    assert answer() == 5\n}\n",
+            call: "answer",
+            expect: 5,
+        },
+        // A type parameter that appears only inside a `Result`, which is the
+        // one shape nobody declares and the argument cannot answer for.
+        Agreed {
+            name: "a type parameter inside a Result",
+            source: "module a\n\nfn width<T>(outcome: Result<T, String>) -> Int {\n    match outcome {\n        ok(value) => 1,\n        err(why) => length(why),\n    }\n}\n\nfn number(n: Int) -> Result<Int, String> {\n    if n > 0 {\n        ok(n)\n    } else {\n        err(\"small\")\n    }\n}\n\nfn word(n: Int) -> Result<String, String> {\n    if n > 0 {\n        ok(\"one\")\n    } else {\n        err(\"tiny\")\n    }\n}\n\nfn answer() -> Int {\n    width(number(1)) + width(number(0)) + width(word(1)) + width(word(0))\n}\n\ntest \"one function over two payloads\" {\n    assert width(number(0)) == 5\n    assert answer() == 11\n}\n",
+            call: "answer",
+            expect: 11,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
