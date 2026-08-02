@@ -1304,7 +1304,7 @@ impl Lowering<'_> {
             let Some(written) = &param.ty else {
                 continue;
             };
-            let actual = self.ty_at(arg.span())?;
+            let actual = self.ty_of_argument(arg)?;
             bind(written, &actual, generics, &mut bindings);
         }
         if bindings.len() != generics.len()
@@ -1545,6 +1545,27 @@ impl Lowering<'_> {
     /// or turned into a runtime check, so what is left to compile is the
     /// base type. A named type is a layout this pass already built, found by
     /// the name its definition carries.
+    /// What an argument is, for working out a type parameter from it.
+    ///
+    /// A name that is already in a slot answers for itself when the checker
+    /// could not. An accumulator is the case: `with seen = None` on an
+    /// `Option<String>` is only settled by the body, and the name is read
+    /// before that in the `while` above it.
+    fn ty_of_argument(&mut self, arg: &ast::Expr) -> Result<Ty, Unlowered> {
+        match self.ty_at(arg.span()) {
+            Ok(ty) => Ok(ty),
+            Err(why) => {
+                if let ast::Expr::Ident(ident) = arg
+                    && let Some(def) = self.resolutions.resolution(ident.span)
+                    && let Some(local) = self.slots.get(&def).copied()
+                {
+                    return Ok(self.function.local_ty(local).clone());
+                }
+                Err(why)
+            }
+        }
+    }
+
     fn ty_at(&mut self, span: Span) -> Result<Ty, Unlowered> {
         let ty = self
             .types

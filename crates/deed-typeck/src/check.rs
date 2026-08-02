@@ -2511,6 +2511,26 @@ impl<'a> Checker<'a> {
                 arms,
                 span,
             } => self.check_match(scrutinee, arms, *span, Some((expected.clone(), because))),
+            Expr::For {
+                binder,
+                index,
+                iterable,
+                accumulator,
+                keep,
+                body,
+                span,
+            } => self.check_for_against(
+                Walk {
+                    binder,
+                    index: index.as_ref(),
+                    iterable,
+                    accumulator: accumulator.as_ref(),
+                    keep: keep.as_deref(),
+                    body,
+                    span: *span,
+                },
+                Some(expected.clone()),
+            ),
             Expr::Block(block) => self.check_block_against(block, expected, because),
             other => {
                 let ty = self.infer(other);
@@ -2879,6 +2899,18 @@ impl<'a> Checker<'a> {
     /// read things the walk never changes either stops it before it starts or
     /// never stops it at all, and neither is a thing anybody meant to write.
     fn check_for(&mut self, walk: Walk<'a>) -> Ty {
+        self.check_for_against(walk, None)
+    }
+
+    /// The same, with what the whole walk has to produce when something above
+    /// it said.
+    ///
+    /// The accumulator is the walk's value, so a walk in tail position of a
+    /// function returning `Option<String>` starts with an accumulator of that
+    /// type. Without it `with seen = None` is a variant of a generic choice
+    /// with nothing saying what it holds, and every read of `seen` before the
+    /// body settles it is a value the compiler knows nothing about.
+    fn check_for_against(&mut self, walk: Walk<'a>, wanted: Option<Ty>) -> Ty {
         let Walk {
             binder,
             index,
@@ -2939,7 +2971,29 @@ impl<'a> Checker<'a> {
         // is checked with the loop's own names still out of scope.
         let carried = match accumulator {
             Some(accumulator) => {
-                let ty = self.infer(&accumulator.init);
+                let ty = match &wanted {
+                    // What the walk has to produce is what the accumulator
+                    // is, so an initialiser that says less than the context
+                    // does is filled in from the context. `settled` rather
+                    // than the context outright, and one level at a time, for
+                    // the same reason it is used on what the body produced:
+                    // where the initialiser knew, it wins.
+                    Some(wanted) => {
+                        let got = self.check_against(
+                            &accumulator.init,
+                            wanted,
+                            Some((
+                                None,
+                                accumulator.span,
+                                "what this walk has to produce".to_string(),
+                            )),
+                        );
+                        let ty = settled(&got, wanted);
+                        self.types.record_expr(accumulator.init.span(), ty.clone());
+                        ty
+                    }
+                    None => self.infer(&accumulator.init),
+                };
                 if let Some(def) = self.def_of(&accumulator.name) {
                     self.def_types.insert(def, ty.clone());
                 }
@@ -3008,7 +3062,6 @@ impl<'a> Checker<'a> {
         // is an `Int` even if every turn happens to produce a `Positive`.
         settled(&carried, &produced)
     }
-
     fn infer(&mut self, expr: &'a Expr) -> Ty {
         let ty = self.infer_inner(expr);
         self.types.record_expr(expr.span(), ty.clone());
