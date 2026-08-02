@@ -351,6 +351,31 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 8,
         },
+        // `?`, which is a `match` on a `Result` that nobody wrote. The
+        // failure case ends the function, so what these count is how far the
+        // body got.
+        Agreed {
+            name: "an error that ends the function it was met in",
+            source: "module a\n\nfn half(n: Int) -> Result<Int, String> {\n    if n == 0 {\n        err(\"zero\")\n    } else {\n        ok(n)\n    }\n}\n\nfn twice(n: Int) -> Result<Int, String> {\n    let one = half(n)?\n    let two = half(one)?\n    ok(one + two)\n}\n\nfn outcome(n: Int) -> Int {\n    match twice(n) {\n        ok(m) => m,\n        err(why) => 0 - length(why),\n    }\n}\n\nfn answer() -> Int { outcome(3) + outcome(0) + outcome(5) }\n\ntest \"the second half never runs when the first failed\" {\n    assert outcome(3) == 6\n    assert outcome(0) == 0 - 4\n    assert answer() == 12\n}\n",
+            call: "answer",
+            expect: 12,
+        },
+        // In the middle of an expression rather than at the head of a `let`,
+        // which is where it is easiest to lower the wrong part.
+        Agreed {
+            name: "an error met inside an argument",
+            source: "module a\n\nfn word(n: Int) -> Result<String, String> {\n    if n == 1 {\n        ok(\"one\")\n    } else {\n        err(\"not one\")\n    }\n}\n\nfn shout(n: Int) -> Result<String, String> {\n    ok(upper(word(n)?))\n}\n\nfn size(n: Int) -> Int {\n    match shout(n) {\n        ok(text) => length(text),\n        err(why) => 0 - length(why),\n    }\n}\n\nfn answer() -> Int { size(1) + size(2) }\n\ntest \"the message comes out as it went in\" {\n    assert size(1) == 3\n    assert size(2) == 0 - 7\n    assert answer() == 0 - 4\n}\n",
+            call: "answer",
+            expect: -4,
+        },
+        // The failure the prelude builds, carried out of a function that only
+        // passes it along.
+        Agreed {
+            name: "an error the prelude wrote",
+            source: "module a\n\nfn pick(xs: List<Int>, i: Int) -> Result<Int, String> {\n    ok(at(xs, i)?)\n}\n\nfn got(i: Int) -> Int {\n    match pick([4, 5, 6], i) {\n        ok(n) => n,\n        err(why) => 0 - length(why),\n    }\n}\n\nfn answer() -> Int { got(0) + got(2) + got(9) }\n\ntest \"an index nobody has says which one and how many there were\" {\n    assert got(0) == 4\n    assert got(9) == 0 - 30\n    assert answer() == 0 - 20\n}\n",
+            call: "answer",
+            expect: -20,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",

@@ -20,6 +20,11 @@ release notes.
 
 ### Diagnostics
 
+- A refinement that fails at runtime says which refinement in the sentence and
+  which value in the label under the source line, rather than putting the value
+  in the sentence. Both engines stop on one now and only one of them can write
+  an arbitrary value into a sentence, so the value in it would have been a
+  second dialect of the same failure.
 - An outcome written on a `where` clause gets DEED2023 and the condition under
   it is still read. `where ok => n + n <= 10` is what somebody writes after
   reading the `ensures` beside it, and it used to end the contract at the `=>`,
@@ -59,6 +64,19 @@ release notes.
 
 ### Tools
 
+- `deed build` compiles `?`. A function that propagates a failure used to be
+  refused with "this expression is not lowered yet", which is four of the
+  thirty-four programs in the corpus and most of the ones that do any real
+  work with `Result`.
+- A refinement the checker could not prove is checked in the compiled program
+  as well as the interpreted one. `deed check` said "so it becomes a runtime
+  check" and `deed build` emitted nothing, so a value that violated its own
+  type went through. Both engines stop on the same code, in the same place,
+  with the same sentence.
+- A `where` clause an `assert refuses` is aiming at keeps its runtime check in
+  the compiled program. The check is dropped when every recorded call proved
+  the clause, and a call written to break it was recorded nowhere, so the one
+  caller that needed the check was the one caller nothing knew about.
 - The compiled backend has all thirteen prelude functions. `at`, `push`,
   `repeat`, `split`, `join`, `trim`, `upper`, `lower`, `to_string` and `to_int`
   used to exist only in the interpreter, so a program that called one ran under

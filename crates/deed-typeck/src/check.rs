@@ -460,10 +460,30 @@ impl<'a> Checker<'a> {
                             def,
                             alias.name.name.clone(),
                             Nominal::Refinement {
-                                base,
+                                base: base.clone(),
                                 predicate: predicate.span(),
                             },
                         );
+
+                        // Read the predicate as the expression it is, with
+                        // `value` standing for what it is about. Nothing here
+                        // needs the answer: what this leaves behind is a type
+                        // per span, and without those the compiled backend has
+                        // no way to turn the predicate into the runtime check
+                        // the checker says it becomes.
+                        let subject = self
+                            .resolutions
+                            .defs()
+                            .find(|(_, data)| {
+                                data.kind == DefKind::Local
+                                    && data.name == "value"
+                                    && data.span == alias.name.span
+                            })
+                            .map(|(id, _)| id);
+                        if let Some(subject) = subject {
+                            self.def_types.insert(subject, base);
+                        }
+                        self.infer(predicate);
                     } else {
                         self.declare_type_params(def, &alias.generics);
                         // Force the expansion now so a cycle is reported once,
@@ -887,10 +907,17 @@ impl<'a> Checker<'a> {
             let outcome = self.clause_holds(requires, clause, &facts);
 
             // Inside an `assert refuses`, a clause that will not hold is the
-            // statement being right. Nothing is reported and nothing is
-            // recorded, because a precondition that is meant to fail is not an
-            // obligation anybody discharged.
+            // statement being right, so nothing is reported and no tier is
+            // recorded: a precondition that is meant to fail is not an
+            // obligation anybody discharged, and counting one would say the
+            // corpus is less proven than it is. What is recorded is that
+            // somebody is aiming at this contract. The compiled backend drops
+            // a callee's check when every recorded call proved the clause,
+            // and this call is the one that needs the check to still be there.
             if self.refuting {
+                if let Some(name) = &name {
+                    self.types.push_refuted(name.clone());
+                }
                 continue;
             }
 

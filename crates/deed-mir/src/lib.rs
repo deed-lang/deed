@@ -31,6 +31,8 @@ pub mod codes {
     pub const ASSERTION_FAILED: &str = "DEED6001";
     /// A `where` clause that did not hold on entry.
     pub const PRECONDITION_FAILED: &str = "DEED6002";
+    /// A value that did not satisfy the refinement its type carries.
+    pub const REFINEMENT_FAILED: &str = "DEED6004";
     /// Something the run could not do, which is where a match running out of
     /// arms lands.
     pub const NOT_RUNNABLE: &str = "DEED6006";

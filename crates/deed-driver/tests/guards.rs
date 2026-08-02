@@ -92,7 +92,11 @@ fn an_argument_is_guarded() {
          }}\n"
     ));
     let text = render_human(&sources, &failure);
-    assert!(text.contains("0 does not satisfy `Positive`"), "{text}");
+    assert!(
+        text.contains("this value does not satisfy `Positive`"),
+        "{text}"
+    );
+    assert!(text.contains("0 violates the refinement"), "{text}");
     assert!(text.contains("could not prove this statically"), "{text}");
 }
 
@@ -107,7 +111,12 @@ fn a_return_value_is_guarded() {
          \x20 assert make(-5) == -5\n\
          }}\n"
     ));
-    assert!(render_human(&sources, &failure).contains("-5 does not satisfy `Positive`"));
+    let text = render_human(&sources, &failure);
+    assert!(
+        text.contains("this value does not satisfy `Positive`"),
+        "{text}"
+    );
+    assert!(text.contains("-5 violates the refinement"), "{text}");
 }
 
 #[test]
@@ -180,7 +189,12 @@ fn an_element_of_a_list_is_guarded() {
          \x20 assert make(0) == [1, 1]\n\
          }}\n"
     ));
-    assert!(render_human(&sources, &failure).contains("0 does not satisfy `Positive`"));
+    let text = render_human(&sources, &failure);
+    assert!(
+        text.contains("this value does not satisfy `Positive`"),
+        "{text}"
+    );
+    assert!(text.contains("0 violates the refinement"), "{text}");
 }
 
 #[test]
@@ -291,7 +305,12 @@ fn a_relationship_that_does_not_prove_it_is_guarded() {
          \x20 assert span(3, 3) == 0\n\
          }}\n"
     ));
-    assert!(render_human(&sources, &failure).contains("0 does not satisfy `Positive`"));
+    let text = render_human(&sources, &failure);
+    assert!(
+        text.contains("this value does not satisfy `Positive`"),
+        "{text}"
+    );
+    assert!(text.contains("0 violates the refinement"), "{text}");
 }
 
 #[test]
@@ -329,7 +348,12 @@ fn a_payload_that_came_back_from_a_call_is_guarded() {
          \x20 assert narrowed(0) == ok(1)\n\
          }}\n"
     ));
-    assert!(render_human(&sources, &failure).contains("0 does not satisfy `Positive`"));
+    let text = render_human(&sources, &failure);
+    assert!(
+        text.contains("this value does not satisfy `Positive`"),
+        "{text}"
+    );
+    assert!(text.contains("0 violates the refinement"), "{text}");
 }
 
 #[test]
@@ -382,7 +406,12 @@ fn a_bound_on_a_multiple_that_does_not_prove_it_is_guarded() {
          \x20 assert f(-1) == -1\n\
          }\n",
     );
-    assert!(render_human(&sources, &failure).contains("-1 does not satisfy `NonNegative`"));
+    let text = render_human(&sources, &failure);
+    assert!(
+        text.contains("this value does not satisfy `NonNegative`"),
+        "{text}"
+    );
+    assert!(text.contains("-1 violates the refinement"), "{text}");
 }
 
 // -- a promise that is not kept ---------------------------------------------
