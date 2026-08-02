@@ -14,7 +14,9 @@ pub mod lower;
 
 use deed_diagnostics::Span;
 
-pub use lower::{Unlowered, lower, lower_with_tests};
+pub use lower::{
+    Alongside, Unlowered, lower, lower_alongside, lower_with_tests, lower_with_tests_alongside,
+};
 
 /// The diagnostic codes a compiled program can stop with.
 ///

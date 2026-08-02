@@ -346,9 +346,26 @@ fn run_check(args: CheckArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The other files a lowering may need to reach into.
+///
+/// A call into another module is lowered from that module's own syntax with
+/// that module's own tables, so the backend needs the files that came in
+/// because an import wanted them and not only the one somebody named.
+fn alongside(checks: &[Checked], subject: usize) -> Vec<deed_mir::Alongside<'_>> {
+    checks
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| *at != subject)
+        .map(|(_, checked)| deed_mir::Alongside {
+            module: &checked.module,
+            resolutions: &checked.resolutions,
+            types: &checked.types,
+        })
+        .collect()
+}
+
 /// Compiles each named file to a WebAssembly module beside it, or to a
 /// component (module plus WIT world) when `component` is true.
-///
 /// Only the files somebody named. A module that came in because an import
 /// wanted it is context, and compiling it would write a file nobody asked
 /// for next to somebody else's source.
@@ -369,8 +386,13 @@ fn build(
 
     let mut wrote = false;
 
-    for (path, checked) in files.iter().zip(checks).take(subject) {
-        let lowered = match deed_mir::lower(&checked.module, &checked.resolutions, &checked.types) {
+    for (at, (path, checked)) in files.iter().zip(checks).take(subject).enumerate() {
+        let lowered = match deed_mir::lower_alongside(
+            &checked.module,
+            &checked.resolutions,
+            &checked.types,
+            &alongside(checks, at),
+        ) {
             Ok(lowered) => lowered,
             Err(why) => {
                 writeln!(out, "{}: {why}", path.display())?;
@@ -419,10 +441,15 @@ fn build_component(
 ) -> io::Result<bool> {
     let mut wrote = false;
 
-    for (path, checked) in files.iter().zip(checks).take(subject) {
+    for (at, (path, checked)) in files.iter().zip(checks).take(subject).enumerate() {
         // Step 1: Lower to MIR. The same pass `deed build` does; refusing here
         // rather than after avoids writing a WIT for a module that cannot compile.
-        let lowered = match deed_mir::lower(&checked.module, &checked.resolutions, &checked.types) {
+        let lowered = match deed_mir::lower_alongside(
+            &checked.module,
+            &checked.resolutions,
+            &checked.types,
+            &alongside(checks, at),
+        ) {
             Ok(lowered) => lowered,
             Err(why) => {
                 writeln!(out, "{}: {why}", path.display())?;
@@ -879,7 +906,7 @@ fn run_compiled_main(
     }
 
     let mut runs = Vec::new();
-    for checked in &checks[..subject.min(checks.len())] {
+    for (at, checked) in checks[..subject.min(checks.len())].iter().enumerate() {
         let has_main = checked.module.items.iter().any(|item| {
             matches!(
                 item,
@@ -890,7 +917,12 @@ fn run_compiled_main(
             continue;
         }
 
-        let lowered = match deed_mir::lower(&checked.module, &checked.resolutions, &checked.types) {
+        let lowered = match deed_mir::lower_alongside(
+            &checked.module,
+            &checked.resolutions,
+            &checked.types,
+            &alongside(checks, at),
+        ) {
             Ok(lowered) => lowered,
             Err(why) => {
                 writeln!(out, "{}: {why}", sources.file(checked.file).name())?;
@@ -1211,13 +1243,16 @@ fn run_compiled_tests(
     let mut failed: Vec<(String, String)> = Vec::new();
     let mut ran = 0usize;
 
-    for checked in &checks[..subject.min(checks.len())] {
-        let lowered =
-            match deed_mir::lower_with_tests(&checked.module, &checked.resolutions, &checked.types)
-            {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
+    for (at, checked) in checks[..subject.min(checks.len())].iter().enumerate() {
+        let lowered = match deed_mir::lower_with_tests_alongside(
+            &checked.module,
+            &checked.resolutions,
+            &checked.types,
+            &alongside(checks, at),
+        ) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
 
         if lowered.tests.is_empty() {
             continue;

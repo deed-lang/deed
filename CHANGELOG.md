@@ -64,6 +64,12 @@ release notes.
 
 ### Tools
 
+- `deed build` compiles a call into another module. The lowering was handed one
+  file and the interpreter was handed all of them, so anything with a `use` in
+  it was refused, which is most programs that do real work. What is lowered is
+  what is reached: a module that ships thirty functions and is imported for one
+  contributes one, and a contract on the other side is checked here because the
+  call that could break it was answered for here.
 - A declared function written where a value belongs compiles. `map(step, xs)`
   with `step` a function rather than a closure used to be refused, because a
   call through a value passes an environment and a call by name does not, so
