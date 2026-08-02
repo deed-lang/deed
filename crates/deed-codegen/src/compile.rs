@@ -1696,6 +1696,18 @@ mod tests {
         });
         program.add_function(function);
 
+        // A comparison of two numbers, in the same program, because the walk
+        // asks two questions of everything it meets and a program with only
+        // the interesting kind in it cannot tell them apart.
+        let mut numbers = Function::new("same_number", vec![Ty::Int, Ty::Int], Ty::Bool);
+        numbers.body = Block::of(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Local(Local(0))),
+            right: Box::new(Expr::Local(Local(1))),
+            span: nowhere(),
+        });
+        program.add_function(numbers);
+
         let module = compile(&program).expect("this compiles");
         let comparisons: Vec<&String> = module
             .names
@@ -1706,7 +1718,7 @@ mod tests {
         assert_eq!(
             comparisons.len(),
             2,
-            "the record and the list it holds, and nothing for the number: {:?}",
+            "the record and the list it holds, and nothing for either number: {:?}",
             module.names
         );
 
