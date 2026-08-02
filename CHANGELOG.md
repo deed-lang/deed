@@ -64,6 +64,10 @@ release notes.
 
 ### Tools
 
+- A generic function whose type parameter appears only inside a type somebody
+  declared compiles. `Option<Int>` and `Option<String>` become two layouts and
+  neither says what it holds, so what the parameter stood for cannot be read
+  off the value the way it can off a `List`. What the checker recorded says it.
 - A `for` whose accumulator only the surrounding type says the shape of is
   checked against that shape. `with seen = Nothing` says nothing about what
   the choice holds, and the `while` above the body reads the accumulator
