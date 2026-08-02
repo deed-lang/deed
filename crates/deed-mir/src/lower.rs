@@ -3070,12 +3070,15 @@ impl Lowering<'_> {
                         .position(|declared| declared.name == field.name.name.as_str())
                         .ok_or_else(|| unlowered("a field the variant does not have", *span))?;
                     // `{ limit }` binds `limit`, and `{ limit: reached }`
-                    // binds `reached` to the same field.
+                    // binds `reached` to the same field. A dotted name here
+                    // is not a binder and never reaches this pass: the
+                    // resolver has nothing to resolve the first segment to
+                    // and turns the program away.
                     let bound = match &field.pattern {
                         None => &field.name,
-                        Some(ast::Pattern::Path { segments, .. }) if segments.len() == 1 => {
-                            &segments[0]
-                        }
+                        Some(ast::Pattern::Path { segments, span }) => segments
+                            .last()
+                            .ok_or_else(|| unlowered("an empty pattern", *span))?,
                         Some(ast::Pattern::Wildcard(_)) => continue,
                         Some(other) => {
                             return Err(unlowered("a pattern inside a pattern", other.span()));
@@ -3106,8 +3109,11 @@ impl Lowering<'_> {
                 for (position, element) in elements.iter().enumerate() {
                     match element {
                         ast::Pattern::Wildcard(_) => {}
-                        ast::Pattern::Path { segments, .. } if segments.len() == 1 => {
-                            bindings.push((vec![(layout, at, position)], &segments[0]));
+                        ast::Pattern::Path { segments, span } => {
+                            let name = segments
+                                .last()
+                                .ok_or_else(|| unlowered("an empty pattern", *span))?;
+                            bindings.push((vec![(layout, at, position)], name));
                         }
                         // One level in. `err(OverLimit { limit })` names a
                         // field of the record the failure holds, and what it
