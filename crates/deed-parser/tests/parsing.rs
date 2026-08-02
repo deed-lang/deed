@@ -2434,3 +2434,83 @@ fn the_signature_does_not_stretch_over_the_contract() {
         contract
     );
 }
+
+// -- an outcome written on a precondition -----------------------------------
+//
+// What somebody writes after reading the `ensures` beside it. The contract
+// used to end at the `=>`, so the answer was a block that was expected and,
+// separately, that `ok` is a builtin rather than a value.
+
+const OUTCOME_IN_WHERE: &str = "module a\n\nfn twice(n: Int) -> Int\n  \
+                                where ok => n + n <= 10\n  \
+                                ensures ok => result == n + n\n{\n    n + n\n}\n";
+
+#[test]
+fn an_outcome_on_a_where_clause_says_which_clause_it_belongs_to() {
+    let (sources, parsed) = parse_source(OUTCOME_IN_WHERE);
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::OUTCOME_IN_WHERE]);
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("has no outcome to name"), "{text}");
+    assert!(text.contains("goes in `ensures`"), "{text}");
+}
+
+/// Reading it is the point: the condition is still a clause, so nothing else
+/// is reported about a contract the parser stopped in the middle of.
+#[test]
+fn the_condition_under_an_outcome_is_still_a_clause() {
+    let (_, parsed) = parse_source(OUTCOME_IN_WHERE);
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.contract.requires.len(), 1);
+    assert_eq!(function.contract.ensures.len(), 1);
+    assert!(function.body.tail.is_some());
+}
+
+/// The repair takes the space with it, so what is left is the clause on its
+/// own rather than the clause with a gap in front of it.
+#[test]
+fn dropping_the_outcome_leaves_the_condition_alone() {
+    let (_, parsed) = parse_source(OUTCOME_IN_WHERE);
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    let mut repaired = OUTCOME_IN_WHERE.to_string();
+    repaired.replace_range(fix.edits[0].span.as_range(), &fix.edits[0].replacement);
+    assert!(repaired.contains("where n + n <= 10"), "{repaired}");
+
+    let parsed = parse_ok(&repaired);
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}
+
+/// `ensures` is where the words mean something, and it is untouched.
+#[test]
+fn an_outcome_on_an_ensures_clause_is_left_alone() {
+    let parsed =
+        parse_ok("module a\n\nfn f(n: Int) -> Int\n  ensures ok => result == n\n{\n    n\n}\n");
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}
+
+/// Both halves of the shape are asked for. The word on its own is somebody
+/// naming a builtin, which the type checker answers, and an `=>` after
+/// something that is not an outcome is not this mistake either.
+#[test]
+fn only_an_outcome_with_an_arrow_after_it_is_this_mistake() {
+    let (_, parsed) = parse_source("module a\n\nfn f(n: Int) -> Int\n  where ok\n{\n    n\n}\n");
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "a word on its own is not this: {:?}",
+        codes_of(&parsed.diagnostics)
+    );
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.contract.requires.len(), 1);
+
+    let (_, parsed) =
+        parse_source("module a\n\nfn f(n: Int) -> Int\n  where n => 1\n{\n    n\n}\n");
+    assert!(
+        !codes_of(&parsed.diagnostics).contains(&codes::OUTCOME_IN_WHERE),
+        "an arrow after an ordinary name is not this: {:?}",
+        codes_of(&parsed.diagnostics)
+    );
+}

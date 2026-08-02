@@ -20,6 +20,11 @@ release notes.
 
 ### Diagnostics
 
+- An outcome written on a `where` clause gets DEED2023 and the condition under
+  it is still read. `where ok => n + n <= 10` is what somebody writes after
+  reading the `ensures` beside it, and it used to end the contract at the `=>`,
+  so the answer was a block that was expected and, separately, that `ok` is a
+  builtin rather than a value.
 - A number or a string the lexer cannot read is one message rather than two.
   It used to hand the parser an invalid token, which then said an expression
   was expected in the same column the lexer had just written in. What was
