@@ -194,3 +194,15 @@ pub const HANDLER_MISSING_OPERATION: &str = "DEED4029";
 /// takes: read the state into a local and let the closure capture that. The
 /// value is then a number, which is what a `Fn() -> Int` says it is.
 pub const CLOSURE_OVER_STATE: &str = "DEED4030";
+
+/// `Int.max`: reaching for a name this language does not have.
+///
+/// `Int` is a signed 64-bit integer and there is nothing that says so in a
+/// program. A `where` clause that has to keep a sum inside the type is the
+/// place it comes up, and the answer used to be `Int` is a type and not a
+/// value, which is true and is not what the reader was asking.
+///
+/// The number is what there is, so the message names it and the repair writes
+/// it. Reasoning about a bound needs the value at the point the clause is
+/// read, and a call would arrive there as a call rather than as a number.
+pub const NO_LIMIT_NAME: &str = "DEED4031";
