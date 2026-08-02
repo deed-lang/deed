@@ -20,6 +20,12 @@ release notes.
 
 ### Diagnostics
 
+- A number or a string the lexer cannot read is one message rather than two.
+  It used to hand the parser an invalid token, which then said an expression
+  was expected in the same column the lexer had just written in. What was
+  written stands in for it instead, the way a decimal point already did: the
+  digits before the bad one, the largest `Int` for a number too big, and what
+  was read before the line ended for a string with no closing quote.
 - `a and b` and `a or b` are read as `&&` and `||`, with DEED2020 naming the
   operator and `deed fix` writing it. The words are ordinary names here, so a
   `where` clause holding one used to stop at the word and answer with the block

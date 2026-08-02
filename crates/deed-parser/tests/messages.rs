@@ -538,3 +538,54 @@ fn a_binding_without_let_does_not_cascade() {
     only_error("module a\n\nfn f() -> Int {\n  var n = 1\n  n\n}\n")
         .under(codes::BINDING_WITHOUT_LET);
 }
+
+/// A literal the lexer could not read used to produce a second message here.
+///
+/// The lexer hands back what was written instead of an error token, so this
+/// pass has an expression and nothing to say. The claim belongs here rather
+/// than beside the lexer's own tests: what was wrong with an error token was
+/// the message this pass then wrote in the same column.
+#[test]
+fn a_literal_the_lexer_reported_is_not_reported_again() {
+    for literal in ["9223372036854775808", "0x", "100u8", "0b12", "1.5"] {
+        let source = format!("module a\n\nfn f() -> Int {{\n  {literal}\n}}\n");
+        let mut sources = SourceMap::new();
+        let file = sources.add("test.deed", &source);
+        let lexed = tokenize(file, sources.file(file).text());
+        assert!(lexed.has_errors(), "{literal} should not lex");
+
+        let parsed = parse(file, &lexed.tokens);
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "{literal} was reported twice:\n{}",
+            parsed
+                .diagnostics
+                .iter()
+                .map(|d| render_human(&sources, d))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+}
+
+/// The same for a string that never closes.
+#[test]
+fn an_unterminated_string_is_not_reported_again() {
+    let source = "module a\n\nfn f() -> String {\n  \"oops\n}\n";
+    let mut sources = SourceMap::new();
+    let file = sources.add("test.deed", source);
+    let lexed = tokenize(file, sources.file(file).text());
+    assert!(lexed.has_errors(), "the source should not lex");
+
+    let parsed = parse(file, &lexed.tokens);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "reported twice:\n{}",
+        parsed
+            .diagnostics
+            .iter()
+            .map(|d| render_human(&sources, d))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
