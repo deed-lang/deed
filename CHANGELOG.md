@@ -34,6 +34,11 @@ release notes.
   body, and `deed fix` builds the region a `uses` clause goes in by subtracting
   one from the other. Every construct now ends where the parser actually read
   to. Found by the nightly fuzzer.
+- The scheduled fuzz run reports what it finds as an issue rather than as a
+  pull request. Opening a pull request from a workflow needs a repository
+  setting that also lets workflows approve pull requests, and the first run
+  that found anything got told so and said nothing to anybody. The branch is
+  pushed either way, so the issue names it.
 
 ### Measurements
 
