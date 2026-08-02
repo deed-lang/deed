@@ -1895,11 +1895,14 @@ impl<'a> Parser<'a> {
             }
         }
 
-        while let Some((op, bp)) = binary_op(self.kind()) {
+        while let Some((op, bp, spelled)) = self.infix_operator() {
             if bp < min_bp || self.continues_a_new_line() {
                 break;
             }
             let op_span = self.bump().span;
+            if let Some(symbol) = spelled {
+                self.word_for_an_operator(op_span, symbol);
+            }
             let rhs = self.parse_expr_bp(bp + 1);
             lhs = Expr::Binary {
                 span: lhs.span().to(rhs.span()),
@@ -1911,6 +1914,56 @@ impl<'a> Parser<'a> {
         }
 
         lhs
+    }
+
+    /// The operator sitting here, and the symbol it should have been written
+    /// with when it was written as a word.
+    ///
+    /// `and` and `or` are ordinary names in this language, which is why they
+    /// are read by shape: a name in the position an operator goes in, with an
+    /// expression already to its left. A call to something named `and` has a
+    /// `(` after it and never reaches here.
+    fn infix_operator(&self) -> Option<(BinaryOp, u8, Option<&'static str>)> {
+        if let Some((op, bp)) = binary_op(self.kind()) {
+            return Some((op, bp, None));
+        }
+        let TokenKind::Ident(word) = self.kind() else {
+            return None;
+        };
+        match word.as_str() {
+            "and" => Some((BinaryOp::And, 2, Some("&&"))),
+            "or" => Some((BinaryOp::Or, 1, Some("||"))),
+            _ => None,
+        }
+    }
+
+    /// Reports the word and builds the operator anyway.
+    ///
+    /// Building it is the point. Stopping here is what the reader already got:
+    /// the expression ended at the word, and what they were told about was the
+    /// block that did not follow. Reading it means the contract clause or the
+    /// condition holding it is the one they wrote, and the only thing wrong
+    /// with the file is a word.
+    fn word_for_an_operator(&mut self, span: Span, symbol: &str) {
+        self.emit(
+            Diagnostic::error(
+                codes::WORD_OPERATOR,
+                self.file,
+                span,
+                format!("this language writes that operator `{symbol}`"),
+            )
+            .with_primary_label(format!("write `{symbol}`"))
+            .with_note(
+                "the words are ordinary names here, so one of them between two values is read \
+                 as the operator it was meant to be rather than as a name nobody declared",
+            )
+            .with_fix(
+                format!("write `{symbol}`"),
+                span,
+                symbol.to_string(),
+                Applicability::MachineApplicable,
+            ),
+        );
     }
 
     /// Reports `a..b` and takes the whole thing with it.

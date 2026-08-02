@@ -20,7 +20,12 @@ release notes.
 
 ### Diagnostics
 
-- None yet.
+- `a and b` and `a or b` are read as `&&` and `||`, with DEED2020 naming the
+  operator and `deed fix` writing it. The words are ordinary names here, so a
+  `where` clause holding one used to stop at the word and answer with the block
+  that did not follow it. The resolver has had the answer since #213 and never
+  got to give it: across eighteen recorded model runs the word reached the
+  parser seventeen times and the resolver none.
 
 ### Standard library
 
