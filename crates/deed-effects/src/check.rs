@@ -694,27 +694,15 @@ impl<'a> Checker<'a> {
             match item {
                 Item::Function(function) => {
                     let def = self.resolutions.resolution(function.sig.name.span);
-                    self.check_fn(function, def, None);
+                    self.check_fn(function, def);
                 }
                 Item::Handler(handler) => {
-                    // A handler operation writes no parameter types, so the
-                    // rows of the function values it is handed are in the
-                    // effect's declaration rather than in front of it.
-                    let declared = module.items.iter().find_map(|item| match item {
-                        Item::Effect(effect) if effect.name.name == handler.effect.name => {
-                            Some(effect)
-                        }
-                        _ => None,
-                    });
+                    // A handler operation writes no parameter types, so a row
+                    // variable it reads off one belongs to the effect. Which
+                    // effect that is is only knowable from here.
                     self.enclosing_effect = self.resolutions.resolution(handler.effect.span);
                     for operation in &handler.operations {
-                        let signature = declared.and_then(|effect| {
-                            effect
-                                .operations
-                                .iter()
-                                .find(|op| op.name.name == operation.sig.name.name)
-                        });
-                        self.check_fn(operation, None, signature);
+                        self.check_fn(operation, None);
                     }
                     self.enclosing_effect = None;
                 }
@@ -749,12 +737,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_fn(
-        &mut self,
-        function: &FnDecl,
-        def: Option<DefId>,
-        from_effect: Option<&deed_ast::FnSig>,
-    ) {
+    fn check_fn(&mut self, function: &FnDecl, def: Option<DefId>) {
         // A handler operation has no definition of its own, so its row is
         // lowered here rather than during collection.
         let (declared, sites, unverifiable) = match def {
@@ -789,25 +772,6 @@ impl<'a> Checker<'a> {
             };
             let (row, _, _) = self.lower_row(row);
             self.closure_rows.insert(def, row);
-        }
-
-        // The same, for a handler operation, whose parameters are typed by the
-        // effect rather than by the operation. Calling a task out of the queue
-        // performs the effect's row variable, and the operation has to say so:
-        // a handler that stores function values and calls them is the one
-        // place in the language where a signature would otherwise claim to
-        // perform nothing while running arbitrary code.
-        if let Some(signature) = from_effect {
-            for (param, declared) in function.sig.params.iter().zip(&signature.params) {
-                let Some(Type::Fn { row, .. }) = &declared.ty else {
-                    continue;
-                };
-                let Some(def) = self.resolutions.resolution(param.name.span) else {
-                    continue;
-                };
-                let (row, _, _) = self.lower_row(row);
-                self.closure_rows.insert(def, row);
-            }
         }
 
         let mut performed = self.infer_block(&function.body);

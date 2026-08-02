@@ -169,6 +169,81 @@ fn forking_a_task_charges_the_caller_with_what_the_task_performs() {
     );
 }
 
+/// The variable a handler reads off a type is the one its own effect
+/// declared.
+///
+/// Two effects here, both taking a variable spelled `r`, and the handler
+/// implements the second. What `held()` performs is read off the queue's
+/// element type, which reaches the effects pass as the name `r` and nothing
+/// else, so which `r` that is has to come from the handler. Pick the other
+/// one and `run` performs something its `uses` clause does not name.
+#[test]
+fn a_handler_reads_the_variable_its_own_effect_declared() {
+    let codes = refused(
+        "module p\n\n\
+         effect Idle<uses r> {\n\
+         \x20   fn ping(step: Fn() uses r -> ()) -> ()\n\
+         }\n\n\
+         effect Task<uses r> {\n\
+         \x20   fn fork(step: Fn() uses r -> ()) -> ()\n\
+         \x20   fn run() -> ()\n\
+         }\n\n\
+         handler Runner implements Task {\n\
+         \x20   state queue: List<Fn() uses r -> ()>\n\n\
+         \x20   fn fork(step) -> () {\n\
+         \x20       queue = push(queue, step)\n\
+         \x20   }\n\n\
+         \x20   fn run() -> ()\n\
+         \x20     uses\n\
+         \x20       r,\n\
+         \x20   {\n\
+         \x20       for held in queue with done = () {\n\
+         \x20           held()\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n",
+    );
+
+    assert_eq!(
+        codes,
+        Vec::<String>::new(),
+        "the handler read a row variable belonging to the wrong effect: {codes:?}"
+    );
+}
+
+/// An imported effect's operation is type checked against what the effect
+/// declared, row variable and all.
+///
+/// The surface is what carries an operation's parameter types across, and a
+/// row variable in one has to cross as a variable rather than as the name of
+/// an effect the far side would go looking for. Without the surface entry
+/// there is no type to check against and anything at all goes through.
+#[test]
+fn an_imported_operation_checks_what_it_was_given() {
+    let mut sources = SourceMap::new();
+    let library = shipped_source("std/task").expect("std/task ships");
+    let program = "module p\n\n\
+         use std/task.{Task}\n\n\
+         fn go() -> () {\n\
+         \x20   Task.fork(3)\n\
+         }\n";
+
+    let a = sources.add("probe.deed".to_string(), program.to_string());
+    let b = sources.add("std/task.deed".to_string(), library.to_string());
+    let codes: Vec<String> = deed_driver::check_all(&sources, &[a, b])
+        .iter()
+        .filter(|checked| checked.file == a)
+        .flat_map(|checked| checked.diagnostics.iter())
+        .filter(|diagnostic| diagnostic.is_error())
+        .map(|diagnostic| diagnostic.code.to_string())
+        .collect();
+
+    assert!(
+        codes.contains(&"DEED4001".to_string()),
+        "an `Int` went where a task was wanted and nothing said so: {codes:?}"
+    );
+}
+
 /// A handler for an *imported* parameterised effect cannot name its row
 /// variable.
 ///
