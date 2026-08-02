@@ -376,6 +376,32 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: -20,
         },
+        // A declared function written where a value belongs. A call through
+        // a value passes an environment and a call by name does not, so the
+        // two cannot be the same function however empty the environment is.
+        Agreed {
+            name: "a function passed by name",
+            source: "module a\n\nfn twice(n: Int) -> Int { n + n }\n\nfn less(n: Int) -> Int { n - 1 }\n\nfn apply(step: Fn(Int) -> Int, n: Int) -> Int { step(n) }\n\nfn answer() -> Int {\n    apply(twice, 5) + apply(less, 5) + apply(twice, apply(less, 3))\n}\n\ntest \"the same name twice costs one wrapper\" {\n    assert apply(twice, 5) == 10\n    assert apply(less, 5) == 4\n    assert answer() == 18\n}\n",
+            call: "answer",
+            expect: 18,
+        },
+        // A contract belongs to the function, not to the way it was called,
+        // so a name handed over as a value keeps the clause it was declared
+        // with.
+        Agreed {
+            name: "a function passed by name keeps its contract",
+            source: "module a\n\nfn halve(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n / 2\n}\n\nfn apply(step: Fn(Int) -> Int, n: Int) -> Int { step(n) }\n\nfn answer() -> Int { apply(halve, 8) }\n\ntest \"the clause travels with the name\" {\n    assert refuses apply(halve, 0 - 2)\n    assert answer() == 4\n}\n",
+            call: "answer",
+            expect: 4,
+        },
+        // A closure written where the value belongs, alongside a name, since
+        // the two have to be the same kind of thing to a caller.
+        Agreed {
+            name: "a closure and a name in the same place",
+            source: "module a\n\nfn twice(n: Int) -> Int { n + n }\n\nfn apply(step: Fn(Int) -> Int, n: Int) -> Int { step(n) }\n\nfn adder(by: Int) -> Fn(Int) -> Int {\n    |x: Int| x + by\n}\n\nfn answer() -> Int {\n    apply(twice, 3) + apply(adder(10), 3) + apply(|x: Int| x * 3, 3)\n}\n\ntest \"a closure that left the function that wrote it\" {\n    assert apply(adder(10), 3) == 13\n    assert answer() == 28\n}\n",
+            call: "answer",
+            expect: 28,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
