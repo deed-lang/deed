@@ -1445,12 +1445,16 @@ impl Lowering<'_> {
             return;
         }
 
+        // No guard on which name was written. The checker already accepted
+        // the call, so the shapes line up and this is reading an answer
+        // rather than searching for one, which is the same reasoning `bind`
+        // gives for walking both in step.
         let actual_args: Vec<&CheckedTy> = match actual {
             CheckedTy::Named { args, .. } | CheckedTy::External { args, .. } => {
                 args.iter().collect()
             }
-            CheckedTy::List(element) if name == "List" => vec![element],
-            CheckedTy::Result(ok, err) if name == "Result" => vec![ok, err],
+            CheckedTy::List(element) => vec![element],
+            CheckedTy::Result(ok, err) => vec![ok, err],
             _ => return,
         };
         for (written, actual) in args.iter().zip(actual_args) {
