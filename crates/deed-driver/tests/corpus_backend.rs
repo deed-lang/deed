@@ -223,6 +223,7 @@ fn the_backend_still_compiles_what_it_used_to() {
         // The capability example: a program that reads a file it was given
         // access to and cannot read one it was not.
         "config.deed",
+        "counter.deed",
         "date.deed",
         "diverge.deed",
         "generator.deed",

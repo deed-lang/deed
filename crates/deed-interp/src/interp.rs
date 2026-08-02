@@ -3014,11 +3014,22 @@ impl<'a> Interp<'a> {
                 }
             }
             Pattern::Record { fields, .. } => {
-                let Value::Variant(variant) = value else {
+                // A record and a variant with fields are matched the same
+                // way, and the pattern reads the same either way. Leaving the
+                // record out meant `err(OverLimit { limit: hit })` bound
+                // nothing when `OverLimit` was a record, and the name it did
+                // not bind was found missing where it was used rather than
+                // where it was written.
+                let held: Option<&Fields> = match value {
+                    Value::Variant(variant) => Some(&variant.fields),
+                    Value::Record(fields) => Some(fields),
+                    _ => None,
+                };
+                let Some(held) = held else {
                     return;
                 };
                 for field in fields {
-                    let Some(inner) = variant.fields.get(&field.name.name).cloned() else {
+                    let Some(inner) = held.get(&field.name.name).cloned() else {
                         continue;
                     };
                     match &field.pattern {

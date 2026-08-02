@@ -16,7 +16,11 @@ release notes.
 
 ### Language
 
-- None yet.
+- A record pattern binds what it names. `err(OverLimit { limit })` bound
+  nothing when `OverLimit` was a record rather than a variant of a choice, and
+  the name it did not bind was reported missing where it was used rather than
+  where it was written. The same pattern on a variant has always worked, and
+  the two are one shape.
 
 ### Diagnostics
 
@@ -64,6 +68,9 @@ release notes.
 
 ### Tools
 
+- A pattern that reaches one level in compiles.
+  `err(OverLimit { limit: reached })` names a field of the record the failure
+  holds, and what it reads is the same read twice over.
 - A generic function whose type parameter appears only inside a type somebody
   declared, or only inside an alias for one, compiles. `Option<Int>` and
   `Option<String>` become two layouts and neither says what it holds, so what

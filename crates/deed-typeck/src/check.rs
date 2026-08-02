@@ -4886,12 +4886,19 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn variant_fields(&self, variant: DefId) -> Option<Vec<FieldTy>> {
-        let parent = self.resolutions.def(variant).parent?;
+    fn variant_fields(&self, named: DefId) -> Option<Vec<FieldTy>> {
+        // A record is a shape with one set of fields and no parent, and a
+        // pattern reads it the same way a variant's is read. Leaving it out
+        // meant every name a record pattern bound had no type, which is not
+        // an error anywhere and is a value the backend cannot compile.
+        if let Some(Nominal::Record { fields }) = self.types.nominal(named) {
+            return Some(fields.clone());
+        }
+        let parent = self.resolutions.def(named).parent?;
         match self.types.nominal(parent)? {
             Nominal::Choice { variants } => variants
                 .iter()
-                .find(|candidate| candidate.def == variant)
+                .find(|candidate| candidate.def == named)
                 .and_then(|candidate| candidate.fields.clone()),
             _ => None,
         }

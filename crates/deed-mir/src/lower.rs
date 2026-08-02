@@ -1035,8 +1035,15 @@ struct Guard {
     inside_ok: bool,
 }
 
-/// Which variants an arm names, and which field each name it binds reads.
-type Arm<'p> = (Vec<usize>, Vec<(usize, &'p ast::Ident)>);
+/// Which variants an arm names, and where each name it binds reads from.
+///
+/// A binding is a path rather than one field, because a pattern may reach
+/// through a value into what it holds: `err(OverLimit { limit })` names a
+/// field of the record inside the failure.
+type Arm<'p> = (
+    Vec<usize>,
+    Vec<(Vec<(crate::LayoutId, usize, usize)>, &'p ast::Ident)>,
+);
 
 /// Matches a written parameter type against what an argument actually is,
 /// recording what each type parameter must stand for.
@@ -2854,23 +2861,25 @@ impl Lowering<'_> {
         for arm in arms.iter().rev() {
             let (variants, bindings) = self.arm_pattern(&arm.pattern, layout)?;
             let mut stmts = Vec::new();
-            for (field, name) in bindings {
-                let field_ty = self.layout(layout).variants[variants[0]].fields[field]
-                    .ty
-                    .clone();
+            for (path, name) in bindings {
+                let mut read = Expr::Local(held);
+                let mut field_ty = Ty::Unit;
+                for (layout, variant, field) in path {
+                    field_ty = self.layout(layout).variants[variant].fields[field]
+                        .ty
+                        .clone();
+                    read = Expr::Field {
+                        value: Box::new(read),
+                        layout,
+                        variant,
+                        field,
+                    };
+                }
                 let local = self.function.add_local(field_ty);
                 if let Some(def) = self.resolutions.resolution(name.span) {
                     self.slots.insert(def, local);
                 }
-                stmts.push(Stmt::Assign {
-                    local,
-                    value: Expr::Field {
-                        value: Box::new(Expr::Local(held)),
-                        layout,
-                        variant: variants[0],
-                        field,
-                    },
-                });
+                stmts.push(Stmt::Assign { local, value: read });
             }
 
             let taken = Block {
@@ -3060,7 +3069,19 @@ impl Lowering<'_> {
                         .iter()
                         .position(|declared| declared.name == field.name.name.as_str())
                         .ok_or_else(|| unlowered("a field the variant does not have", *span))?;
-                    bindings.push((index, &field.name));
+                    // `{ limit }` binds `limit`, and `{ limit: reached }`
+                    // binds `reached` to the same field.
+                    let bound = match &field.pattern {
+                        None => &field.name,
+                        Some(ast::Pattern::Path { segments, .. }) if segments.len() == 1 => {
+                            &segments[0]
+                        }
+                        Some(ast::Pattern::Wildcard(_)) => continue,
+                        Some(other) => {
+                            return Err(unlowered("a pattern inside a pattern", other.span()));
+                        }
+                    };
+                    bindings.push((vec![(layout, at, index)], bound));
                 }
                 (vec![at], bindings)
             }
@@ -3086,10 +3107,33 @@ impl Lowering<'_> {
                     match element {
                         ast::Pattern::Wildcard(_) => {}
                         ast::Pattern::Path { segments, .. } if segments.len() == 1 => {
-                            bindings.push((position, &segments[0]));
+                            bindings.push((vec![(layout, at, position)], &segments[0]));
                         }
+                        // One level in. `err(OverLimit { limit })` names a
+                        // field of the record the failure holds, and what it
+                        // reads is the same read twice over.
                         other => {
-                            return Err(unlowered("a pattern inside a pattern", other.span()));
+                            let Ty::Aggregate(inner) =
+                                held.variants[at].fields[position].ty.clone()
+                            else {
+                                return Err(unlowered("a pattern inside a pattern", other.span()));
+                            };
+                            let (named, held_by) = self.arm_pattern(other, inner)?;
+                            // Only where the inner pattern always applies.
+                            // One that has to be tested would need a
+                            // condition of its own, and the arm has one
+                            // condition.
+                            if named.len() != self.layout(inner).variants.len() {
+                                return Err(unlowered(
+                                    "a pattern inside a pattern that has to be tested",
+                                    other.span(),
+                                ));
+                            }
+                            for (path, name) in held_by {
+                                let mut reached = vec![(layout, at, position)];
+                                reached.extend(path);
+                                bindings.push((reached, name));
+                            }
                         }
                     }
                 }
