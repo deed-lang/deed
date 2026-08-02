@@ -580,6 +580,17 @@ impl Run<'_> {
                     let at = pop(stack)?.as_i64() as usize + *offset as usize;
                     self.store(at, value.as_i64())?;
                 }
+                Ins::I32Load8U(offset) => {
+                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
+                    let byte = *self.memory.get(at).ok_or(Trap::OutOfBounds)?;
+                    stack.push(Value::I32(byte as i32));
+                }
+                Ins::I32Store8(offset) => {
+                    let value = pop(stack)?.as_i64();
+                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
+                    let place = self.memory.get_mut(at).ok_or(Trap::OutOfBounds)?;
+                    *place = value as u8;
+                }
                 other => self.arithmetic(other, stack)?,
             }
         }
@@ -864,5 +875,35 @@ mod tests {
         );
         widened.memory_pages = Some(1);
         assert_eq!(call(&widened, "f", &[]), Ok(None));
+    }
+
+    /// A byte goes where the offset says, and comes back from there.
+    ///
+    /// The offset is what makes these two instructions addressable rather
+    /// than a pair that only ever reads address zero, and a string operation
+    /// is nothing but a walk over offsets.
+    #[test]
+    fn a_byte_is_stored_and_loaded_at_the_offset_it_names() {
+        let mut module = module_with(
+            vec![
+                // memory[24] = 200, through a base of 20 and an offset of 4
+                Ins::I32Const(20),
+                Ins::I32Const(200),
+                Ins::I32Store8(4),
+                // and read back the same way
+                Ins::I32Const(16),
+                Ins::I32Load8U(8),
+                Ins::I64ExtendI32S,
+                Ins::Return,
+            ],
+            vec![],
+            vec![ValType::I64],
+        );
+        module.memory_pages = Some(1);
+        assert_eq!(
+            call(&module, "f", &[]),
+            Ok(Some(Value::I64(200))),
+            "a byte written at 20 + 4 is the byte read at 16 + 8"
+        );
     }
 }

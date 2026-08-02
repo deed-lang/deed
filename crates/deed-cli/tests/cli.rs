@@ -1691,18 +1691,11 @@ fn build_writes_a_module_next_to_the_source() {
 #[test]
 fn build_says_what_it_could_not_compile() {
     let scratch = Scratch::new("build-refused");
-    let source = scratch.write(
-        "hard.deed",
-        "module hard\n\nfn greet(name: String) -> String { \"hi \" + name }\n",
-    );
+    let source = scratch.write("hard.deed", REFUSED);
 
     let output = run(&["build", source.to_str().unwrap()]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(
-        stdout(&output).contains("two strings"),
-        "{}",
-        stdout(&output)
-    );
+    assert!(stdout(&output).contains("in memory"), "{}", stdout(&output));
     assert!(!scratch.path().join("hard.wasm").exists());
 }
 
@@ -1716,10 +1709,7 @@ fn build_says_what_it_could_not_compile() {
 fn build_writes_what_it_can_and_names_what_it_cannot() {
     let scratch = Scratch::new("build-mixed");
     scratch.write("fine.deed", "module fine\n\nfn answer() -> Int { 1 }\n");
-    scratch.write(
-        "hard.deed",
-        "module hard\n\nfn greet(name: String) -> String { \"hi \" + name }\n",
-    );
+    scratch.write("hard.deed", REFUSED);
 
     let output = run(&["build", scratch.path().to_str().unwrap()]);
     assert!(
@@ -1728,12 +1718,15 @@ fn build_writes_what_it_can_and_names_what_it_cannot() {
         stdout(&output)
     );
     assert!(!scratch.path().join("hard.wasm").exists());
-    assert!(
-        stdout(&output).contains("two strings"),
-        "{}",
-        stdout(&output)
-    );
+    assert!(stdout(&output).contains("in memory"), "{}", stdout(&output));
 }
+
+/// A program the backend does not compile, for the two tests above.
+///
+/// Comparing two records is structural in this language, and two addresses
+/// being equal is not two records being equal, so the backend refuses rather
+/// than answering the wrong question.
+const REFUSED: &str = "module hard\n\nrecord Point {\n    x: Int,\n}\n\nfn same(one: Point, other: Point) -> Bool { one == other }\n";
 
 // -- building a component --------------------------------------------------
 

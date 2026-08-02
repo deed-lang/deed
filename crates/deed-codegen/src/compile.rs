@@ -13,10 +13,13 @@
 //! program that runs and answers wrongly, which is worse than one that does
 //! not build.
 
+use std::collections::HashMap;
+
 use deed_diagnostics::Span;
-use deed_mir::{BinaryOp, Block, Expr, FuncId, Function, Local, Program, Stmt, Ty, UnaryOp};
+use deed_mir::{BinaryOp, Block, Expr, Function, Local, Program, Stmt, Ty, UnaryOp};
 
 use crate::layout;
+use crate::runtime::Helper;
 use crate::wasm::{
     Func, FuncType, FunctionSpans, Import, Ins, InstructionSpan, Module, SpanRole, ValType,
     instruction_size,
@@ -96,6 +99,17 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
     }
     let shift = module.imports.len() as u32;
 
+    // What the backend writes itself, numbered after everything the program
+    // declares so that adding one moves nothing. Worked out before any body
+    // is compiled, because a body calls one by index.
+    let helpers = helpers_used(program);
+    let base = shift + program.functions.len() as u32;
+    let where_helpers: HashMap<Helper, u32> = helpers
+        .iter()
+        .enumerate()
+        .map(|(at, helper)| (*helper, base + at as u32))
+        .collect();
+
     let mut strings = Strings::new();
 
     for function in &program.functions {
@@ -103,6 +117,7 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         let interned = module.types.clone();
         let imported = module.imports.clone();
         let mut body = Builder::new(program, function, &mut strings, interned, imported, shift);
+        body.helpers = where_helpers.clone();
         body.block(&function.body)?;
         body.instructions.push(Ins::Return);
         let func_index = shift + module.funcs.len() as u32;
@@ -127,6 +142,18 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         module.intern_table(func_index);
     }
 
+    for helper in &helpers {
+        let type_index = module.intern_type(helper.signature());
+        let (locals, body) = helper.compile();
+        let func_index = module.add_func(Func {
+            type_index,
+            locals,
+            body,
+        });
+        debug_assert_eq!(where_helpers[helper], func_index);
+        module.names.push((func_index, helper.name().to_string()));
+    }
+
     // The bump pointer starts past every literal the data section placed.
     let mut placed = strings.data;
     placed.push((layout::BUMP, (strings.next as i64).to_le_bytes().to_vec()));
@@ -139,105 +166,193 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
     Ok(module)
 }
 
+/// Visits every expression in a block, outermost first.
+///
+/// One walk rather than one per question. Two passes over a program happen
+/// before any body is compiled, because both imports and the functions this
+/// backend writes itself are numbered ahead of the bodies that call them, and
+/// a second copy of this traversal would be a second thing to keep in step
+/// with the IR.
+fn walk_block(block: &Block, visit: &mut impl FnMut(&Expr)) {
+    for stmt in &block.stmts {
+        walk_stmt(stmt, visit);
+    }
+    walk_expr(&block.value, visit);
+}
+
+fn walk_stmt(stmt: &Stmt, visit: &mut impl FnMut(&Expr)) {
+    match stmt {
+        Stmt::Assign { value, .. } | Stmt::Discard(value) | Stmt::Return { value } => {
+            walk_expr(value, visit)
+        }
+        Stmt::Fail { .. } => {}
+        Stmt::While { condition, body } => {
+            walk_expr(condition, visit);
+            for stmt in body {
+                walk_stmt(stmt, visit);
+            }
+        }
+        Stmt::SetField { object, value, .. } => {
+            walk_expr(object, visit);
+            walk_expr(value, visit);
+        }
+    }
+}
+
+fn walk_expr(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
+    visit(expr);
+    match expr {
+        Expr::Unary { operand, .. } => walk_expr(operand, visit),
+        Expr::Binary { left, right, .. } => {
+            walk_expr(left, visit);
+            walk_expr(right, visit);
+        }
+        Expr::Call { args, .. }
+        | Expr::Make { fields: args, .. }
+        | Expr::List { items: args, .. }
+        | Expr::Runtime { args, .. }
+        | Expr::Perform { args, .. }
+        | Expr::Host { args, .. } => {
+            for arg in args {
+                walk_expr(arg, visit);
+            }
+        }
+        Expr::CallIndirect { callee, args, .. } => {
+            walk_expr(callee, visit);
+            for arg in args {
+                walk_expr(arg, visit);
+            }
+        }
+        Expr::Field { value, .. } | Expr::Discriminant { value, .. } => walk_expr(value, visit),
+        Expr::If {
+            condition,
+            then,
+            otherwise,
+            ..
+        } => {
+            walk_expr(condition, visit);
+            walk_block(then, visit);
+            walk_block(otherwise, visit);
+        }
+        Expr::Block(block) => walk_block(block, visit),
+        Expr::ElementAt { list, index, .. } => {
+            walk_expr(list, visit);
+            walk_expr(index, visit);
+        }
+        Expr::Install { state, body, .. } => {
+            walk_expr(state, visit);
+            walk_block(body, visit);
+        }
+        _ => {}
+    }
+}
+
 /// Every host call the program makes, by name, with the signature it wants.
 ///
 /// Collected up front rather than as bodies are compiled, because imports
 /// are numbered before defined functions and a body cannot add one without
 /// moving every function already placed.
 fn host_calls(program: &Program) -> Vec<(String, FuncType)> {
-    fn walk(expr: &Expr, found: &mut Vec<(String, FuncType)>) {
-        if let Expr::Host { name, args, ret } = expr
-            && !found.iter().any(|(seen, _)| seen == name)
-        {
-            found.push((
-                name.clone(),
-                FuncType {
-                    params: args
-                        .iter()
-                        .filter_map(|arg| static_ty(arg).and_then(|ty| val_type(&ty)))
-                        .collect(),
-                    results: val_type(ret).into_iter().collect(),
-                },
-            ));
-        }
-
-        match expr {
-            Expr::Unary { operand, .. } => walk(operand, found),
-            Expr::Binary { left, right, .. } => {
-                walk(left, found);
-                walk(right, found);
-            }
-            Expr::Call { args, .. }
-            | Expr::Make { fields: args, .. }
-            | Expr::List { items: args, .. }
-            | Expr::Runtime { args, .. }
-            | Expr::Perform { args, .. }
-            | Expr::Host { args, .. } => {
-                for arg in args {
-                    walk(arg, found);
-                }
-            }
-            Expr::CallIndirect { callee, args, .. } => {
-                walk(callee, found);
-                for arg in args {
-                    walk(arg, found);
-                }
-            }
-            Expr::Field { value, .. } | Expr::Discriminant { value, .. } => walk(value, found),
-            Expr::If {
-                condition,
-                then,
-                otherwise,
-                ..
-            } => {
-                walk(condition, found);
-                walk_block(then, found);
-                walk_block(otherwise, found);
-            }
-            Expr::Block(block) => walk_block(block, found),
-            Expr::ElementAt { list, index, .. } => {
-                walk(list, found);
-                walk(index, found);
-            }
-            Expr::Install { state, body, .. } => {
-                walk(state, found);
-                walk_block(body, found);
-            }
-            _ => {}
-        }
-    }
-
-    fn walk_block(block: &Block, found: &mut Vec<(String, FuncType)>) {
-        for stmt in &block.stmts {
-            walk_stmt(stmt, found);
-        }
-        walk(&block.value, found);
-    }
-
-    fn walk_stmt(stmt: &Stmt, found: &mut Vec<(String, FuncType)>) {
-        match stmt {
-            Stmt::Assign { value, .. } | Stmt::Discard(value) | Stmt::Return { value } => {
-                walk(value, found)
-            }
-            Stmt::Fail { .. } => {}
-            Stmt::While { condition, body } => {
-                walk(condition, found);
-                for stmt in body {
-                    walk_stmt(stmt, found);
-                }
-            }
-            Stmt::SetField { object, value, .. } => {
-                walk(object, found);
-                walk(value, found);
-            }
-        }
-    }
-
-    let mut found = Vec::new();
+    let mut found: Vec<(String, FuncType)> = Vec::new();
     for function in &program.functions {
-        walk_block(&function.body, &mut found);
+        walk_block(&function.body, &mut |expr| {
+            if let Expr::Host { name, args, ret } = expr
+                && !found.iter().any(|(seen, _)| seen == name)
+            {
+                found.push((
+                    name.clone(),
+                    FuncType {
+                        params: args
+                            .iter()
+                            .filter_map(|arg| static_ty(arg).and_then(|ty| val_type(&ty)))
+                            .collect(),
+                        results: val_type(ret).into_iter().collect(),
+                    },
+                ));
+            }
+        });
     }
     found
+}
+
+/// Which of the functions this backend writes the program reaches.
+///
+/// The same question a body asks when it meets one of these shapes, asked
+/// ahead of time because the answer is an index. Asking it twice is the
+/// arrangement, and the two places agreeing is what the emitted helper being
+/// the one that gets called depends on.
+fn helpers_used(program: &Program) -> Vec<Helper> {
+    let mut found: Vec<Helper> = Vec::new();
+    for function in &program.functions {
+        walk_block(&function.body, &mut |expr| {
+            let Expr::Binary { op, left, .. } = expr else {
+                return;
+            };
+            let wanted = match op {
+                BinaryOp::ConcatStr => Some(Helper::JoinedText),
+                BinaryOp::LtStr | BinaryOp::LeStr | BinaryOp::GtStr | BinaryOp::GeStr => {
+                    Some(Helper::TextOrder)
+                }
+                BinaryOp::Eq | BinaryOp::Ne => match ty_in(program, function, left) {
+                    Ty::Str => Some(Helper::SameText),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(helper) = wanted
+                && !found.contains(&helper)
+            {
+                found.push(helper);
+            }
+        });
+    }
+
+    // Emitted in a fixed order, so the same program compiles to the same
+    // bytes however its expressions happened to be walked.
+    Helper::ALL
+        .iter()
+        .copied()
+        .filter(|helper| found.contains(helper))
+        .collect()
+}
+
+/// What an expression produces.
+///
+/// Worked out from the IR rather than recorded on every node, because it is
+/// only asked where an instruction depends on it.
+fn ty_in(program: &Program, function: &Function, expr: &Expr) -> Ty {
+    match expr {
+        Expr::Unit => Ty::Unit,
+        Expr::Bool(_) => Ty::Bool,
+        Expr::Int(_) => Ty::Int,
+        Expr::Str(_) => Ty::Str,
+        Expr::Local(local) => function.local_ty(*local).clone(),
+        Expr::Unary { op, .. } => match op {
+            UnaryOp::Not => Ty::Bool,
+            UnaryOp::Negate => Ty::Int,
+        },
+        Expr::Binary { op, .. } => op.result_ty(),
+        Expr::Call { func, .. } => program.function(*func).ret.clone(),
+        Expr::CallIndirect { ret, .. } => (**ret).clone(),
+        Expr::Make { layout, .. } => Ty::Aggregate(*layout),
+        Expr::Field {
+            layout,
+            variant,
+            field,
+            ..
+        } => program.layout(*layout).variants[*variant].fields[*field]
+            .ty
+            .clone(),
+        Expr::Discriminant { .. } => Ty::Int,
+        Expr::List { element, .. } => Ty::List(element.clone()),
+        Expr::If { ty, .. } => (**ty).clone(),
+        Expr::Block(block) => ty_in(program, function, &block.value),
+        Expr::Runtime { ret, .. } => (**ret).clone(),
+        Expr::ElementAt { element, .. } => (**element).clone(),
+        Expr::Install { ty, .. } => (**ty).clone(),
+        Expr::Perform { ret, .. } => (**ret).clone(),
+        Expr::Host { ret, .. } => (**ret).clone(),
+    }
 }
 
 /// What an expression produces, for the cases an import's signature needs,
@@ -336,6 +451,8 @@ struct Builder<'a> {
     /// difference, and it is applied in exactly two places: a direct call
     /// and the table.
     shift: u32,
+    /// Where each function this backend writes itself is numbered.
+    helpers: HashMap<Helper, u32>,
     /// Source spans attached to selected instructions in this function.
     sites: Vec<SiteDraft>,
 }
@@ -377,6 +494,7 @@ impl<'a> Builder<'a> {
             signatures,
             imports,
             shift,
+            helpers: HashMap::new(),
             sites: Vec::new(),
         }
     }
@@ -1232,30 +1350,51 @@ impl<'a> Builder<'a> {
             BinaryOp::GeInt => Ins::I64GeS,
             BinaryOp::And => Ins::I32And,
             BinaryOp::Or => Ins::I32Or,
-            BinaryOp::ConcatStr => return Err(self.fail("joining two strings")),
+            // Both operands are already on the stack, which is what the
+            // helper takes, so joining or ordering two strings is a call.
+            BinaryOp::ConcatStr => {
+                let at = self.helper(Helper::JoinedText)?;
+                Ins::Call(at)
+            }
             BinaryOp::LtStr | BinaryOp::LeStr | BinaryOp::GtStr | BinaryOp::GeStr => {
-                return Err(self.fail("ordering two strings"));
+                let at = self.helper(Helper::TextOrder)?;
+                self.instructions.push(Ins::Call(at));
+                self.instructions.push(Ins::I64Const(0));
+                match op {
+                    BinaryOp::LtStr => Ins::I64LtS,
+                    BinaryOp::LeStr => Ins::I64LeS,
+                    BinaryOp::GtStr => Ins::I64GtS,
+                    _ => Ins::I64GeS,
+                }
             }
             // Equality is structural and works on every type, so which
             // instruction it is depends on what was compared rather than on
             // the operator. Two addresses being equal is not two values being
-            // equal, so anything living in memory is refused rather than
-            // compared the wrong way.
+            // equal, so anything living in memory is compared by what it
+            // holds or refused rather than compared the wrong way.
             BinaryOp::Eq | BinaryOp::Ne => {
                 let operand = self.ty_of(left)?;
-                if operand.is_boxed() {
+                if operand == Ty::Str {
+                    let at = self.helper(Helper::SameText)?;
+                    self.instructions.push(Ins::Call(at));
+                    match op {
+                        BinaryOp::Eq => Ins::Nop,
+                        _ => Ins::I32Eqz,
+                    }
+                } else if operand.is_boxed() {
                     return Err(self.fail("comparing two values that live in memory"));
-                }
-                match (val_type(&operand), op) {
-                    (Some(ValType::I64), BinaryOp::Eq) => Ins::I64Eq,
-                    (Some(ValType::I64), BinaryOp::Ne) => Ins::I64Ne,
-                    (Some(ValType::I32), BinaryOp::Eq) => Ins::I32Eq,
-                    (Some(ValType::I32), BinaryOp::Ne) => Ins::I32Ne,
-                    // Two values of a type with no representation are equal,
-                    // and there is nothing on the stack to compare.
-                    (None, BinaryOp::Eq) => Ins::I32Const(1),
-                    (None, _) => Ins::I32Const(0),
-                    _ => unreachable!("only Eq and Ne reach here"),
+                } else {
+                    match (val_type(&operand), op) {
+                        (Some(ValType::I64), BinaryOp::Eq) => Ins::I64Eq,
+                        (Some(ValType::I64), BinaryOp::Ne) => Ins::I64Ne,
+                        (Some(ValType::I32), BinaryOp::Eq) => Ins::I32Eq,
+                        (Some(ValType::I32), BinaryOp::Ne) => Ins::I32Ne,
+                        // Two values of a type with no representation are
+                        // equal, and there is nothing on the stack to compare.
+                        (None, BinaryOp::Eq) => Ins::I32Const(1),
+                        (None, _) => Ins::I32Const(0),
+                        _ => unreachable!("only Eq and Ne reach here"),
+                    }
                 }
             }
         };
@@ -1268,42 +1407,17 @@ impl<'a> Builder<'a> {
     /// Worked out from the IR rather than recorded on every node, because it
     /// is only asked where an instruction depends on it.
     fn ty_of(&self, expr: &Expr) -> Result<Ty, Unsupported> {
-        Ok(match expr {
-            Expr::Unit => Ty::Unit,
-            Expr::Bool(_) => Ty::Bool,
-            Expr::Int(_) => Ty::Int,
-            Expr::Str(_) => Ty::Str,
-            Expr::Local(local) => self.function.local_ty(*local).clone(),
-            Expr::Unary { op, .. } => match op {
-                UnaryOp::Not => Ty::Bool,
-                UnaryOp::Negate => Ty::Int,
-            },
-            Expr::Binary { op, .. } => op.result_ty(),
-            Expr::Call { func, .. } => self.callee(*func).ret.clone(),
-            Expr::CallIndirect { ret, .. } => (**ret).clone(),
-            Expr::Make { layout, .. } => Ty::Aggregate(*layout),
-            Expr::Field {
-                layout,
-                variant,
-                field,
-                ..
-            } => self.program.layout(*layout).variants[*variant].fields[*field]
-                .ty
-                .clone(),
-            Expr::Discriminant { .. } => Ty::Int,
-            Expr::List { element, .. } => Ty::List(element.clone()),
-            Expr::If { ty, .. } => (**ty).clone(),
-            Expr::Block(block) => self.ty_of(&block.value)?,
-            Expr::Runtime { ret, .. } => (**ret).clone(),
-            Expr::ElementAt { element, .. } => (**element).clone(),
-            Expr::Install { ty, .. } => (**ty).clone(),
-            Expr::Perform { ret, .. } => (**ret).clone(),
-            Expr::Host { ret, .. } => (**ret).clone(),
-        })
+        Ok(ty_in(self.program, self.function, expr))
     }
 
-    fn callee(&self, func: FuncId) -> &Function {
-        self.program.function(func)
+    /// Where one of the functions this backend writes is numbered.
+    fn helper(&self, helper: Helper) -> Result<u32, Unsupported> {
+        self.helpers.get(&helper).copied().ok_or_else(|| {
+            self.fail(&format!(
+                "`{}`, which nothing collected before the bodies were compiled",
+                helper.name()
+            ))
+        })
     }
 }
 
@@ -1341,6 +1455,47 @@ mod tests {
         });
         program.add_function(function);
         compile(&program).expect("this compiles")
+    }
+
+    /// A helper is emitted only when something reaches it, and it arrives in
+    /// the name section under the name the runtime publishes.
+    ///
+    /// The name is the only thing a person reading a trap in a compiled
+    /// module has to go on, and nothing else in the compiler reads it, so
+    /// without this it can be anything at all.
+    #[test]
+    fn a_helper_is_emitted_under_its_own_name_and_only_when_it_is_reached() {
+        let mut program = Program::new();
+        let mut function = Function::new("join", vec![Ty::Str, Ty::Str], Ty::Str);
+        function.body = Block::of(Expr::Binary {
+            op: BinaryOp::ConcatStr,
+            left: Box::new(Expr::Local(Local(0))),
+            right: Box::new(Expr::Local(Local(1))),
+            span: nowhere(),
+        });
+        program.add_function(function);
+        let module = compile(&program).expect("this compiles");
+        assert_eq!(
+            module.funcs.len(),
+            2,
+            "the program's function and one helper"
+        );
+        assert!(
+            module
+                .names
+                .iter()
+                .any(|(_, name)| name == deed_mir::runtime::STR_CONCAT),
+            "{:?}",
+            module.names
+        );
+
+        let plain = compile(&adding()).expect("this compiles");
+        assert_eq!(
+            plain.funcs.len(),
+            1,
+            "a program that joins nothing carries no helper: {:?}",
+            plain.names
+        );
     }
 
     fn assert_arithmetic_failure(module: &crate::wasm::Module, name: &str, args: [i64; 2]) {

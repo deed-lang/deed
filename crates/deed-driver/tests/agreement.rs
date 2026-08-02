@@ -164,6 +164,84 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 2,
         },
+        // Strings are bytes in memory, so every one of these is a loop the
+        // backend writes rather than an instruction. Both halves of each
+        // answer are asked: whether two strings are the same, and what
+        // joining them produces.
+        Agreed {
+            name: "joining two strings",
+            source: "module a\n\nfn answer() -> Int {\n    if \"ab\" + \"cde\" == \"abcde\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"one string after the other\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        Agreed {
+            name: "joining an empty string changes nothing",
+            source: "module a\n\nfn answer() -> Int { length(\"\" + \"abc\" + \"\") }\n\ntest \"nothing is still nothing\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        // The joined string carries a character count rather than a byte
+        // count, and the two differ the moment anything is not ASCII.
+        Agreed {
+            name: "joining counts characters rather than bytes",
+            source: "module a\n\nfn answer() -> Int { length(\"é\" + \"x\") }\n\ntest \"two characters, three bytes\" {\n    assert answer() == 2\n}\n",
+            call: "answer",
+            expect: 2,
+        },
+        Agreed {
+            name: "two strings that differ in one place",
+            source: "module a\n\nfn answer() -> Int {\n    if \"abc\" == \"abd\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"one byte is enough to tell them apart\" {\n    assert answer() == 0\n}\n",
+            call: "answer",
+            expect: 0,
+        },
+        Agreed {
+            name: "a string is not its prefix",
+            source: "module a\n\nfn answer() -> Int {\n    if \"ab\" != \"abc\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"length is asked first\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // The order `design/02-syntax.md` names: by code point, so a number
+        // written as text sorts as text.
+        Agreed {
+            name: "ordering two strings",
+            source: "module a\n\nfn earlier(a: String, b: String) -> Bool { a < b }\n\nfn answer() -> Int {\n    if earlier(\"10\", \"9\") && !earlier(\"9\", \"10\") {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"text order is not number order\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        Agreed {
+            name: "a prefix comes first",
+            source: "module a\n\nfn answer() -> Int {\n    if \"ab\" < \"abc\" && \"abc\" > \"ab\" && \"ab\" <= \"ab\" && \"ab\" >= \"ab\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"the shorter one comes first when it matches\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // All four in both directions, and on two strings that are the same.
+        // Three of them agree wherever one string really does come before the
+        // other, so what tells them apart is the pair that is equal and the
+        // pair where the answer is no.
+        Agreed {
+            name: "each ordering operator answers for itself",
+            source: "module a\n\nfn answer() -> Int {\n    if \"ab\" < \"abc\" && !(\"abc\" < \"ab\") && !(\"ab\" < \"ab\") &&\n        \"ab\" <= \"abc\" && !(\"abc\" <= \"ab\") && \"ab\" <= \"ab\" &&\n        \"abc\" > \"ab\" && !(\"ab\" > \"abc\") && !(\"ab\" > \"ab\") &&\n        \"abc\" >= \"ab\" && !(\"ab\" >= \"abc\") && \"ab\" >= \"ab\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"twelve answers, one for each way round\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // Equality is one operator over every type, so which instruction it
+        // is depends on what was compared. A wrong width here answers the
+        // wrong question quietly.
+        Agreed {
+            name: "equality on each width",
+            source: "module a\n\nfn answer() -> Int {\n    if 1 == 1 && !(1 == 2) && 1 != 2 && !(1 != 1) &&\n        true == true && !(true == false) && true != false && !(true != true) {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"a number and a boolean are not the same width\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // Two values of a type with no representation. There is nothing on
+        // the stack to compare, so the answer is written rather than computed,
+        // and it still has to be the right one.
+        Agreed {
+            name: "equality on something with no representation",
+            source: "module a\n\nfn nothing() -> () { () }\n\nfn answer() -> Int {\n    if nothing() == nothing() && !(nothing() != nothing()) {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"two of nothing are the same nothing\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
@@ -536,12 +614,12 @@ fn a_proven_precondition_compiles_to_nothing_and_a_guarded_one_does_not() {
 /// into something that runs and answers wrongly.
 #[test]
 fn what_the_backend_cannot_compile_is_refused_by_name() {
-    let (_, one) = checked("module a\n\nfn greet(name: String) -> String { \"hi \" + name }\n");
+    let (_, one) = checked(STILL_REFUSED);
     let lowered = deed_mir::lower(&one.module, &one.resolutions, &one.types)
-        .expect("joining two strings lowers, compiling it is what does not");
-    let refused = compile(&lowered).expect_err("joining two strings is not compiled yet");
-    assert_eq!(refused.function, "greet");
-    assert!(refused.to_string().contains("two strings"), "{refused}");
+        .expect("this lowers, compiling it is what does not");
+    let refused = compile(&lowered).expect_err("this is not compiled yet");
+    assert_eq!(refused.function, "same");
+    assert!(refused.to_string().contains("in memory"), "{refused}");
 }
 
 /// The interpreter stays the reference implementation, so a program the
@@ -549,9 +627,9 @@ fn what_the_backend_cannot_compile_is_refused_by_name() {
 /// not being replaced, and it is worth a test rather than a sentence.
 #[test]
 fn a_program_the_backend_refuses_still_runs_under_the_interpreter() {
-    let (_, one) = checked(
-        "module a\n\nfn greet(name: String) -> String { \"hi \" + name }\n\ntest \"it greets\" {\n    assert greet(\"you\") == \"hi you\"\n}\n",
-    );
+    let (_, one) = checked(&format!(
+        "{STILL_REFUSED}\ntest \"two of the same\" {{\n    assert same(Point {{ x: 1 }}, Point {{ x: 1 }})\n}}\n"
+    ));
 
     let mut interpreted = Interpreted::new();
     interpreted.add(
@@ -571,6 +649,15 @@ fn a_program_the_backend_refuses_still_runs_under_the_interpreter() {
         "the backend has not got here yet"
     );
 }
+
+/// A shape the backend does not compile, for the two tests above.
+///
+/// Comparing two records is structural in this language and two addresses
+/// being equal is not two records being equal, so the backend refuses rather
+/// than answering the wrong question. When it stops refusing, these two tests
+/// need another shape rather than deleting: what they hold is that a refusal
+/// says which function it met and that the interpreter still answers.
+const STILL_REFUSED: &str = "module a\n\nrecord Point {\n    x: Int,\n}\n\nfn same(one: Point, other: Point) -> Bool { one == other }\n";
 
 /// One generated run, by what happened.
 enum Finding {
