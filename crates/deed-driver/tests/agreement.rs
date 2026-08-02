@@ -803,6 +803,82 @@ test \"a call across a file boundary\" {\n\
     );
 }
 
+/// A record and a choice declared in one module and used in another.
+///
+/// A type crosses a boundary the same way a function does, and what it comes
+/// out as has to be what the module that declared it built. Two layouts for
+/// one record would make a value of it fit neither, which is the failure this
+/// rules out: `held` reads a field of something `shapes` built, and `weight`
+/// matches on a variant of something `shapes` declared.
+#[test]
+fn a_type_from_another_module_is_the_same_type() {
+    let library = "module shapes\n\n\
+record Box { held: Int }\n\n\
+choice Tone {\n    Plain,\n    Loud,\n}\n\n\
+fn boxed(n: Int) -> Box { Box { held: n } }\n";
+    let caller = "module a\n\n\
+use shapes.{Box, Tone, Plain, Loud, boxed}\n\n\
+fn held(box: Box) -> Int { box.held }\n\n\
+fn weight(tone: Tone) -> Int {\n\
+\x20   match tone {\n\
+\x20       Plain => 1,\n\
+\x20       Loud => 10,\n\
+\x20   }\n\
+}\n\n\
+fn answer() -> Int { held(boxed(4)) + weight(Loud) + weight(Plain) }\n\n\
+test \"a record and a choice cross a boundary\" {\n\
+\x20   assert held(boxed(4)) == 4\n\
+\x20   assert answer() == 15\n\
+}\n";
+
+    let mut sources = SourceMap::new();
+    let ids = vec![
+        sources.add("a.deed".to_string(), caller.to_string()),
+        sources.add("shapes.deed".to_string(), library.to_string()),
+    ];
+    let checks = check_all(&sources, &ids);
+    assert!(
+        !checks[0].has_errors(),
+        "the caller should check: {:?}",
+        checks[0].diagnostics
+    );
+
+    let mut interpreted = Interpreted::new();
+    for checked in &checks {
+        interpreted.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+            checked.rows(),
+        );
+    }
+    let outcomes = run_tests(&interpreted, checks[0].file);
+    assert!(
+        outcomes[0].failure.is_none(),
+        "the interpreter should agree: {:?}",
+        outcomes[0].failure
+    );
+
+    let alongside = vec![deed_mir::Alongside {
+        module: &checks[1].module,
+        resolutions: &checks[1].resolutions,
+        types: &checks[1].types,
+    }];
+    let lowered = deed_mir::lower_alongside(
+        &checks[0].module,
+        &checks[0].resolutions,
+        &checks[0].types,
+        &alongside,
+    )
+    .expect("this lowers");
+    let module = compile(&lowered).expect("this compiles");
+    assert_eq!(
+        call(&module, "answer", &[]).expect("this runs"),
+        Some(Value::I64(15))
+    );
+}
+
 /// A contract on the other side of a boundary is checked here.
 ///
 /// A callee's `where` clause is dropped when every call the checker recorded

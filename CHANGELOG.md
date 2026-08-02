@@ -64,6 +64,11 @@ release notes.
 
 ### Tools
 
+- A record, a choice, an alias, an effect or a handler declared in one module
+  and used in another compiles. A type crosses a boundary the same way a
+  function does, and what it comes out as is what the module that declared it
+  built, so a value of one record fits everywhere it is named rather than
+  fitting one layout in one file and another elsewhere.
 - An `if` or a `match` written where a type is expected of it compiles.
   The checker works out what one comes to and did not write it down, because
   the pass that records a type per expression is the one that infers rather

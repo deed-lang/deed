@@ -132,6 +132,7 @@ struct Unit<'a> {
     /// What the module calls itself, which is what a `use` on the other side
     /// names it by.
     path: String,
+    module: &'a Module,
     resolutions: &'a Resolutions,
     types: &'a Types,
     layouts: HashMap<String, crate::LayoutId>,
@@ -376,6 +377,7 @@ fn tables<'a>(
             .as_ref()
             .map(ast::ModulePath::to_string_path)
             .unwrap_or_default(),
+        module,
         resolutions,
         types,
         layouts,
@@ -409,6 +411,55 @@ fn lower_impl(
         // turned away over the rest of it.
         if let Ok(unit) = tables(extra.module, extra.resolutions, extra.types, &mut program) {
             units.push(unit);
+        }
+    }
+
+    // A type crosses a boundary the same way a function does. What it comes
+    // out as is what the module that declared it built, so each module's
+    // tables gain the names it borrowed rather than a copy of the shape,
+    // which would give one record two layouts and make a value of it fit
+    // neither.
+    //
+    // By name and only for what a `use` line asked for, so two modules that
+    // both declare a `Point` keep their own.
+    let borrowed: Vec<(usize, usize, String)> = units
+        .iter()
+        .enumerate()
+        .flat_map(|(at, unit)| {
+            unit.module.uses.iter().flat_map(move |used| {
+                let path = used.path.to_string_path();
+                used.names
+                    .iter()
+                    .map(move |name| (at, path.clone(), name.name.to_string()))
+            })
+        })
+        .filter_map(|(at, path, name)| {
+            let from = units.iter().position(|unit| unit.path == path)?;
+            (from != at).then_some((at, from, name))
+        })
+        .collect();
+
+    for (at, from, name) in borrowed {
+        if let Some(id) = units[from].layouts.get(&name).copied() {
+            units[at].layouts.insert(name.clone(), id);
+        }
+        if let Some(nominal) = units[from].nominals.get(&name).copied() {
+            units[at].nominals.insert(name.clone(), nominal);
+        }
+        if let Some(alias) = units[from].aliases.get(&name).copied() {
+            units[at].aliases.insert(name.clone(), alias);
+        }
+        if let Some(ty) = units[from].alias_types.get(&name).cloned() {
+            units[at].alias_types.insert(name.clone(), ty);
+        }
+        if let Some(id) = units[from].effects.get(&name).copied() {
+            units[at].effects.insert(name.clone(), id);
+        }
+        if let Some(effect) = units[from].signatures.get(&name).copied() {
+            units[at].signatures.insert(name.clone(), effect);
+        }
+        if let Some(handler) = units[from].handlers.get(&name).copied() {
+            units[at].handlers.insert(name.clone(), handler);
         }
     }
 
@@ -1575,6 +1626,37 @@ impl Lowering<'_> {
                     self.nominals,
                     &mut self.shapes,
                 )?)
+            }
+            // A type that came from another module. The checker carries it
+            // by module and name rather than by definition, for the reason a
+            // `DefId` cannot cross: it is an index into one module's table.
+            // The name is enough here, because the borrowing pass put what
+            // the module that declared it built under that name.
+            CheckedTy::External { module, name, args } if &**module != "<prelude>" => {
+                let name = name.to_string();
+                if args.is_empty() {
+                    match self.layouts.get(name.as_str()) {
+                        Some(id) => Ty::Aggregate(*id),
+                        None => match self.alias_types.get(name.as_str()) {
+                            Some(ty) => ty.clone(),
+                            None => return Err(unlowered(&format!("the type `{name}`"), span)),
+                        },
+                    }
+                } else {
+                    let actuals = args
+                        .iter()
+                        .map(|arg| self.convert(arg, span))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ty::Aggregate(instantiate_nominal(
+                        name.as_str(),
+                        &actuals,
+                        span,
+                        self.layouts,
+                        self.aliases,
+                        self.nominals,
+                        &mut self.shapes,
+                    )?)
+                }
             }
             other => lower_ty(other, span)?,
         })
