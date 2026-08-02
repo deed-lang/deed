@@ -182,3 +182,16 @@ pub const STATE_INITIALISER: &str = "DEED2019";
 /// the rest of it is checked. The repair is a word for a symbol, which is the
 /// whole of it, so it is applied rather than offered.
 pub const WORD_OPERATOR: &str = "DEED2020";
+
+/// A signature with the answer written under it and no braces around it.
+///
+/// The shape other languages give a one-line function. Here a body is a block
+/// and nothing else, so the reader was told a `{` was expected, the body was
+/// skipped, and its first line was then read as a declaration that was not
+/// one. What arrived was a message about a brace, a message about a name, and
+/// a return type that no longer matched anything.
+///
+/// Read to the next declaration, which is the only thing that can follow a
+/// body, so the braces are an insertion at each end and the function is the
+/// one that was written.
+pub const BRACELESS_BODY: &str = "DEED2021";

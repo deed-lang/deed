@@ -26,6 +26,12 @@ release notes.
   that did not follow it. The resolver has had the answer since #213 and never
   got to give it: across eighteen recorded model runs the word reached the
   parser seventeen times and the resolver none.
+- A function body written without braces gets DEED2021, which says a body is a
+  block and offers the braces, and the body is read to the next declaration so
+  the function is still a function. It used to be a message about a brace, then
+  a message about the first line of the body not being a declaration, then a
+  return type that matched nothing. Thirty-two of the six hundred programs in
+  the recorded model runs were written this way.
 
 ### Standard library
 

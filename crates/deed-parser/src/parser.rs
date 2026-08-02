@@ -1222,13 +1222,108 @@ impl<'a> Parser<'a> {
         // saying true, because the names in it only resolve once the whole
         // signature is in scope.
         contract.requires.splice(0..0, constraints);
-        let body = self.parse_block();
+        let body = if self.at(&TokenKind::LBrace) || self.at_item_start() || self.at_eof() {
+            self.parse_block()
+        } else {
+            self.body_without_braces()
+        };
         Some(FnDecl {
             span: sig.span.to(body.span),
             sig,
             contract,
             body,
         })
+    }
+
+    /// Reads a body that was written without braces, and says so once.
+    ///
+    /// The reader wrote the shape their last language had: a signature, and
+    /// the answer under it. What they were told was that a `{` was expected,
+    /// and then the file fell apart, because the body was skipped and its
+    /// first line was read as a declaration that was not one. Eighteen of the
+    /// recorded model runs wrote it and one of them never got out of it.
+    ///
+    /// Where the body ends is not a guess: a declaration keyword or the brace
+    /// closing a handler are the only things that can follow it, and neither
+    /// can be a statement. So the braces are an insertion at each end, and the
+    /// file after them is a file the reader meant to write.
+    /// Whether the token sitting here is one that can only come after a body.
+    ///
+    /// A declaration keyword, or the brace that closes a handler. Neither can
+    /// begin a statement, which is what makes reading an unbraced body to here
+    /// a reading rather than a guess.
+    fn after_a_body(&self) -> bool {
+        self.at_item_start() || self.at(&TokenKind::RBrace)
+    }
+
+    fn body_without_braces(&mut self) -> Block {
+        let open = self.read_to();
+        let start = self.span();
+
+        let saved = std::mem::replace(&mut self.struct_lit, StructLit::Allow);
+        let mut stmts = Vec::new();
+        let mut tail = None;
+        loop {
+            // On its own, and first, because at the end of the file `bump`
+            // does not move and every other way out of this loop is a
+            // question about the token sitting there.
+            if self.at_eof() {
+                break;
+            }
+            if self.after_a_body() {
+                break;
+            }
+
+            let before = self.pos;
+            let stmt = self.parse_stmt();
+            self.eat(&TokenKind::Semi);
+
+            let done = self.at_eof() || self.after_a_body();
+            match stmt {
+                Stmt::Expr(expr) if done => tail = Some(Box::new(expr)),
+                other => stmts.push(other),
+            }
+
+            if self.pos == before {
+                self.bump();
+            }
+        }
+        self.struct_lit = saved;
+        let close = self.read_to();
+
+        self.emit(
+            Diagnostic::error(
+                codes::BRACELESS_BODY,
+                self.file,
+                start.to(close),
+                "a function body is a block, and this one has no braces",
+            )
+            .with_primary_label("this needs `{` in front of it and `}` after it")
+            .with_note(
+                "a block is the only thing a body can be, and its value is the expression it \
+                 ends with, which is why there is no second form that returns one line",
+            )
+            .with_edits(
+                "put the body in braces",
+                vec![
+                    SuggestedEdit {
+                        span: open,
+                        replacement: " {".to_string(),
+                    },
+                    SuggestedEdit {
+                        span: close,
+                        replacement: "\n}".to_string(),
+                    },
+                ],
+                Applicability::MachineApplicable,
+            ),
+        );
+
+        Block {
+            stmts,
+            tail,
+            span: start.to(close),
+        }
     }
 
     /// The contract block: `where`, then `uses`, then `ensures`, in that order.

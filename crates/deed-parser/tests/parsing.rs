@@ -2290,3 +2290,92 @@ fn a_function_named_and_is_still_a_function() {
     );
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 }
+
+// -- a body written without braces ------------------------------------------
+//
+// A signature with the answer under it, which is what a one-line function
+// looks like in most languages. Skipping the body cost the file: the first
+// line of it was read as a declaration that was not one, and the return type
+// stopped matching anything.
+
+const BRACELESS: &str = "module a\n\n\
+                         fn take_one(count: Int) -> Int\n  count - 1\n\n\
+                         fn twice(n: Int) -> Int\n  n + n\n";
+
+#[test]
+fn a_body_without_braces_is_told_it_is_a_block() {
+    let (sources, parsed) = parse_source(BRACELESS);
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::BRACELESS_BODY, codes::BRACELESS_BODY]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("a function body is a block"), "{text}");
+    assert!(
+        text.contains("its value is the expression it ends with"),
+        "{text}"
+    );
+}
+
+/// The point of reading it: both functions are still functions with bodies, so
+/// nothing downstream reports a missing declaration or a return type that does
+/// not match a body nobody read.
+#[test]
+fn the_functions_survive_a_missing_brace() {
+    let (_, parsed) = parse_source(BRACELESS);
+    let bodies: Vec<bool> = parsed
+        .module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function.body.tail.is_some()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bodies, vec![true, true]);
+}
+
+/// The braces go on as an insertion at each end, so applying them leaves a
+/// file that parses. Where the body ends is the next declaration, and nothing
+/// else can be there.
+#[test]
+fn the_repair_puts_braces_round_what_was_written() {
+    let (_, parsed) = parse_source(BRACELESS);
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    assert_eq!(fix.edits.len(), 2);
+    assert_eq!(fix.edits[0].replacement, " {");
+    assert_eq!(fix.edits[1].replacement, "\n}");
+
+    let mut repaired = BRACELESS.to_string();
+    for edit in fix.edits.iter().rev() {
+        repaired.replace_range(edit.span.as_range(), &edit.replacement);
+    }
+    assert!(
+        repaired.contains("fn take_one(count: Int) -> Int {\n  count - 1\n}"),
+        "{repaired}"
+    );
+}
+
+/// A contract sits between the signature and the body, so the brace goes after
+/// the contract rather than after the return type.
+#[test]
+fn the_opening_brace_goes_after_the_contract() {
+    let source = "module a\n\nfn take(count: Int) -> Int\n  where count > 0\n  count - 1\n";
+    let (_, parsed) = parse_source(source);
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+
+    let mut repaired = source.to_string();
+    for edit in fix.edits.iter().rev() {
+        repaired.replace_range(edit.span.as_range(), &edit.replacement);
+    }
+    assert!(repaired.contains("where count > 0 {"), "{repaired}");
+}
+
+/// A signature with nothing under it is a different mistake: there is no body
+/// to put braces round, and the reader is told what was expected.
+#[test]
+fn a_signature_with_no_body_at_all_is_still_a_missing_brace() {
+    let (_, parsed) = parse_source("module a\n\nfn f() -> Int\n\nfn g() -> Int {\n    1\n}\n");
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::UNEXPECTED_TOKEN]);
+}
