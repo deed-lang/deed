@@ -1215,13 +1215,14 @@ impl<'a> Parser<'a> {
 
     fn parse_fn(&mut self, types_required: TypesRequired) -> Option<FnDecl> {
         let mut constraints = Vec::new();
-        let sig = self.parse_fn_sig(types_required, &mut constraints)?;
+        let mut sig = self.parse_fn_sig(types_required, &mut constraints)?;
         let mut contract = self.parse_contract();
         // A constraint written on a parameter belongs here, and this is where
         // it goes. The diagnostic said so; putting it there is what makes the
         // saying true, because the names in it only resolve once the whole
         // signature is in scope.
         contract.requires.splice(0..0, constraints);
+        self.return_type_after_the_contract(&mut sig);
         let body = if self.at(&TokenKind::LBrace) || self.at_item_start() || self.at_eof() {
             self.parse_block()
         } else {
@@ -1233,6 +1234,43 @@ impl<'a> Parser<'a> {
             contract,
             body,
         })
+    }
+
+    /// Reads `-> T` written after the contract instead of before it.
+    ///
+    /// The contract comes after the return type here, and it is written that
+    /// way round for a reason: `->` closes the parameter list and everything
+    /// after it is about the function rather than about its shape. Written the
+    /// other way the arrow sat where the body should have started, and the
+    /// reader was told a `{` was expected while the function went on to have
+    /// no return type and a body that did not match it.
+    ///
+    /// Read rather than refused, so what is wrong with the file is the order
+    /// of two things and not the four messages that followed. There is no fix
+    /// attached: moving text needs the text, and the parser has tokens.
+    fn return_type_after_the_contract(&mut self, sig: &mut FnSig) {
+        if !self.at(&TokenKind::Arrow) {
+            return;
+        }
+        let arrow = self.bump().span;
+        let ty = self.parse_type();
+        self.emit(
+            Diagnostic::error(
+                codes::RETURN_TYPE_AFTER_CONTRACT,
+                self.file,
+                arrow.to(ty.span()),
+                "the return type goes before the contract, not after it",
+            )
+            .with_primary_label("this belongs after the parameter list")
+            .with_secondary(sig.span, "the signature ends here")
+            .with_note(
+                "`->` is what closes a parameter list, and everything after the type it names \
+                 is about what the function promises rather than about its shape",
+            ),
+        );
+        if sig.ret.is_none() {
+            sig.ret = Some(ty);
+        }
     }
 
     /// Reads a body that was written without braces, and says so once.

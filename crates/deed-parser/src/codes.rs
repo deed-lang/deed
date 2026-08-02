@@ -195,3 +195,14 @@ pub const WORD_OPERATOR: &str = "DEED2020";
 /// body, so the braces are an insertion at each end and the function is the
 /// one that was written.
 pub const BRACELESS_BODY: &str = "DEED2021";
+
+/// `fn f(n: Int) where n > 0 -> Int`: the contract written before the type.
+///
+/// The order here is the parameter list, then `->` and the type, then the
+/// contract, because `->` is what closes a parameter list and what follows the
+/// type is about what the function promises rather than about its shape.
+///
+/// Written the other way the arrow sat where the body should have begun, so
+/// the reader was told a `{` was expected, and the function went on to have no
+/// return type and a body that did not match the one it was missing.
+pub const RETURN_TYPE_AFTER_CONTRACT: &str = "DEED2022";

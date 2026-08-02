@@ -31,8 +31,11 @@ release notes.
   the function is still a function. It used to be a message about a brace, then
   a message about the first line of the body not being a declaration, then a
   return type that matched nothing. Thirty-two of the six hundred programs in
-  the recorded model runs were written this way.
-
+  the recorded model runs were written this way.- A contract written before the return type gets DEED2022, and the return type
+  is read where it was written. `fn f(n: Int) where n > 0 -> Int` used to put
+  the arrow where the body should have begun, so the message was about a brace
+  and the function went on to have no return type and a body that did not match
+  the one it was missing.
 ### Standard library
 
 - None yet.
