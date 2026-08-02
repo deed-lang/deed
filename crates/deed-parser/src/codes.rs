@@ -206,3 +206,14 @@ pub const BRACELESS_BODY: &str = "DEED2021";
 /// the reader was told a `{` was expected, and the function went on to have no
 /// return type and a body that did not match the one it was missing.
 pub const RETURN_TYPE_AFTER_CONTRACT: &str = "DEED2022";
+
+/// `where ok => n + n <= 10`: an outcome written on a precondition.
+///
+/// What somebody writes after reading the `ensures` beside it. A `where`
+/// clause is about the arguments, which are what they are whichever way the
+/// call comes out, so there is no outcome for one to name.
+///
+/// It used to end the contract at the `=>`, so the reader was told a block was
+/// expected, and told separately that `ok` is a builtin rather than a value.
+/// Neither of those says which clause an outcome belongs to.
+pub const OUTCOME_IN_WHERE: &str = "DEED2023";

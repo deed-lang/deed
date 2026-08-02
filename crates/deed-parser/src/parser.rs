@@ -1419,7 +1419,7 @@ impl<'a> Parser<'a> {
 
             match kw {
                 Keyword::Where => {
-                    let mut items = self.parse_contract_list(|p| p.parse_expr_no_struct());
+                    let mut items = self.parse_contract_list(|p| p.parse_requires());
                     contract.requires.append(&mut items);
                 }
                 Keyword::Uses => {
@@ -1498,6 +1498,58 @@ impl<'a> Parser<'a> {
             operation,
             all,
         }
+    }
+
+    /// One `where` clause, which is about the arguments and names no outcome.
+    ///
+    /// `where ok => n + n <= 10` is what somebody writes after reading the
+    /// `ensures` next to it, and it used to end the contract at the `=>`: the
+    /// reader was told a block was expected, and told separately that `ok` is
+    /// a builtin rather than a value. Neither says which clause an outcome
+    /// belongs to.
+    fn parse_requires(&mut self) -> Expr {
+        let outcome = self.span();
+        let named = matches!(self.kind(), TokenKind::Ident(word) if word == "ok" || word == "err");
+        if named && matches!(self.nth_kind(1), TokenKind::FatArrow) {
+            self.bump();
+            let arrow = self.bump().span;
+            self.emit(
+                Diagnostic::error(
+                    codes::OUTCOME_IN_WHERE,
+                    self.file,
+                    outcome.to(arrow),
+                    "a `where` clause has no outcome to name",
+                )
+                .with_primary_label("this is what `ensures` is written with")
+                .with_note(
+                    "a `where` clause is about the arguments, and they are what they are \
+                     whichever way the call comes out",
+                )
+                .with_note(
+                    "an obligation about the result goes in `ensures`, which is where every \
+                     outcome is answered for",
+                )
+                .with_fix(
+                    "drop the outcome",
+                    // Up to the condition, so the space between them goes too,
+                    // unless the condition is on a line of its own.
+                    Span::new(
+                        outcome.start,
+                        if self.peek().starts_line {
+                            arrow.end
+                        } else {
+                            self.span().start
+                        },
+                    ),
+                    String::new(),
+                    // Whether the condition was a precondition with an outcome
+                    // written on it or an obligation in the wrong clause is
+                    // the reader's to say, and the two want different edits.
+                    Applicability::MaybeIncorrect,
+                ),
+            );
+        }
+        self.parse_expr_no_struct()
     }
 
     /// `ok => balance(from) == old(balance(from)) - amount`
