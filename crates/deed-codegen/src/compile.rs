@@ -82,6 +82,39 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         index_of_signature(&mut module, function);
     }
 
+    // Then every shape an indirect call reaches, which is not always a shape
+    // some function here has. `perform` names an operation rather than a
+    // body, and the handler that answers it may be installed in a module this
+    // one never sees, or in a test block a `deed build` is not compiling. The
+    // call still has to say what shape it is calling, so the shape is interned
+    // from the call rather than from a body that happens to be nearby.
+    let reached: Vec<FuncType> = {
+        let mut found = Vec::new();
+        for function in &program.functions {
+            walk_block(&function.body, &mut |expr| {
+                let (args, ret) = match expr {
+                    Expr::CallIndirect { args, ret, .. } | Expr::Perform { args, ret, .. } => {
+                        (args, ret)
+                    }
+                    _ => return,
+                };
+                found.push(FuncType {
+                    params: std::iter::once(ValType::I64)
+                        .chain(
+                            args.iter()
+                                .filter_map(|arg| val_type(&ty_in(program, function, arg))),
+                        )
+                        .collect(),
+                    results: val_type(ret).into_iter().collect(),
+                });
+            });
+        }
+        found
+    };
+    for wanted in reached {
+        module.intern_type(wanted);
+    }
+
     // Then everything the host has to supply, before any function is added,
     // because an import is numbered ahead of every function the module
     // defines. Adding one later would move every function already placed.

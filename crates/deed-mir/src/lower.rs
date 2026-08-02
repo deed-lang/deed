@@ -1557,10 +1557,16 @@ impl Lowering<'_> {
                             });
                         }
 
+                        // A function used as a value, which is a closure
+                        // that captured nothing.
+                        if let Some(def) = self.resolutions.resolution(ident.span)
+                            && self.by_def.contains_key(&def)
+                        {
+                            return self.function_value(&ident.name, def, ident.span);
+                        }
+
                         // So it is a variant carrying no fields, written
-                        // bare the way this language writes them. A function
-                        // used as a value would also land here and is
-                        // refused, since it needs a closure to carry.
+                        // bare the way this language writes them.
                         let (layout, variant) = self.variant_named(&ident.name, ident.span)?;
                         if !self.layout(layout).variants[variant].fields.is_empty() {
                             return Err(unlowered(
@@ -2668,6 +2674,92 @@ impl Lowering<'_> {
             ],
             value: Expr::Local(carried),
         })))
+    }
+
+    /// A function used as a value, which is a closure that captured nothing.
+    ///
+    /// A call through a value passes the environment first and a call by name
+    /// does not, so the two cannot be the same function however empty the
+    /// environment is. What the value points at is a wrapper that takes the
+    /// environment, ignores it, and calls the real one. One wrapper per
+    /// function rather than one per mention, so `map(step, xs)` written twice
+    /// costs one.
+    fn function_value(&mut self, name: &str, def: DefId, span: Span) -> Result<Expr, Unlowered> {
+        let func = *self
+            .by_def
+            .get(&def)
+            .ok_or_else(|| unlowered(&format!("the name `{name}`"), span))?;
+        let declaration = *self
+            .declarations
+            .get(name)
+            .ok_or_else(|| unlowered(&format!("the name `{name}`"), span))?;
+
+        // The environment a value carries. Nothing is captured, so it holds
+        // the code pointer and nothing else.
+        let shape = crate::LayoutId(self.shapes.len());
+        self.shapes.push(crate::Layout {
+            name: format!("value of `{name}`"),
+            variants: vec![crate::Variant {
+                name: "closure".to_string(),
+                fields: vec![crate::Field {
+                    name: "code".to_string(),
+                    ty: Ty::Int,
+                }],
+            }],
+        });
+
+        let known = format!("value of `{name}`");
+        if let Some(index) = self.instantiated.get(&known).copied() {
+            return Ok(Expr::Make {
+                layout: shape,
+                variant: 0,
+                fields: vec![Expr::Int(index.0 as i64)],
+            });
+        }
+
+        let mut params = vec![Ty::Aggregate(shape)];
+        for param in &declaration.sig.params {
+            let Some(ty) = &param.ty else {
+                return Err(unlowered("a parameter with no type", param.span));
+            };
+            params.push(written(
+                ty,
+                self.layouts,
+                self.aliases,
+                self.nominals,
+                &self.bindings.clone(),
+                &mut self.shapes,
+            )?);
+        }
+        let ret = match &declaration.sig.ret {
+            None => Ty::Unit,
+            Some(ty) => written(
+                ty,
+                self.layouts,
+                self.aliases,
+                self.nominals,
+                &self.bindings.clone(),
+                &mut self.shapes,
+            )?,
+        };
+
+        let index = crate::FuncId(self.declared + self.lifted.len());
+        self.instantiated.insert(known.clone(), index);
+        let mut wrapper = Function::new(known, params, ret);
+        wrapper.body = Block::of(Expr::Call {
+            func,
+            args: (1..=declaration.sig.params.len())
+                .map(|position| Expr::Local(Local(position)))
+                .collect(),
+            span,
+        });
+        self.lifted.push(wrapper);
+
+        Ok(Expr::Make {
+            layout: shape,
+            variant: 0,
+            fields: vec![Expr::Int(index.0 as i64)],
+        })
     }
 
     /// Which layout and which variant a name refers to.

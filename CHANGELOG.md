@@ -64,6 +64,15 @@ release notes.
 
 ### Tools
 
+- A declared function written where a value belongs compiles. `map(step, xs)`
+  with `step` a function rather than a closure used to be refused, because a
+  call through a value passes an environment and a call by name does not, so
+  the value points at a wrapper that takes the environment and calls the real
+  one. The contract stays on the function it belongs to.
+- `perform` compiles in a module that installs no handler for the effect. The
+  shape of the call was interned from whatever bodies happened to be nearby,
+  and a handler installed only inside a test block is not one of them, so a
+  program that performed an effect it did not also handle was refused.
 - `deed build` compiles `?`. A function that propagates a failure used to be
   refused with "this expression is not lowered yet", which is four of the
   thirty-four programs in the corpus and most of the ones that do any real
