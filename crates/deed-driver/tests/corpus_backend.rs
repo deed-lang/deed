@@ -218,10 +218,12 @@ fn the_backend_still_compiles_what_it_used_to() {
     compiled.sort_unstable();
 
     let mut expected = vec![
+        "calculator.deed",
         "closures.deed",
         // The capability example: a program that reads a file it was given
         // access to and cannot read one it was not.
         "config.deed",
+        "date.deed",
         "diverge.deed",
         "generator.deed",
         "generics.deed",
@@ -237,9 +239,12 @@ fn the_backend_still_compiles_what_it_used_to() {
         "ratio.deed",
         "scheduler.deed",
         "sink.deed",
+        "stack_machine.deed",
+        "string.deed",
         "strings.deed",
         "table.deed",
         "tic_tac_toe.deed",
+        "todo.deed",
         "tree.deed",
         "using_list.deed",
         "workers.deed",

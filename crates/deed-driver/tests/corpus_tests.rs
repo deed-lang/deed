@@ -232,6 +232,7 @@ fn compiled_tests_run_in_the_expected_files() {
     ran.sort_unstable();
 
     let mut expected = vec![
+        "calculator.deed",
         "closures.deed",
         "diverge.deed",
         "json.deed",

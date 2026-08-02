@@ -402,6 +402,29 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 28,
         },
+        // An `if` and a `match` where the type is expected rather than
+        // worked out. The checker knows what these come to and used to not
+        // write it down, so the backend had nothing to lower them with.
+        Agreed {
+            name: "an if the type is expected of",
+            source: "module a\n\nchoice Month {\n    Feb,\n    Apr,\n    Other,\n}\n\nfn days(month: Month, leap: Bool) -> Int {\n    match month {\n        Feb => if leap {\n            29\n        } else {\n            28\n        },\n        Apr => 30,\n        Other => 31,\n    }\n}\n\nfn answer() -> Int {\n    days(Feb, true) + days(Feb, false) + days(Apr, false) + days(Other, false)\n}\n\ntest \"an if is the value of an arm\" {\n    assert days(Feb, true) == 29\n    assert answer() == 118\n}\n",
+            call: "answer",
+            expect: 118,
+        },
+        Agreed {
+            name: "a match the type is expected of",
+            source: "module a\n\nfn first(xs: List<Int>, fallback: Int) -> Int {\n    if length(xs) == 0 {\n        fallback\n    } else {\n        match at(xs, 0) {\n            ok(n) => n,\n            err(why) => fallback,\n        }\n    }\n}\n\nfn answer() -> Int { first([7, 8], 1) + first([], 1) }\n\ntest \"a match is the value of a branch\" {\n    assert first([7, 8], 1) == 7\n    assert first([], 1) == 1\n    assert answer() == 8\n}\n",
+            call: "answer",
+            expect: 8,
+        },
+        // The same, one level further in: an `if` that is the value of an
+        // arm of a `match` that is itself the value of a branch.
+        Agreed {
+            name: "an if inside a match inside an if",
+            source: "module a\n\nfn size(text: String, wide: Bool) -> Int {\n    if length(text) == 0 {\n        0\n    } else {\n        match to_int(text) {\n            ok(n) => if wide {\n                n + n\n            } else {\n                n\n            },\n            err(why) => length(why),\n        }\n    }\n}\n\nfn answer() -> Int { size(\"21\", true) + size(\"\", false) + size(\"3\", false) }\n\ntest \"the type is expected all the way down\" {\n    assert size(\"21\", true) == 42\n    assert answer() == 45\n}\n",
+            call: "answer",
+            expect: 45,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
