@@ -2978,7 +2978,7 @@ impl<'a> Checker<'a> {
                     // than the context outright, and one level at a time, for
                     // the same reason it is used on what the body produced:
                     // where the initialiser knew, it wins.
-                    Some(wanted) if !wanted.absorbs() => {
+                    Some(wanted) => {
                         let got = self.check_against(
                             &accumulator.init,
                             wanted,
@@ -2992,7 +2992,7 @@ impl<'a> Checker<'a> {
                         self.types.record_expr(accumulator.init.span(), ty.clone());
                         ty
                     }
-                    _ => self.infer(&accumulator.init),
+                    None => self.infer(&accumulator.init),
                 };
                 if let Some(def) = self.def_of(&accumulator.name) {
                     self.def_types.insert(def, ty.clone());
@@ -3060,23 +3060,8 @@ impl<'a> Checker<'a> {
         // at all, so the answer has to accept what it started as, and where
         // that is a real type it wins: an accumulator that started as an `Int`
         // is an `Int` even if every turn happens to produce a `Positive`.
-        let ty = settled(&carried, &produced);
-
-        // Said about the initialiser too. `with seen = None` on an
-        // `Option<String>` is the same expression that only the body settles,
-        // and what it was recorded as is what the backend has to build it
-        // from.
-        if let Some(accumulator) = accumulator
-            && carried != ty
-        {
-            self.types.record_expr(accumulator.init.span(), ty.clone());
-            if let Some(def) = self.def_of(&accumulator.name) {
-                self.def_types.insert(def, ty.clone());
-            }
-        }
-        ty
+        settled(&carried, &produced)
     }
-
     fn infer(&mut self, expr: &'a Expr) -> Ty {
         let ty = self.infer_inner(expr);
         self.types.record_expr(expr.span(), ty.clone());
