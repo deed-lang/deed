@@ -470,6 +470,25 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 1111,
         },
+        // Equality is structural, and two addresses being equal is not two
+        // values being equal. Every shape that lives in memory: a record, a
+        // choice with fields, a list, and a record holding both.
+        Agreed {
+            name: "two values that live in memory",
+            source: "module a\n\nrecord Money {\n    units: Int,\n    currency: String,\n}\n\nrecord Account {\n    owner: String,\n    held: Money,\n    seen: List<Int>,\n}\n\nchoice Side {\n    Left { at: Int },\n    Right { at: Int },\n}\n\nfn score(held: Bool) -> Int {\n    if held {\n        1\n    } else {\n        0\n    }\n}\n\nfn pounds(n: Int) -> Money { Money { units: n, currency: \"gbp\" } }\n\nfn account(owner: String, n: Int, seen: List<Int>) -> Account {\n    Account { owner: owner, held: pounds(n), seen: seen }\n}\n\nfn purses(n: Int) -> List<Money> { [pounds(n), pounds(n + 1)] }\n\nfn answer() -> Int {\n    score(pounds(5) == pounds(5)) +\n        score(pounds(5) == pounds(6)) +\n        score(pounds(5) == Money { units: 5, currency: \"usd\" }) +\n        score(account(\"x\", 5, [1]) == account(\"x\", 5, [1])) +\n        score(account(\"x\", 5, [1]) == account(\"y\", 5, [1])) +\n        score(account(\"x\", 5, [1]) == account(\"x\", 6, [1])) +\n        score(account(\"x\", 5, [1]) == account(\"x\", 5, [2])) +\n        score(account(\"x\", 5, [1]) == account(\"x\", 5, [])) +\n        score([1, 2] == [1, 2]) +\n        score([1, 2] == [1, 3]) +\n        score([1, 2] == [1]) +\n        score([\"a\"] == [\"a\"]) +\n        score([\"a\"] == [\"b\"]) +\n        score(purses(1) == purses(1)) +\n        score(purses(1) == purses(2)) +\n        score([[1, 2]] == [[1, 2]]) +\n        score([[1, 2]] == [[1, 3]]) +\n        score(Left { at: 1 } == Left { at: 1 }) +\n        score(Left { at: 1 } == Right { at: 1 }) +\n        score(Left { at: 1 } == Left { at: 2 }) +\n        score(pounds(5) != pounds(6))\n}\n\ntest \"what a value holds is what it is\" {\n    assert pounds(5) == pounds(5)\n    assert purses(1) == purses(1)\n    assert answer() == 8\n}\n",
+            call: "answer",
+            expect: 8,
+        },
+        // A handler whose first operation lifts a function of its own. Every
+        // operation is placed before any body is lowered, because a body may
+        // add functions after itself and the operation after it has already
+        // been told where it is.
+        Agreed {
+            name: "a handler whose first operation lifts something",
+            source: "module a\n\neffect Queue {\n    fn take() -> ()\n    fn more() -> Bool\n}\n\nfn tail<T>(xs: List<T>) -> List<T> {\n    for x at i in xs with out = [] {\n        if i > 0 {\n            push(out, x)\n        } else {\n            out\n        }\n    }\n}\n\nhandler Holder implements Queue {\n    state held: List<Int>\n\n    fn take() -> () {\n        held = tail(held)\n    }\n\n    fn more() -> Bool {\n        length(held) > 0\n    }\n}\n\nfn drain() -> Int\n  uses\n    Queue.more,\n    Queue.take,\n    Diverge,\n{\n    if Queue.more() {\n        Queue.take()\n        drain() + 1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int\n  uses\n    Diverge,\n{\n    with Holder { held: [1, 2, 3] } {\n        drain()\n    }\n}\n\ntest \"the queue drains and the walk ends\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
@@ -1117,7 +1136,7 @@ fn what_the_backend_cannot_compile_is_refused_by_name() {
 #[test]
 fn a_program_the_backend_refuses_still_runs_under_the_interpreter() {
     let (_, one) = checked(&format!(
-        "{STILL_REFUSED}\ntest \"two of the same\" {{\n    assert same(Point {{ x: 1 }}, Point {{ x: 1 }})\n}}\n"
+        "{STILL_REFUSED}\ntest \"a function is itself\" {{\n    assert holds(twice)\n}}\n"
     ));
 
     let mut interpreted = Interpreted::new();
@@ -1141,12 +1160,16 @@ fn a_program_the_backend_refuses_still_runs_under_the_interpreter() {
 
 /// A shape the backend does not compile, for the two tests above.
 ///
-/// Comparing two records is structural in this language and two addresses
-/// being equal is not two records being equal, so the backend refuses rather
-/// than answering the wrong question. When it stops refusing, these two tests
-/// need another shape rather than deleting: what they hold is that a refusal
-/// says which function it met and that the interpreter still answers.
-const STILL_REFUSED: &str = "module a\n\nrecord Point {\n    x: Int,\n}\n\nfn same(one: Point, other: Point) -> Bool { one == other }\n";
+/// Two function values, compared. Comparing two records used to be here and
+/// is compiled now (#877): the backend writes a comparison per shape and
+/// walks what it holds. A function value is where that stops, because what
+/// two of them hold is a code pointer and an environment, and neither says
+/// whether the two would answer the same way.
+///
+/// When this stops being refused, these two tests need another shape rather
+/// than deleting: what they hold is that a refusal says which function it met
+/// and that the interpreter still answers.
+const STILL_REFUSED: &str = "module a\n\nfn twice(n: Int) -> Int { n + n }\n\nfn same(one: Fn(Int) -> Int, other: Fn(Int) -> Int) -> Bool { one == other }\n\nfn holds(step: Fn(Int) -> Int) -> Bool { same(step, step) }\n";
 
 /// One generated run, by what happened.
 enum Finding {

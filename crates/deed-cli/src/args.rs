@@ -53,8 +53,8 @@ Paths may be files or directories. A directory is searched for `.deed` files.
 `deed run` calls `main`, handing it the one `System` capability there is.
 Everything after `--` goes to the program, which reads it with `Io.args`.
 `deed build` compiles to a WebAssembly module beside the file it was given. It
-compiles less of the language than `deed run` interprets, and says what it could
-not compile rather than guessing.
+says what it could not compile rather than guessing, which as of #877 is a
+function value compared with another one and nothing else in the corpus.
 `deed build --component` produces a WebAssembly module and a `.wit` world file
 beside the source. The component's exported interface is every function the
 module declares. A function is its own export; there is no `main`. Functions

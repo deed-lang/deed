@@ -135,12 +135,22 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
     // What the backend writes itself, numbered after everything the program
     // declares so that adding one moves nothing. Worked out before any body
     // is compiled, because a body calls one by index.
-    let helpers = helpers_used(program);
+    let shapes = compared(program);
+    let helpers = helpers_used(program, &shapes);
     let base = shift + program.functions.len() as u32;
     let where_helpers: HashMap<Helper, u32> = helpers
         .iter()
         .enumerate()
         .map(|(at, helper)| (*helper, base + at as u32))
+        .collect();
+
+    // Then one comparison per shape a program compares two of, after those,
+    // for the same reason.
+    let after = base + helpers.len() as u32;
+    let where_equals: Vec<(Ty, u32)> = shapes
+        .iter()
+        .enumerate()
+        .map(|(at, shape)| (shape.clone(), after + at as u32))
         .collect();
 
     let mut strings = Strings::new();
@@ -151,6 +161,7 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         let imported = module.imports.clone();
         let mut body = Builder::new(program, function, &mut strings, interned, imported, shift);
         body.helpers = where_helpers.clone();
+        body.equals = where_equals.clone();
         body.block(&function.body)?;
         body.instructions.push(Ins::Return);
         let func_index = shift + module.funcs.len() as u32;
@@ -186,6 +197,21 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         });
         debug_assert_eq!(where_helpers[helper], func_index);
         module.names.push((func_index, helper.name().to_string()));
+    }
+
+    for (shape, _) in &where_equals {
+        let type_index = module.intern_type(crate::equality::signature());
+        let at = crate::equality::Where {
+            equals: &where_equals,
+            same_text: where_helpers.get(&Helper::SameText).copied().unwrap_or(0),
+        };
+        let (locals, body) = crate::equality::compile(program, shape, &at);
+        let func_index = module.add_func(Func {
+            type_index,
+            locals,
+            body,
+        });
+        module.names.push((func_index, format!("same {shape:?}")));
     }
 
     // The bump pointer starts past every literal the data section placed.
@@ -309,14 +335,45 @@ fn host_calls(program: &Program) -> Vec<(String, FuncType)> {
     found
 }
 
+/// Every shape a program compares two of, and every shape those hold.
+///
+/// Two addresses being equal is not two values being equal, so a shape that
+/// lives in memory is compared by a function that knows what it holds, and
+/// there is one per shape. Collected up front for the same reason a helper
+/// is: the answer is an index.
+fn compared(program: &Program) -> Vec<Ty> {
+    let mut found: Vec<Ty> = Vec::new();
+    for function in &program.functions {
+        walk_block(&function.body, &mut |expr| {
+            let Expr::Binary { op, left, .. } = expr else {
+                return;
+            };
+            if !matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                return;
+            }
+            let operand = ty_in(program, function, left);
+            if crate::equality::walked(&operand) && !found.contains(&operand) {
+                found.push(operand);
+            }
+        });
+    }
+    crate::equality::close_over(program, &mut found);
+    found
+}
+
 /// Which of the functions this backend writes the program reaches.
 ///
 /// The same question a body asks when it meets one of these shapes, asked
 /// ahead of time because the answer is an index. Asking it twice is the
 /// arrangement, and the two places agreeing is what the emitted helper being
 /// the one that gets called depends on.
-fn helpers_used(program: &Program) -> Vec<Helper> {
+fn helpers_used(program: &Program, shapes: &[Ty]) -> Vec<Helper> {
     let mut found: Vec<Helper> = Vec::new();
+    // A shape holding text is compared with the text helper, and nothing in
+    // the program need write `==` on two strings for that to happen.
+    if crate::equality::needs_text(program, shapes) {
+        found.push(Helper::SameText);
+    }
     for function in &program.functions {
         walk_block(&function.body, &mut |expr| {
             let Expr::Binary { op, left, .. } = expr else {
@@ -510,6 +567,9 @@ struct Builder<'a> {
     shift: u32,
     /// Where each function this backend writes itself is numbered.
     helpers: HashMap<Helper, u32>,
+    /// Where the comparison for each shape a program compares two of is
+    /// numbered.
+    equals: Vec<(Ty, u32)>,
     /// Source spans attached to selected instructions in this function.
     sites: Vec<SiteDraft>,
 }
@@ -552,6 +612,7 @@ impl<'a> Builder<'a> {
             imports,
             shift,
             helpers: HashMap::new(),
+            equals: Vec::new(),
             sites: Vec::new(),
         }
     }
@@ -1308,10 +1369,18 @@ impl<'a> Builder<'a> {
                 let tagged = self.program.layout(*id).is_tagged();
                 let ty = self.ty_of(expr)?;
                 self.expr(value)?;
+                // A field with no representation is not on the stack, the
+                // same as every other value of a type that has none. Reading
+                // one anyway left the word it happens to occupy behind, which
+                // is what `ok(nothing)` on an `Io.save` binds.
+                let Some(width) = val_type(&ty) else {
+                    self.instructions.push(Ins::Drop);
+                    return Ok(());
+                };
                 self.instructions.push(Ins::I32WrapI64);
                 self.instructions
                     .push(Ins::I64Load(layout::field_offset(tagged, *field)));
-                if matches!(val_type(&ty), Some(ValType::I32)) {
+                if matches!(width, ValType::I32) {
                     self.instructions.push(Ins::I32WrapI64);
                 }
             }
@@ -1457,6 +1526,20 @@ impl<'a> Builder<'a> {
                         BinaryOp::Eq => Ins::Nop,
                         _ => Ins::I32Eqz,
                     }
+                } else if crate::equality::walked(&operand) {
+                    let at = self
+                        .equals
+                        .iter()
+                        .find(|(shape, _)| *shape == operand)
+                        .map(|(_, at)| *at)
+                        .ok_or_else(|| {
+                            self.fail("comparing two values of a shape nothing collected")
+                        })?;
+                    self.instructions.push(Ins::Call(at));
+                    match op {
+                        BinaryOp::Eq => Ins::Nop,
+                        _ => Ins::I32Eqz,
+                    }
                 } else if operand.is_boxed() {
                     return Err(self.fail("comparing two values that live in memory"));
                 } else {
@@ -1570,6 +1653,82 @@ mod tests {
             plain.funcs.len(),
             1,
             "a program that joins nothing carries no helper: {:?}",
+            plain.names
+        );
+    }
+
+    /// A comparison is emitted per shape a program compares two of, and no
+    /// shape it does not.
+    ///
+    /// The failure this rules out is invisible from the outside: an extra
+    /// function nothing calls answers nothing wrongly, it only makes every
+    /// module larger than the program in it, and the collection walks two
+    /// separate lists that have to agree on which shapes are which.
+    #[test]
+    fn a_comparison_is_emitted_per_shape_compared_and_no_other() {
+        let mut program = Program::new();
+        let held = program.add_layout(Layout {
+            name: "Point".to_string(),
+            variants: vec![Variant {
+                name: "Point".to_string(),
+                fields: vec![
+                    Field {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    },
+                    Field {
+                        name: "seen".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    },
+                ],
+            }],
+        });
+        let mut function = Function::new(
+            "same",
+            vec![Ty::Aggregate(held), Ty::Aggregate(held)],
+            Ty::Bool,
+        );
+        function.body = Block::of(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Local(Local(0))),
+            right: Box::new(Expr::Local(Local(1))),
+            span: nowhere(),
+        });
+        program.add_function(function);
+
+        // A comparison of two numbers, in the same program, because the walk
+        // asks two questions of everything it meets and a program with only
+        // the interesting kind in it cannot tell them apart.
+        let mut numbers = Function::new("same_number", vec![Ty::Int, Ty::Int], Ty::Bool);
+        numbers.body = Block::of(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Local(Local(0))),
+            right: Box::new(Expr::Local(Local(1))),
+            span: nowhere(),
+        });
+        program.add_function(numbers);
+
+        let module = compile(&program).expect("this compiles");
+        let comparisons: Vec<&String> = module
+            .names
+            .iter()
+            .filter(|(_, name)| name.starts_with("same "))
+            .map(|(_, name)| name)
+            .collect();
+        assert_eq!(
+            comparisons.len(),
+            2,
+            "the record and the list it holds, and nothing for either number: {:?}",
+            module.names
+        );
+
+        let plain = compile(&adding()).expect("this compiles");
+        assert!(
+            !plain
+                .names
+                .iter()
+                .any(|(_, name)| name.starts_with("same ")),
+            "a program that compares two numbers needs no comparison: {:?}",
             plain.names
         );
     }
