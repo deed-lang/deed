@@ -431,6 +431,47 @@ mod tests {
         module
     }
 
+    /// A module that does not validate says which function it was in.
+    ///
+    /// A module is one list of instructions after another and the failure is
+    /// about one of them, so without the name the answer is "somewhere in
+    /// here". Every function the backend writes has a name in the name
+    /// section already, and the index a name is filed under counts the
+    /// imports first.
+    #[test]
+    fn what_does_not_validate_says_which_function_it_was_in() {
+        let mut module = module_with(
+            vec![FuncType {
+                params: vec![],
+                results: vec![ValType::I64],
+            }],
+            Func {
+                type_index: 0,
+                locals: vec![],
+                body: vec![Ins::I64Add],
+            },
+        );
+        module.imports.push(crate::wasm::Import {
+            module: "deed:io".to_string(),
+            name: "write".to_string(),
+            type_index: 0,
+        });
+        module.names.push((0, "the import".to_string()));
+        module.names.push((1, "the one that is wrong".to_string()));
+
+        let why = validate(&module).expect_err("this does not validate");
+        assert!(
+            why.0.contains("the one that is wrong"),
+            "the failure should name the function it was in: {}",
+            why.0
+        );
+        assert!(
+            !why.0.contains("the import"),
+            "an import is not a body and cannot be the one: {}",
+            why.0
+        );
+    }
+
     #[test]
     fn a_function_that_returns_what_it_declares_validates() {
         let module = module_with(

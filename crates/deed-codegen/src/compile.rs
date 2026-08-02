@@ -152,9 +152,6 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         .enumerate()
         .map(|(at, shape)| (shape.clone(), after + at as u32))
         .collect();
-    if !where_equals.is_empty() {
-        module.intern_type(crate::equality::signature());
-    }
 
     let mut strings = Strings::new();
 
@@ -1656,6 +1653,70 @@ mod tests {
             plain.funcs.len(),
             1,
             "a program that joins nothing carries no helper: {:?}",
+            plain.names
+        );
+    }
+
+    /// A comparison is emitted per shape a program compares two of, and no
+    /// shape it does not.
+    ///
+    /// The failure this rules out is invisible from the outside: an extra
+    /// function nothing calls answers nothing wrongly, it only makes every
+    /// module larger than the program in it, and the collection walks two
+    /// separate lists that have to agree on which shapes are which.
+    #[test]
+    fn a_comparison_is_emitted_per_shape_compared_and_no_other() {
+        let mut program = Program::new();
+        let held = program.add_layout(Layout {
+            name: "Point".to_string(),
+            variants: vec![Variant {
+                name: "Point".to_string(),
+                fields: vec![
+                    Field {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    },
+                    Field {
+                        name: "seen".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    },
+                ],
+            }],
+        });
+        let mut function = Function::new(
+            "same",
+            vec![Ty::Aggregate(held), Ty::Aggregate(held)],
+            Ty::Bool,
+        );
+        function.body = Block::of(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Local(Local(0))),
+            right: Box::new(Expr::Local(Local(1))),
+            span: nowhere(),
+        });
+        program.add_function(function);
+
+        let module = compile(&program).expect("this compiles");
+        let comparisons: Vec<&String> = module
+            .names
+            .iter()
+            .filter(|(_, name)| name.starts_with("same "))
+            .map(|(_, name)| name)
+            .collect();
+        assert_eq!(
+            comparisons.len(),
+            2,
+            "the record and the list it holds, and nothing for the number: {:?}",
+            module.names
+        );
+
+        let plain = compile(&adding()).expect("this compiles");
+        assert!(
+            !plain
+                .names
+                .iter()
+                .any(|(_, name)| name.starts_with("same ")),
+            "a program that compares two numbers needs no comparison: {:?}",
             plain.names
         );
     }

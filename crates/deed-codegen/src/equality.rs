@@ -37,14 +37,14 @@ pub(crate) fn walked(ty: &Ty) -> bool {
 /// In a fixed order, so the same program compiles to the same bytes: the
 /// order shapes were first reached, which is the order the walk finds them.
 pub(crate) fn close_over(program: &Program, found: &mut Vec<Ty>) {
-    let mut at = 0;
-    while at < found.len() {
-        for ty in held_by(program, &found[at]) {
-            if walked(&ty) && !found.contains(&ty) {
-                found.push(ty);
+    let mut pending = found.clone();
+    while let Some(ty) = pending.pop() {
+        for held in held_by(program, &ty) {
+            if walked(&held) && !found.contains(&held) {
+                found.push(held.clone());
+                pending.push(held);
             }
         }
-        at += 1;
     }
 }
 
@@ -133,9 +133,12 @@ fn unless(test: Vec<Ins>) -> Vec<Ins> {
 }
 
 /// Whether the two words at `offset` are equal, for a field of type `ty`.
+///
+/// A field with no representation compares as the word it does not use,
+/// which is the zero it was never written: memory starts zeroed here and is
+/// never reused, so both sides read the same nothing.
 fn field(offset: u32, ty: &Ty, at: &Where<'_>) -> Vec<Ins> {
     match ty {
-        Ty::Unit => Vec::new(),
         Ty::Str => {
             let mut ins = both(offset);
             ins.push(Ins::Call(at.same_text));
