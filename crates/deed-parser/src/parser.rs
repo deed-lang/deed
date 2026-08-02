@@ -261,6 +261,23 @@ impl<'a> Parser<'a> {
         self.peek().span
     }
 
+    /// An empty span where the parser has actually read to.
+    ///
+    /// Every construct here ends at a closing token, and the obvious way to
+    /// record that is to take the span sitting there before asking for it.
+    /// When the closer is missing that span belongs to whatever comes next,
+    /// and the node ends up covering a token it never read. A signature that
+    /// swallows the `{` of its own body is not merely untidy: `deed fix`
+    /// subtracts one span from the other to find the region a `uses` clause
+    /// goes in, and a reversed range is not a range.
+    fn read_to(&self) -> Span {
+        let end = match self.pos {
+            0 => 0,
+            pos => self.tokens[pos - 1].span.end,
+        };
+        Span::at(end)
+    }
+
     fn at(&self, kind: &TokenKind) -> bool {
         self.kind() == kind
     }
@@ -575,8 +592,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBrace, "an import list");
+        let end = self.read_to();
         Some(Use {
             span: path.span.to(end),
             path,
@@ -790,9 +807,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBrace, context);
-        Some((fields, end))
+        Some((fields, self.read_to()))
     }
 
     /// A variant written `Circle(Int)`, which this language does not have.
@@ -884,8 +900,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBrace, "a choice declaration");
+        let end = self.read_to();
         Some(ChoiceDecl {
             name,
             generics,
@@ -931,8 +947,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBrace, "an effect declaration");
+        let end = self.read_to();
         Some(EffectDecl {
             name,
             operations,
@@ -1040,8 +1056,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBrace, "a handler declaration");
+        let end = self.read_to();
         Some(HandlerDecl {
             name,
             effect,
@@ -1152,12 +1168,12 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let mut end = self.span();
         self.expect(TokenKind::RParen, "a parameter list");
+        let mut end = self.read_to();
 
         let ret = if self.eat(&TokenKind::Arrow) {
             let ty = self.parse_type();
-            end = ty.span();
+            end = self.read_to();
             Some(ty)
         } else {
             None
@@ -1283,7 +1299,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => unreachable!("guarded above"),
             }
-            end = self.span();
+            end = self.read_to();
         }
 
         contract.span = any.then(|| start.to(end));
@@ -1443,9 +1459,8 @@ impl<'a> Parser<'a> {
     fn parse_type(&mut self) -> Type {
         if self.at(&TokenKind::LParen) {
             let start = self.bump().span;
-            let end = self.span();
             self.expect(TokenKind::RParen, "the unit type");
-            return Type::Unit(start.to(end));
+            return Type::Unit(start.to(self.read_to()));
         }
 
         let Some(name) = self.expect_ident("a type") else {
@@ -1474,8 +1489,8 @@ impl<'a> Parser<'a> {
                     break;
                 }
             }
-            end = self.span();
             self.expect(TokenKind::Gt, "a type argument list");
+            end = self.read_to();
         }
 
         Type::Named {
@@ -1531,7 +1546,7 @@ impl<'a> Parser<'a> {
         let ret = self.parse_type();
 
         Type::Fn {
-            span: name.span.to(ret.span()),
+            span: name.span.to(self.read_to()),
             params,
             row,
             ret: Box::new(ret),
@@ -1570,8 +1585,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBrace, "a block");
+        let end = self.read_to();
         self.struct_lit = saved;
 
         Block {
@@ -2245,8 +2260,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RParen, "an argument list");
+        let end = self.read_to();
         self.struct_lit = saved;
         (args, end)
     }
@@ -2281,8 +2296,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBrace, "a struct literal");
+        let end = self.read_to();
         self.struct_lit = saved;
         (fields, end)
     }
@@ -2308,8 +2323,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBracket, "a list literal");
+        let end = self.read_to();
         self.struct_lit = saved;
         Expr::List {
             elements,
@@ -2366,8 +2381,8 @@ impl<'a> Parser<'a> {
                 let saved = std::mem::replace(&mut self.struct_lit, StructLit::Allow);
                 let inner = self.parse_expr();
                 self.struct_lit = saved;
-                let end = self.span();
                 self.expect(TokenKind::RParen, "`old`");
+                let end = self.read_to();
                 Expr::Old {
                     expr: Box::new(inner),
                     span: span.to(end),
@@ -2377,8 +2392,8 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.expect(TokenKind::LParen, "`unchanged`");
                 let effect = self.parse_effect_ref();
-                let end = self.span();
                 self.expect(TokenKind::RParen, "`unchanged`");
+                let end = self.read_to();
                 Expr::Unchanged {
                     effect,
                     span: span.to(end),
@@ -2616,8 +2631,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.span();
         self.expect(TokenKind::RBrace, "a match expression");
+        let end = self.read_to();
         self.struct_lit = saved;
 
         Expr::Match {
@@ -2841,8 +2856,8 @@ impl<'a> Parser<'a> {
                     break;
                 }
             }
-            let end = self.span();
             self.expect(TokenKind::RParen, "a pattern");
+            let end = self.read_to();
             return Pattern::Tuple {
                 path: segments,
                 elements,
@@ -2877,8 +2892,8 @@ impl<'a> Parser<'a> {
                     break;
                 }
             }
-            let end = self.span();
             self.expect(TokenKind::RBrace, "a pattern");
+            let end = self.read_to();
             return Pattern::Record {
                 path: segments,
                 fields,
