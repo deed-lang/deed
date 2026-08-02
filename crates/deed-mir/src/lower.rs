@@ -1034,6 +1034,39 @@ fn bind(written: &ast::Type, actual: &Ty, generics: &[ast::Ident], out: &mut Has
     }
 }
 
+/// The same, read against what the checker recorded rather than against what
+/// the value came out as here.
+///
+/// A generic type somebody declared reaches this layer as one layout per set
+/// of arguments, with the arguments gone: `Option<Int>` and `Option<String>`
+/// are two layouts and neither says what it holds. A parameter that appears
+/// only inside one of those cannot be read off the lowered type, and the
+/// checker still has what it stood for.
+fn bind_checked(
+    written: &ast::Type,
+    actual: &CheckedTy,
+    generics: &[ast::Ident],
+    out: &mut Vec<(String, CheckedTy)>,
+) {
+    let ast::Type::Named { name, args, .. } = written else {
+        return;
+    };
+    if args.is_empty() && generics.iter().any(|one| one.name == name.name) {
+        out.push((name.name.to_string(), actual.clone()));
+        return;
+    }
+    let actual_args: Vec<CheckedTy> = match actual {
+        CheckedTy::Named { args, .. } => args.clone(),
+        CheckedTy::External { args, .. } => args.clone(),
+        CheckedTy::List(element) => vec![(**element).clone()],
+        CheckedTy::Result(ok, err) => vec![(**ok).clone(), (**err).clone()],
+        _ => return,
+    };
+    for (written, actual) in args.iter().zip(&actual_args) {
+        bind_checked(written, actual, generics, out);
+    }
+}
+
 /// Every name an expression mentions, by where it was written.
 ///
 /// Used to work out what a closure captures. Over-approximating is safe here
@@ -1312,6 +1345,28 @@ impl Lowering<'_> {
             && let Ok(actual) = self.ty_at(span)
         {
             bind(written, &actual, generics, &mut bindings);
+        }
+
+        // Last, what the checker recorded, for a parameter that appears only
+        // inside a type somebody declared.
+        if bindings.len() != generics.len() {
+            let mut found = Vec::new();
+            for (param, arg) in declaration.sig.params.iter().zip(args) {
+                let (Some(written), Some(actual)) =
+                    (&param.ty, self.types.type_of(arg.span()).cloned())
+                else {
+                    continue;
+                };
+                bind_checked(written, &actual, generics, &mut found);
+            }
+            for (name, actual) in found {
+                if bindings.contains_key(&name) {
+                    continue;
+                }
+                if let Ok(lowered) = self.convert(&actual, span) {
+                    bindings.insert(name, lowered);
+                }
+            }
         }
         Ok(bindings)
     }

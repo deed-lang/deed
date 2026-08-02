@@ -434,6 +434,16 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 0,
         },
+        // A type parameter that only appears inside a type somebody
+        // declared. `Holder<Int>` and `Holder<String>` are two layouts here
+        // and neither says what it holds, so what `T` stands for cannot be
+        // read off the value and comes from the checker instead.
+        Agreed {
+            name: "a type parameter read out of a declared type",
+            source: "module a\n\nchoice Holder<T> {\n    Empty,\n    Full { item: T },\n}\n\nfn filled<T>(holder: Holder<T>) -> Bool {\n    match holder {\n        Empty => false,\n        Full { item } => true,\n    }\n}\n\nfn count(one: Holder<Int>, other: Holder<String>) -> Int {\n    let a = if filled(one) {\n        1\n    } else {\n        0\n    }\n    let b = if filled(other) {\n        10\n    } else {\n        0\n    }\n    a + b\n}\n\nfn answer() -> Int {\n    count(Full { item: 1 }, Full { item: \"x\" }) + count(Empty, Full { item: \"x\" })\n}\n\ntest \"one function, two sets of arguments\" {\n    assert count(Empty, Empty) == 0\n    assert answer() == 21\n}\n",
+            call: "answer",
+            expect: 21,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
