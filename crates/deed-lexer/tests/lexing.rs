@@ -341,7 +341,11 @@ fn radix_prefixes_and_separators_are_decoded() {
 fn a_literal_suffix_is_one_error_not_two_tokens() {
     let (_, lexed) = lex("100u8");
     assert_eq!(codes_of(&lexed.diagnostics), vec![codes::MALFORMED_NUMBER]);
-    assert_eq!(lexed.tokens[0].kind, TokenKind::Error);
+    assert_eq!(
+        lexed.tokens[0].kind,
+        TokenKind::Int(100),
+        "the digits before the bad one stand in, so the parser has an expression"
+    );
     assert_eq!(lexed.tokens.len(), 2, "should not also emit an identifier");
 }
 
@@ -748,7 +752,40 @@ fn the_negative_boundary_is_a_minus_and_an_oversized_digit_run() {
         vec![codes::INTEGER_OUT_OF_RANGE]
     );
     assert_eq!(lexed.tokens[0].kind, TokenKind::Minus);
-    assert_eq!(lexed.tokens[1].kind, TokenKind::Error);
+    assert_eq!(lexed.tokens[1].kind, TokenKind::Int(i64::MAX));
+}
+
+/// One message per literal, which is what the stand-in tokens are for. An
+/// error token would be an expression the parser cannot read, and it would say
+/// so in the same column the lexer has just written in.
+#[test]
+fn a_literal_the_lexer_cannot_read_still_stands_in_for_one() {
+    for source in ["9223372036854775808", "0x", "100u8", "0b12", "1.5"] {
+        let (_, lexed) = lex(source);
+        assert_eq!(
+            lexed.diagnostics.len(),
+            1,
+            "{source} should be one mistake: {:?}",
+            codes_of(&lexed.diagnostics)
+        );
+        assert!(
+            matches!(lexed.tokens[0].kind, TokenKind::Int(_)),
+            "{source} left {:?} where a number was written",
+            lexed.tokens[0].kind
+        );
+    }
+}
+
+/// The same for a string: what was read before the line ended stands in for
+/// it, so the quote that is missing is the only thing wrong with the line.
+#[test]
+fn an_unterminated_string_stands_in_for_the_string() {
+    let (_, lexed) = lex("\"oops\n");
+    assert_eq!(
+        codes_of(&lexed.diagnostics),
+        vec![codes::UNTERMINATED_STRING]
+    );
+    assert_eq!(lexed.tokens[0].kind, TokenKind::Str("oops".to_string()));
 }
 
 // DEED1006, five ways: no digits at all, and one note per radix.

@@ -399,10 +399,7 @@ impl<'a> Lexer<'a> {
             // would earn a second message, in the same place, saying an
             // expression was expected, which tells the reader nothing they
             // were not just told.
-            return match i64::from_str_radix(&digits, radix) {
-                Ok(value) => TokenKind::Int(value),
-                Err(_) => TokenKind::Error,
-            };
+            return TokenKind::Int(i64::from_str_radix(&digits, radix).unwrap_or(i64::MAX));
         }
 
         if digits.is_empty() {
@@ -416,7 +413,7 @@ impl<'a> Lexer<'a> {
                 )
                 .with_primary_label("expected at least one digit"),
             );
-            return TokenKind::Error;
+            return TokenKind::Int(0);
         }
 
         if let Some(bad_offset) = self.first_invalid_digit(digits_start, radix) {
@@ -441,7 +438,15 @@ impl<'a> Lexer<'a> {
                         .to_string(),
                 }),
             );
-            return TokenKind::Error;
+            // The digits before the bad one, for the reason the decimal point
+            // has: the reader has just been shown what is wrong with this
+            // literal, and an invalid token would earn them a second message
+            // in the same column saying an expression was expected.
+            let read: String = self.src[digits_start..bad_offset]
+                .chars()
+                .filter(|&c| c != '_')
+                .collect();
+            return TokenKind::Int(i64::from_str_radix(&read, radix).unwrap_or(0));
         }
 
         match i64::from_str_radix(&digits, radix) {
@@ -457,7 +462,10 @@ impl<'a> Lexer<'a> {
                     .with_primary_label("too large")
                     .with_note(format!("`Int` holds values up to {}", i64::MAX)),
                 );
-                TokenKind::Error
+                // The largest there is, which is the number the note names.
+                // Nothing runs a file that does not check, and a token the
+                // parser cannot read would only say so twice.
+                TokenKind::Int(i64::MAX)
             }
         }
     }
@@ -477,15 +485,19 @@ impl<'a> Lexer<'a> {
         let mut value = String::new();
 
         loop {
+            // What was read stands in for the string, for the reason the
+            // decimal point has: an invalid token would earn a second message
+            // in the same place saying an expression was expected, and the
+            // quote that is missing is the only thing wrong with this one.
             let Some(c) = self.peek() else {
                 self.unterminated_string(start, "end of file");
-                return TokenKind::Error;
+                return TokenKind::Str(value);
             };
             if c == '\n' {
                 // The newline is left for the trivia skipper, so the next line
                 // still lexes normally instead of being swallowed.
                 self.unterminated_string(start, "end of line");
-                return TokenKind::Error;
+                return TokenKind::Str(value);
             }
 
             self.bump();
