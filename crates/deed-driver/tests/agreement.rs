@@ -242,6 +242,115 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 1,
         },
+        // The prelude's own functions, each of which is a loop the backend
+        // writes. What they answer is the interpreter's answer: both engines
+        // run every one of these.
+        Agreed {
+            name: "a number written out",
+            source: "module a\n\nfn answer() -> Int {\n    if to_string(0) == \"0\" && to_string(42) == \"42\" && to_string(0 - 7) == \"-7\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"a sign and a zero are both digits somebody has to write\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        Agreed {
+            name: "the smallest number written out",
+            source: "module a\n\nfn answer() -> Int { length(to_string(0 - 9223372036854775807 - 1)) }\n\ntest \"the number with no positive counterpart\" {\n    assert to_string(0 - 9223372036854775807 - 1) == \"-9223372036854775808\"\n    assert answer() == 20\n}\n",
+            call: "answer",
+            expect: 20,
+        },
+        Agreed {
+            name: "the same value a number of times",
+            source: "module a\n\nfn answer() -> Int {\n    length(repeat(\"ab\", 3)) + length(repeat(\"ab\", 0)) + length(repeat(\"ab\", 0 - 4))\n}\n\ntest \"a count that went negative is no padding rather than a refusal\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        Agreed {
+            name: "one more on the end",
+            source: "module a\n\nfn answer() -> Int {\n    let grown = push(push([], 4), 5)\n    length(grown)\n}\n\ntest \"pushing onto nothing gives one\" {\n    assert answer() == 2\n}\n",
+            call: "answer",
+            expect: 2,
+        },
+        Agreed {
+            name: "what push put there is what comes back",
+            source: "module a\n\nfn answer() -> Int {\n    let grown = push(push([1], 2), 3)\n    match at(grown, 2) {\n        ok(n) => n,\n        err(why) => 0 - 1,\n    }\n}\n\ntest \"the list that went in is still in front\" {\n    assert answer() == 3\n}\n",
+            call: "answer",
+            expect: 3,
+        },
+        // An index nobody promised is there, and the sentence both engines
+        // answer with. Two engines writing two different strings here is a
+        // difference a program can read.
+        Agreed {
+            name: "an index that is not there",
+            source: "module a\n\nfn answer() -> Int {\n    match at([1, 2], 5) {\n        ok(n) => 0,\n        err(why) => length(why),\n    }\n}\n\ntest \"the message names the index and the length\" {\n    let said = match at([1, 2], 5) {\n        ok(n) => \"\",\n        err(why) => why,\n    }\n    assert said == \"index 5 is outside a list of 2\"\n    assert answer() == 30\n}\n",
+            call: "answer",
+            expect: 30,
+        },
+        Agreed {
+            name: "an index below the start",
+            source: "module a\n\nfn answer() -> Int {\n    match at([1, 2], 0 - 1) {\n        ok(n) => 0,\n        err(why) => length(why),\n    }\n}\n\ntest \"a negative index is outside too\" {\n    let said = match at([1, 2], 0 - 1) {\n        ok(n) => \"\",\n        err(why) => why,\n    }\n    assert said == \"index -1 is outside a list of 2\"\n    assert answer() == 31\n}\n",
+            call: "answer",
+            expect: 31,
+        },
+        // A list of booleans is narrower on the stack than in memory, so
+        // something has to widen it going in and narrow it coming out.
+        Agreed {
+            name: "a list of booleans keeps its width",
+            source: "module a\n\nfn count(flag: Bool) -> Int {\n    if flag {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    let flags = push([true, false], true)\n    match at(flags, 2) {\n        ok(flag) => count(flag),\n        err(why) => 0 - 1,\n    }\n}\n\ntest \"a boolean survives a list\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // Text taken apart and put back together, which is most of what a
+        // program that reads anything does.
+        //
+        // What `answer` returns is the only thing the compiled side is asked
+        // for, so an assertion that sits in the `test` block alone is checked
+        // against the interpreter and nothing else. Each of these folds the
+        // comparison into the answer instead, and counts how many held.
+        Agreed {
+            name: "text taken apart and put back together",
+            source: "module a\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(join(split(\"a,b,c\", \",\"), \"-\"), \"a-b-c\") +\n        same(join(split(\",a,\", \",\"), \"-\"), \"-a-\") +\n        same(join(split(\"añb\", \"\"), \"-\"), \"a-ñ-b\") +\n        same(join(split(\"a--b--c\", \"--\"), \"|\"), \"a|b|c\") +\n        same(join(split(\"abc\", \",\"), \",\"), \"abc\") +\n        same(join(split(\"\", \",\"), \",\"), \"\")\n}\n\ntest \"a separator at an edge leaves an empty piece\" {\n    assert answer() == 6\n}\n",
+            call: "answer",
+            expect: 6,
+        },
+        // How many pieces each of those came apart into, which `join` puts
+        // back together whether it is right or not.
+        Agreed {
+            name: "how many pieces text comes apart into",
+            source: "module a\n\nfn answer() -> Int {\n    length(split(\"a,b,c\", \",\")) +\n        length(split(\",a,\", \",\")) +\n        length(split(\"añb\", \"\")) +\n        length(split(\"a--b--c\", \"--\")) +\n        length(split(\"abc\", \",\")) +\n        length(split(\"\", \",\"))\n}\n\ntest \"an empty separator gives characters, not bytes\" {\n    assert length(split(\"añb\", \"\")) == 3\n    assert answer() == 14\n}\n",
+            call: "answer",
+            expect: 14,
+        },
+        Agreed {
+            name: "the ends taken off",
+            source: "module a\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(trim(\"  hi \\t\\n\"), \"hi\") +\n        same(trim(\"   \"), \"\") +\n        same(trim(\"hi\"), \"hi\") +\n        same(trim(\"\"), \"\") +\n        same(trim(\" a b \"), \"a b\") +\n        same(trim(\"\\r\\nx\\r\\n\"), \"x\")\n}\n\ntest \"four characters and not the Unicode table\" {\n    assert answer() == 6\n}\n",
+            call: "answer",
+            expect: 6,
+        },
+        // The bytes either side of the two ranges, because a shift applied
+        // one place too far is the way this gets written wrong.
+        Agreed {
+            name: "the twenty-six letters and nothing else",
+            source: "module a\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(upper(\"añb1\"), \"AñB1\") +\n        same(lower(\"AñB1\"), \"añb1\") +\n        same(upper(\"az\"), \"AZ\") +\n        same(lower(\"AZ\"), \"az\") +\n        same(upper(\"`{\"), \"`{\") +\n        same(lower(\"@[\"), \"@[\")\n}\n\ntest \"text in a script with no case survives\" {\n    assert answer() == 6\n}\n",
+            call: "answer",
+            expect: 6,
+        },
+        Agreed {
+            name: "a number written out",
+            source: "module a\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(to_string(0), \"0\") +\n        same(to_string(7), \"7\") +\n        same(to_string(0 - 7), \"-7\") +\n        same(to_string(9223372036854775807), \"9223372036854775807\") +\n        same(to_string(0 - 9223372036854775807 - 1), \"-9223372036854775808\")\n}\n\ntest \"the smallest number has no positive to negate\" {\n    assert answer() == 5\n}\n",
+            call: "answer",
+            expect: 5,
+        },
+        Agreed {
+            name: "text that is not a number",
+            source: "module a\n\nfn said(text: String) -> String {\n    match to_int(text) {\n        ok(n) => \"\",\n        err(why) => why,\n    }\n}\n\nfn same(got: String, want: String) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(said(\"4x\"), \"`4x` is not a number\") +\n        same(said(\"\"), \"`` is not a number\") +\n        same(said(\" 1\"), \"` 1` is not a number\") +\n        same(said(\"42\"), \"\")\n}\n\ntest \"the message quotes what it was given\" {\n    assert answer() == 4\n}\n",
+            call: "answer",
+            expect: 4,
+        },
+        Agreed {
+            name: "the boundaries a number can be read at",
+            source: "module a\n\nfn read(text: String) -> Int {\n    match to_int(text) {\n        ok(n) => n,\n        err(why) => 0,\n    }\n}\n\nfn failed(text: String) -> Int {\n    match to_int(text) {\n        ok(n) => 0,\n        err(why) => 1,\n    }\n}\n\nfn is(got: Int, want: Int) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    failed(\"\") + failed(\"-\") + failed(\" 1\") + failed(\"9223372036854775808\") +\n        is(read(\"-9223372036854775808\"), 0 - 9223372036854775807 - 1) +\n        is(read(\"9223372036854775807\"), 9223372036854775807) +\n        is(read(\"+7\"), 7) +\n        is(read(\"-0\"), 0)\n}\n\ntest \"the edges, from both sides\" {\n    assert answer() == 8\n}\n",
+            call: "answer",
+            expect: 8,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",

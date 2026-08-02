@@ -282,14 +282,19 @@ own doc comment used to say capabilities were refused by name; that was true bef
 and stayed written down after, which is the same mistake this document's other measured
 sections keep finding elsewhere in this repository. Fixed alongside the test.
 
-**Three of the thirteen callable prelude functions compile: `ok`, `err`, `length`.** The
-other ten (`at`, `push`, `repeat`, `split`, `join`, `trim`, `upper`, `lower`, `to_string`,
-`to_int`) do not yet; none of them have a body in `deed-mir`'s lowering to call, the same
-gap `sink.deed`'s closure signature and the three examples early `return` blocks (#620) sit
-in. Type names (`Int`, `String`, `Bool`, `Result`, `List`, `System`, `Console`, `Clock`,
-`Dir`) are left out of this count on purpose: whether a *value* of one of them passes
-through the backend is a different, already-answered question (`generics.rs`, `result.rs`,
-`lists.rs`, `host.rs`), not one a function call can ask.
+**All thirteen callable prelude functions compile.** Three of them (`ok`, `err`, `length`)
+did from the beginning, because each is one instruction or none. The other ten (`at`,
+`push`, `repeat`, `split`, `join`, `trim`, `upper`, `lower`, `to_string`, `to_int`) were
+refused until #877, for the reason this document keeps finding: the prelude was written
+once in the interpreter and nowhere else, so `deed run` had a body to call and `deed build`
+did not. They are compiled now, not by lowering the interpreter's Rust but by writing each
+one in WebAssembly directly (`deed-codegen/src/runtime.rs`), on the grounds that a hundred
+lines the backend emits itself is cheaper to keep honest than a second source language.
+What keeps the two answers together is `agreement.rs`, which runs the same program through
+both engines and compares. Type names (`Int`, `String`, `Bool`, `Result`, `List`, `System`,
+`Console`, `Clock`, `Dir`) are left out of this count on purpose: whether a *value* of one
+of them passes through the backend is a different, already-answered question (`generics.rs`,
+`result.rs`, `lists.rs`, `host.rs`), not one a function call can ask.
 
 ## The runner validates the module before it runs one, and a real engine is not tested against
 
