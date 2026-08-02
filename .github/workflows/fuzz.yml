@@ -5,9 +5,9 @@ name: Fuzz
 # the corpus. It is on a schedule rather than on push so that it never runs
 # alongside the timing-sensitive scaling and LSP cost tests in CI.
 #
-# A crash input is opened as a pull request against the corpus. Merging it
-# makes the regression test permanent, because the next regular CI run and
-# every one after it replays it.
+# A crash input is pushed as a branch and reported as an issue. Opening a pull
+# request from that branch makes the regression test permanent, because the
+# next regular CI run and every one after it replays the corpus.
 on:
   schedule:
     # Sundays at 03:00 UTC. A weekday run would compete with review activity;
@@ -18,7 +18,7 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
+  issues: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -72,10 +72,16 @@ jobs:
       # assert nothing. If cumulative coverage turns out to be worth carrying
       # between runs, the answer is a cache, not the corpus.
       #
-      # This opens a PR instead of pushing. The ruleset on the default branch
-      # requires a pull request and exempts nobody, so a direct push is
-      # refused outright.
-      - name: open a PR for any crash inputs
+      # This pushes a branch and opens an issue rather than opening a pull
+      # request. It used to open the pull request, and on the first run that
+      # found anything `gh pr create` answered "GitHub Actions is not
+      # permitted to create or approve pull requests": a repository setting
+      # that also lets workflows approve pull requests, which is not a thing to
+      # turn on so that a fuzzer can leave a note. The branch is pushed either
+      # way, so the issue names it and a person turns it into a pull request.
+      # The ruleset on the default branch requires one and exempts nobody, so
+      # a direct push was never an option.
+      - name: report any crash inputs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -108,21 +114,19 @@ jobs:
           {
             echo "The scheduled fuzz run found $count input(s) the check pipeline did not survive."
             echo
-            echo "They are corpus entries now, so \`fuzz_corpus.rs\` replays them on every build."
+            echo "They are on \`$branch\` as corpus entries, so \`fuzz_corpus.rs\` replays them"
+            echo "on every build once that branch lands."
             echo
-            echo "**The checks on this PR are meant to fail.** The replay test reproduces the crash,"
-            echo "which is what makes this a regression test rather than a CI artifact. Push the fix"
-            echo "onto this branch and it goes green; merging it before then would only move a red"
-            echo "build onto the default branch."
+            echo "Open a pull request from \`$branch\` and expect it red: the replay test"
+            echo "reproduces the crash, which is what makes this a regression test rather than a"
+            echo "CI artifact. Push the fix onto the same branch and it goes green."
             echo
-            echo "Reproduce locally with \`cargo fuzz run check <input>\`. The same files are in the"
-            echo "\`fuzz-artifacts\` artifact on run $GITHUB_RUN_ID."
-            echo
-            echo "Checks start in an approval-required state because a pull request opened with"
-            echo "\`GITHUB_TOKEN\` does not start its own runs. Approve them from the merge box."
+            echo "Reproduce locally with \`cargo fuzz run check <input>\`, or with no fuzzer at"
+            echo "all through \`cargo test -p deed-driver --test fuzz_corpus\`. The same files"
+            echo "are in the \`fuzz-artifacts\` artifact on run $GITHUB_RUN_ID."
           } > "$body"
 
-          gh pr create --base "$GITHUB_REF_NAME" --head "$branch" \
+          gh issue create \
             --title "fuzz: $count crash input(s) from the scheduled run" \
             --body-file "$body"
 

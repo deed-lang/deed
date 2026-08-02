@@ -257,8 +257,9 @@ pipeline and fails on any panic. The corpus lives in
 `crates/deed-driver/fuzz/corpus/check/` and is replayed on every build by
 `crates/deed-driver/tests/fuzz_corpus.rs` (no fuzzer needed, stable toolchain).
 The corpus grows automatically: the scheduled workflow in `.github/workflows/fuzz.yml`
-runs a bounded 30-minute fuzz session every Sunday and commits any new inputs
-it discovers.
+runs a bounded 30-minute fuzz session every Sunday, and anything it finds is
+pushed as a `fuzz/crash-<run id>` branch and reported as an issue. Open a pull
+request from that branch, expect it red, and push the fix onto it.
 
 To run the corpus replay without the fuzzer:
 
