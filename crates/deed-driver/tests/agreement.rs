@@ -214,6 +214,34 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 1,
         },
+        // All four in both directions, and on two strings that are the same.
+        // Three of them agree wherever one string really does come before the
+        // other, so what tells them apart is the pair that is equal and the
+        // pair where the answer is no.
+        Agreed {
+            name: "each ordering operator answers for itself",
+            source: "module a\n\nfn answer() -> Int {\n    if \"ab\" < \"abc\" && !(\"abc\" < \"ab\") && !(\"ab\" < \"ab\") &&\n        \"ab\" <= \"abc\" && !(\"abc\" <= \"ab\") && \"ab\" <= \"ab\" &&\n        \"abc\" > \"ab\" && !(\"ab\" > \"abc\") && !(\"ab\" > \"ab\") &&\n        \"abc\" >= \"ab\" && !(\"ab\" >= \"abc\") && \"ab\" >= \"ab\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"twelve answers, one for each way round\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // Equality is one operator over every type, so which instruction it
+        // is depends on what was compared. A wrong width here answers the
+        // wrong question quietly.
+        Agreed {
+            name: "equality on each width",
+            source: "module a\n\nfn answer() -> Int {\n    if 1 == 1 && !(1 == 2) && 1 != 2 && !(1 != 1) &&\n        true == true && !(true == false) && true != false && !(true != true) {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"a number and a boolean are not the same width\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // Two values of a type with no representation. There is nothing on
+        // the stack to compare, so the answer is written rather than computed,
+        // and it still has to be the right one.
+        Agreed {
+            name: "equality on something with no representation",
+            source: "module a\n\nfn nothing() -> () { () }\n\nfn answer() -> Int {\n    if nothing() == nothing() && !(nothing() != nothing()) {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"two of nothing are the same nothing\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",

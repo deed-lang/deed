@@ -307,20 +307,12 @@ fn helpers_used(program: &Program) -> Vec<Helper> {
         });
     }
 
-    let mut closed = found.clone();
-    for helper in &found {
-        for also in helper.needs() {
-            if !closed.contains(also) {
-                closed.push(*also);
-            }
-        }
-    }
     // Emitted in a fixed order, so the same program compiles to the same
     // bytes however its expressions happened to be walked.
     Helper::ALL
         .iter()
         .copied()
-        .filter(|helper| closed.contains(helper))
+        .filter(|helper| found.contains(helper))
         .collect()
 }
 
@@ -1463,6 +1455,47 @@ mod tests {
         });
         program.add_function(function);
         compile(&program).expect("this compiles")
+    }
+
+    /// A helper is emitted only when something reaches it, and it arrives in
+    /// the name section under the name the runtime publishes.
+    ///
+    /// The name is the only thing a person reading a trap in a compiled
+    /// module has to go on, and nothing else in the compiler reads it, so
+    /// without this it can be anything at all.
+    #[test]
+    fn a_helper_is_emitted_under_its_own_name_and_only_when_it_is_reached() {
+        let mut program = Program::new();
+        let mut function = Function::new("join", vec![Ty::Str, Ty::Str], Ty::Str);
+        function.body = Block::of(Expr::Binary {
+            op: BinaryOp::ConcatStr,
+            left: Box::new(Expr::Local(Local(0))),
+            right: Box::new(Expr::Local(Local(1))),
+            span: nowhere(),
+        });
+        program.add_function(function);
+        let module = compile(&program).expect("this compiles");
+        assert_eq!(
+            module.funcs.len(),
+            2,
+            "the program's function and one helper"
+        );
+        assert!(
+            module
+                .names
+                .iter()
+                .any(|(_, name)| name == deed_mir::runtime::STR_CONCAT),
+            "{:?}",
+            module.names
+        );
+
+        let plain = compile(&adding()).expect("this compiles");
+        assert_eq!(
+            plain.funcs.len(),
+            1,
+            "a program that joins nothing carries no helper: {:?}",
+            plain.names
+        );
     }
 
     fn assert_arithmetic_failure(module: &crate::wasm::Module, name: &str, args: [i64; 2]) {

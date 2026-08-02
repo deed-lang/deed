@@ -66,11 +66,6 @@ impl Helper {
         }
     }
 
-    /// The helpers this one calls, so emitting it emits them too.
-    pub(crate) fn needs(self) -> &'static [Helper] {
-        &[]
-    }
-
     /// The locals beyond the parameters, and the body.
     pub(crate) fn compile(self) -> (Vec<ValType>, Vec<Ins>) {
         match self {
