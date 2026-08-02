@@ -16,6 +16,13 @@ release notes.
 
 ### Language
 
+- An effect takes row variables: `effect Task<uses r>`. They are in scope in
+  its operation signatures and in the state of any handler implementing it, so
+  a handler can hold a `List<Fn() uses r -> ()>`, and each call to an operation
+  fills the variable in from the value it was passed. A program that forks a
+  task which logs is charged with logging. Before this a scheduler's queue had
+  to name every effect its tasks might perform, which only the program knows,
+  so a scheduler could be written and not shipped.
 - A record pattern binds what it names. `err(OverLimit { limit })` bound
   nothing when `OverLimit` was a record rather than a variant of a choice, and
   the name it did not bind was reported missing where it was used rather than
@@ -64,10 +71,35 @@ release notes.
   type.
 ### Standard library
 
-- None yet.
+- `std/task` ships: a cooperative scheduler with `Task.fork`, `Task.more`,
+  `Task.step`, and `run` and `run_up_to` over them. Tasks are function values
+  and run to completion in the order they were forked; a task that wants to
+  leave room for another forks the rest of itself. There are no resumptions,
+  so nothing suspends in the middle. `examples/tasks.deed` uses it and
+  `examples/scheduler.deed` is the same scheduler written by hand, kept for
+  the comparison.
 
 ### Tools
 
+- A closure whose body lifts anything points at itself. The compiled backend
+  reserved the closure's place before lowering its body, and a body that
+  lifted a function of its own, another closure, a copy of a generic function,
+  a wrapper for a function named as a value, took that place first. So
+  `|| Task.fork(step)` compiled to a value pointing at the wrapper for `step`,
+  and calling it ran the wrong code with no diagnostic anywhere.
+- A handler declared in another module is lowered against that module's
+  tables. Installing one only needs the declaration, so a `with` naming an
+  imported handler got that far and then read its operation bodies with the
+  wrong resolutions, where every name resolved to nothing.
+- A call inside an imported module reaches the function it names. A `DefId` is
+  an index into one module's table, and the table of functions in the module
+  being compiled was consulted for definitions from anywhere, so a recursive
+  function in a library reached whatever happened to have its number in the
+  program that imported it.
+- `deed fix` checks a file with the modules it imports beside it. On its own,
+  a call into another module has no row, so a function performing an effect
+  only through such a call looked like one declaring an effect it never
+  performs, and the fix on offer was to delete the row.
 - `deed build` compiles every program in the corpus. It compiled seven of the
   thirty-five when #877 was opened; the rest were refused for a dozen separate
   reasons and each one is closed. What `deed run` interprets and what

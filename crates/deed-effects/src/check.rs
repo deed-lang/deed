@@ -124,6 +124,8 @@ pub fn analyse(
         function_rows: function_rows.clone(),
         checked_rows: HashSet::new(),
         row_from: HashMap::new(),
+        operation_rows: HashMap::new(),
+        enclosing_effect: None,
         closure_rows: HashMap::new(),
         in_contract: false,
     };
@@ -188,6 +190,21 @@ struct Checker<'a> {
     /// itself with whatever it passed at each of these, which is what makes a
     /// row variable mean anything outside the declaration that wrote it.
     row_from: HashMap<DefId, Vec<usize>>,
+    /// The same, for the operations of an effect declared in this module.
+    ///
+    /// Keyed by the operation rather than by the effect, because each one
+    /// takes its own parameters and only some of them carry a variable. An
+    /// operation from another module reads this off the import instead.
+    operation_rows: HashMap<DefId, Vec<usize>>,
+    /// The effect whose handler is being checked, when one is.
+    ///
+    /// A row variable written in a type reaches this pass as a name, and the
+    /// name only means something inside the declaration that introduced it.
+    /// For an effect's variable that declaration is the effect, and a handler
+    /// is the other place it is in scope, so this is what tells the two apart
+    /// from a `List<Fn() uses r -> ()>` in some third module that happens to
+    /// have an `r` of its own.
+    enclosing_effect: Option<DefId>,
     /// The row of each local bound to a closure, within the body being checked.
     ///
     /// A closure is the one value in the language that holds code, and a name
@@ -255,11 +272,38 @@ impl<'a> Checker<'a> {
                             let (performed, _, _) = self.lower_row(&operation.contract.uses);
                             row.extend(&performed);
                         }
+                        // A row variable belonging to the effect is not an
+                        // effect the installer can be charged with: it stands
+                        // for whatever was handed to the operations, and that
+                        // was charged at the calls that handed it over. Left
+                        // in, a `with` would report an undischarged effect
+                        // named after the variable, which names nothing.
+                        let row: Row = row
+                            .iter()
+                            .filter(|item| self.kind_of(item.effect) != DefKind::RowParam)
+                            .cloned()
+                            .collect();
                         self.handler_rows.insert(def, row);
                     }
                 }
+                Item::Effect(effect) => {
+                    self.check_row_variables(&effect.rows, &effect.operations);
+                    let sources = deed_resolve::exports::effect_row_sources(effect);
+                    for operation in &effect.operations {
+                        let (Some(def), Some(positions)) = (
+                            self.resolutions.resolution(operation.name.span),
+                            sources.get(&operation.name.name),
+                        ) else {
+                            continue;
+                        };
+                        self.operation_rows.insert(def, positions.clone());
+                    }
+                }
                 Item::Function(function) => {
-                    self.check_row_variables(&function.sig);
+                    self.check_row_variables(
+                        &function.sig.rows,
+                        std::slice::from_ref(&function.sig),
+                    );
                     let Some(def) = self.resolutions.resolution(function.sig.name.span) else {
                         continue;
                     };
@@ -311,29 +355,40 @@ impl<'a> Checker<'a> {
     ///
     /// This is what `row_sources` has always assumed. Saying it out loud turns
     /// an assumption the code relies on into a rule a reader can check against.
-    fn check_row_variables(&mut self, sig: &deed_ast::FnSig) {
-        if sig.rows.is_empty() {
+    ///
+    /// An effect's own row variables get the same rule over the same
+    /// positions, and for the same reason: `fn next() -> Fn() uses r -> ()`
+    /// hands a caller a value that performs something the caller has no name
+    /// for, and a variable buried inside `List<Fn() uses r -> ()>` in a
+    /// parameter is one nothing at the call reads off. The one position an
+    /// effect's variable has that a function's does not is a handler's state,
+    /// which is not a signature and is not checked here.
+    fn check_row_variables(&mut self, rows: &[deed_ast::Ident], sigs: &[deed_ast::FnSig]) {
+        if rows.is_empty() {
             return;
         }
-        let names: Vec<&str> = sig.rows.iter().map(|row| row.name.as_str()).collect();
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
 
         let mut misplaced = Vec::new();
-        for param in &sig.params {
-            // The row of the parameter's own function type is the one place a
-            // variable belongs, so it is skipped and everything under it is not.
-            match &param.ty {
-                Some(Type::Fn { params, ret, .. }) => {
-                    for nested in params {
-                        find_row_variables(nested, &names, &mut misplaced);
+        for sig in sigs {
+            for param in &sig.params {
+                // The row of the parameter's own function type is the one
+                // place a variable belongs, so it is skipped and everything
+                // under it is not.
+                match &param.ty {
+                    Some(Type::Fn { params, ret, .. }) => {
+                        for nested in params {
+                            find_row_variables(nested, &names, &mut misplaced);
+                        }
+                        find_row_variables(ret, &names, &mut misplaced);
                     }
-                    find_row_variables(ret, &names, &mut misplaced);
+                    Some(ty) => find_row_variables(ty, &names, &mut misplaced),
+                    None => {}
                 }
-                Some(ty) => find_row_variables(ty, &names, &mut misplaced),
-                None => {}
             }
-        }
-        if let Some(ret) = &sig.ret {
-            find_row_variables(ret, &names, &mut misplaced);
+            if let Some(ret) = &sig.ret {
+                find_row_variables(ret, &names, &mut misplaced);
+            }
         }
 
         for (name, span) in misplaced {
@@ -639,12 +694,29 @@ impl<'a> Checker<'a> {
             match item {
                 Item::Function(function) => {
                     let def = self.resolutions.resolution(function.sig.name.span);
-                    self.check_fn(function, def);
+                    self.check_fn(function, def, None);
                 }
                 Item::Handler(handler) => {
+                    // A handler operation writes no parameter types, so the
+                    // rows of the function values it is handed are in the
+                    // effect's declaration rather than in front of it.
+                    let declared = module.items.iter().find_map(|item| match item {
+                        Item::Effect(effect) if effect.name.name == handler.effect.name => {
+                            Some(effect)
+                        }
+                        _ => None,
+                    });
+                    self.enclosing_effect = self.resolutions.resolution(handler.effect.span);
                     for operation in &handler.operations {
-                        self.check_fn(operation, None);
+                        let signature = declared.and_then(|effect| {
+                            effect
+                                .operations
+                                .iter()
+                                .find(|op| op.name.name == operation.sig.name.name)
+                        });
+                        self.check_fn(operation, None, signature);
                     }
+                    self.enclosing_effect = None;
                 }
                 Item::Test(test) => {
                     let performed = self.infer_block(&test.body);
@@ -677,7 +749,12 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_fn(&mut self, function: &FnDecl, def: Option<DefId>) {
+    fn check_fn(
+        &mut self,
+        function: &FnDecl,
+        def: Option<DefId>,
+        from_effect: Option<&deed_ast::FnSig>,
+    ) {
         // A handler operation has no definition of its own, so its row is
         // lowered here rather than during collection.
         let (declared, sites, unverifiable) = match def {
@@ -712,6 +789,25 @@ impl<'a> Checker<'a> {
             };
             let (row, _, _) = self.lower_row(row);
             self.closure_rows.insert(def, row);
+        }
+
+        // The same, for a handler operation, whose parameters are typed by the
+        // effect rather than by the operation. Calling a task out of the queue
+        // performs the effect's row variable, and the operation has to say so:
+        // a handler that stores function values and calls them is the one
+        // place in the language where a signature would otherwise claim to
+        // perform nothing while running arbitrary code.
+        if let Some(signature) = from_effect {
+            for (param, declared) in function.sig.params.iter().zip(&signature.params) {
+                let Some(Type::Fn { row, .. }) = &declared.ty else {
+                    continue;
+                };
+                let Some(def) = self.resolutions.resolution(param.name.span) else {
+                    continue;
+                };
+                let (row, _, _) = self.lower_row(row);
+                self.closure_rows.insert(def, row);
+            }
         }
 
         let mut performed = self.infer_block(&function.body);
@@ -1227,7 +1323,13 @@ impl<'a> Checker<'a> {
                 let effect = self.resolutions.def(def).parent?;
                 let mut row = Row::new();
                 row.insert(EffectItem::operation(effect, self.name_of(def)));
-                Some(row)
+                // An effect may take a row variable, and then an operation
+                // that is handed a function value performs whatever that
+                // value performs. The handler is where it happens and the
+                // caller is who chose it, which is the same split a row
+                // variable on a function already has.
+                let sources = self.operation_row_from(effect, def);
+                Some(self.fill_row(row, &sources, args))
             }
             // A function's declared row is its contract. Using the declaration
             // rather than the inferred row keeps this modular and means
@@ -1302,6 +1404,25 @@ impl<'a> Checker<'a> {
             },
             _ => None,
         }
+    }
+
+    /// Which of an effect operation's parameters carry the effect's row
+    /// variable, whether the effect was declared here or imported.
+    fn operation_row_from(&self, effect: DefId, operation: DefId) -> Vec<usize> {
+        if let Some(sources) = self.operation_rows.get(&operation) {
+            return sources.clone();
+        }
+        let Some(export) = self.resolutions.import(effect) else {
+            return Vec::new();
+        };
+        if export.kind != deed_resolve::ExportKind::Effect {
+            return Vec::new();
+        }
+        export
+            .operation_rows
+            .get(&self.resolutions.def(operation).name)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// A declared row with its variables replaced by what was passed.
@@ -1400,6 +1521,22 @@ impl<'a> Checker<'a> {
             return self.resolutions.builtin(&entry.effect);
         }
 
+        // A row variable belonging to the effect whose handler is being
+        // checked. `List<Fn() uses r -> ()>` is a queue of tasks, and calling
+        // one out of it performs whatever they perform, so `r` has to survive
+        // reading a type here. A function's row variable does not, and this is
+        // the difference: outside a handler there is no effect for the name to
+        // belong to and the entry is dropped as before.
+        if entry.variable {
+            let effect = self.enclosing_effect?;
+            return self.resolutions.defs().find_map(|(def, data)| {
+                (data.kind == DefKind::RowParam
+                    && data.parent == Some(effect)
+                    && data.name == entry.effect)
+                    .then_some(def)
+            });
+        }
+
         self.resolutions.defs().find_map(|(def, data)| {
             if data.name != entry.effect {
                 return None;
@@ -1455,7 +1592,15 @@ impl<'a> Checker<'a> {
         if export.kind != deed_resolve::ExportKind::Handler {
             return Row::new();
         }
-        let entries = export.row.clone();
+        // A row variable in a handler's row belongs to the effect it
+        // implements and names nothing here. What it stood for was charged at
+        // the calls that supplied it, the same way a function's is.
+        let entries: Vec<RowEntry> = export
+            .row
+            .iter()
+            .filter(|entry| !entry.variable)
+            .cloned()
+            .collect();
         self.translate(&entries, handler.span())
     }
 

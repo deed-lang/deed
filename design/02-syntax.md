@@ -279,6 +279,15 @@ could not do was ship, so a program elsewhere that wanted a date had to copy it,
 same thing that moved `std/list` and `std/table` out of `examples/`. `Io.epoch` hands back
 milliseconds and stops there, and everything above that is arithmetic rather than authority.
 
+A scheduler is there too, and it is the newest one because it is the one that needed the
+language to grow. `std/task` has `run` and `run_up_to`, over an effect that takes a row
+variable: `Task.fork` accepts a `Fn() uses r -> ()`, and `r` is filled in at each fork from
+the value passed. A library cannot know what the tasks it is handed will perform, so before
+an effect could take a row variable the queue's element type had to name a concrete row and
+the scheduler had to be copied into every program that wanted one.
+`examples/scheduler.deed` is that copy, kept as it was, and `examples/tasks.deed` is the same
+program written against the library.
+
 ## A library that ships with the compiler
 
 A module named `std/x` lives inside the compiler.
@@ -299,8 +308,8 @@ were not anywhere. `trim` stays in the prelude because it cannot be written.
 The other thing that goes here is a library that was already written and had nowhere to be.
 `std/list` and `std/table` were both under `examples/`, which made their names paths into
 this repository, so a program elsewhere could not import them and had to copy the files
-instead. Six modules ship today,
-`std/string`, `std/list`, `std/table`, `std/map`, `std/ratio` and `std/date`, and `crates/deed-driver/src/shipped.rs` is the
+instead. Seven modules ship today,
+`std/string`, `std/list`, `std/table`, `std/map`, `std/ratio`, `std/date` and `std/task`, and `crates/deed-driver/src/shipped.rs` is the
 table.
 
 ## Lists
@@ -751,7 +760,7 @@ by reason.
 
 | Tier or reason | Count |
 | --- | --- |
-| Proven | 68 |
+| Proven | 72 |
 | Tested | 8 |
 | Guarded, nothing narrowed this name | 2 |
 | Guarded, nothing established this length | 1 |

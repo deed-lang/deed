@@ -101,8 +101,54 @@ pub struct Export {
     /// itself with whatever it passed at each of these, which is what makes a
     /// row variable mean anything at a call site.
     pub row_from: Vec<usize>,
+    /// For an effect, which of each operation's parameters carry one of the
+    /// effect's row variables.
+    ///
+    /// Keyed by operation name, and empty for everything that is not an
+    /// effect. A call to `Task.fork` charges itself with whatever it passed at
+    /// each of these, the same way a call to a function with a row variable
+    /// does, and this is how that survives the module boundary. Without it an
+    /// effect declared in `std/task` would be a hole: the tasks a program
+    /// forks perform real effects and nobody would be charged with them.
+    pub operation_rows: BTreeMap<String, Vec<usize>>,
     /// The replacement name, when this export is deprecated.
     pub deprecated: Option<String>,
+}
+
+/// Which of an effect's operations pass a row variable through, and where.
+///
+/// The same question `row_sources` asks about a function, minus the half about
+/// the declaration's own `uses`: an effect operation has no contract, and what
+/// the variable stands for reaches the handler rather than the caller.
+pub fn effect_row_sources(decl: &deed_ast::EffectDecl) -> BTreeMap<String, Vec<usize>> {
+    let declared: Vec<&str> = decl
+        .rows
+        .iter()
+        .map(|variable| variable.name.as_str())
+        .collect();
+    if declared.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let mut sources = BTreeMap::new();
+    for operation in &decl.operations {
+        let positions: Vec<usize> = operation
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, param)| match &param.ty {
+                Some(deed_ast::Type::Fn { row, .. }) => row
+                    .iter()
+                    .any(|entry| declared.contains(&entry.effect.name.as_str())),
+                _ => false,
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if !positions.is_empty() {
+            sources.insert(operation.name.name.clone(), positions);
+        }
+    }
+    sources
 }
 
 /// Which parameters carry a row variable that the declaration passes through.
@@ -258,6 +304,18 @@ impl Exports {
         // lines, so nothing has to be resolved first.
         let mut rows = RowLowering::of(module);
 
+        // A handler's `uses` may name a row variable belonging to the effect
+        // it implements, so lowering its row needs to know which names those
+        // are. Straight off the syntax, like everything else here.
+        let effect_rows: BTreeMap<&str, &[deed_ast::Ident]> = module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Effect(decl) => Some((decl.name.name.as_str(), decl.rows.as_slice())),
+                _ => None,
+            })
+            .collect();
+
         for item in &module.items {
             // A choice's variants are usable unqualified inside the module
             // that declares them, which is what makes `err(NotFound { .. })`
@@ -275,6 +333,7 @@ impl Exports {
                             row: Vec::new(),
                             row_complete: true,
                             row_from: Vec::new(),
+                            operation_rows: BTreeMap::new(),
                             deprecated: None,
                         },
                     );
@@ -324,7 +383,12 @@ impl Exports {
                     // effects the handler itself performs, so those belong to
                     // whoever installed it, and an importer has to be able to
                     // read them off the import.
-                    rows.declaring(&[]);
+                    rows.declaring(
+                        effect_rows
+                            .get(decl.effect.name.as_str())
+                            .copied()
+                            .unwrap_or(&[]),
+                    );
                     let mut row = Vec::new();
                     let mut complete = true;
                     for operation in &decl.operations {
@@ -360,6 +424,11 @@ impl Exports {
                 Item::Test(_) => continue,
             };
 
+            let operation_rows = match item {
+                Item::Effect(decl) => effect_row_sources(decl),
+                _ => BTreeMap::new(),
+            };
+
             names.insert(
                 name.name.clone(),
                 Export {
@@ -368,6 +437,7 @@ impl Exports {
                     row,
                     row_complete,
                     row_from,
+                    operation_rows,
                     deprecated: None,
                 },
             );

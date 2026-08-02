@@ -217,3 +217,17 @@ pub const RETURN_TYPE_AFTER_CONTRACT: &str = "DEED2022";
 /// expected, and told separately that `ok` is a builtin rather than a value.
 /// Neither of those says which clause an outcome belongs to.
 pub const OUTCOME_IN_WHERE: &str = "DEED2023";
+
+/// `effect Queue<T>`: a type parameter on an effect declaration.
+///
+/// An effect's parameter list holds row variables and nothing else. A row
+/// variable is filled in at the calls that supply it and erased everywhere
+/// else, so one costs nothing to carry. A type parameter would have to reach
+/// the handler, which is a value with state and a single installation, and
+/// there is no answer yet for what `with Q { items: [] }` means when two
+/// different `T`s are performed through it.
+///
+/// Written as its own message because the list does parse, and the reader
+/// otherwise gets a name-resolution error about `T` from inside an operation
+/// signature, which points at the use rather than the decision.
+pub const EFFECT_TYPE_PARAM: &str = "DEED2024";

@@ -145,6 +145,14 @@ struct Unit<'a> {
     effects: HashMap<String, crate::EffectId>,
     signatures: HashMap<String, &'a ast::EffectDecl>,
     handlers: HashMap<String, &'a ast::HandlerDecl>,
+    /// Which unit declares each handler this one can install.
+    ///
+    /// A handler's operations are code, and code is read against the tables
+    /// of the module it was written in. Borrowing the declaration is enough to
+    /// install one and not enough to lower it: every name in an operation body
+    /// belongs to the other module's resolutions, so lowering it here found
+    /// nothing at all.
+    handler_from: HashMap<String, usize>,
     guards: HashMap<Span, Guard>,
     refinements: HashMap<DefId, Refinement<'a>>,
 }
@@ -389,6 +397,7 @@ fn tables<'a>(
         effects,
         signatures,
         handlers,
+        handler_from: HashMap::new(),
         guards,
         refinements,
     })
@@ -494,6 +503,8 @@ fn lower_impl(
         }
         if let Some(handler) = units[from].handlers.get(&name).copied() {
             units[at].handlers.insert(name.clone(), handler);
+            let owner = units[from].handler_from.get(&name).copied().unwrap_or(from);
+            units[at].handler_from.insert(name.clone(), owner);
         }
     }
 
@@ -2239,7 +2250,15 @@ impl Lowering<'_> {
                     });
                 }
 
-                match self.by_def.get(&def) {
+                // `by_def` is the module being compiled and only it: a
+                // `DefId` is an index into one module's resolution table, so
+                // a definition from somewhere else that happens to have the
+                // same number would find a function here and call it. Which
+                // is what happened, silently, to a recursive function in an
+                // imported module: `run` in `std/task` reached whatever had
+                // its number in the program that imported it.
+                let known = (self.at == 0).then(|| self.by_def.get(&def)).flatten();
+                match known {
                     Some(func) => Expr::Call {
                         func: *func,
                         args: lowered,
@@ -2586,6 +2605,25 @@ impl Lowering<'_> {
             return Ok(found.clone());
         }
 
+        // A handler declared in another module is lowered against that
+        // module's tables. Installing one only needs the declaration, which
+        // is why borrowing it was enough to get this far, but its operations
+        // are code: every name in them was resolved over there, and read here
+        // they resolved to nothing at all.
+        let owner = self.units[self.at].handler_from.get(name).copied();
+        let was = owner.map(|at| self.enter(at));
+        let answered = self.answer_here(name, span);
+        if let Some(was) = was {
+            self.leave(was);
+        }
+        answered
+    }
+
+    fn answer_here(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Result<(crate::EffectId, crate::LayoutId, Vec<crate::FuncId>), Unlowered> {
         let handler = *self
             .handlers
             .get(name)
@@ -2787,13 +2825,30 @@ impl Lowering<'_> {
         }
         let ret = self.ty_at(body.span())?;
         let index = self.declared + self.lifted.len();
-        let mut lifted = Function::new(format!("closure{index}"), lifted_params, ret);
+        let lifted = Function::new(
+            format!("closure{index}"),
+            lifted_params.clone(),
+            ret.clone(),
+        );
+
+        // The place is taken before the body is lowered, not after. A body
+        // may lift something of its own: another closure, a copy of a generic
+        // function, a wrapper for a function named as a value, or a handler's
+        // operations. Each of those pushed first, so the closure landed one
+        // slot past the number its own value carries, and calling it reached
+        // whatever had taken that slot. `|| Task.fork(step)` is the shortest
+        // way to see it: naming `step` as a value lifts a wrapper, and the
+        // closure came out pointing at the wrapper.
+        self.lifted.push(lifted);
 
         // Inside the body, a captured name reads out of the environment and
         // a parameter is a parameter. Saved and put back, because the
         // enclosing function goes on being lowered afterwards.
         let outer_slots = self.slots.clone();
-        let outer_function = std::mem::replace(&mut self.function, lifted);
+        let outer_function = std::mem::replace(
+            &mut self.function,
+            Function::new(String::new(), lifted_params, ret),
+        );
 
         for (position, param) in params.iter().enumerate() {
             if let Some(def) = self.resolutions.resolution(param.name.span) {
@@ -2817,12 +2872,13 @@ impl Lowering<'_> {
         }
 
         let lowered = self.expr(body)?;
-        lifted = std::mem::replace(&mut self.function, outer_function);
-        lifted.body = Block {
+        let done = std::mem::replace(&mut self.function, outer_function);
+        let at = index - self.declared;
+        self.lifted[at].locals = done.locals;
+        self.lifted[at].body = Block {
             stmts: reads,
             value: lowered,
         };
-        self.lifted.push(lifted);
         self.slots = outer_slots;
 
         let mut held = vec![Expr::Int(index as i64)];

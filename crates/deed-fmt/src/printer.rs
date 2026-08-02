@@ -358,6 +358,7 @@ impl Printer<'_> {
         self.line_start();
         self.push("effect ");
         self.push(&decl.name.name);
+        self.push(&type_params(&[], &decl.rows));
         self.push(" {");
         self.newline();
         self.indent += 1;

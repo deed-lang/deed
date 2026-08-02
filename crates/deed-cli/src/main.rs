@@ -992,8 +992,19 @@ fn run_fix(files: &[PathBuf], check_only: bool) -> ExitCode {
         };
 
         let name = display_path(path);
-        let before = diagnose(&name, &original);
-        let fixed = deed_driver::fix::fix(&original, |text| diagnose(&name, text));
+        // What the file imports, read once. A fix round changes the file and
+        // not what it imports, so this is the same context every round.
+        //
+        // Checking the file on its own was cheaper and wrong: a call into
+        // another module has no row when that module is not there, so a
+        // function that performs an effect only through such a call looked
+        // like one declaring an effect it never performs, and the fix on
+        // offer was to delete the row. `examples/tasks.deed` forks tasks that
+        // log, and `deed fix` proposed taking `Log.note` off the function that
+        // forks them.
+        let context = context_for(path);
+        let before = diagnose(&name, &original, &context);
+        let fixed = deed_driver::fix::fix(&original, |text| diagnose(&name, text, &context));
 
         if !fixed.changed() {
             continue;
@@ -1001,7 +1012,7 @@ fn run_fix(files: &[PathBuf], check_only: bool) -> ExitCode {
 
         // A fix that leaves more errors than it found is a wrong fix, not a
         // partial one, so the file is left alone and the run says so.
-        let after = diagnose(&name, &fixed.source);
+        let after = diagnose(&name, &fixed.source, &context);
         if deed_driver::fix::error_count(&after) > deed_driver::fix::error_count(&before) {
             eprintln!(
                 "error: {name}: fixing made it worse, so nothing was written. \
@@ -1046,11 +1057,59 @@ fn run_fix(files: &[PathBuf], check_only: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Checks one file on its own, which is what a fix round needs.
-fn diagnose(name: &str, text: &str) -> Vec<deed_diagnostics::Diagnostic> {
+/// Checks one file with the modules it imports beside it.
+///
+/// Only this file's own diagnostics come back. The context is there so the
+/// rows and the types a call crosses into are the ones the program really
+/// has, which is the difference between a fix that is right and one that
+/// deletes what it could not see.
+fn diagnose(
+    name: &str,
+    text: &str,
+    context: &[(String, String)],
+) -> Vec<deed_diagnostics::Diagnostic> {
     let mut sources = SourceMap::new();
     let file = sources.add(name.to_string(), text.to_string());
-    deed_driver::check(&sources, file).diagnostics
+    if context.is_empty() {
+        return deed_driver::check(&sources, file).diagnostics;
+    }
+    let mut ids = vec![file];
+    for (name, text) in context {
+        ids.push(sources.add(name.clone(), text.clone()));
+    }
+    deed_driver::check_all(&sources, &ids)
+        .into_iter()
+        .find(|checked| checked.file == file)
+        .map(|checked| checked.diagnostics)
+        .unwrap_or_default()
+}
+
+/// The modules one file imports, by the name and text a check wants.
+///
+/// Both halves of where a module can live: a file on disk beside it, and one
+/// that ships inside the compiler. Anything that cannot be found is left out,
+/// which puts the file back where it was before this existed rather than
+/// turning a missing import into a failure of `deed fix`.
+fn context_for(path: &Path) -> Vec<(String, String)> {
+    let mut files = vec![path.to_path_buf()];
+    let mut shipped = Vec::new();
+    let mut manifests = Vec::new();
+    if resolve_imports(&mut files, &mut shipped, &mut manifests).is_err() {
+        return Vec::new();
+    }
+
+    let mut context = Vec::new();
+    for found in files.iter().skip(1) {
+        if let Ok(text) = std::fs::read_to_string(found) {
+            context.push((display_path(found), text));
+        }
+    }
+    for module in shipped {
+        if let Some(text) = deed_driver::shipped_source(module) {
+            context.push((format!("{module}.deed"), text.to_string()));
+        }
+    }
+    context
 }
 
 /// Calls `main`, handing it the one `System` there is.

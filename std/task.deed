@@ -1,0 +1,151 @@
+// Cooperative tasks.
+//
+// A task is a function value. `Task.fork` puts one in the queue and `run`
+// takes them out one at a time until the queue is empty. There is no
+// preemption and no parallelism: a task runs to completion, and a task that
+// wants to leave room for another splits itself into a step that runs now and
+// a closure for the rest, forks the closure, and returns.
+//
+// The row variable is what makes this a library rather than a pattern to copy.
+// `Fn() uses r -> ()` is "a task, performing whatever tasks here perform", and
+// `r` is filled in at each `Task.fork` from the value that was passed. So a
+// program forking a task that logs is charged with logging, and one forking a
+// task that reads a file is charged with that, and neither of them is written
+// down in this file. `examples/scheduler.deed` is the same scheduler with the
+// row spelled out, which is what had to be done before an effect could take
+// one, and it is worth reading beside this to see what the variable bought.
+//
+// What is not here is resumption. `Task.step` calls a task and the task
+// returns; there is no way to suspend one in the middle and pick it up later,
+// because `Resume<A, R>` is written down as a decision and not implemented.
+// See `design/decisions/2026-07-31-one-shot-resumptions.md`, whose own open
+// question is what the row of a `Resume` is. Until that is answered a task
+// that wants to yield splits itself, which is what `run_alternating` in the
+// tests does.
+
+module std/task
+
+use std/list.{first, drop}
+
+// Fork a task, ask whether any are waiting, and run one.
+//
+// Three operations rather than one `run`, because draining the queue is an
+// ordinary recursive function and there is no reason for it to be part of the
+// effect. `run` below is that function, and a program that wants a different
+// order can write its own against the same three.
+effect Task<uses r> {
+
+    // Put a task in the queue. It runs later, in the order it was forked.
+    fn fork(step: Fn() uses r -> ()) -> ()
+
+    // Whether the queue still has something in it.
+    fn more() -> Bool
+
+    // Run the task at the front of the queue, if there is one.
+    fn step() -> ()
+}
+
+// Tasks run in the order they were forked, and a task forked by a task goes
+// behind everything already waiting.
+//
+// The queue is a list of function values, which is the one piece of state a
+// scheduler needs. `step` performs `r`: calling a task performs whatever that
+// task performs, and a signature that did not say so would be a handler
+// running arbitrary code while claiming to run none.
+handler RoundRobin implements Task {
+    state queue: List<Fn() uses r -> ()>
+
+    fn fork(step) -> () {
+        queue = push(queue, step)
+    }
+
+    fn more() -> Bool {
+        length(queue) > 0
+    }
+
+    fn step() -> ()
+      uses
+        r,
+    {
+        match first(queue) {
+            ok(next) => {
+                queue = drop(queue, 1)
+                next()
+            },
+            err(_) => (),
+        }
+    }
+}
+
+// Run every task, including the ones the tasks fork, until none are left.
+//
+// `Diverge` because nothing here proves the queue empties: a task that forks
+// itself never stops, and that is the program's decision rather than a
+// mistake this function can rule out.
+fn run() -> ()
+  uses
+    Task.more,
+    Task.step,
+    Diverge,
+{
+    if Task.more() {
+        Task.step()
+        run()
+    }
+}
+
+// Run at most `limit` tasks, and answer how many actually ran.
+//
+// The bounded form, for a program that wants a scheduler it can prove
+// terminates. No `Diverge`: the walk is over a list of known length, so this
+// stops whatever the tasks do.
+fn run_up_to(limit: Int) -> Int
+  where
+    limit >= 0,
+  uses
+    Task.more,
+    Task.step,
+{
+    for slot in repeat(0, limit) with ran = 0 {
+        if Task.more() {
+            Task.step()
+            ran + 1
+        } else {
+            ran
+        }
+    }
+}
+
+test "run empties the queue" {
+    with RoundRobin { queue: [] } {
+        Task.fork(|| ())
+        Task.fork(|| ())
+        run()
+        assert Task.more() == false
+    }
+}
+
+test "a task forked by a task runs too" {
+    let ran = with RoundRobin { queue: [] } {
+        Task.fork(|| Task.fork(|| ()))
+        run_up_to(5)
+    }
+    assert ran == 2
+}
+
+test "a bounded run stops at the limit and says so" {
+    let ran = with RoundRobin { queue: [] } {
+        Task.fork(|| ())
+        Task.fork(|| ())
+        Task.fork(|| ())
+        run_up_to(2)
+    }
+    assert ran == 2
+}
+
+test "a bounded run over an empty queue runs nothing" {
+    let ran = with RoundRobin { queue: [] } {
+        run_up_to(3)
+    }
+    assert ran == 0
+}

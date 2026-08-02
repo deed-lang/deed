@@ -176,6 +176,13 @@ pub struct ChoiceDecl {
 #[derive(Clone, Debug)]
 pub struct EffectDecl {
     pub name: Ident,
+    /// `<uses r>` in `effect Task<uses r>`.
+    ///
+    /// A row variable an effect declares stands for whatever the values handed
+    /// to its operations perform. It is what lets a handler keep a queue of
+    /// them without naming, in the library, effects only the program knows
+    /// about.
+    pub rows: Vec<Ident>,
     /// Operation signatures. An effect has no bodies; that is the point of it.
     pub operations: Vec<FnSig>,
     pub span: Span,
