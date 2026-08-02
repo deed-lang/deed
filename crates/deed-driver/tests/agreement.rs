@@ -461,6 +461,15 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 11,
         },
+        // A pattern that reaches through what a variant holds. The failure
+        // carries a record or a variant, and the arm names a field of it,
+        // either under its own name or under one the arm chose.
+        Agreed {
+            name: "a pattern that reaches one level in",
+            source: "module a\n\nrecord OverLimit {\n    limit: Int,\n}\n\nchoice Trouble {\n    TooBig { size: Int },\n}\n\nfn bump(n: Int, limit: Int) -> Result<Int, OverLimit> {\n    if n > limit {\n        err(OverLimit { limit: limit })\n    } else {\n        ok(n)\n    }\n}\n\nfn reached(n: Int, limit: Int) -> Int {\n    match bump(n, limit) {\n        ok(count) => count,\n        err(OverLimit { limit: hit }) => 0 - hit,\n    }\n}\n\nfn shorthand(n: Int, top: Int) -> Int {\n    match bump(n, top) {\n        ok(count) => count,\n        err(OverLimit { limit }) => limit + 1000,\n    }\n}\n\nfn trouble(n: Int) -> Result<Int, Trouble> {\n    if n > 5 {\n        err(TooBig { size: n })\n    } else {\n        ok(n)\n    }\n}\n\nfn size_of(n: Int) -> Int {\n    match trouble(n) {\n        ok(m) => m,\n        err(TooBig { size }) => size + 100,\n    }\n}\n\nfn answer() -> Int {\n    reached(1, 5) + reached(9, 5) + shorthand(9, 5) + size_of(9) + size_of(1)\n}\n\ntest \"the name inside the failure is the one that was written\" {\n    assert reached(9, 5) == 0 - 5\n    assert shorthand(9, 5) == 1005\n    assert size_of(9) == 109\n    assert answer() == 1111\n}\n",
+            call: "answer",
+            expect: 1111,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
