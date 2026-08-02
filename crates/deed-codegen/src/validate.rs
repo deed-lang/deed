@@ -347,6 +347,16 @@ impl<'m> Checker<'m> {
                 self.pop_expect(ValType::I64)?;
                 self.pop_expect(ValType::I32)?;
             }
+            Ins::I32Load8U(_) => {
+                self.require_memory()?;
+                self.pop_expect(ValType::I32)?;
+                self.push(ValType::I32);
+            }
+            Ins::I32Store8(_) => {
+                self.require_memory()?;
+                self.pop_expect(ValType::I32)?;
+                self.pop_expect(ValType::I32)?;
+            }
         }
         Ok(())
     }

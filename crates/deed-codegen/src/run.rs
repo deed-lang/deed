@@ -580,6 +580,17 @@ impl Run<'_> {
                     let at = pop(stack)?.as_i64() as usize + *offset as usize;
                     self.store(at, value.as_i64())?;
                 }
+                Ins::I32Load8U(offset) => {
+                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
+                    let byte = *self.memory.get(at).ok_or(Trap::OutOfBounds)?;
+                    stack.push(Value::I32(byte as i32));
+                }
+                Ins::I32Store8(offset) => {
+                    let value = pop(stack)?.as_i64();
+                    let at = pop(stack)?.as_i64() as usize + *offset as usize;
+                    let place = self.memory.get_mut(at).ok_or(Trap::OutOfBounds)?;
+                    *place = value as u8;
+                }
                 other => self.arithmetic(other, stack)?,
             }
         }

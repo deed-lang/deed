@@ -145,6 +145,9 @@ pub enum Ins {
     I64Load(u32),
     I32Store(u32),
     I64Store(u32),
+    /// One byte, which is what a string is made of.
+    I32Load8U(u32),
+    I32Store8(u32),
 }
 
 impl Ins {
@@ -236,6 +239,16 @@ impl Ins {
             Ins::I64Store(offset) => {
                 out.push(0x37);
                 write_u32(out, 3);
+                write_u32(out, *offset);
+            }
+            Ins::I32Load8U(offset) => {
+                out.push(0x2d);
+                write_u32(out, 0);
+                write_u32(out, *offset);
+            }
+            Ins::I32Store8(offset) => {
+                out.push(0x3a);
+                write_u32(out, 0);
                 write_u32(out, *offset);
             }
             Ins::I32Const(value) => {

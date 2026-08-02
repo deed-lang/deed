@@ -16,6 +16,7 @@ pub mod abi;
 pub mod compile;
 pub mod layout;
 pub mod run;
+mod runtime;
 pub mod validate;
 pub mod wasm;
 

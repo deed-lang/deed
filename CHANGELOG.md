@@ -42,7 +42,8 @@ release notes.
   the function is still a function. It used to be a message about a brace, then
   a message about the first line of the body not being a declaration, then a
   return type that matched nothing. Thirty-two of the six hundred programs in
-  the recorded model runs were written this way.- A contract written before the return type gets DEED2022, and the return type
+  the recorded model runs were written this way.
+- A contract written before the return type gets DEED2022, and the return type
   is read where it was written. `fn f(n: Int) where n > 0 -> Int` used to put
   the arrow where the body should have begun, so the message was about a brace
   and the function went on to have no return type and a body that did not match
@@ -58,6 +59,12 @@ release notes.
 
 ### Tools
 
+- The compiled backend joins two strings, compares them and orders them.
+  `deed build` used to refuse any program that put two pieces of text together
+  or asked which came first, which is most programs that touch text at all.
+  These are functions the backend writes into the module and calls, numbered
+  after everything the program declares, and only the ones a program reaches
+  are emitted.
 - `deed check` no longer panics on a function whose parameter list never
   closes. A declaration used to end at the token sitting where its closing
   token should have been, so a signature could reach past the start of its own
