@@ -64,6 +64,12 @@ release notes.
 
 ### Tools
 
+- An `if` or a `match` written where a type is expected of it compiles.
+  The checker works out what one comes to and did not write it down, because
+  the pass that records a type per expression is the one that infers rather
+  than the one that checks against something. Five more corpus programs
+  compile, and every one of them was a `match` arm or a branch whose value was
+  a branch.
 - `deed build` compiles a call into another module. The lowering was handed one
   file and the interpreter was handed all of them, so anything with a `use` in
   it was refused, which is most programs that do real work. What is lowered is

@@ -2484,6 +2484,16 @@ impl<'a> Checker<'a> {
     /// a fact is no longer the branch being checked and every refinement in a
     /// conditional falls back to a runtime guard.
     fn check_against(&mut self, expr: &'a Expr, expected: &Ty, because: Because) -> Ty {
+        let ty = self.check_against_inner(expr, expected, because);
+        // The bidirectional path skips `infer`, which is where every other
+        // expression gets its type written down. Without this an `if` or a
+        // `match` in tail position is the one shape the compiler knows the
+        // type of and never says, which the backend then cannot lower.
+        self.types.record_expr(expr.span(), ty.clone());
+        ty
+    }
+
+    fn check_against_inner(&mut self, expr: &'a Expr, expected: &Ty, because: Because) -> Ty {
         match expr {
             Expr::If {
                 condition,
