@@ -2194,3 +2194,99 @@ fn the_handler_survives_the_initialiser() {
     assert_eq!(handler.state.len(), 1);
     assert_eq!(handler.operations.len(), 1);
 }
+
+// -- an operator written as a word ------------------------------------------
+//
+// `and` and `or` are ordinary names here, so a `where` clause holding one
+// stopped at the word and the reader was told a block was expected. The
+// resolver has answered this since #213 and never got to: across eighteen
+// recorded model runs the word reached the parser seventeen times and the
+// resolver none.
+
+#[test]
+fn a_word_where_an_operator_goes_names_the_operator() {
+    for (word, symbol) in [("and", "&&"), ("or", "||")] {
+        let source = format!("module a\n\nfn f(a: Bool, b: Bool) -> Bool {{\n    a {word} b\n}}\n");
+        let (sources, parsed) = parse_source(&source);
+        assert_eq!(codes_of(&parsed.diagnostics), vec![codes::WORD_OPERATOR]);
+
+        let text = render_human(&sources, &parsed.diagnostics[0]);
+        assert!(
+            text.contains(&format!("writes that operator `{symbol}`")),
+            "{text}"
+        );
+        assert_eq!(
+            parsed.diagnostics[0]
+                .fix
+                .as_ref()
+                .expect("a fix")
+                .edits
+                .first()
+                .expect("an edit")
+                .replacement,
+            symbol
+        );
+    }
+}
+
+/// The shape it was found in, and the reason for reading the word rather than
+/// stopping at it: the contract is the one that was written, so the only thing
+/// wrong with the file is the word.
+#[test]
+fn a_contract_clause_holding_a_word_is_still_the_clause_that_was_written() {
+    let (_, parsed) = parse_source(
+        "module a\n\nfn twice(n: Int) -> Int\n  where n >= 0 and n <= 10\n  \
+         ensures ok => result == n + n\n{\n    n + n\n}\n",
+    );
+    assert_eq!(codes_of(&parsed.diagnostics), vec![codes::WORD_OPERATOR]);
+
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    assert_eq!(function.contract.requires.len(), 1);
+    assert_eq!(function.contract.ensures.len(), 1);
+    assert_eq!(function.body.stmts.len(), 0);
+    assert!(function.body.tail.is_some(), "the body is still a body");
+}
+
+/// Precedence is the operator's, not the word's, so the two spellings parse to
+/// the same tree. Written the other way round the comparisons would bind to
+/// the wrong side and the clause would mean something else.
+#[test]
+fn a_word_binds_the_way_the_operator_it_stands_for_binds() {
+    /// The tree without its spans, which are the one thing that differs when a
+    /// word three characters long stands in for a symbol two long.
+    fn shape(expr: &Expr) -> String {
+        match expr {
+            Expr::Binary { op, lhs, rhs, .. } => {
+                format!("({:?} {} {})", op, shape(lhs), shape(rhs))
+            }
+            Expr::Ident(name) => name.name.to_string(),
+            Expr::Int { value, .. } => value.to_string(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    let tail = |source: &str| {
+        let parsed = parse_source(source).1;
+        let Item::Function(function) = &parsed.module.items[0] else {
+            panic!("expected a function");
+        };
+        shape(function.body.tail.as_ref().expect("a tail expression"))
+    };
+    let written = "module a\n\nfn f(n: Int) -> Bool {\n    n > 0 and n < 10 or n == 20\n}\n";
+    let spelled = "module a\n\nfn f(n: Int) -> Bool {\n    n > 0 && n < 10 || n == 20\n}\n";
+    assert_eq!(tail(written), tail(spelled));
+    assert!(tail(written).starts_with("(Or "), "{}", tail(written));
+}
+
+/// A name that resolves never reaches this. `and(a, b)` is a call, and a call
+/// has its argument list where an operand would have been.
+#[test]
+fn a_function_named_and_is_still_a_function() {
+    let parsed = parse_ok(
+        "module a\n\nfn and(a: Bool, b: Bool) -> Bool {\n    a\n}\n\n\
+         fn f() -> Bool {\n    and(true, false)\n}\n",
+    );
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+}

@@ -170,3 +170,15 @@ pub const NO_LIST_OPERATOR: &str = "DEED2018";
 /// Read and dropped, so the operations after it are still operations, and the
 /// note says both halves of the shape rather than which token was wanted.
 pub const STATE_INITIALISER: &str = "DEED2019";
+
+/// `a and b`, `a or b`: the words other languages spell their operators with.
+///
+/// The resolver already had an answer for these, and it never got to give it.
+/// `and` is an ordinary name here, so a condition or a contract clause holding
+/// one stops at the word: the expression ends, and the reader is told a block
+/// was expected. Nothing in that sentence is the word they wrote.
+///
+/// Read as the operator they mean, so the line is the program they wrote and
+/// the rest of it is checked. The repair is a word for a symbol, which is the
+/// whole of it, so it is applied rather than offered.
+pub const WORD_OPERATOR: &str = "DEED2020";

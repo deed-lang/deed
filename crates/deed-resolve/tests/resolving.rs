@@ -475,10 +475,15 @@ fn reaching_for_a_receiver_is_told_there_are_no_methods() {
     }
 }
 
+/// `not` still arrives here, and `and` and `or` arrive only when they are not
+/// between two values. The parser reads those two as the operator they stand
+/// for (DEED2020), which is where the reader actually writes them; what is
+/// left for this is a word standing on its own, where there are no operands to
+/// build anything out of.
 #[test]
 fn a_word_for_an_operator_is_answered_with_the_operator() {
-    for (word, op) in [("and", "&&"), ("or", "||"), ("not", "!")] {
-        let source = format!("module a\n\nfn f(a: Bool, b: Bool) -> Bool {{ a {word} b }}\n");
+    for (word, op) in [("and", "&&"), ("or", "||")] {
+        let source = format!("module a\n\nfn f() -> Bool {{ {word} }}\n");
         let (sources, _, resolved) = resolve_source(&source);
         let named = resolved
             .diagnostics
@@ -490,6 +495,17 @@ fn a_word_for_an_operator_is_answered_with_the_operator() {
         assert!(text.contains(&format!("this is spelled `{op}`")), "{text}");
         assert_eq!(named.fix.as_ref().expect("a fix").edits[0].replacement, op);
     }
+
+    let (sources, _, resolved) =
+        resolve_source("module a\n\nfn f(a: Bool, b: Bool) -> Bool { a not b }\n");
+    let named = resolved
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("cannot find `not`"))
+        .expect("`not` should not resolve");
+    let text = render_human(&sources, named);
+    assert!(text.contains("this is spelled `!`"), "{text}");
+    assert_eq!(named.fix.as_ref().expect("a fix").edits[0].replacement, "!");
 }
 
 /// Nothing here shadows anything. A name that resolves never reaches the
