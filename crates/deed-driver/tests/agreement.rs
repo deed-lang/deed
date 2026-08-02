@@ -444,6 +444,15 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 21,
         },
+        // A type parameter that appears only inside an alias. `Pairs<K, V>`
+        // says nothing on its own: what `V` stands for is inside what the
+        // alias is written over, under whatever the alias called it.
+        Agreed {
+            name: "a type parameter behind an alias",
+            source: "module a\n\nrecord Pair<K, V> {\n    key: K,\n    value: V,\n}\n\ntype Pairs<K, V> = List<Pair<K, V>>\n\nfn value_of<K, V>(pairs: Pairs<K, V>, fallback: V) -> V {\n    for one in pairs with found = fallback {\n        one.value\n    }\n}\n\nfn answer() -> Int {\n    let numbers = [Pair { key: \"a\", value: 1 }, Pair { key: \"b\", value: 2 }]\n    let words = [Pair { key: 1, value: \"xyz\" }]\n    value_of(numbers, 0) + length(value_of(words, \"\"))\n}\n\ntest \"one alias, two sets of arguments\" {\n    assert value_of([], 7) == 7\n    assert answer() == 5\n}\n",
+            call: "answer",
+            expect: 5,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",

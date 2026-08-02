@@ -422,7 +422,7 @@ fn lower_impl(
     //
     // By name and only for what a `use` line asked for, so two modules that
     // both declare a `Point` keep their own.
-    let borrowed: Vec<(usize, usize, String)> = units
+    let mut pending: Vec<(usize, usize, String)> = units
         .iter()
         .enumerate()
         .flat_map(|(at, unit)| {
@@ -439,15 +439,49 @@ fn lower_impl(
         })
         .collect();
 
-    for (at, from, name) in borrowed {
+    let mut taken: Vec<(usize, usize, String)> = Vec::new();
+    while let Some(one) = pending.pop() {
+        if taken.contains(&one) {
+            continue;
+        }
+        taken.push(one.clone());
+        let (at, from, name) = one;
+
         if let Some(id) = units[from].layouts.get(&name).copied() {
             units[at].layouts.insert(name.clone(), id);
         }
         if let Some(nominal) = units[from].nominals.get(&name).copied() {
             units[at].nominals.insert(name.clone(), nominal);
+            // What a record's fields or a choice's variants are written over
+            // may be another name that module declares and this one never
+            // asked for. `use std/table.{Table}` is enough to need `Entry`,
+            // which nobody writes down anywhere on this side.
+            let mut named = Vec::new();
+            match nominal {
+                Nominal::Record(record) => {
+                    for field in &record.fields {
+                        names_in_type(&field.ty, &mut named);
+                    }
+                }
+                Nominal::Choice(choice) => {
+                    for variant in &choice.variants {
+                        for field in variant.fields.iter().flatten() {
+                            names_in_type(&field.ty, &mut named);
+                        }
+                    }
+                }
+            }
+            for name in named {
+                pending.push((at, from, name));
+            }
         }
         if let Some(alias) = units[from].aliases.get(&name).copied() {
             units[at].aliases.insert(name.clone(), alias);
+            let mut named = Vec::new();
+            names_in_type(&alias.ty, &mut named);
+            for name in named {
+                pending.push((at, from, name));
+            }
         }
         if let Some(ty) = units[from].alias_types.get(&name).cloned() {
             units[at].alias_types.insert(name.clone(), ty);
@@ -1034,38 +1068,13 @@ fn bind(written: &ast::Type, actual: &Ty, generics: &[ast::Ident], out: &mut Has
     }
 }
 
-/// The same, read against what the checker recorded rather than against what
-/// the value came out as here.
-///
-/// A generic type somebody declared reaches this layer as one layout per set
-/// of arguments, with the arguments gone: `Option<Int>` and `Option<String>`
-/// are two layouts and neither says what it holds. A parameter that appears
-/// only inside one of those cannot be read off the lowered type, and the
-/// checker still has what it stood for.
-fn bind_checked(
-    written: &ast::Type,
-    actual: &CheckedTy,
-    generics: &[ast::Ident],
-    out: &mut Vec<(String, CheckedTy)>,
-) {
-    let ast::Type::Named { name, args, .. } = written else {
-        return;
-    };
-    if args.is_empty() {
-        if generics.iter().any(|one| one.name == name.name) {
-            out.push((name.name.to_string(), actual.clone()));
+/// Every name a written type mentions, including inside its arguments.
+fn names_in_type(ty: &ast::Type, out: &mut Vec<String>) {
+    if let ast::Type::Named { name, args, .. } = ty {
+        out.push(name.name.to_string());
+        for arg in args {
+            names_in_type(arg, out);
         }
-        return;
-    }
-    // Only what somebody declared. A `List` or a `Result` says what it holds
-    // at this layer too, so nothing gets here needing those: what the value
-    // came out as answered first.
-    let actual_args = match actual {
-        CheckedTy::Named { args, .. } | CheckedTy::External { args, .. } => args,
-        _ => return,
-    };
-    for (written, actual) in args.iter().zip(actual_args) {
-        bind_checked(written, actual, generics, out);
     }
 }
 
@@ -1359,7 +1368,7 @@ impl Lowering<'_> {
                 else {
                     continue;
                 };
-                bind_checked(written, &actual, generics, &mut found);
+                self.bind_checked(written, &actual, generics, &HashMap::new(), &mut found);
             }
             for (name, actual) in found {
                 if bindings.contains_key(&name) {
@@ -1371,6 +1380,82 @@ impl Lowering<'_> {
             }
         }
         Ok(bindings)
+    }
+
+    /// What a type parameter stands for, read against what the checker
+    /// recorded rather than against what the value came out as here.
+    ///
+    /// A generic type somebody declared reaches this layer as one layout per
+    /// set of arguments, with the arguments gone: `Option<Int>` and
+    /// `Option<String>` are two layouts and neither says what it holds. A
+    /// parameter that appears only inside one of those cannot be read off the
+    /// lowered type, and the checker still has what it stood for.
+    ///
+    /// `rename` carries the names an alias introduced. A parameter written
+    /// `Table<K, V>` says nothing on its own: `Table` is a name for
+    /// `List<Entry<K, V>>` with its own two parameters, and what the caller's
+    /// `K` stands for is inside what the alias expands to, under whatever the
+    /// alias called it.
+    fn bind_checked(
+        &self,
+        written: &ast::Type,
+        actual: &CheckedTy,
+        generics: &[ast::Ident],
+        rename: &HashMap<String, String>,
+        out: &mut Vec<(String, CheckedTy)>,
+    ) {
+        let ast::Type::Named { name, args, .. } = written else {
+            return;
+        };
+        let name = match rename.get(name.name.as_str()) {
+            Some(outer) => outer.clone(),
+            None => name.name.to_string(),
+        };
+
+        if args.is_empty() {
+            if generics
+                .iter()
+                .any(|one| one.name.as_str() == name.as_str())
+            {
+                out.push((name, actual.clone()));
+            }
+            return;
+        }
+
+        if let Some(alias) = self.aliases.get(name.as_str()).copied()
+            && alias.generics.len() == args.len()
+        {
+            let mut inner = HashMap::new();
+            for (generic, arg) in alias.generics.iter().zip(args) {
+                if let ast::Type::Named {
+                    name: written,
+                    args,
+                    ..
+                } = arg
+                    && args.is_empty()
+                {
+                    let outer = match rename.get(written.name.as_str()) {
+                        Some(outer) => outer.clone(),
+                        None => written.name.to_string(),
+                    };
+                    inner.insert(generic.name.to_string(), outer);
+                }
+            }
+            self.bind_checked(&alias.ty, actual, generics, &inner, out);
+            return;
+        }
+
+        let actual_args: Vec<&CheckedTy> = match actual {
+            CheckedTy::Named { args, .. } | CheckedTy::External { args, .. } => {
+                args.iter().collect()
+            }
+            CheckedTy::List(element) if name == "List" => vec![element],
+            CheckedTy::Result(ok, err) if name == "Result" => vec![ok, err],
+            _ => return,
+        };
+        for (written, actual) in args.iter().zip(actual_args) {
+            self.bind_checked(written, actual, generics, rename, out);
+        }
     }
 
     /// Lowers one copy of a declaration and hands back where it landed.
