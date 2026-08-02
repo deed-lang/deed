@@ -28,7 +28,12 @@ release notes.
 
 ### Tools
 
-- None yet.
+- `deed check` no longer panics on a function whose parameter list never
+  closes. A declaration used to end at the token sitting where its closing
+  token should have been, so a signature could reach past the start of its own
+  body, and `deed fix` builds the region a `uses` clause goes in by subtracting
+  one from the other. Every construct now ends where the parser actually read
+  to. Found by the nightly fuzzer.
 
 ### Measurements
 
