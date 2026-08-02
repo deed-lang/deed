@@ -1350,20 +1350,34 @@ impl Lowering<'_> {
         args: &[ast::Expr],
         span: Span,
     ) -> Result<Option<crate::FuncId>, Unlowered> {
-        if self.resolutions.def(def).kind != deed_resolve::DefKind::Import {
-            return Ok(None);
-        }
-        let name = self.resolutions.def(def).name.clone();
-        let Some(path) = self.resolutions.import_module(def) else {
-            return Ok(None);
+        let (at, name) = match self.resolutions.def(def).kind {
+            deed_resolve::DefKind::Import => {
+                let name = self.resolutions.def(def).name.clone();
+                let Some(path) = self.resolutions.import_module(def) else {
+                    return Ok(None);
+                };
+                let path = path.to_string();
+                let Some(at) = self.units.iter().position(|unit| unit.path == path) else {
+                    return Err(unlowered(
+                        &format!(
+                            "a call to `{name}`, whose module `{path}` was not compiled alongside"
+                        ),
+                        span,
+                    ));
+                };
+                (at, name)
+            }
+            // A call to something the module being read declares itself.
+            // When that is not the module being compiled, its functions have
+            // no index of their own and are lowered as they are reached, the
+            // same way an imported one is. Nothing here is on the path of a
+            // program that imports nothing.
+            deed_resolve::DefKind::Function if self.at != 0 => {
+                (self.at, self.resolutions.def(def).name.clone())
+            }
+            _ => return Ok(None),
         };
-        let path = path.to_string();
-        let Some(at) = self.units.iter().position(|unit| unit.path == path) else {
-            return Err(unlowered(
-                &format!("a call to `{name}`, whose module `{path}` was not compiled alongside"),
-                span,
-            ));
-        };
+        let path = self.units[at].path.clone();
         let Some(declaration) = self.units[at].declarations.get(&name).copied() else {
             return Ok(None);
         };

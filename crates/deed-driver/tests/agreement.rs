@@ -722,20 +722,22 @@ fn the_agreement_covers_more_than_one_program() {
 /// The interpreter has always been handed every file at once. The backend
 /// was handed one, so a program that imported anything was refused, which is
 /// most programs that do real work. What is lowered is what is reached: the
-/// module below declares two functions and only the one called comes across.
+/// module below declares four functions and only the three called come
+/// across, one of them because another one called it.
 #[test]
 fn a_call_into_another_module_answers_the_same_thing() {
     let library = "module tools\n\n\
 fn twice(n: Int) -> Int { n + n }\n\n\
+fn four_times(n: Int) -> Int { twice(twice(n)) }\n\n\
 fn wrapped<T>(item: T) -> List<T> { [item] }\n\n\
 fn never_called(n: Int) -> Int { n * 1000 }\n";
     let caller = "module a\n\n\
-use tools.{twice, wrapped}\n\n\
+use tools.{twice, four_times, wrapped}\n\n\
 fn answer() -> Int {\n\
-\x20   twice(3) + length(wrapped(\"x\")) + length(wrapped(1)) + twice(1)\n\
+\x20   twice(3) + length(wrapped(\"x\")) + length(wrapped(1)) + four_times(1)\n\
 }\n\n\
 test \"a call across a file boundary\" {\n\
-\x20   assert answer() == 10\n\
+\x20   assert answer() == 12\n\
 }\n";
 
     let mut sources = SourceMap::new();
@@ -797,7 +799,7 @@ test \"a call across a file boundary\" {\n\
     let module = compile(&lowered).expect("this compiles");
     assert_eq!(
         call(&module, "answer", &[]).expect("this runs"),
-        Some(Value::I64(10))
+        Some(Value::I64(12))
     );
 }
 

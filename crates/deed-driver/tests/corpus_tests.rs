@@ -236,6 +236,7 @@ fn compiled_tests_run_in_the_expected_files() {
         "closures.deed",
         "diverge.deed",
         "json.deed",
+        "markdown.deed",
         "proven.deed",
         "tic_tac_toe.deed",
     ];
