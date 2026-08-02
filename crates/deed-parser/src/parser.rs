@@ -1247,6 +1247,15 @@ impl<'a> Parser<'a> {
     /// closing a handler are the only things that can follow it, and neither
     /// can be a statement. So the braces are an insertion at each end, and the
     /// file after them is a file the reader meant to write.
+    /// Whether the token sitting here is one that can only come after a body.
+    ///
+    /// A declaration keyword, or the brace that closes a handler. Neither can
+    /// begin a statement, which is what makes reading an unbraced body to here
+    /// a reading rather than a guess.
+    fn after_a_body(&self) -> bool {
+        self.at_item_start() || self.at(&TokenKind::RBrace)
+    }
+
     fn body_without_braces(&mut self) -> Block {
         let open = self.read_to();
         let start = self.span();
@@ -1254,12 +1263,22 @@ impl<'a> Parser<'a> {
         let saved = std::mem::replace(&mut self.struct_lit, StructLit::Allow);
         let mut stmts = Vec::new();
         let mut tail = None;
-        while !self.at_eof() && !self.at_item_start() && !self.at(&TokenKind::RBrace) {
+        loop {
+            // On its own, and first, because at the end of the file `bump`
+            // does not move and every other way out of this loop is a
+            // question about the token sitting there.
+            if self.at_eof() {
+                break;
+            }
+            if self.after_a_body() {
+                break;
+            }
+
             let before = self.pos;
             let stmt = self.parse_stmt();
             self.eat(&TokenKind::Semi);
 
-            let done = self.at_eof() || self.at_item_start() || self.at(&TokenKind::RBrace);
+            let done = self.at_eof() || self.after_a_body();
             match stmt {
                 Stmt::Expr(expr) if done => tail = Some(Box::new(expr)),
                 other => stmts.push(other),
