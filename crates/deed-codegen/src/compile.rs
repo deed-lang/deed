@@ -318,14 +318,18 @@ fn helpers_used(program: &Program) -> Vec<Helper> {
 
     // Whatever those call, and whatever those call. A helper missing from the
     // module is a call to an index that is something else.
-    let mut at = 0;
-    while at < found.len() {
-        for also in found[at].needs() {
+    //
+    // A worklist rather than an index walking the list it is growing: the
+    // list is short and the shapes read the same, and an index that stops
+    // moving is a compiler that hangs rather than one that answers wrongly.
+    let mut pending: Vec<Helper> = found.clone();
+    while let Some(helper) = pending.pop() {
+        for also in helper.needs() {
             if !found.contains(also) {
                 found.push(*also);
+                pending.push(*also);
             }
         }
-        at += 1;
     }
 
     // Emitted in a fixed order, so the same program compiles to the same
