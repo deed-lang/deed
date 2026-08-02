@@ -2379,3 +2379,58 @@ fn a_signature_with_no_body_at_all_is_still_a_missing_brace() {
     let (_, parsed) = parse_source("module a\n\nfn f() -> Int\n\nfn g() -> Int {\n    1\n}\n");
     assert_eq!(codes_of(&parsed.diagnostics), vec![codes::UNEXPECTED_TOKEN]);
 }
+
+// -- the contract written before the return type ----------------------------
+//
+// `->` closes the parameter list, so everything after the type it names is
+// about what the function promises. Written the other way the arrow sat where
+// the body should have begun.
+
+const OUT_OF_ORDER: &str =
+    "module a\n\nfn restock(count: Int) where count > 0 -> Int {\n    count + 1\n}\n";
+
+#[test]
+fn a_return_type_after_the_contract_says_where_it_goes() {
+    let (sources, parsed) = parse_source(OUT_OF_ORDER);
+    assert_eq!(
+        codes_of(&parsed.diagnostics),
+        vec![codes::RETURN_TYPE_AFTER_CONTRACT]
+    );
+
+    let text = render_human(&sources, &parsed.diagnostics[0]);
+    assert!(text.contains("goes before the contract"), "{text}");
+    assert!(text.contains("closes a parameter list"), "{text}");
+}
+
+/// Reading it is the point: the function has the return type that was written
+/// and the contract that was written, so nothing downstream reports a body
+/// that does not match a type nobody read.
+#[test]
+fn the_function_keeps_both_halves_of_what_was_written() {
+    let (_, parsed) = parse_source(OUT_OF_ORDER);
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    let ret = function.sig.ret.as_ref().expect("the return type is read");
+    assert!(format!("{ret:?}").contains("Int"), "{ret:?}");
+    assert_eq!(function.contract.requires.len(), 1);
+    assert!(function.body.tail.is_some());
+}
+
+/// The signature still ends where it was written to end. Stretching it over
+/// the contract would make one span contain the other, which is the shape
+/// `tests/spans.rs` holds the parser to.
+#[test]
+fn the_signature_does_not_stretch_over_the_contract() {
+    let (_, parsed) = parse_source(OUT_OF_ORDER);
+    let Item::Function(function) = &parsed.module.items[0] else {
+        panic!("expected a function");
+    };
+    let contract = function.contract.span.expect("a contract");
+    assert!(
+        function.sig.span.end <= contract.start,
+        "{:?} against {:?}",
+        function.sig.span,
+        contract
+    );
+}
