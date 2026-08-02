@@ -220,7 +220,7 @@ fn compiled_tests_run_in_the_expected_files() {
         .collect();
     ran.sort_unstable();
 
-    let mut expected = vec!["diverge.deed"];
+    let mut expected = vec!["diverge.deed", "proven.deed"];
     expected.sort_unstable();
 
     for name in &expected {

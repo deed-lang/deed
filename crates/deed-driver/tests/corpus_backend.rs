@@ -214,10 +214,12 @@ fn the_backend_still_compiles_what_it_used_to() {
         "lists.deed",
         "map.deed",
         "names.deed",
+        "proven.deed",
         "ratio.deed",
         "strings.deed",
         "table.deed",
         "tree.deed",
+        "workers.deed",
     ];
     expected.sort_unstable();
 

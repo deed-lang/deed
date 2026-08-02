@@ -256,6 +256,53 @@ fn lower_impl(
         }
     }
 
+    // What each refinement says, and what it says it about. `value` is the
+    // only name the language introduces on its own, and resolution gives it a
+    // definition whose span is the alias name, which is what makes it findable
+    // from here without matching on the word.
+    let mut refinements: HashMap<DefId, Refinement<'_>> = HashMap::new();
+    for alias in aliases.values() {
+        let (Some(def), Some(predicate)) = (
+            resolutions.resolution(alias.name.span),
+            alias.refinement.as_ref(),
+        ) else {
+            continue;
+        };
+        let subject = resolutions
+            .defs()
+            .find(|(_, data)| {
+                data.kind == deed_resolve::DefKind::Local
+                    && data.name == "value"
+                    && data.span == alias.name.span
+            })
+            .map(|(id, _)| id);
+        refinements.insert(
+            def,
+            Refinement {
+                predicate,
+                subject,
+                name: alias.name.name.to_string(),
+            },
+        );
+    }
+
+    // Everything the checker could not settle, which is what the compiled
+    // program has to check for itself.
+    let guards: HashMap<Span, Guard> = types
+        .obligations()
+        .iter()
+        .filter(|obligation| obligation.tier == deed_typeck::Tier::Guarded)
+        .map(|obligation| {
+            (
+                obligation.span,
+                Guard {
+                    refinement: obligation.refinement,
+                    inside_ok: obligation.inside_ok,
+                },
+            )
+        })
+        .collect();
+
     // Two passes over functions: every signature first, so a body can call
     // anything the module declares regardless of where it sits in the file.
     // One pass would make calling forward an error, which is a rule this
@@ -341,6 +388,9 @@ fn lower_impl(
             state: None,
             function: program.functions[index].clone(),
             slots: HashMap::new(),
+            guards: &guards,
+            refinements: &refinements,
+            checking: false,
         };
 
         for (position, param) in declaration.sig.params.iter().enumerate() {
@@ -423,6 +473,9 @@ fn lower_impl(
                         state: None,
                         function: program.functions[probe_id.0].clone(),
                         slots: HashMap::new(),
+                        guards: &guards,
+                        refinements: &refinements,
+                        checking: false,
                     };
                     let value = match lowering.expr(subject) {
                         Ok(v) => v,
@@ -477,6 +530,9 @@ fn lower_impl(
                     state: None,
                     function: program.functions[body_id.0].clone(),
                     slots: HashMap::new(),
+                    guards: &guards,
+                    refinements: &refinements,
+                    checking: false,
                 };
                 let body = match lowering.block(&filtered) {
                     Ok(b) => b,
@@ -782,6 +838,43 @@ struct Lowering<'a> {
     function: Function,
     /// Where each bound name lives.
     slots: HashMap<DefId, Local>,
+    /// Every refinement the checker could not settle, by the span of the
+    /// expression that has to satisfy it.
+    ///
+    /// Read off the checker's own table rather than worked out again here,
+    /// for the reason `deed_driver::Checked::guards` gives: when the two were
+    /// separate the checker said "so it becomes a runtime check" over places
+    /// that had no check.
+    guards: &'a HashMap<Span, Guard>,
+    /// What each refinement says, and what name it says it about.
+    refinements: &'a HashMap<DefId, Refinement<'a>>,
+    /// Whether a refinement's own predicate is being lowered.
+    ///
+    /// A predicate is an ordinary expression and is lowered as one, so
+    /// without this a guard inside one would ask for itself forever.
+    checking: bool,
+}
+
+/// One refinement, as the lowering needs it.
+struct Refinement<'a> {
+    /// What has to hold, which is an ordinary expression.
+    predicate: &'a ast::Expr,
+    /// The `value` the predicate talks about. `None` for a predicate that
+    /// never mentions it, which is a predicate with nothing to bind.
+    subject: Option<DefId>,
+    /// What the refinement is called, for the sentence a failure prints.
+    name: String,
+}
+
+/// A refinement one expression has to satisfy at runtime.
+#[derive(Clone, Copy)]
+struct Guard {
+    refinement: DefId,
+    /// Whether the value is the one inside the `ok` rather than the
+    /// expression itself. A `Result` that came back from a call has nothing
+    /// naming its payload, so the obligation lands on the whole expression
+    /// and has to say that what it is about is one level in.
+    inside_ok: bool,
 }
 
 /// Which variants an arm names, and which field each name it binds reads.
@@ -1082,7 +1175,15 @@ impl Lowering<'_> {
     ///
     /// A function nothing calls answers yes, which is right: a clause that
     /// no call can break is a clause with nothing to check.
+    ///
+    /// A function an `assert refuses` aims at answers no however its calls
+    /// settled. That call is written to break the clause and the checker
+    /// records no tier for it, so without this the one caller that needs the
+    /// check is the one caller nothing knew about.
     fn every_caller_proved(&self, callee: &str) -> bool {
+        if self.types.is_refuted(callee) {
+            return false;
+        }
         self.types
             .preconditions()
             .iter()
@@ -1298,7 +1399,134 @@ impl Lowering<'_> {
         Ok(Block { stmts, value })
     }
 
+    /// One expression, with whatever the checker could not settle about it
+    /// checked around it.
+    ///
+    /// Every way a refined value can come into existence goes through here,
+    /// which is the point: the arrangement this replaces checked arguments
+    /// and annotated `let`s and nothing else, so a return value carried a
+    /// warning and no check.
     fn expr(&mut self, expr: &ast::Expr) -> Result<Expr, Unlowered> {
+        let lowered = self.raw_expr(expr)?;
+        self.guarded(expr.span(), lowered)
+    }
+
+    /// What a refinement the checker left `Guarded` costs at runtime.
+    ///
+    /// The value is bound, the predicate is run against it, and a failure
+    /// ends the run the way any contract failure does. Nothing at all when
+    /// the checker settled it, which is the whole of what the tier buys.
+    fn guarded(&mut self, span: Span, value: Expr) -> Result<Expr, Unlowered> {
+        if self.checking {
+            return Ok(value);
+        }
+        let Some(guard) = self.guards.get(&span).copied() else {
+            return Ok(value);
+        };
+        let Some(refinement) = self.refinements.get(&guard.refinement) else {
+            return Ok(value);
+        };
+        let predicate = refinement.predicate;
+        let name = refinement.name.clone();
+        // A predicate that never says `value` says nothing about the value,
+        // and there is nothing to bind it to.
+        let Some(subject) = refinement.subject else {
+            return Ok(value);
+        };
+
+        let ty = self.ty_at(span)?;
+        let held = self.function.add_local(ty.clone());
+
+        // What the predicate is about, and whether there is one to ask about.
+        let (bound_ty, read, only_when) = if guard.inside_ok {
+            let Ty::Aggregate(layout) = ty else {
+                return Err(unlowered(
+                    "a refinement on a `Result` this cannot see inside",
+                    span,
+                ));
+            };
+            let (ok, _) = self.outcomes(layout, span)?;
+            let payload = self.layout(layout).variants[ok].fields[0].ty.clone();
+            (
+                payload,
+                Expr::Field {
+                    value: Box::new(Expr::Local(held)),
+                    layout,
+                    variant: ok,
+                    field: 0,
+                },
+                Some(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(Expr::Discriminant {
+                        value: Box::new(Expr::Local(held)),
+                        layout,
+                    }),
+                    right: Box::new(Expr::Int(ok as i64)),
+                    span,
+                }),
+            )
+        } else {
+            (ty, Expr::Local(held), None)
+        };
+
+        let bound = self.function.add_local(bound_ty);
+
+        // The predicate talks about `value`, which is in scope nowhere else,
+        // so it is bound here and whatever the name meant before is put back.
+        let outer = self.slots.insert(subject, bound);
+        self.checking = true;
+        let condition = self.raw_expr(predicate);
+        self.checking = false;
+        match outer {
+            Some(was) => {
+                self.slots.insert(subject, was);
+            }
+            None => {
+                self.slots.remove(&subject);
+            }
+        }
+
+        let mut check = vec![
+            Stmt::Assign {
+                local: bound,
+                value: read,
+            },
+            Stmt::Discard(Expr::If {
+                condition: Box::new(condition?),
+                then: Box::new(Block::of(Expr::Unit)),
+                otherwise: Box::new(Block {
+                    stmts: vec![Stmt::Fail {
+                        code: crate::codes::REFINEMENT_FAILED.to_string(),
+                        message: format!("this value does not satisfy `{name}`"),
+                        span,
+                    }],
+                    value: Expr::Unit,
+                }),
+                ty: Box::new(Ty::Unit),
+            }),
+        ];
+
+        if let Some(condition) = only_when {
+            check = vec![Stmt::Discard(Expr::If {
+                condition: Box::new(condition),
+                then: Box::new(Block {
+                    stmts: check,
+                    value: Expr::Unit,
+                }),
+                otherwise: Box::new(Block::of(Expr::Unit)),
+                ty: Box::new(Ty::Unit),
+            })];
+        }
+
+        let mut stmts = vec![Stmt::Assign { local: held, value }];
+        stmts.extend(check);
+        Ok(Expr::Block(Box::new(Block {
+            stmts,
+            value: Expr::Local(held),
+        })))
+    }
+
+    fn raw_expr(&mut self, expr: &ast::Expr) -> Result<Expr, Unlowered> {
         Ok(match expr {
             ast::Expr::Int { value, .. } => Expr::Int(*value),
             ast::Expr::Bool { value, .. } => Expr::Bool(*value),
@@ -1689,6 +1917,7 @@ impl Lowering<'_> {
                 body,
                 span,
             } => self.install(handlers, body, *span)?,
+            ast::Expr::Try { operand, span } => self.propagate(operand, *span)?,
             other => {
                 return Err(unlowered("this expression", other.span()));
             }
@@ -2107,6 +2336,93 @@ impl Lowering<'_> {
             stmts: vec![Stmt::Assign { local: held, value }],
             value: Expr::Block(Box::new(chain)),
         })))
+    }
+
+    /// `expr?`, which is the `match` on a `Result` that nobody wrote.
+    ///
+    /// The failure case ends the enclosing function, so the value the whole
+    /// thing has is what the success case carries and the rest of the body
+    /// only runs when there is one.
+    ///
+    /// The failure is rebuilt in the enclosing function's own `Result` rather
+    /// than handed back as it arrived. The two are the same shape today and
+    /// passing it along would work, but only until a layout moves under it,
+    /// and this is the layer that is supposed to know.
+    fn propagate(&mut self, operand: &ast::Expr, span: Span) -> Result<Expr, Unlowered> {
+        let subject = self.ty_at(operand.span())?;
+        let Ty::Aggregate(layout) = subject.clone() else {
+            return Err(unlowered("`?` on something that is not a Result", span));
+        };
+        let (ok, err) = self.outcomes(layout, span)?;
+
+        // Where the failure goes, and the only thing this needs to know about
+        // the function it is written in.
+        let Ty::Aggregate(outer) = self.function.ret.clone() else {
+            return Err(unlowered(
+                "`?` in a function that does not answer with a Result",
+                span,
+            ));
+        };
+        let (_, outer_err) = self.outcomes(outer, span)?;
+
+        let held = self.function.add_local(subject);
+        let value = self.expr(operand)?;
+
+        let failed = Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Discriminant {
+                value: Box::new(Expr::Local(held)),
+                layout,
+            }),
+            right: Box::new(Expr::Int(err as i64)),
+            span,
+        };
+
+        Ok(Expr::Block(Box::new(Block {
+            stmts: vec![
+                Stmt::Assign { local: held, value },
+                Stmt::Discard(Expr::If {
+                    condition: Box::new(failed),
+                    then: Box::new(Block {
+                        stmts: vec![Stmt::Return {
+                            value: Expr::Make {
+                                layout: outer,
+                                variant: outer_err,
+                                fields: vec![Expr::Field {
+                                    value: Box::new(Expr::Local(held)),
+                                    layout,
+                                    variant: err,
+                                    field: 0,
+                                }],
+                            },
+                        }],
+                        value: Expr::Unit,
+                    }),
+                    otherwise: Box::new(Block::of(Expr::Unit)),
+                    ty: Box::new(Ty::Unit),
+                }),
+            ],
+            value: Expr::Field {
+                value: Box::new(Expr::Local(held)),
+                layout,
+                variant: ok,
+                field: 0,
+            },
+        })))
+    }
+
+    /// Which variant of a `Result` layout carries the answer and which the
+    /// failure.
+    ///
+    /// Read off the layout rather than written down, so the one place that
+    /// decides the order stays one place.
+    fn outcomes(&self, layout: crate::LayoutId, span: Span) -> Result<(usize, usize), Unlowered> {
+        let variants = &self.layout(layout).variants;
+        let at = |name: &str| variants.iter().position(|one| one.name == name);
+        match (at("ok"), at("err")) {
+            (Some(ok), Some(err)) => Ok((ok, err)),
+            _ => Err(unlowered("`?` on something that is not a Result", span)),
+        }
     }
 
     /// Whether the value in `held` is one of these variants.

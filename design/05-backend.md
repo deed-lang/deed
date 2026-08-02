@@ -296,6 +296,29 @@ both engines and compares. Type names (`Int`, `String`, `Bool`, `Result`, `List`
 of them passes through the backend is a different, already-answered question (`generics.rs`,
 `result.rs`, `lists.rs`, `host.rs`), not one a function call can ask.
 
+## What a tier costs at runtime, measured in both engines
+
+`design/02-syntax.md` says an obligation the checker proves costs nothing at runtime and
+one it cannot becomes a check. Both halves were only true of the interpreter. The compiled
+backend emitted the `where` clause checks and no refinement checks at all, so `deed check`
+printed "so it becomes a runtime check" over a check that `deed build` did not write, and a
+value that violated its own type went through a compiled program without anything noticing.
+
+Closed under #877. The lowering reads the checker's own table of `Guarded` obligations,
+the same table `deed_driver::Checked::guards` hands the interpreter, and turns each one
+into a bind, a predicate and a `Fail`. The predicate is an ordinary expression and is
+lowered as one, which needed the checker to read it: a refinement predicate had no types
+recorded for it because nothing had ever asked what `value > 0` meant.
+
+Two things that were not obvious. The obligation on a `Result` that came back from a call
+is about the number inside the `ok`, so the check has to look one level in and let an `err`
+through untouched. And a `where` clause an `assert refuses` aims at has no recorded call
+site at all: the checker deliberately records no tier there, since a precondition meant to
+fail is not one anybody discharged, and the backend's rule for dropping a check is "every
+recorded call proved it". So the one caller that needed the check was the one caller
+nothing knew about, and `assert refuses` passed under the interpreter and failed under
+`deed build`.
+
 ## The runner validates the module before it runs one, and a real engine is not tested against
 
 `crates/deed-codegen/src/run.rs` says plainly it is a test oracle, not a WebAssembly

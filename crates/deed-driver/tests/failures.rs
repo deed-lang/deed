@@ -57,6 +57,131 @@ fn a_broken_precondition_says_which_clause_and_whose_fault_it_is() {
     );
 }
 
+/// A refinement the checker could not settle, broken by the value that
+/// reaches it.
+///
+/// Through a call, because a number written on the spot says its own value
+/// and the checker settles that one at compile time.
+const REFINEMENT: &str = "module a\n\n\
+type Positive = Int where value > 0\n\n\
+fn square(n: Int) -> Int { n * n }\n\n\
+fn answer(n: Int) -> Positive { square(n) }\n";
+
+#[test]
+fn a_broken_refinement_says_which_one_it_was() {
+    let trap = stopped(REFINEMENT, "answer", &[Value::I64(0)]);
+    let Trap::Failed { code, message, .. } = trap else {
+        panic!("a broken refinement should say what it was, not {trap}");
+    };
+
+    assert_eq!(code, deed_interp::codes::REFINEMENT_FAILED);
+    assert!(
+        message.contains("Positive"),
+        "the sentence should name the refinement: {message}"
+    );
+}
+
+/// A refinement the checker settled leaves nothing to fail.
+///
+/// The half that would go missing quietly: a backend that emitted no check
+/// at all passes the test above's sibling and this one both, so the pair
+/// only means something together with `a_broken_refinement_says_which_one`.
+#[test]
+fn a_refinement_that_holds_does_not_stop_the_program() {
+    let one = checked(REFINEMENT);
+    let program = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+    let module = compile(&program).expect("this compiles");
+
+    assert_eq!(
+        call(&module, "answer", &[Value::I64(3)]).expect("this should not have stopped"),
+        Some(Value::I64(9))
+    );
+}
+
+/// Both engines stop on the same refinement, in the same place, with the
+/// same sentence.
+#[test]
+fn the_interpreter_and_compiler_stop_the_same_way_on_a_refinement() {
+    let source = format!("{REFINEMENT}\nfn main() -> Int {{ answer(0) }}\n");
+    let one = checked(&source);
+    let program = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+    let module = compile(&program).expect("this compiles");
+    let trap = call(&module, "main", &[]).expect_err("this should have stopped");
+    let Trap::Failed {
+        code,
+        message: compiled_message,
+        span: Some(compiled_span),
+        ..
+    } = trap
+    else {
+        panic!("the compiled engine should have stopped with a span, not {trap}");
+    };
+
+    let mut interpreted = Interpreted::new();
+    interpreted.add(
+        one.file,
+        &one.module,
+        &one.resolutions,
+        one.guards(),
+        one.rows(),
+    );
+    let run = deed_interp::run_main(&interpreted, one.file, std::path::Path::new(""), &[])
+        .expect("the source should define `main`");
+    let failure = run.result.expect_err("the interpreter should also fail");
+
+    assert_eq!(code, failure.code);
+    assert_eq!(compiled_message, failure.message);
+    assert_eq!(compiled_span, failure.primary.span);
+}
+
+/// The other place a refinement lands: inside the `ok` of a `Result` that
+/// came back from a call, where nothing names the number to prove anything
+/// about it.
+///
+/// The `err` case carries no such number, so it has to go through
+/// untouched rather than be run against a predicate it was never about.
+#[test]
+fn a_refinement_inside_a_result_checks_the_payload_and_leaves_the_failure_alone() {
+    let source = "module a\n\n\
+type Positive = Int where value > 0\n\n\
+fn make(n: Int) -> Result<Int, String> {\n\
+    if n == 7 {\n\
+        err(\"seven\")\n\
+    } else {\n\
+        ok(n)\n\
+    }\n\
+}\n\n\
+fn narrowed(n: Int) -> Result<Positive, String> { make(n) }\n\n\
+fn answer(n: Int) -> Int {\n\
+    match narrowed(n) {\n\
+        ok(m) => m,\n\
+        err(why) => 0 - length(why),\n\
+    }\n\
+}\n";
+    let one = checked(source);
+    let program = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+    let module = compile(&program).expect("this compiles");
+
+    assert_eq!(
+        call(&module, "answer", &[Value::I64(3)]).expect("a positive payload is fine"),
+        Some(Value::I64(3))
+    );
+    assert_eq!(
+        call(&module, "answer", &[Value::I64(7)]).expect("an `err` has nothing to check"),
+        Some(Value::I64(-5))
+    );
+
+    let trap = call(&module, "answer", &[Value::I64(0)]).expect_err("zero is not positive");
+    let Trap::Failed { code, message, .. } = trap else {
+        panic!("a broken refinement should say what it was, not {trap}");
+    };
+    assert_eq!(code, deed_interp::codes::REFINEMENT_FAILED);
+    assert!(
+        message.contains("Positive"),
+        "the sentence should name the refinement: {message}"
+    );
+}
+
 /// The compiled program keeps the interpreter's vocabulary rather than
 /// inventing a second one.
 ///
@@ -78,6 +203,10 @@ fn the_codes_the_backend_uses_are_the_interpreters_codes() {
         deed_interp::codes::NOT_RUNNABLE
     );
     assert_eq!(deed_mir::codes::ABANDONED, deed_interp::codes::ABANDONED);
+    assert_eq!(
+        deed_mir::codes::REFINEMENT_FAILED,
+        deed_interp::codes::REFINEMENT_FAILED
+    );
 }
 
 /// The same program, run by the interpreter, files a diagnostic with the

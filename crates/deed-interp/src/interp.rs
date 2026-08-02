@@ -2554,13 +2554,19 @@ impl<'a> Interp<'a> {
 
         let name = self.refinement_name(refinement);
         Err(self.fail(
+            // The sentence names the rule and the label names the value. The
+            // compiled backend stops on the same refinement with the same
+            // sentence, and it has no way to write an arbitrary value into
+            // one, so a value in the sentence would be a second dialect of
+            // the same failure. It is worth more under the source line
+            // anyway, which is where the expression it is about is.
             Diagnostic::error(
                 codes::REFINEMENT_FAILED,
                 self.file(),
                 span,
-                format!("{value} does not satisfy `{name}`"),
+                format!("this value does not satisfy `{name}`"),
             )
-            .with_primary_label("violates the refinement")
+            .with_primary_label(format!("{value} violates the refinement"))
             .with_secondary(predicate.span(), "the predicate it has to satisfy")
             .with_note("the compiler could not prove this statically, so it is checked here"),
         ))

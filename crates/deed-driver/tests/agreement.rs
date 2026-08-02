@@ -351,6 +351,31 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 8,
         },
+        // `?`, which is a `match` on a `Result` that nobody wrote. The
+        // failure case ends the function, so what these count is how far the
+        // body got.
+        Agreed {
+            name: "an error that ends the function it was met in",
+            source: "module a\n\nfn half(n: Int) -> Result<Int, String> {\n    if n == 0 {\n        err(\"zero\")\n    } else {\n        ok(n)\n    }\n}\n\nfn twice(n: Int) -> Result<Int, String> {\n    let one = half(n)?\n    let two = half(one)?\n    ok(one + two)\n}\n\nfn outcome(n: Int) -> Int {\n    match twice(n) {\n        ok(m) => m,\n        err(why) => 0 - length(why),\n    }\n}\n\nfn answer() -> Int { outcome(3) + outcome(0) + outcome(5) }\n\ntest \"the second half never runs when the first failed\" {\n    assert outcome(3) == 6\n    assert outcome(0) == 0 - 4\n    assert answer() == 12\n}\n",
+            call: "answer",
+            expect: 12,
+        },
+        // In the middle of an expression rather than at the head of a `let`,
+        // which is where it is easiest to lower the wrong part.
+        Agreed {
+            name: "an error met inside an argument",
+            source: "module a\n\nfn word(n: Int) -> Result<String, String> {\n    if n == 1 {\n        ok(\"one\")\n    } else {\n        err(\"not one\")\n    }\n}\n\nfn shout(n: Int) -> Result<String, String> {\n    ok(upper(word(n)?))\n}\n\nfn size(n: Int) -> Int {\n    match shout(n) {\n        ok(text) => length(text),\n        err(why) => 0 - length(why),\n    }\n}\n\nfn answer() -> Int { size(1) + size(2) }\n\ntest \"the message comes out as it went in\" {\n    assert size(1) == 3\n    assert size(2) == 0 - 7\n    assert answer() == 0 - 4\n}\n",
+            call: "answer",
+            expect: -4,
+        },
+        // The failure the prelude builds, carried out of a function that only
+        // passes it along.
+        Agreed {
+            name: "an error the prelude wrote",
+            source: "module a\n\nfn pick(xs: List<Int>, i: Int) -> Result<Int, String> {\n    ok(at(xs, i)?)\n}\n\nfn got(i: Int) -> Int {\n    match pick([4, 5, 6], i) {\n        ok(n) => n,\n        err(why) => 0 - length(why),\n    }\n}\n\nfn answer() -> Int { got(0) + got(2) + got(9) }\n\ntest \"an index nobody has says which one and how many there were\" {\n    assert got(0) == 4\n    assert got(9) == 0 - 30\n    assert answer() == 0 - 20\n}\n",
+            call: "answer",
+            expect: -20,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",
@@ -716,6 +741,57 @@ fn a_proven_precondition_compiles_to_nothing_and_a_guarded_one_does_not() {
     assert!(
         sizes[0] < sizes[1],
         "a call the checker could not prove should compile to more than one it could: {sizes:?}"
+    );
+}
+
+/// An `assert refuses` keeps the check it is aiming at, and only that one.
+///
+/// The check is dropped when every recorded call proved the clause, and the
+/// checker records no tier for a call inside `assert refuses`: a
+/// precondition meant to fail is not an obligation anybody discharged. So
+/// the one caller that needs the check is the one caller nothing knew about,
+/// and the clause it aims at has to be named rather than inferred from the
+/// tiers.
+///
+/// Both halves matter. A backend that kept every check whenever any `assert
+/// refuses` appeared would pass the first assertion and lose what the tier
+/// is worth, which is the claim `design/05-backend.md` makes.
+#[test]
+fn an_assert_refuses_keeps_the_check_it_aims_at_and_no_other() {
+    let source = "module a\n\n\
+fn halve(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n / 2\n}\n\n\
+fn twice(n: Int) -> Int\n  where\n    n >= 0,\n{\n    n + n\n}\n\n\
+fn answer() -> Int { twice(4) }\n\n\
+test \"a negative one is turned down\" {\n    assert refuses halve(0 - 1)\n}\n";
+
+    let (_, one) = checked(source);
+    let lowered = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+    let sizes: Vec<usize> = lowered
+        .functions
+        .iter()
+        .map(|function| function.body.stmts.len())
+        .collect();
+
+    let halve = lowered
+        .functions
+        .iter()
+        .position(|function| function.name == "halve")
+        .expect("`halve` is declared");
+    let twice = lowered
+        .functions
+        .iter()
+        .position(|function| function.name == "twice")
+        .expect("`twice` is declared");
+
+    assert!(
+        sizes[halve] > sizes[twice],
+        "`halve` is what the `assert refuses` aims at, so it keeps its check \
+         and `twice` does not: {sizes:?}"
+    );
+    assert_eq!(
+        sizes[twice], 0,
+        "every call to `twice` proved its clause, so it should compile to no \
+         check at all: {sizes:?}"
     );
 }
 

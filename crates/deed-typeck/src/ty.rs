@@ -425,6 +425,7 @@ pub struct Types {
     exprs: HashMap<Span, Ty>,
     obligations: Vec<Obligation>,
     preconditions: Vec<Precondition>,
+    refuted: Vec<String>,
     row_required: HashMap<Span, Vec<RowEntry>>,
 }
 
@@ -448,6 +449,25 @@ impl Types {
 
     pub(crate) fn push_precondition(&mut self, precondition: Precondition) {
         self.preconditions.push(precondition);
+    }
+
+    pub(crate) fn push_refuted(&mut self, callee: String) {
+        if !self.refuted.contains(&callee) {
+            self.refuted.push(callee);
+        }
+    }
+
+    /// Whether an `assert refuses` anywhere is aiming at this function's
+    /// contract.
+    ///
+    /// Not a tier and not an obligation: nobody discharged anything, and
+    /// counting one here would say the corpus is less proven than it is. What
+    /// it is for is the other direction. A callee's runtime check is dropped
+    /// when every call proved the clause, and a call written to break the
+    /// clause is recorded nowhere else, so the one caller that needs the
+    /// check to still be there was the one caller nothing knew about.
+    pub fn is_refuted(&self, callee: &str) -> bool {
+        self.refuted.iter().any(|name| name == callee)
     }
 
     /// Every `where` clause answered for at a call, in the order they were
