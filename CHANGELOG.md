@@ -23,6 +23,10 @@ release notes.
   task which logs is charged with logging. Before this a scheduler's queue had
   to name every effect its tasks might perform, which only the program knows,
   so a scheduler could be written and not shipped.
+- A function value written into a handler's state at a `with` is charged to
+  whoever wrote it there. The state is the one way into a handler that does
+  not go through an operation, so `with RoundRobin { queue: [noisy] }` used to
+  put a task in that nobody answered for.
 - A record pattern binds what it names. `err(OverLimit { limit })` bound
   nothing when `OverLimit` was a record rather than a variant of a choice, and
   the name it did not bind was reported missing where it was used rather than

@@ -1118,6 +1118,7 @@ impl<'a> Checker<'a> {
                 for handler in handlers {
                     row.extend(&self.infer_expr(handler));
                     inside.extend(&self.handler_row(handler));
+                    inside.extend(&self.handed_over(handler));
                     match self.handled_effect(handler) {
                         Some(effect) => {
                             handled.insert(effect);
@@ -1477,6 +1478,39 @@ impl<'a> Checker<'a> {
         row
     }
 
+    /// What a handler is handed at the point it is installed.
+    ///
+    /// A `with` gives the handler its state, and a state field may hold
+    /// function values: a queue of tasks is the shape this exists for. Those
+    /// values run when the handler runs them, so whoever wrote them into the
+    /// installation is who chose them, the same as at a `Task.fork`. Without
+    /// this, seeding a queue at the `with` put tasks in that nobody was
+    /// charged with, which is the one way into a handler's state that does not
+    /// go through an operation.
+    ///
+    /// Every function value in the expression, rather than only the fields
+    /// whose declared type carries a row variable. Which fields those are is
+    /// on the far side of a module boundary for an imported handler, and a
+    /// handler given a function it never calls is a handler with a field it
+    /// does not need.
+    fn handed_over(&mut self, handler: &Expr) -> Row {
+        let Expr::StructLit { fields, .. } = handler else {
+            return Row::new();
+        };
+        let mut row = Row::new();
+        let mut values = Vec::new();
+        for field in fields {
+            if let Some(value) = &field.value {
+                function_values(value, &mut values);
+            }
+        }
+        for value in values {
+            let held = self.function_value_row(value);
+            row.extend(&held);
+        }
+        row
+    }
+
     /// This module's own handle on an effect declared somewhere.
     fn name_for(&self, entry: &deed_resolve::RowEntry) -> Option<DefId> {
         // The language provides it, so it is in scope everywhere and there is
@@ -1636,5 +1670,35 @@ fn find_row_variables(ty: &Type, names: &[&str], found: &mut Vec<(String, Span)>
             find_row_variables(ret, names, found);
         }
         Type::Unit(_) | Type::Error(_) => {}
+    }
+}
+
+/// The function values written inside an expression, as expressions.
+///
+/// A name and a closure are the two things that are one, and a list or a
+/// record literal is how several of them get written in one place. That is
+/// what a handler's state is given at a `with`, which is the only caller.
+///
+/// What it does not reach is a function value that arrives from a call:
+/// `queue: tasks()` hands over whatever `tasks` built, and working out what
+/// that was is a question about the body of another function rather than
+/// about this expression. The row of the call itself is charged the ordinary
+/// way, so what escapes is the row of what it returned.
+fn function_values<'a>(expr: &'a Expr, found: &mut Vec<&'a Expr>) {
+    match expr {
+        Expr::Ident(_) | Expr::Closure { .. } => found.push(expr),
+        Expr::List { elements, .. } => {
+            for element in elements {
+                function_values(element, found);
+            }
+        }
+        Expr::StructLit { fields, .. } => {
+            for field in fields {
+                if let Some(value) = &field.value {
+                    function_values(value, found);
+                }
+            }
+        }
+        _ => {}
     }
 }

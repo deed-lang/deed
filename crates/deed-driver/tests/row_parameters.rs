@@ -244,6 +244,99 @@ fn an_imported_operation_checks_what_it_was_given() {
     );
 }
 
+/// An imported handler's state crosses with its row variable still a
+/// variable.
+///
+/// `with RoundRobin { queue: [noisy] }` hands the handler a task at the point
+/// it is installed, and what the queue holds is `Fn() uses r -> ()`. If `r`
+/// arrives on this side as the name of an effect rather than as a variable,
+/// there is nothing a task could be that fits it. An empty queue does not ask
+/// the question, which is why this one is not empty.
+#[test]
+fn an_imported_handler_is_installed_holding_a_task() {
+    let mut sources = SourceMap::new();
+    let library = shipped_source("std/task").expect("std/task ships");
+    let program = "module p\n\n\
+         use std/task.{Task, RoundRobin, run_up_to}\n\n\
+         effect Log {\n\
+         \x20   fn note(message: String) -> ()\n\
+         }\n\n\
+         fn noisy() -> ()\n\
+         \x20 uses\n\
+         \x20   Log.note,\n\
+         {\n\
+         \x20   Log.note(\"hello\")\n\
+         }\n\n\
+         fn go() -> Int\n\
+         \x20 uses\n\
+         \x20   Log.note,\n\
+         {\n\
+         \x20   with RoundRobin { queue: [noisy] } {\n\
+         \x20       run_up_to(1)\n\
+         \x20   }\n\
+         }\n";
+
+    let a = sources.add("probe.deed".to_string(), program.to_string());
+    let b = sources.add("std/task.deed".to_string(), library.to_string());
+    let codes: Vec<String> = deed_driver::check_all(&sources, &[a, b])
+        .iter()
+        .filter(|checked| checked.file == a)
+        .flat_map(|checked| checked.diagnostics.iter())
+        .filter(|diagnostic| diagnostic.is_error())
+        .map(|diagnostic| diagnostic.code.to_string())
+        .collect();
+
+    assert_eq!(
+        codes,
+        Vec::<String>::new(),
+        "a task did not fit the queue of an imported handler: {codes:?}"
+    );
+}
+
+/// And a task written into the installation is charged to whoever wrote it
+/// there.
+///
+/// The state is the one way into a handler that does not go through an
+/// operation, so it needs the same rule: the task runs, and the function that
+/// chose it is the one that answers for what it performs.
+#[test]
+fn seeding_a_queue_charges_the_caller_too() {
+    let mut sources = SourceMap::new();
+    let library = shipped_source("std/task").expect("std/task ships");
+    let program = "module p\n\n\
+         use std/task.{Task, RoundRobin, run_up_to}\n\n\
+         effect Log {\n\
+         \x20   fn note(message: String) -> ()\n\
+         }\n\n\
+         fn noisy() -> ()\n\
+         \x20 uses\n\
+         \x20   Log.note,\n\
+         {\n\
+         \x20   Log.note(\"hello\")\n\
+         }\n\n\
+         fn go() -> Int {\n\
+         \x20   with RoundRobin { queue: [noisy] } {\n\
+         \x20       run_up_to(1)\n\
+         \x20   }\n\
+         }\n";
+
+    let a = sources.add("probe.deed".to_string(), program.to_string());
+    let b = sources.add("std/task.deed".to_string(), library.to_string());
+    let codes: Vec<String> = deed_driver::check_all(&sources, &[a, b])
+        .iter()
+        .filter(|checked| checked.file == a)
+        .flat_map(|checked| checked.diagnostics.iter())
+        .filter(|diagnostic| diagnostic.is_error())
+        .map(|diagnostic| diagnostic.code.to_string())
+        .collect();
+
+    assert!(
+        codes.contains(&"DEED5001".to_string()),
+        "a task went into the queue at the installation and nobody was charged \
+         with what it performs: {codes:?}"
+    );
+}
+
 /// A handler for an *imported* parameterised effect cannot name its row
 /// variable.
 ///

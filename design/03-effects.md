@@ -534,6 +534,13 @@ It is not a signature, so nobody reads it at a call and nothing has to be able t
 from there. What the queue holds is decided by the forks, and those are checked where they
 are written.
 
+And by the installation, which is the one way into a handler's state that does not go through
+an operation. `with RoundRobin { queue: [noisy] }` puts a task in the queue without a
+`Task.fork` anywhere, so a function value written into a handler at a `with` is charged to
+the function that wrote it there, the same as one passed at a fork. What that does not reach
+is a value arriving from a call, as in `queue: tasks()`: what `tasks` built is a question
+about its body rather than about this expression.
+
 `std/task` is the reason this exists. A library scheduler cannot know what the tasks it is
 handed will perform, so before this its queue had to name a concrete row and every program
 that wanted a scheduler had to copy one. `examples/scheduler.deed` is such a copy, kept for
