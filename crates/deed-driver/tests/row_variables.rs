@@ -61,6 +61,7 @@ fn expect_tests_pass(src: &str) {
         &checked.resolutions,
         checked.guards(),
         checked.rows(),
+        checked.operators(),
     );
     for outcome in run_tests(&program, checked.file) {
         if let Some(failure) = &outcome.failure {

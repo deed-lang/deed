@@ -113,7 +113,7 @@ mod clock_tests {
 use deed_ast::{Item, Module, Outcome};
 use deed_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use deed_effects::Effects;
-use deed_interp::{DeclaredRows, Guard, Guards, RowItem};
+use deed_interp::{DeclaredRows, Guard, Guards, OperatorCalls, RowItem};
 use deed_lexer::tokenize;
 use deed_parser::parse;
 use deed_resolve::{Resolutions, Universe};
@@ -245,6 +245,16 @@ impl Checked {
                 (span, items)
             })
             .collect()
+    }
+
+    /// Which function each bound operator in this file goes to.
+    ///
+    /// Handed to the interpreter for the same reason `guards` is: only the
+    /// checker can answer it. A record value carries its fields and not the
+    /// name of its type, so a `+` between two of them is a question nothing
+    /// downstream could work out on its own.
+    pub fn operators(&self) -> OperatorCalls {
+        self.types.operators().clone()
     }
 }
 

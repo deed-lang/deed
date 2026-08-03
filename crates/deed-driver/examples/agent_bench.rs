@@ -168,6 +168,7 @@ pub fn score(task: &str, answer: &str) -> Score {
             &one.resolutions,
             one.guards(),
             one.rows(),
+            one.operators(),
         );
     }
 

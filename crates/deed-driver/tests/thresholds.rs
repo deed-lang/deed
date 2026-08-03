@@ -55,6 +55,7 @@ fn outcome(source: &str) -> Result<Vec<String>, String> {
             &one.resolutions,
             one.guards(),
             one.rows(),
+            one.operators(),
         );
     }
 
@@ -116,14 +117,15 @@ fn a_passed_function_still_does_what_a_trait_would_have() {
     }
 }
 
-/// No fractional numbers: the remaining cost is that `1/2 + 1/3` has to be
-/// spelled `added(half, third)`, which is an argument about operator
-/// overloading rather than about numbers.
+/// No fractional numbers: the remaining cost is a contract that has to say
+/// something about a fractional quantity.
 ///
-/// The other half of that page's threshold is a contract that has to say
-/// something about a fractional quantity. Nothing in `std/ratio` does, which is
-/// why the proof model was never asked anything, and this counts it rather than
-/// asserting it.
+/// The other half of that page's threshold was that `1/2 + 1/3` had to be
+/// spelled `added(half, third)`, which it called an argument about operator
+/// overloading rather than about numbers. That argument was made and
+/// `std/ratio` binds its three operators, so what is left is this half.
+/// Nothing in `std/ratio` writes a contract, which is why the proof model was
+/// never asked anything, and this counts it rather than asserting it.
 #[test]
 fn nothing_yet_writes_a_contract_about_a_fractional_quantity() {
     let text = shipped_source("std/ratio").expect("std/ratio ships");

@@ -145,6 +145,7 @@ fn the_final_tutorial_program_runs() {
         &checked.resolutions,
         checked.guards(),
         checked.rows(),
+        checked.operators(),
     );
 
     let run = run_main(&program, checked.file, Path::new(""), &[]).expect("there should be a main");

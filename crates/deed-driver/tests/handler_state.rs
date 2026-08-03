@@ -101,6 +101,7 @@ fn answer(src: &str) -> Answer {
         &checked.resolutions,
         checked.guards(),
         checked.rows(),
+        checked.operators(),
     );
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let run = run_main(&program, checked.file, &root, &[]).expect("a `main` to run");
@@ -127,6 +128,7 @@ fn every_test_passes(src: &str) {
         &checked.resolutions,
         checked.guards(),
         checked.rows(),
+        checked.operators(),
     );
 
     let outcomes = run_tests(&program, checked.file);

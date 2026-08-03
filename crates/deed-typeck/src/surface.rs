@@ -41,7 +41,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use deed_ast::{Expr, FieldDecl, Ident, Item, Module, Outcome, Type};
+use deed_ast::{BinaryOp, Expr, FieldDecl, Ident, Item, Module, Outcome, Type};
 use deed_diagnostics::{FileId, Span};
 use deed_resolve::{DefKind, Resolutions, RowLowering};
 
@@ -195,6 +195,14 @@ pub struct SurfaceVariant {
 #[derive(Clone, Debug, Default)]
 pub struct Surface {
     items: BTreeMap<String, SurfaceItem>,
+    /// The operators this module bound, and the function each one means.
+    ///
+    /// The binding travels with the type rather than staying at home. A module
+    /// that imports `Ratio` imports what `+` means on one, because the
+    /// alternative is a type whose arithmetic only works in the file that
+    /// declared it. Where a binding may be *written* is still narrow, and that
+    /// is what keeps the meaning decided in one place.
+    operators: Vec<(BinaryOp, String)>,
 }
 
 impl Surface {
@@ -234,6 +242,17 @@ impl World {
 
     pub fn get(&self, module: &str, name: &str) -> Option<&SurfaceItem> {
         self.modules.get(module)?.get(name)
+    }
+
+    /// Every operator every module in this world bound, with the module that
+    /// bound it.
+    pub fn operators(&self) -> impl Iterator<Item = (&str, BinaryOp, &str)> {
+        self.modules.iter().flat_map(|(path, surface)| {
+            surface
+                .operators
+                .iter()
+                .map(move |(op, function)| (path.as_str(), *op, function.as_str()))
+        })
     }
 
     /// Replaces every mention of a transparent alias with what it names.
@@ -279,7 +298,13 @@ impl World {
                     .iter()
                     .map(|(name, item)| (name.clone(), expand_item(item, &aliases)))
                     .collect();
-                (path.clone(), Surface { items })
+                (
+                    path.clone(),
+                    Surface {
+                        items,
+                        operators: surface.operators.clone(),
+                    },
+                )
             })
             .collect();
 
@@ -745,7 +770,18 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
         }
     }
 
-    Surface { items }
+    let operators = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Operator(decl) if decl.op.is_bindable() => {
+                Some((decl.op, decl.function.name.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+
+    Surface { items, operators }
 }
 
 /// Where each of a declaration's type parameters sits in its list.

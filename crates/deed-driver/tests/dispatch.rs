@@ -31,6 +31,7 @@ fn fails_with(source: &str, expected_code: &str) {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let mut outcomes = run_tests(&program, one.file);
     assert_eq!(outcomes.len(), 1, "expected exactly one test");
@@ -63,6 +64,7 @@ fn ran_main(source: &str) -> deed_interp::Run {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     run_main(&program, one.file, Path::new("."), &[]).expect("the program should have main")
 }
@@ -85,6 +87,7 @@ fn ran(source: &str) -> Vec<deed_interp::TestOutcome> {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let outcomes = run_tests(&program, one.file);
     assert!(!outcomes.is_empty(), "this program declares no test");

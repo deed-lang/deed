@@ -6,7 +6,7 @@
 //!
 //! ```
 //! use deed_diagnostics::SourceMap;
-//! use deed_interp::{DeclaredRows, Guards, Program, run_tests};
+//! use deed_interp::{DeclaredRows, Guards, OperatorCalls, Program, run_tests};
 //! use deed_lexer::tokenize;
 //! use deed_parser::parse;
 //! use deed_resolve::{Universe, resolve};
@@ -35,6 +35,8 @@
 //! // refined, so there is nothing to check at runtime. `DeclaredRows` is what
 //! // each function promised, so that the run can hold it to that. Nothing
 //! // here performs anything, so there is nothing to hold it to either.
+//! // `OperatorCalls` is what each bound operator means, and nothing here
+//! // binds one.
 //! let mut program = Program::new();
 //! program.add(
 //!     file,
@@ -42,6 +44,7 @@
 //!     &resolved.resolutions,
 //!     Guards::new(),
 //!     DeclaredRows::new(),
+//!     OperatorCalls::new(),
 //! );
 //!
 //! let outcomes = run_tests(&program, file);
@@ -62,8 +65,8 @@ pub mod value;
 pub use deed_rt::sandbox;
 
 pub use interp::{
-    DeclaredRows, FunctionProfile, Guard, Guards, Program, RowItem, Run, RuntimeProfile,
-    TestOutcome, run_main, run_main_profiled, run_tests,
+    DeclaredRows, FunctionProfile, Guard, Guards, OperatorCalls, Program, RowItem, Run,
+    RuntimeProfile, TestOutcome, run_main, run_main_profiled, run_tests,
 };
 pub use property::{
     GeneratedInputs, PropertyConfig, PropertyOutcome, generate_inputs, is_testable, run_properties,

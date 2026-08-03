@@ -66,6 +66,7 @@ fn run_map_test(bench: &str, test_name: &str) {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
 

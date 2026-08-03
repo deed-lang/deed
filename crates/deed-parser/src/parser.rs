@@ -644,7 +644,7 @@ impl<'a> Parser<'a> {
                 Some(Elsewhere::NotAThing(note)) => diagnostic = diagnostic.with_note(note),
                 None => {
                     diagnostic = diagnostic.with_note(
-                        "a file contains `deprecated`, `type`, `record`, `choice`, `effect`, `handler`, `fn` and `test` declarations",
+                        "a file contains `deprecated`, `operator`, `type`, `record`, `choice`, `effect`, `handler`, `fn` and `test` declarations",
                     );
                 }
             }

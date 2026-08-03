@@ -75,7 +75,7 @@
 //! nothing makes it ask whether anybody checked them.
 
 use deed_diagnostics::{Diagnostic, SourceMap, render_human};
-use deed_interp::{DeclaredRows, Guards, Program, codes, run_main, run_tests};
+use deed_interp::{DeclaredRows, Guards, OperatorCalls, Program, codes, run_main, run_tests};
 use deed_lexer::tokenize;
 use deed_parser::parse;
 use deed_resolve::{Universe, resolve};
@@ -155,6 +155,7 @@ fn message_in(src: &str, universe: &Universe) -> Reported {
         &resolved.resolutions,
         Guards::new(),
         DeclaredRows::new(),
+        OperatorCalls::new(),
     );
 
     let mut outcomes = run_tests(&program, file);
@@ -188,6 +189,7 @@ fn message_from_main(src: &str, root: &Path) -> Reported {
         &resolved.resolutions,
         Guards::new(),
         DeclaredRows::new(),
+        OperatorCalls::new(),
     );
 
     let run = run_main(&program, file, root, &[]).expect("there should be a main");

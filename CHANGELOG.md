@@ -16,6 +16,17 @@ release notes.
 
 ### Language
 
+- An operator can be bound to a function a module declares: `operator + = added`
+  says that `+`, written between two values of the type that function takes,
+  means it. `+`, `-` and `*`, and nothing else: an operator answers with the
+  type it was handed, and `/` is partial, which this language spells with a
+  `Result`. A binding rather than a definition, so the function keeps its name
+  and can still be passed. The binding travels with the type, so a module that
+  imports `Ratio` imports what `+` means on one. `std/ratio` binds all three,
+  and `1/2 + 1/3` is now written the way arithmetic is written rather than as
+  `added(half, third)`. Ordering is deliberately left out: `<` on a user type
+  meets `sort`, which is the trait question rather than a question about
+  notation.
 - `Int.max` and `Int.min` are numbers. `Int` is a signed 64-bit integer and a
   program had no way to say so: a `where` clause keeping a sum inside the type
   had to carry nineteen digits, and the smallest `Int` had to be written

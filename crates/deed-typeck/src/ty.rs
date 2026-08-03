@@ -427,6 +427,7 @@ pub struct Types {
     preconditions: Vec<Precondition>,
     refuted: Vec<String>,
     row_required: HashMap<Span, Vec<RowEntry>>,
+    operators: HashMap<Span, (String, String)>,
 }
 
 impl Types {
@@ -441,6 +442,25 @@ impl Types {
 
     pub(crate) fn record_expr(&mut self, span: Span, ty: Ty) {
         self.exprs.insert(span, ty);
+    }
+
+    /// Notes that the operator written across `span` means a call to a
+    /// function, named by the module that declares it.
+    ///
+    /// Both engines read this rather than working it out again. Which
+    /// function a `+` between two values goes to is a question about types,
+    /// and only this pass has them: a record value carries its fields and not
+    /// the name of its type, so nothing downstream could answer it. A module
+    /// and a name rather than a definition, because nothing imported the
+    /// function and so nothing here has a definition for it.
+    pub(crate) fn record_operator(&mut self, span: Span, target: (String, String)) {
+        self.operators.insert(span, target);
+    }
+
+    /// Every operator written between two values of a type that bound one,
+    /// with the module and name of the function it means.
+    pub fn operators(&self) -> &HashMap<Span, (String, String)> {
+        &self.operators
     }
 
     pub(crate) fn push_obligation(&mut self, obligation: Obligation) {

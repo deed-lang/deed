@@ -839,6 +839,7 @@ fn program_of(checks: &[Checked]) -> Program<'_> {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
     program
