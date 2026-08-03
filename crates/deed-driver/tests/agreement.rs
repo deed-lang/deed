@@ -1029,8 +1029,105 @@ fn answer(n: Int) -> Int { halve(n) }\n";
     assert!(message.contains("halve"), "{message}");
 }
 
-/// A proof about `Int` is only sound if every engine shares the same boundary.
+/// A `use` that asks for a function gets the types in its signature too.
 ///
+/// `use std/table.{set}` is the whole of what a program writes, and `set`
+/// hands back a `Table<K, V>` over an `Entry<K, V>`. Neither name appears
+/// anywhere on this side, so nothing pulled either across and the backend
+/// refused the program over a type it had never been told about. A keyed
+/// library is the ordinary case: importing the function without importing its
+/// return type is what everybody does.
+#[test]
+fn a_type_a_signature_names_crosses_with_the_function() {
+    let library = "module tools\n\n\
+record Pair<K, V> {\n    key: K,\n    value: V,\n}\n\n\
+type Pairs<K, V> = List<Pair<K, V>>\n\n\
+fn put<K, V>(held: Pairs<K, V>, key: K, value: V) -> Pairs<K, V> {\n\
+\x20   push(held, Pair { key: key, value: value })\n\
+}\n";
+    let caller = "module a\n\n\
+use tools.{put}\n\n\
+fn answer() -> Int { length(put(put([], \"a\", 1), \"b\", 2)) }\n";
+
+    let mut sources = SourceMap::new();
+    let ids = vec![
+        sources.add("a.deed".to_string(), caller.to_string()),
+        sources.add("tools.deed".to_string(), library.to_string()),
+    ];
+    let checks = check_all(&sources, &ids);
+    assert!(
+        !checks[0].has_errors(),
+        "the caller should check: {:?}",
+        checks[0].diagnostics
+    );
+
+    let alongside = vec![deed_mir::Alongside {
+        module: &checks[1].module,
+        resolutions: &checks[1].resolutions,
+        types: &checks[1].types,
+    }];
+    let lowered = deed_mir::lower_alongside(
+        &checks[0].module,
+        &checks[0].resolutions,
+        &checks[0].types,
+        &alongside,
+    )
+    .expect("this lowers");
+    let module = compile(&lowered).expect("this compiles");
+    assert_eq!(
+        call(&module, "answer", &[]).expect("this runs"),
+        Some(Value::I64(2))
+    );
+}
+
+/// A function from another module, named rather than called.
+///
+/// The keyed libraries take a comparator, and the comparator a program passes
+/// is one of theirs: `insert(m, k, v, cmp_string)` names a function it
+/// imported. Naming one declared here already worked, and the wrapper an
+/// imported one needs is the same wrapper over a body lowered in its own
+/// module.
+#[test]
+fn a_function_from_another_module_can_be_named_as_a_value() {
+    let library = "module tools\n\n\
+fn twice(n: Int) -> Int { n + n }\n\n\
+fn apply(step: Fn(Int) -> Int, n: Int) -> Int { step(n) }\n";
+    let caller = "module a\n\n\
+use tools.{twice, apply}\n\n\
+fn answer() -> Int { apply(twice, 21) }\n";
+
+    let mut sources = SourceMap::new();
+    let ids = vec![
+        sources.add("a.deed".to_string(), caller.to_string()),
+        sources.add("tools.deed".to_string(), library.to_string()),
+    ];
+    let checks = check_all(&sources, &ids);
+    assert!(
+        !checks[0].has_errors(),
+        "the caller should check: {:?}",
+        checks[0].diagnostics
+    );
+
+    let alongside = vec![deed_mir::Alongside {
+        module: &checks[1].module,
+        resolutions: &checks[1].resolutions,
+        types: &checks[1].types,
+    }];
+    let lowered = deed_mir::lower_alongside(
+        &checks[0].module,
+        &checks[0].resolutions,
+        &checks[0].types,
+        &alongside,
+    )
+    .expect("this lowers");
+    let module = compile(&lowered).expect("this compiles");
+    assert_eq!(
+        call(&module, "answer", &[]).expect("this runs"),
+        Some(Value::I64(42))
+    );
+}
+
+/// A proof about `Int` is only sound if every engine shares the same boundary.
 /// `grow` is Proven because `Int` does not wrap: `n + 1` either answers with
 /// another positive integer or fails with arithmetic that has no answer. If the
 /// backend wrapped here, this would come back `i64::MIN` and the proof would be

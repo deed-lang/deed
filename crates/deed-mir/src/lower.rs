@@ -506,6 +506,25 @@ fn lower_impl(
             let owner = units[from].handler_from.get(&name).copied().unwrap_or(from);
             units[at].handler_from.insert(name.clone(), owner);
         }
+        // A function's signature names types, and a `use` that asked for the
+        // function had no reason to ask for them as well. `use
+        // std/table.{set}` is the whole of what a program writes, and `set`
+        // hands back a `Table<K, V>` over an `Entry<K, V>`, neither of which
+        // appears anywhere on this side.
+        if let Some(declaration) = units[from].declarations.get(&name).copied() {
+            let mut named = Vec::new();
+            for param in &declaration.sig.params {
+                if let Some(ty) = &param.ty {
+                    names_in_type(ty, &mut named);
+                }
+            }
+            if let Some(ret) = &declaration.sig.ret {
+                names_in_type(ret, &mut named);
+            }
+            for name in named {
+                pending.push((at, from, name));
+            }
+        }
     }
 
     let mut shapes = std::mem::take(&mut program.layouts);
@@ -1004,6 +1023,10 @@ struct Lowering<'a> {
     /// state outside a handler impossible to lower rather than merely
     /// rejected.
     state: Option<(crate::LayoutId, Local)>,
+    /// The shape the expression being lowered has to come out as, when
+    /// something around it says so. Only an equality does today, and only a
+    /// `Result` with a half nobody wrote down reads it.
+    expected: Option<Ty>,
     function: Function,
     /// Where each bound name lives.
     slots: HashMap<DefId, Local>,
@@ -1228,6 +1251,7 @@ impl<'a> Lowering<'a> {
             nominals: &unit.nominals,
             answered,
             state: None,
+            expected: None,
             function,
             slots: HashMap::new(),
             guards: &unit.guards,
@@ -1318,14 +1342,16 @@ impl Lowering<'_> {
 
         let bindings = self.type_arguments(declaration, generics, args, span)?;
 
-        let mut spelled: Vec<String> = generics
+        // In the order the declaration wrote them. Sorted, `keys<Int, Str>`
+        // and `keys<Str, Int>` were one name, so the second call reached the
+        // first call's body and read the wrong half of every entry.
+        let spelled: Vec<String> = generics
             .iter()
             .map(|generic| match bindings.get(generic.name.as_str()) {
                 Some(ty) => format!("{ty:?}"),
                 None => "?".to_string(),
             })
             .collect();
-        spelled.sort();
         let copy = format!("{name}<{}>", spelled.join(", "));
 
         if let Some(found) = self.instantiated.get(&copy) {
@@ -1396,6 +1422,20 @@ impl Lowering<'_> {
                     bindings.insert(name, lowered);
                 }
             }
+        }
+
+        // What is left is a parameter no argument said anything about, which
+        // means no value of that type reached the call and none can come back
+        // holding one. `holds([], key)` over a `Table<K, V>` is the shape: the
+        // list is empty, so `V` is a type the call has no example of.
+        //
+        // A layout is still needed, because the empty list has an element
+        // width, so it stands in as a number for the same reason an empty
+        // list's element type does. See `Lowering::convert`.
+        for generic in generics {
+            bindings
+                .entry(generic.name.clone())
+                .or_insert_with(|| Ty::Int);
         }
         Ok(bindings)
     }
@@ -1608,14 +1648,13 @@ impl Lowering<'_> {
             ));
         }
 
-        let mut spelled: Vec<String> = generics
+        let spelled: Vec<String> = generics
             .iter()
             .map(|generic| match bindings.get(generic.name.as_str()) {
                 Some(ty) => format!("{ty:?}"),
                 None => "?".to_string(),
             })
             .collect();
-        spelled.sort();
         let copy = format!("{path}/{name}<{}>", spelled.join(", "));
         if let Some(found) = self.instantiated.get(&copy) {
             return Ok(Some(*found));
@@ -1778,12 +1817,25 @@ impl Lowering<'_> {
                         Ty::Aggregate(id) if self.layout(id).name.starts_with("Result<") => {
                             Ty::Aggregate(id)
                         }
-                        _ => {
-                            return Err(unlowered(
-                                "a `Result` whose halves this cannot work out",
-                                span,
-                            ));
-                        }
+                        // Neither half is written here and the function this
+                        // is inside does not hand one back either, which is
+                        // where a test block asking a library a question
+                        // lands. What it is being compared against says the
+                        // shape when there is one, and otherwise the half
+                        // nobody settled stands in as a number, the same as a
+                        // type argument nothing says.
+                        _ => match self.expected.clone() {
+                            Some(Ty::Aggregate(id))
+                                if self.layout(id).name.starts_with("Result<") =>
+                            {
+                                Ty::Aggregate(id)
+                            }
+                            _ => {
+                                let ok = self.type_argument(ok, span)?;
+                                let err = self.type_argument(err, span)?;
+                                Ty::Aggregate(result_layout(&mut self.shapes, ok, err))
+                            }
+                        },
                     }
                 }
             }
@@ -1804,7 +1856,7 @@ impl Lowering<'_> {
                 let name = &self.resolutions.def(*def).name;
                 let actuals = args
                     .iter()
-                    .map(|arg| self.convert(arg, span))
+                    .map(|arg| self.type_argument(arg, span))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ty::Aggregate(instantiate_nominal(
                     name.as_str(),
@@ -1834,7 +1886,7 @@ impl Lowering<'_> {
                 } else {
                     let actuals = args
                         .iter()
-                        .map(|arg| self.convert(arg, span))
+                        .map(|arg| self.type_argument(arg, span))
                         .collect::<Result<Vec<_>, _>>()?;
                     Ty::Aggregate(instantiate_nominal(
                         name.as_str(),
@@ -1849,6 +1901,20 @@ impl Lowering<'_> {
             }
             other => lower_ty(other, span)?,
         })
+    }
+
+    /// One type argument of a generic type, where not knowing it is allowed.
+    ///
+    /// `Empty` is a `Map<K, V>` and nothing at that name says what either
+    /// stands for, because the value holds none of either. The layout still
+    /// needs one, so it stands in as a number, which is what an empty list's
+    /// element type already does and for the same reason: there is no element
+    /// to read it off.
+    fn type_argument(&mut self, ty: &CheckedTy, span: Span) -> Result<Ty, Unlowered> {
+        match ty {
+            CheckedTy::Unknown => Ok(Ty::Int),
+            other => self.convert(other, span),
+        }
     }
 
     /// Which `Result` layout an `ok` or an `err` is building.
@@ -2126,9 +2192,11 @@ impl Lowering<'_> {
                         }
 
                         // A function used as a value, which is a closure
-                        // that captured nothing.
+                        // that captured nothing. Declared here or imported:
+                        // both are a name that is not a local and not a
+                        // variant, and the value is built the same way.
                         if let Some(def) = self.resolutions.resolution(ident.span)
-                            && self.by_def.contains_key(&def)
+                            && self.names_a_function(def)
                         {
                             return self.function_value(&ident.name, def, ident.span);
                         }
@@ -2161,10 +2229,19 @@ impl Lowering<'_> {
                 op, lhs, rhs, span, ..
             } => {
                 let operand = self.ty_at(lhs.span())?;
+                let left = self.expr(lhs)?;
+                // The left side is the shape the right side has to be, and it
+                // is the only thing that says so when the right side is
+                // `ok("twenty")`: what an `ok` holds says nothing about what
+                // the `err` half would have held, and two `Result` layouts
+                // hold different widths.
+                let outer = self.expected.replace(operand.clone());
+                let right = self.expr(rhs);
+                self.expected = outer;
                 Expr::Binary {
                     op: binary(*op, &operand, *span)?,
-                    left: Box::new(self.expr(lhs)?),
-                    right: Box::new(self.expr(rhs)?),
+                    left: Box::new(left),
+                    right: Box::new(right?),
                     span: *span,
                 }
             }
@@ -3356,6 +3433,18 @@ impl Lowering<'_> {
         })))
     }
 
+    /// Whether a name is a function, wherever it was declared.
+    fn names_a_function(&self, def: DefId) -> bool {
+        match self.resolutions.def(def).kind {
+            deed_resolve::DefKind::Function => true,
+            deed_resolve::DefKind::Import => self
+                .resolutions
+                .import(def)
+                .is_some_and(|export| export.kind == deed_resolve::ExportKind::Function),
+            _ => false,
+        }
+    }
+
     /// A function used as a value, which is a closure that captured nothing.
     ///
     /// A call through a value passes the environment first and a call by name
@@ -3365,14 +3454,27 @@ impl Lowering<'_> {
     /// function rather than one per mention, so `map(step, xs)` written twice
     /// costs one.
     fn function_value(&mut self, name: &str, def: DefId, span: Span) -> Result<Expr, Unlowered> {
-        let func = *self
-            .by_def
-            .get(&def)
-            .ok_or_else(|| unlowered(&format!("the name `{name}`"), span))?;
-        let declaration = *self
-            .declarations
-            .get(name)
-            .ok_or_else(|| unlowered(&format!("the name `{name}`"), span))?;
+        // A function from another module is lowered in its own module first,
+        // the same way a call into one is, and the wrapper is built over what
+        // came back. `insert(m, k, v, cmp_string)` is the shape: the callback
+        // a keyed library takes is named rather than written out, and the name
+        // is an import.
+        let known = (self.at == 0).then(|| self.by_def.get(&def)).flatten();
+        let func = match known {
+            Some(func) => *func,
+            None => self
+                .crossed(def, &[], span)?
+                .ok_or_else(|| unlowered(&format!("the name `{name}`"), span))?,
+        };
+        let declaration = match self.declarations.get(name).copied() {
+            Some(declaration) => declaration,
+            None => self
+                .resolutions
+                .import_module(def)
+                .and_then(|path| self.units.iter().find(|unit| unit.path == path))
+                .and_then(|unit| unit.declarations.get(name).copied())
+                .ok_or_else(|| unlowered(&format!("the name `{name}`"), span))?,
+        };
 
         // The environment a value carries. Nothing is captured, so it holds
         // the code pointer and nothing else.
@@ -3446,7 +3548,18 @@ impl Lowering<'_> {
     ///
     /// A record's only variant carries the record's own name, so one lookup
     /// answers both shapes.
-    fn variant_named(&self, name: &str, span: Span) -> Result<(crate::LayoutId, usize), Unlowered> {
+    ///
+    /// A generic choice has no layout until something asks for one at a set
+    /// of type arguments, so a variant of one is not found by name at all.
+    /// `Empty` and `Node` in `std/map` are that shape, and every test in that
+    /// file writes one. What the checker recorded at the name says which
+    /// `Map<K, V>` it is, and building that layout is the same work a call
+    /// returning one would have done.
+    fn variant_named(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Result<(crate::LayoutId, usize), Unlowered> {
         if let Some(id) = self.layouts.get(name) {
             return Ok((*id, 0));
         }
@@ -3459,6 +3572,46 @@ impl Lowering<'_> {
                 return Ok((crate::LayoutId(index), at));
             }
         }
+        if let Ok(Ty::Aggregate(id)) = self.ty_at(span)
+            && let Some(at) = self
+                .layout(id)
+                .variants
+                .iter()
+                .position(|variant| variant.name == name)
+        {
+            return Ok((id, at));
+        }
+
+        // A variant of a generic choice, written where nothing says what the
+        // arguments are. `Empty` is that: it carries no fields, so a `Map<K,
+        // V>` holding none of either is the same value whatever `K` and `V`
+        // turn out to be, and the tag is all there is to build. The arguments
+        // stand in as numbers for the reason an empty list's element type
+        // does.
+        let generic = self.nominals.iter().find_map(|(nominal, held)| {
+            let Nominal::Choice(choice) = held else {
+                return None;
+            };
+            choice
+                .variants
+                .iter()
+                .position(|variant| variant.name.name == name)
+                .map(|at| (nominal.clone(), choice.generics.len(), at))
+        });
+        if let Some((nominal, arity, at)) = generic {
+            let args = vec![Ty::Int; arity];
+            let id = instantiate_nominal(
+                &nominal,
+                &args,
+                span,
+                self.layouts,
+                self.aliases,
+                self.nominals,
+                &mut self.shapes,
+            )?;
+            return Ok((id, at));
+        }
+
         Err(unlowered(&format!("the name `{name}`"), span))
     }
 }
