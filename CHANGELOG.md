@@ -256,6 +256,16 @@ release notes.
 
 ### Measurements
 
+- Most of what a compiled program wastes is one shape. `for` is the only loop
+  and a `for` is a fold, so the lists a walk builds on the way exist only as
+  values of its accumulator, and whether any of them can be observed is a
+  question about what the body does with that one name. Counted over the
+  shipped library and the corpus: 44 walks mention their accumulator only as
+  `push`'s first argument or as the value of a branch handing it on, against
+  34 of every other shape. Those 44 have nothing holding an intermediate list,
+  so there is no reason for them to be separate lists.
+  `design/decisions/2026-08-04-a-walk-that-only-pushes.md` proposes what to do
+  about it; nothing is written yet.
 - Installing a handler is free. A handler's state is reserved from the frame
   stack now rather than the value heap, so it is given back when the block
   ends the way the frame already was, and a walk that installs one every turn
