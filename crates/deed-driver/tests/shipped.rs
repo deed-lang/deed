@@ -240,3 +240,71 @@ fn every_function_a_shipped_module_declares_is_named_by_one_of_its_tests() {
         "no shipped module declares a function, so this asked nothing"
     );
 }
+
+/// How much of the library the compiled backend actually runs.
+///
+/// Compiling a module is not compiling its generic functions. Those are
+/// lowered once per set of type arguments, so a module full of them can build
+/// cleanly, be counted in "the backend compiles the corpus", and have no
+/// generic body ever put through the backend at all. `std/map` was twenty
+/// tests and two of them ran.
+///
+/// Named per module rather than totalled, for the same reason
+/// `crates/deed-driver/tests/corpus_tests.rs` names files: a number that fell
+/// says one stopped running, and a list says which. Every one of them runs
+/// now, so this is the whole library and it is worth keeping that way.
+#[test]
+fn the_compiled_backend_runs_the_whole_library() {
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+    for module in shipped_modules() {
+        let text = shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
+    }
+    let checks = check_all(&sources, &ids);
+
+    for (at, module) in shipped_modules().enumerate() {
+        let subject = &checks[at];
+        let alongside: Vec<deed_mir::Alongside<'_>> = checks
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != at)
+            .map(|(_, checked)| deed_mir::Alongside {
+                module: &checked.module,
+                resolutions: &checked.resolutions,
+                types: &checked.types,
+            })
+            .collect();
+
+        let written = subject
+            .module
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::Test(_)))
+            .count();
+
+        let lowered = deed_mir::lower_with_tests_alongside(
+            &subject.module,
+            &subject.resolutions,
+            &subject.types,
+            &alongside,
+        )
+        .unwrap_or_else(|refused| panic!("`{module}` should lower: {refused}"));
+        assert_eq!(
+            lowered.tests.len(),
+            written,
+            "`{module}` writes {written} tests and the backend lowered {}",
+            lowered.tests.len()
+        );
+
+        let compiled = deed_codegen::compile(&lowered)
+            .unwrap_or_else(|refused| panic!("`{module}` should compile: {refused}"));
+        for test in &lowered.tests {
+            assert!(
+                deed_codegen::call(&compiled, &test.body, &[]).is_ok(),
+                "`{}` in `{module}` passes in the interpreter and not in the backend",
+                test.name
+            );
+        }
+    }
+}

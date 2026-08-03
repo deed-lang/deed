@@ -96,6 +96,30 @@ release notes.
 
 ### Tools
 
+- The compiled backend runs the whole shipped library. It ran 59 of the 91
+  tests those modules carry, and `std/map` was twenty of which two ran. A
+  module's generic functions are lowered once per set of type arguments, so a
+  module full of them builds cleanly with no generic body ever put through the
+  backend at all, and "the backend compiles the corpus" said nothing about
+  them. `crates/deed-driver/tests/shipped.rs` runs every one now, and
+  `examples/tree.deed` joined the corpus files whose test blocks run compiled.
+- Two copies of a generic function that differ only in the order of their type
+  arguments are two copies. The name a copy was cached under sorted them, so
+  `keys<Int, Str>` and `keys<Str, Int>` were one entry and the second call
+  reached the first call's body.
+- A `use` that asks for a function gets the types in its signature too.
+  `use std/table.{set}` is the whole of what a program writes, and `set` hands
+  back a `Table<K, V>` over an `Entry<K, V>`; neither name appears on the
+  importing side, so the backend refused the program over a type it had never
+  been told about.
+- A function from another module can be named as a value. The keyed libraries
+  take a comparator and the one a program passes is one of theirs, so
+  `insert(m, k, v, cmp_string)` was refused.
+- A type parameter no argument says anything about, and a variant of a generic
+  choice written where nothing says which one, stand in as numbers.
+  `holds([], key)` over a `Table<K, V>` has no example of `V`, and `Empty`
+  carries none of either half of a `Map<K, V>`; both still need a layout for a
+  value that holds nothing.
 - A closure whose body lifts anything points at itself. The compiled backend
   reserved the closure's place before lowering its body, and a body that
   lifted a function of its own, another closure, a copy of a generic function,

@@ -254,6 +254,7 @@ fn compiled_tests_run_in_the_expected_files() {
         "tasks.deed",
         "tic_tac_toe.deed",
         "todo.deed",
+        "tree.deed",
         "using_list.deed",
         "workers.deed",
     ];
