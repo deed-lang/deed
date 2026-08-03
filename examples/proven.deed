@@ -118,6 +118,29 @@ fn unbounded_span(low: Int, high: Int) -> Positive
     high - low
 }
 
+// Proven from a bound the program can name. `Int` is a signed 64-bit integer
+// and until `Int.max` existed there was no way to say so: the clause had to
+// carry the nineteen digits, or the function had to be written without a
+// bound and take the runtime check.
+//
+// The bound is what makes this Proven rather than Guarded. `n + 100` on an
+// unbounded `n` has no answer at the top of the range, and overflow stops the
+// program rather than wrapping, so the checker is right to want it said.
+fn headroom(n: Int) -> Positive
+  where
+    n >= 0,
+    n <= Int.max - 100,
+{
+    n + 100
+}
+
+// The other end, which is the one with no literal. Negation is an operator
+// rather than part of a literal, so the digits of the smallest `Int` are one
+// past the largest and there is nothing a literal alone could say.
+fn is_the_floor(n: Int) -> Bool {
+    n == Int.min
+}
+
 // Proven across a call. `always_one` promises what it returns, the promise is
 // read here, and the proof one function did is worth something to the next.
 // Without this every abstraction boundary would restart the reasoning from
@@ -354,6 +377,11 @@ test "the guarded ones are checked when they run" {
     assert one_more(1) == 2
     assert unbounded_span(2, 5) == 3
     assert squared(7) == 49
+    assert headroom(5) == 105
+    assert is_the_floor(Int.min)
+    assert !is_the_floor(0)
+    assert to_string(Int.min) == "-9223372036854775808"
+    assert Int.max == 9223372036854775807
 }
 
 // The half that was missing. Every one of these is a `Guarded` obligation

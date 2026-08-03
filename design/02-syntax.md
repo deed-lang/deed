@@ -760,7 +760,7 @@ by reason.
 
 | Tier or reason | Count |
 | --- | --- |
-| Proven | 72 |
+| Proven | 75 |
 | Tested | 8 |
 | Guarded, nothing narrowed this name | 2 |
 | Guarded, nothing established this length | 1 |
@@ -1001,6 +1001,13 @@ for the same wrong reason.
 It is also strictly more precise away from the edges. `n + 1` for an unbounded `n` used to
 be "anything at all" and is now everything except the smallest integer, which is exactly the
 set of values it can produce.
+
+The other half of the same argument is being able to name the edge. `Int.max` and `Int.min`
+are numbers wherever they are written, and folded where they are written, so
+`where n <= Int.max - 100` is a bound the checker settles rather than one it guards. Before
+them a clause about the edge had to carry nineteen digits, and the smallest `Int` had to be
+spelled `0 - 9223372036854775807 - 1`, because negation is an operator rather than part of a
+literal and the digits it would apply to are one past the largest.
 
 A solver would decide most of these and would be a hard dependency at check time, which P9
 has a budget against. Whether that trade is right is an open question, not a settled one.

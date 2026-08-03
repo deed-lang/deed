@@ -2443,6 +2443,10 @@ impl Lowering<'_> {
                 name,
                 span,
             } => {
+                if let Some(limit) = expr.int_limit() {
+                    return Ok(Expr::Int(limit));
+                }
+
                 let receiver_ty = self.ty_at(receiver.span())?;
 
                 // `sys.console`. A capability has no fields to read: it is a

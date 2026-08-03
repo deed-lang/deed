@@ -690,6 +690,35 @@ impl Expr {
     pub fn is_error(&self) -> bool {
         matches!(self, Expr::Error(_))
     }
+
+    /// `Int.max` and `Int.min`, as the number they stand for.
+    ///
+    /// `Int` is a signed 64-bit integer and a program has to be able to say
+    /// so. It reads as a field access because that is what it looks like, and
+    /// every pass that has to know asks here rather than matching the shape
+    /// again: the checker for the type and the range, the interpreter and the
+    /// backend for the value.
+    ///
+    /// Shape alone. A file that declares something called `Int` is warned that
+    /// it hid a builtin, and the checker asks whether the member resolved
+    /// before it asks this; everything downstream of the checker is looking at
+    /// a program that already type checked.
+    pub fn int_limit(&self) -> Option<i64> {
+        let Expr::Field { receiver, name, .. } = self else {
+            return None;
+        };
+        let Expr::Ident(ident) = &**receiver else {
+            return None;
+        };
+        if ident.name != "Int" {
+            return None;
+        }
+        match name.name.as_str() {
+            "max" => Some(i64::MAX),
+            "min" => Some(i64::MIN),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

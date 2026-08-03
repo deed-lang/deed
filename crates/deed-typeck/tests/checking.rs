@@ -1381,49 +1381,39 @@ fn naming_a_type_as_a_value_is_reported_with_its_wording() {
 
 /// `Int.max` is the same shape and a different question: what is being reached
 /// for is the number, and there is one. Answering "`Int` is a type" is true
-/// and leaves the reader where they were.
+/// and leaves the reader where they were, and so did answering with the digits
+/// and asking for them to be written out.
 #[test]
-fn reaching_for_the_limit_of_a_type_is_answered_with_the_number() {
-    for (word, literal) in [
-        ("max", "9223372036854775807"),
-        ("min", "0 - 9223372036854775807 - 1"),
-    ] {
+fn the_limit_of_a_type_is_the_number_it_stands_for() {
+    for word in ["max", "min"] {
         let source = format!("module a\n\nfn f(n: Int) -> Bool {{ n <= Int.{word} }}\n");
-        let (sources, checked) = check_source(&source);
-        assert_eq!(codes_of(&checked.diagnostics), vec![codes::NO_LIMIT_NAME]);
-
-        let text = rendered(&sources, &checked.diagnostics);
-        assert!(text.contains("there is no name for the"), "{text}");
-        assert!(text.contains("signed 64-bit integer"), "{text}");
-        assert_eq!(
-            checked.diagnostics[0].fix.as_ref().expect("a fix").edits[0].replacement,
-            literal
+        let (_, checked) = check_source(&source);
+        assert!(
+            checked.diagnostics.is_empty(),
+            "`Int.{word}` should be a number: {:?}",
+            codes_of(&checked.diagnostics)
         );
     }
 }
 
-/// The repair has to leave a program, so the number it writes is one the
-/// lexer takes. The smallest `Int` has no literal, which is why it is written
-/// as a subtraction rather than as digits with a `-` in front of them.
+/// And the number is one the checker can reason with, not only one it accepts.
+/// A clause keeping a sum inside the type is the case this exists for:
+/// overflow stops the program, so the bound is worth writing and worth
+/// settling ahead of time.
 #[test]
-fn the_number_the_repair_writes_is_one_that_can_be_written() {
-    for word in ["max", "min"] {
-        let source = format!("module a\n\nfn f(n: Int) -> Bool {{ n <= Int.{word} }}\n");
-        let fix = {
-            let (_, checked) = check_source(&source);
-            checked.diagnostics[0].fix.clone().expect("a fix")
-        };
-        let mut repaired = source.clone();
-        for edit in fix.edits.iter().rev() {
-            repaired.replace_range(edit.span.as_range(), &edit.replacement);
-        }
-        let (_, checked) = check_source(&repaired);
-        assert!(
-            checked.diagnostics.is_empty(),
-            "{repaired}\n{:?}",
-            codes_of(&checked.diagnostics)
-        );
-    }
+fn a_clause_bounded_by_the_limit_is_proven_rather_than_guarded() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         fn headroom(n: Int) -> Int\n\
+         \x20 where\n\
+         \x20   n >= 0,\n\
+         \x20   n <= Int.max - 100,\n\
+         {\n\
+         \x20   n + 100\n\
+         }\n\n\
+         fn call() -> Int { headroom(5) }\n",
+    );
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
 }
 
 /// A field that is not one of the two is an ordinary missing field, and a
@@ -1432,9 +1422,8 @@ fn the_number_the_repair_writes_is_one_that_can_be_written() {
 fn another_field_on_a_type_name_is_left_to_the_message_it_had() {
     let (_, checked) = check_source("module a\n\nfn f() -> Int { Int.width }\n");
     assert!(
-        !codes_of(&checked.diagnostics).contains(&codes::NO_LIMIT_NAME),
-        "{:?}",
-        codes_of(&checked.diagnostics)
+        !checked.diagnostics.is_empty(),
+        "`Int.width` is not a number and not a field of anything"
     );
 
     let (_, checked) = check_source(

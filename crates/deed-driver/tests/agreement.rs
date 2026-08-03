@@ -253,9 +253,27 @@ fn programs() -> Vec<Agreed> {
         },
         Agreed {
             name: "the smallest number written out",
-            source: "module a\n\nfn answer() -> Int { length(to_string(0 - 9223372036854775807 - 1)) }\n\ntest \"the number with no positive counterpart\" {\n    assert to_string(0 - 9223372036854775807 - 1) == \"-9223372036854775808\"\n    assert answer() == 20\n}\n",
+            source: "module a\n\nfn answer() -> Int { length(to_string(Int.min)) }\n\ntest \"the number with no positive counterpart\" {\n    assert to_string(Int.min) == \"-9223372036854775808\"\n    assert Int.min == 0 - 9223372036854775807 - 1\n    assert answer() == 20\n}\n",
             call: "answer",
             expect: 20,
+        },
+        // The two ends, as numbers rather than as the digits a program used
+        // to have to carry. Both engines fold them the same way or the sum
+        // below comes out wrong.
+        Agreed {
+            name: "the limits of the type",
+            source: "module a\n\nfn same(got: Int, want: Int) -> Int {\n    if got == want {\n        1\n    } else {\n        0\n    }\n}\n\nfn answer() -> Int {\n    same(Int.max, 9223372036854775807) +\n        same(Int.min, 0 - 9223372036854775807 - 1) +\n        same(Int.max - Int.max, 0) +\n        same(Int.min + Int.max, 0 - 1) +\n        same(Int.max / 2 + 1, 4611686018427387904)\n}\n\ntest \"the range is what the type says it is\" {\n    assert answer() == 5\n}\n",
+            call: "answer",
+            expect: 5,
+        },
+        // Negating the smallest has no answer, and stopping is the answer
+        // both engines give. Wrapping to itself is what a language that lets
+        // this through would do.
+        Agreed {
+            name: "negating the number with no positive counterpart",
+            source: "module a\n\nfn flip(n: Int) -> Int { 0 - n }\n\nfn answer() -> Int { flip(0 - 5) }\n\ntest \"there is nothing to negate it to\" {\n    assert answer() == 5\n    assert flip(Int.max) == Int.min + 1\n}\n",
+            call: "answer",
+            expect: 5,
         },
         Agreed {
             name: "the same value a number of times",

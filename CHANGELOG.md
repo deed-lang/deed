@@ -16,6 +16,12 @@ release notes.
 
 ### Language
 
+- `Int.max` and `Int.min` are numbers. `Int` is a signed 64-bit integer and a
+  program had no way to say so: a `where` clause keeping a sum inside the type
+  had to carry nineteen digits, and the smallest `Int` had to be written
+  `0 - 9223372036854775807 - 1` because negation is an operator rather than
+  part of a literal. Both are folded where they are written, so a clause
+  bounded by one is settled at check time rather than guarded.
 - An effect takes row variables: `effect Task<uses r>`. They are in scope in
   its operation signatures and in the state of any handler implementing it, so
   a handler can hold a `List<Fn() uses r -> ()>`, and each call to an operation
@@ -35,6 +41,11 @@ release notes.
 
 ### Diagnostics
 
+- A digit run one past the largest `Int` says what to write instead. It is the
+  number somebody reaches for when they want the smallest one, and the answer
+  is `Int.min` rather than digits. DEED4031, which used to answer `Int.max`
+  with the digits and ask for them to be written out, is gone: the name is a
+  value now.
 - A refinement that fails at runtime says which refinement in the sentence and
   which value in the label under the source line, rather than putting the value
   in the sentence. Both engines stop on one now and only one of them can write
