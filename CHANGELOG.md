@@ -256,6 +256,17 @@ release notes.
 
 ### Measurements
 
+- What a compiled program allocates is what its memory reached, because
+  nothing gives any of it back except a handler frame. So the number worth
+  having is not the total but how much of the total is still worth anything,
+  and building a list by folding allocates the whole answer once per element:
+  129 times over at 256, and at 1024 the answer is eight kilobytes and
+  building it exhausts a megabyte. Every one of those copies dies the moment
+  the next is made and nothing else points at it, which is the case reuse
+  analysis answers and a collector would only clean up afterwards. It also
+  answers the first open question of the reclamation decision, which asked
+  what workload would make the limit unacceptable: a keyed structure of a few
+  hundred entries.
 - The tree-versus-table crossover, compiled. The decision in
   `design/decisions/2026-07-31-tree-vs-table-decision.md` was measured on the
   interpreter and predicted that a compiled backend would move the crossover
