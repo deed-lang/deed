@@ -43,9 +43,9 @@ Compiled programs that allocate in long-running loops still exhaust linear memor
 
 ## Open Questions (required)
 
-- What is the first host workload where the measured allocation limit is unacceptable in practice.
+- ~~What is the first host workload where the measured allocation limit is unacceptable in practice.~~ Answered below: a keyed structure of a few hundred entries.
 - Which representation and ownership metadata are needed to stage reference counting and in-place reuse incrementally.
-- Whether handler frames should move to a separate reclaimed stack before full value-level reclamation lands.
+- ~~Whether handler frames should move to a separate reclaimed stack before full value-level reclamation lands.~~ Answered below: yes, and they have.
 
 ## Update: handler frames are reclaimed
 
@@ -65,10 +65,43 @@ Measured, in `crates/deed-driver/tests/compiled_memory.rs`:
 
 The sixteen bytes still leaking per turn are the handler's state cell and the unit its operation answers with. The state cell is the interesting one: `DEED4030` already refuses a closure over handler state, so its lifetime is the block as well, and it could go the same way for the same reason. That is the next step and it is deliberately not taken here, because it needs the state's address to stop being a heap address and every operation call reads it.
 
+## Update: the first open question is answered, and the waste has a shape
+
+The first open question asked what the first host workload is where the limit is unacceptable in practice. It is a keyed structure of a few hundred entries, which is a log file with a few hundred distinct sources rather than anything pathological.
+
+`design/decisions/2026-07-31-tree-vs-table-decision.md` found it while measuring something else: compiled, neither `std/table` nor `std/map` survives a thousand keys. The list reaches the end of memory copying itself, and the tree reaches it two hundred inserts later. At that size the question those two modules were compared to answer does not arise, because neither of them runs.
+
+The shape of the waste is measured now as well, and it decides the direction. Because nothing is given back, **what a compiled program allocates in total is what its memory reached**, so the number that matters is not how much it allocates but how much of that is still worth anything. Building a list by folding `push` onto an accumulator, with the list being walked subtracted off both sides:
+
+```
+length     written out  folded       copies
+16         136          1224         9x
+64         520          17160        33x
+256        2056         265224       129x
+1024       8200         out of memory
+```
+
+The ratio is `n / 2`, which is what `1 + 2 + ... + n` over `n` comes to: the fold allocates the whole answer once per element. Every one of those copies is dead the moment the next one is made, and nothing else points at it, because the accumulator of a `for` is unshared by construction.
+
+The last row is the whole argument in one line. **The answer is eight kilobytes and building it exhausts a megabyte.** Nothing about the result is large; what does not fit is the road to it.
+
+That is the case reuse analysis answers, and it is most of the total. A tracing collector would reclaim the same bytes later; reuse would not allocate them at all, and would need no layout metadata, no root discovery and no runtime, which were the three reasons the collector was turned down above.
+
+`design/hash-map-requirements.md` reached the same place from the other side. Its second gap is "build and update without pathological copying", it picks Perceus-style reuse analysis over adding mutation, and its reasoning is about this language specifically: Deed is immutable at the language level and has a single mutable runtime representation, so reuse keeps the source semantics and takes the win where aliasing permits. Two documents wanting the same machinery for different reasons is the strongest argument either of them has.
+
+Held by `crates/deed-driver/tests/allocation.rs`, which asserts the shape rather than the number: a fold allocates on the order of a copy per turn, and building the same thing twice allocates twice. Both are counts of bytes a compiled program produces, so they are the same on every machine, and a failure means something started reclaiming or reusing and this page should be reread.
+
+The decision itself does not change here. This is still not the change that ships a collector, and reuse analysis is still a cross-cutting compiler and runtime project rather than a surgical fix. What changed is that the deferral is now against a measured limit that has been reached and a direction the measurement points at, rather than against a limit nobody had met.
+
 ## References
 
 - `crates/deed-codegen/src/layout.rs`
 - `crates/deed-codegen/src/compile.rs`
 - `crates/deed-codegen/src/run.rs`
 - `crates/deed-driver/tests/compiled_memory.rs`
+- `crates/deed-driver/tests/allocation.rs`
+- `crates/deed-driver/examples/interpreting.rs`
+- `design/hash-map-requirements.md`
+- `design/decisions/2026-07-31-tree-vs-table-decision.md`
 - deed-lang/deed#674
+- deed-lang/deed#898

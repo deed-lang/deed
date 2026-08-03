@@ -76,6 +76,8 @@ fn main() {
     println!();
     per_map_compiled();
     println!();
+    per_allocation();
+    println!();
     real_program();
     println!();
     notes();
@@ -821,8 +823,14 @@ fn compiled_row(size: usize, sources: fn(usize, usize) -> (String, String)) {
 }
 
 /// What counting one compiled program came back with.
+///
+/// The number's unit is whatever the table asking for it says: instructions
+/// in one, bytes in the other. What the two share is that both are counts a
+/// compiled program produces rather than measurements of the machine it ran
+/// on, so a document keeping one does not have to be reread when the machine
+/// changes.
 enum Counted {
-    Steps(u64),
+    Number(u64),
     /// The backend could not lower or compile it.
     NotCompiled,
     /// It compiled and then stopped. An answer about the backend rather than
@@ -834,7 +842,7 @@ impl Counted {
     /// Per operation, which is the unit every number in this table is in.
     fn each(self, turns: usize) -> Counted {
         match self {
-            Counted::Steps(steps) => Counted::Steps(steps / turns as u64),
+            Counted::Number(count) => Counted::Number(count / turns as u64),
             other => other,
         }
     }
@@ -843,7 +851,7 @@ impl Counted {
 impl std::fmt::Display for Counted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Counted::Steps(steps) => write!(f, "{steps}"),
+            Counted::Number(count) => write!(f, "{count}"),
             Counted::NotCompiled => write!(f, "not compiled"),
             Counted::Stopped(trap) => write!(f, "{trap}"),
         }
@@ -853,9 +861,116 @@ impl std::fmt::Display for Counted {
 /// The walk minus the setup, so what is left is the operations alone.
 fn counted(all: &[(&str, String)], setup: &[(&str, String)]) -> Counted {
     match (steps_compiled(all, 0), steps_compiled(setup, 0)) {
-        (Counted::Steps(all), Counted::Steps(setup)) => Counted::Steps(all.saturating_sub(setup)),
-        (Counted::Steps(_), other) | (other, _) => other,
+        (Counted::Number(all), Counted::Number(setup)) => {
+            Counted::Number(all.saturating_sub(setup))
+        }
+        (Counted::Number(_), other) | (other, _) => other,
     }
+}
+
+// -- what a compiled program allocates ---------------------------------------
+
+/// How much of what a compiled program allocates is a copy of something that
+/// died at the same moment.
+///
+/// The total matters more here than it would anywhere else, because nothing
+/// gives memory back except a handler frame: what a compiled program allocates
+/// in total is what its memory reached. So the question is not how much it
+/// allocates but how much of that is still worth anything.
+///
+/// The same list, built two ways at the same length. Written out as a literal,
+/// which allocates the answer and nothing else. Folded with `push`, which
+/// allocates the answer and every intermediate copy on the way, and each of
+/// those copies is dead the moment the next one is made and is pointed at by
+/// nothing else. Both rows have the list they walk subtracted out, so what is
+/// left is the structure being built.
+///
+/// The difference is what a reuse analysis would have back, and it is the
+/// whole of the difference between a program that fits in a module's memory
+/// and one that does not: `design/decisions/2026-07-31-tree-vs-table-decision.md`
+/// found that neither keyed module survives a thousand keys, and `std/table`
+/// is a list its `set` copies once per key.
+fn per_allocation() {
+    println!("bytes a compiled program allocates to build a list of this length");
+    println!("length     written out  folded       copies");
+    println!("------------------------------------------------------");
+
+    for size in LENGTHS {
+        if size == 0 {
+            continue;
+        }
+        let base = bytes_compiled(&[("bench.deed", walked_source(size))], 0);
+        let written = allocated(&literal_source(size), &base);
+        let folded = allocated(&folded_source(size), &base);
+
+        match (&written, &folded) {
+            (Counted::Number(written), Counted::Number(folded)) if *written > 0 => println!(
+                "{size:<10} {written:<12} {folded:<12} {}x",
+                folded / written
+            ),
+            _ => println!("{size:<10} written out: {written}, folded: {folded}"),
+        }
+    }
+}
+
+/// One program's allocation with the list it walks taken off it.
+fn allocated(source: &str, base: &Counted) -> Counted {
+    match (
+        bytes_compiled(&[("bench.deed", source.to_string())], 0),
+        base,
+    ) {
+        (Counted::Number(all), Counted::Number(base)) => Counted::Number(all.saturating_sub(*base)),
+        (Counted::Number(_), other) => match other {
+            Counted::Number(count) => Counted::Number(*count),
+            Counted::NotCompiled => Counted::NotCompiled,
+            Counted::Stopped(trap) => Counted::Stopped(trap.clone()),
+        },
+        (other, _) => other,
+    }
+}
+
+/// The list both rows walk, and nothing else, so it can be subtracted off.
+fn walked_source(size: usize) -> String {
+    format!(
+        "module bench
+
+test \"walked\" {{
+    let source = repeat(0, {size})
+    assert length(source) == {size}
+}}
+"
+    )
+}
+
+/// The answer, written out. This is what the built structure is worth.
+fn literal_source(size: usize) -> String {
+    let written = std::iter::repeat_n("0", size)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "module bench
+
+test \"walked\" {{
+    let source = repeat(0, {size})
+    let built = [{written}]
+    assert length(built) == length(source)
+}}
+"
+    )
+}
+
+/// The same answer, folded. Every turn copies the list it was handed.
+fn folded_source(size: usize) -> String {
+    format!(
+        "module bench
+
+test \"walked\" {{
+    let source = repeat(0, {size})
+    let built = for n in source with out = [] {{ push(out, n) }}
+    assert length(built) == length(source)
+}}
+"
+    )
 }
 
 // -- a real program ----------------------------------------------------------
@@ -1065,6 +1180,25 @@ fn time(files: &[(&str, String)], entry: usize) -> Duration {
 /// One run rather than [`ROUNDS`] of them: the count is the same every time,
 /// which is most of why it is the number this table reports.
 fn steps_compiled(files: &[(&str, String)], entry: usize) -> Counted {
+    match compiled_run(files, entry) {
+        Ok(outcome) => Counted::Number(outcome.steps),
+        Err(other) => other,
+    }
+}
+
+/// The same run, counted in bytes it allocated.
+///
+/// Nothing gives memory back except a handler frame, so this is also what the
+/// program's memory reached. See
+/// `design/decisions/2026-07-31-compiled-memory-reclamation.md`.
+fn bytes_compiled(files: &[(&str, String)], entry: usize) -> Counted {
+    match compiled_run(files, entry) {
+        Ok(outcome) => Counted::Number(outcome.allocated),
+        Err(other) => other,
+    }
+}
+
+fn compiled_run(files: &[(&str, String)], entry: usize) -> Result<deed_codegen::Outcome, Counted> {
     let mut sources = SourceMap::new();
     let ids: Vec<_> = files
         .iter()
@@ -1099,23 +1233,23 @@ fn steps_compiled(files: &[(&str, String)], entry: usize) -> Counted {
         &subject.types,
         &alongside,
     ) else {
-        return Counted::NotCompiled;
+        return Err(Counted::NotCompiled);
     };
     let Ok(compiled) = deed_codegen::compile(&lowered) else {
-        return Counted::NotCompiled;
+        return Err(Counted::NotCompiled);
     };
     let Some(test) = lowered.tests.first() else {
-        return Counted::NotCompiled;
+        return Err(Counted::NotCompiled);
     };
 
     match deed_codegen::call_within(&compiled, &test.body, &[], COMPILED_BUDGET) {
-        Ok(outcome) => Counted::Steps(outcome.steps),
+        Ok(outcome) => Ok(outcome),
         // A contract or an assertion that did not hold means the benchmark
         // program is wrong, which is not something to report in a column.
         Err(trap @ deed_codegen::Trap::Failed { .. }) => {
             panic!("`{}` should have passed in the backend: {trap}", test.name)
         }
-        Err(trap) => Counted::Stopped(trap),
+        Err(trap) => Err(Counted::Stopped(trap)),
     }
 }
 

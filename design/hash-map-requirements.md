@@ -91,6 +91,14 @@ Reopen immediate additions when measured workloads show that current keyed-colle
 
 If those measurements appear, first addition should be reuse-analysis-backed update behavior, then the minimum contiguous representation needed to support it.
 
+## Update: the copying was measured, from the other side
+
+The trigger above asked for repeated evidence that allocation or copying dominates keyed operations in realistic programs. Part of it arrived while measuring something else, and it is worth recording here because it is about this page's second gap rather than about the page that found it.
+
+Compiled, building a list of 256 by folding onto an accumulator allocates 129 times what the answer is worth, which is a copy of the whole structure per element. `std/table` is a list its `set` copies once per key, so a keyed structure of a few hundred entries does not fit in a compiled module's memory at all: `design/decisions/2026-07-31-tree-vs-table-decision.md` found that neither `std/table` nor `std/map` survives a thousand keys.
+
+That is one of the three conditions rather than all of them, and it is about the compiled backend rather than about a hash map, so nothing is reopened here. What it does is agree with this page from the other direction. `design/decisions/2026-07-31-compiled-memory-reclamation.md` needs reuse analysis so that a compiled program stops allocating the copies at all, and this page wants it so that keyed updates stop copying. Two documents that arrived at the same machinery for different reasons is a better argument for it than either of them makes alone.
+
 ---
 
 AI assistance disclosure: This document was drafted with AI coding assistant support and then reviewed for alignment with issues #617 and #618.
