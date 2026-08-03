@@ -92,6 +92,13 @@ pub struct Outcome {
     pub value: Option<Value>,
     /// How many bytes were allocated while this call was running.
     pub allocated: u64,
+    /// How many instructions the call ran.
+    ///
+    /// The same count the budget below spends, reported rather than only
+    /// enforced. Two programs compared by this number are compared in a unit
+    /// that does not depend on the machine the comparison ran on, which is
+    /// what a measurement kept in a document needs to be.
+    pub steps: u64,
 }
 
 impl std::fmt::Display for Trap {
@@ -284,8 +291,24 @@ pub fn call(module: &Module, name: &str, args: &[Value]) -> Result<Option<Value>
     Ok(call_measured(module, name, args)?.value)
 }
 
-/// Calls an exported function and reports what it allocated.
+/// Calls an exported function and reports what it allocated and ran.
 pub fn call_measured(module: &Module, name: &str, args: &[Value]) -> Result<Outcome, Trap> {
+    call_within(module, name, args, BUDGET)
+}
+
+/// The same, counting up to a budget the caller names.
+///
+/// [`BUDGET`] is the size of a test, not the size of every question a compiled
+/// program can be asked. Walking a thousand-key structure a thousand times
+/// runs more instructions than any test should and is still a finite,
+/// deterministic number, so measuring it means saying how far you are willing
+/// to count rather than moving the limit tests run under.
+pub fn call_within(
+    module: &Module,
+    name: &str,
+    args: &[Value],
+    budget: u64,
+) -> Result<Outcome, Trap> {
     if let Err(crate::validate::Invalid(reason)) = crate::validate::validate(module) {
         return Err(Trap::Invalid(reason));
     }
@@ -299,7 +322,7 @@ pub fn call_measured(module: &Module, name: &str, args: &[Value]) -> Result<Outc
 
     let mut run = Run {
         module,
-        fuel: BUDGET,
+        fuel: budget,
         memory: memory_of(module),
         host: None,
     };
@@ -313,6 +336,7 @@ pub fn call_measured(module: &Module, name: &str, args: &[Value]) -> Result<Outc
         Ok(value) => Ok(Outcome {
             value,
             allocated: run.bump().saturating_sub(before),
+            steps: budget.saturating_sub(run.fuel),
         }),
     }
 }
