@@ -1390,6 +1390,13 @@ fn interval_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
     }
     match expr {
         Expr::Int { value, .. } => Range::exactly(*value),
+        // `Int.max` is the number, so a clause naming it is one the checker
+        // can settle rather than guard. Every other field read is a value
+        // nothing here knows.
+        Expr::Field { .. } => match expr.int_limit() {
+            Some(value) => Range::exactly(value),
+            None => Range::ANY,
+        },
         Expr::Ident(_) => match term_of(expr, env) {
             Some(term) => facts.get(term),
             None => Range::ANY,

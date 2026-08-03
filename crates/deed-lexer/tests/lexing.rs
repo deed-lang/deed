@@ -755,6 +755,21 @@ fn the_negative_boundary_is_a_minus_and_an_oversized_digit_run() {
     assert_eq!(lexed.tokens[1].kind, TokenKind::Int(i64::MAX));
 }
 
+/// And it says what to write instead, which is a name rather than digits.
+///
+/// One past the largest is the digit run somebody reaches for when they want
+/// the smallest `Int`, and it is the only oversized literal with an answer.
+/// A number that is merely too big gets the limit and nothing else.
+#[test]
+fn the_digit_run_one_past_the_largest_names_the_smallest_int() {
+    let text = message("9223372036854775808");
+    assert!(text.contains("one past the largest"), "{text}");
+    assert!(text.contains("`Int.min`"), "{text}");
+
+    let text = message("99999999999999999999");
+    assert!(!text.contains("`Int.min`"), "{text}");
+}
+
 /// One message per literal, which is what the stand-in tokens are for. An
 /// error token would be an expression the parser cannot read, and it would say
 /// so in the same column the lexer has just written in.

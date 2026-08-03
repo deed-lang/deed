@@ -3130,13 +3130,12 @@ impl<'a> Checker<'a> {
 
             Expr::Ident(ident) => self.ident_ty(ident),
 
-            Expr::Field {
-                receiver,
-                name,
-                span,
-            } => {
-                if let Some(ty) = self.limit_of_a_type(receiver, name, *span) {
-                    return ty;
+            Expr::Field { receiver, name, .. } => {
+                // `Int.max` is a number rather than a field of anything, and
+                // the resolution is asked first so a file that declared its
+                // own `Int` still means what it wrote.
+                if self.resolutions.resolution(name.span).is_none() && expr.int_limit().is_some() {
+                    return Ty::Int;
                 }
                 let receiver_ty = self.infer(receiver);
                 // A resolved name here means the `.` was qualification, which
@@ -3550,59 +3549,6 @@ impl<'a> Checker<'a> {
             },
             None => Ty::Unknown,
         }
-    }
-
-    /// `Int.max` and `Int.min`, which are names this language does not have.
-    ///
-    /// The answer used to be that `Int` is a type and not a value, which is
-    /// true and is not the question. `Int` is a signed 64-bit integer and
-    /// nothing in a program says so, and the place it comes up is a `where`
-    /// clause that has to keep a sum inside the type, which is a real thing to
-    /// want: overflow stops the program, so a property test finds the edge
-    /// even when nothing else does.
-    ///
-    /// The number is what there is, so it is named and written. A function
-    /// returning it would arrive at a clause as a call rather than as a
-    /// number, and a bound nothing can read is not a bound.
-    fn limit_of_a_type(&mut self, receiver: &Expr, name: &Ident, span: Span) -> Option<Ty> {
-        let Expr::Ident(ident) = receiver else {
-            return None;
-        };
-        if ident.name != "Int" || self.resolutions.resolution(name.span).is_some() {
-            return None;
-        }
-        let (which, literal) = match name.name.as_str() {
-            "max" => ("largest", i64::MAX.to_string()),
-            // Written as a subtraction because the smallest `Int` has no
-            // literal: negation is an operator, and the digits it would be
-            // applied to are one past the largest.
-            "min" => ("smallest", format!("0 - {} - 1", i64::MAX)),
-            _ => return None,
-        };
-        self.emit(
-            Diagnostic::error(
-                codes::NO_LIMIT_NAME,
-                self.file,
-                span,
-                format!("there is no name for the {which} `Int`"),
-            )
-            .with_primary_label(format!("write {literal}"))
-            .with_note(
-                "`Int` is a signed 64-bit integer, and the number is the only way to say so \
-                 in a program",
-            )
-            .with_note(
-                "a clause about a bound is read where it is written, so the bound has to be a \
-                 number there rather than a call that would produce one",
-            )
-            .with_fix(
-                format!("write the {which} `Int`"),
-                span,
-                literal,
-                Applicability::MachineApplicable,
-            ),
-        );
-        Some(Ty::Int)
     }
 
     fn not_a_value(&mut self, ident: &Ident, what: &str) {

@@ -1037,6 +1037,9 @@ impl<'a> Interp<'a> {
                 {
                     return Ok(Value::variant(origin, variant, Fields::new()));
                 }
+                if let Some(limit) = expr.int_limit() {
+                    return Ok(Value::Int(limit));
+                }
 
                 let receiver_value = self.eval(receiver)?;
                 self.field(&receiver_value, receiver.span(), name)

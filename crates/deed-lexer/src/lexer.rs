@@ -452,16 +452,25 @@ impl<'a> Lexer<'a> {
         match i64::from_str_radix(&digits, radix) {
             Ok(value) => TokenKind::Int(value),
             Err(_) => {
-                self.emit(
-                    Diagnostic::error(
-                        codes::INTEGER_OUT_OF_RANGE,
-                        self.file,
-                        literal_span,
-                        "integer literal does not fit in `Int`",
-                    )
-                    .with_primary_label("too large")
-                    .with_note(format!("`Int` holds values up to {}", i64::MAX)),
-                );
+                let mut diagnostic = Diagnostic::error(
+                    codes::INTEGER_OUT_OF_RANGE,
+                    self.file,
+                    literal_span,
+                    "integer literal does not fit in `Int`",
+                )
+                .with_primary_label("too large")
+                .with_note(format!("`Int` holds values up to {}", i64::MAX));
+                // The one number a reader is likely to have meant. Negation
+                // is an operator rather than part of a literal, so the digits
+                // of the smallest `Int` are one past the largest and there is
+                // nothing a literal alone could say.
+                if u128::from_str_radix(&digits, radix) == Ok(i64::MAX as u128 + 1) {
+                    diagnostic = diagnostic.with_note(
+                        "this is one past the largest, and `-` is an operator rather than part \
+                         of a literal, so the smallest `Int` is written `Int.min`",
+                    );
+                }
+                self.emit(diagnostic);
                 // The largest there is, which is the number the note names.
                 // Nothing runs a file that does not check, and a token the
                 // parser cannot read would only say so twice.

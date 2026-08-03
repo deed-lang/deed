@@ -61,6 +61,8 @@ fn main() {
     println!();
     per_map();
     println!();
+    per_map_compiled();
+    println!();
     real_program();
     println!();
     notes();
@@ -588,52 +590,36 @@ test \"inserting\" {{
 
 // -- what std/map costs, vs std/table -----------------------------------------
 
-/// `std/map`'s `get` (lookup) and `insert`, against a map with a given number
-/// of distinct keys, run alongside `std/table` at the same sizes.
-///
-/// The question from deed-lang/deed#616: does the red-black tree beat the
-/// list at the sizes real programs reach? Both halves use the same LENGTHS
-/// and the same PUSHES so the numbers sit next to each other rather than in
-/// separate tables.
-///
-/// Same worst-case discipline as `per_table`: lookup asks for the last key
-/// inserted (in string sort order it may not be the last node visited, but
-/// it is always a key that is present), and insert adds a key that is not
-/// already there so the whole tree is traversed.
-fn per_map() {
+/// The files a keyed benchmark needs, by which library it uses.
+fn table_files(bench: String) -> Vec<(&'static str, String)> {
     let table = deed_driver::shipped_source("std/table")
         .expect("a module that ships has a source")
         .to_string();
+    vec![("bench.deed", bench), ("<shipped>/std/table.deed", table)]
+}
+
+fn map_files(bench: String) -> Vec<(&'static str, String)> {
     let map = deed_driver::shipped_source("std/map")
         .expect("a module that ships has a source")
         .to_string();
-
-    let table_files = |bench: String| {
-        vec![
-            ("bench.deed", bench),
-            ("<shipped>/std/table.deed", table.clone()),
-        ]
-    };
     let list = deed_driver::shipped_source("std/list")
         .expect("a module that ships has a source")
         .to_string();
-    let map_files = |bench: String| {
-        vec![
-            ("bench.deed", bench),
-            ("<shipped>/std/map.deed", map.clone()),
-            ("<shipped>/std/list.deed", list.clone()),
-        ]
-    };
+    vec![
+        ("bench.deed", bench),
+        ("<shipped>/std/map.deed", map),
+        ("<shipped>/std/list.deed", list),
+    ]
+}
 
-    println!("{PUSHES} lookups: std/table vs std/map, by number of keys");
-    println!("keys       table      table/key  map        map/key");
-    println!("------------------------------------------------------");
-
-    for size in LENGTHS {
-        let last = size.saturating_sub(1);
-
-        let table_source = format!(
-            "module bench
+/// Look the last key up, `PUSHES` times, over a structure holding `size` keys.
+///
+/// Worst-case discipline on both sides: the key asked for is one that is
+/// present, so the list walks all of it and the tree walks to a leaf.
+fn lookup_sources(size: usize) -> (String, String) {
+    let last = size.saturating_sub(1);
+    let table = format!(
+        "module bench
 
 use std/table.{{set, or_else}}
 
@@ -646,10 +632,9 @@ test \"lookup\" {{
     assert got == turns * {last}
 }}
 "
-        );
-
-        let map_source = format!(
-            "module bench
+    );
+    let map = format!(
+        "module bench
 
 use std/map.{{insert, get, cmp_string, Map, Empty}}
 
@@ -671,8 +656,67 @@ test \"lookup\" {{
     assert got == turns * {last}
 }}
 "
-        );
+    );
+    (table, map)
+}
 
+/// Insert a key that is not already there, `PUSHES` times.
+///
+/// The map half avoids calling `size` on the result, which would be O(N) and
+/// would dominate the O(log N) insert. The body runs the insert and adds one,
+/// so `got == turns` confirms nothing was skipped without walking the result.
+fn insert_sources(size: usize) -> (String, String) {
+    let table = format!(
+        "module bench
+
+use std/table.{{set}}
+
+test \"inserting\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
+    let turns = {PUSHES}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{ sum + length(set(base, \"new\", 0)) }}
+    assert got == turns * {}
+}}
+",
+        size + 1
+    );
+    let map = format!(
+        "module bench
+
+use std/map.{{insert, cmp_string, Empty}}
+
+test \"inserting\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with m = Empty {{ insert(m, to_string(i), i, cmp_string) }}
+    let turns = {PUSHES}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{
+        let _m = insert(base, \"new\", 0, cmp_string)
+        sum + 1
+    }}
+    assert got == turns
+}}
+"
+    );
+    (table, map)
+}
+
+/// `std/map`'s `get` (lookup) and `insert`, against a map with a given number
+/// of distinct keys, run alongside `std/table` at the same sizes.
+///
+/// The question from deed-lang/deed#616: does the red-black tree beat the
+/// list at the sizes real programs reach? Both halves use the same LENGTHS
+/// and the same PUSHES so the numbers sit next to each other rather than in
+/// separate tables.
+fn per_map() {
+    println!("{PUSHES} lookups: std/table vs std/map, by number of keys");
+    println!("keys       table      table/key  map        map/key");
+    println!("------------------------------------------------------");
+
+    for size in LENGTHS {
+        let (table_source, map_source) = lookup_sources(size);
         let t = time(&table_files(table_source), 0);
         let m = time(&map_files(map_source), 0);
 
@@ -691,46 +735,7 @@ test \"lookup\" {{
     println!("------------------------------------------------------");
 
     for size in LENGTHS {
-        let table_source = format!(
-            "module bench
-
-use std/table.{{set}}
-
-test \"inserting\" {{
-    let keys = repeat(0, {size})
-    let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
-    let turns = {PUSHES}
-    let ns = repeat(0, turns)
-    let got = for _n in ns with sum = 0 {{ sum + length(set(base, \"new\", 0)) }}
-    assert got == turns * {}
-}}
-",
-            size + 1
-        );
-
-        // The map insert benchmark avoids calling `size` on the result, which
-        // would be O(N) and would dominate the O(log N) insert. Instead the
-        // body runs the insert and adds 1, so `got == turns` confirms nothing
-        // was skipped without walking the result tree.
-        let map_source = format!(
-            "module bench
-
-use std/map.{{insert, cmp_string, Empty}}
-
-test \"inserting\" {{
-    let keys = repeat(0, {size})
-    let base = for _k at i in keys with m = Empty {{ insert(m, to_string(i), i, cmp_string) }}
-    let turns = {PUSHES}
-    let ns = repeat(0, turns)
-    let got = for _n in ns with sum = 0 {{
-        let _m = insert(base, \"new\", 0, cmp_string)
-        sum + 1
-    }}
-    assert got == turns
-}}
-"
-        );
-
+        let (table_source, map_source) = insert_sources(size);
         let t = time(&table_files(table_source), 0);
         let m = time(&map_files(map_source), 0);
 
@@ -741,6 +746,50 @@ test \"inserting\" {{
             millis(m),
             nanos(m / PUSHES as u32),
         );
+    }
+}
+
+/// The same two questions, compiled.
+///
+/// The open question left by `design/decisions/2026-07-31-tree-vs-table-decision.md`:
+/// the crossover it measured is the interpreter's, and the tree's constant
+/// factor is mostly the per-call cost the interpreter pays per tree level.
+/// Compiled code pays less for a call, so the crossover should move toward
+/// smaller N. This is that measurement, over the same programs, so the two
+/// sets of numbers are about the same work.
+fn per_map_compiled() {
+    println!("{PUSHES} lookups, compiled: std/table vs std/map");
+    println!("keys       table      table/key  map        map/key");
+    println!("------------------------------------------------------");
+
+    for size in LENGTHS {
+        let (table_source, map_source) = lookup_sources(size);
+        compiled_row(size, &table_files(table_source), &map_files(map_source));
+    }
+
+    println!();
+    println!("{PUSHES} inserts of a key not already there, compiled");
+    println!("keys       table      table/ins  map        map/ins");
+    println!("------------------------------------------------------");
+
+    for size in LENGTHS {
+        let (table_source, map_source) = insert_sources(size);
+        compiled_row(size, &table_files(table_source), &map_files(map_source));
+    }
+}
+
+fn compiled_row(size: usize, table: &[(&str, String)], map: &[(&str, String)]) {
+    let t = time_compiled(table, 0);
+    let m = time_compiled(map, 0);
+    match (t, m) {
+        (Some(t), Some(m)) => println!(
+            "{size:<10} {:<10} {:<10} {:<10} {}",
+            millis(t),
+            nanos(t / PUSHES as u32),
+            millis(m),
+            nanos(m / PUSHES as u32),
+        ),
+        _ => println!("{size:<10} the backend refused one of them"),
     }
 }
 
@@ -938,6 +987,66 @@ fn time(files: &[(&str, String)], entry: usize) -> Duration {
         best = best.min(elapsed);
     }
     best
+}
+
+/// The same, through the compiled backend.
+///
+/// `None` when the backend cannot lower or compile the program, which is the
+/// honest answer for a row rather than a zero that reads like a fast one.
+/// Compiling is outside the measurement for the same reason checking is.
+fn time_compiled(files: &[(&str, String)], entry: usize) -> Option<Duration> {
+    let mut sources = SourceMap::new();
+    let ids: Vec<_> = files
+        .iter()
+        .map(|(name, text)| sources.add(*name, text.clone()))
+        .collect();
+
+    let checks = check_all(&sources, &ids);
+    for checked in &checks {
+        if let Some(diagnostic) = checked.diagnostics.iter().find(|d| d.is_error()) {
+            panic!(
+                "the benchmark should check cleanly, and it does not:\n{}",
+                deed_diagnostics::render_human(&sources, diagnostic)
+            );
+        }
+    }
+
+    let subject = &checks[entry];
+    let alongside: Vec<deed_mir::Alongside<'_>> = checks
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| *at != entry)
+        .map(|(_, checked)| deed_mir::Alongside {
+            module: &checked.module,
+            resolutions: &checked.resolutions,
+            types: &checked.types,
+        })
+        .collect();
+
+    let lowered = deed_mir::lower_with_tests_alongside(
+        &subject.module,
+        &subject.resolutions,
+        &subject.types,
+        &alongside,
+    )
+    .ok()?;
+    let compiled = deed_codegen::compile(&lowered).ok()?;
+    let test = lowered.tests.first()?;
+
+    let mut best = Duration::MAX;
+    for _ in 0..ROUNDS {
+        let start = Instant::now();
+        let outcome = deed_codegen::call(&compiled, &test.body, &[]);
+        let elapsed = start.elapsed();
+        assert!(
+            outcome.is_ok(),
+            "`{}` should have passed in the backend: {:?}",
+            test.name,
+            outcome.err()
+        );
+        best = best.min(elapsed);
+    }
+    Some(best)
 }
 
 fn notes() {

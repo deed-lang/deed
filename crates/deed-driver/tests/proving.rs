@@ -1355,9 +1355,9 @@ fn the_proven_example_says_what_it_claims() {
         rendered(&sources, &checked.diagnostics)
     );
 
-    // Forty-five proven and two guarded, and the file explains both. If
+    // Forty-eight proven and two guarded, and the file explains both. If
     // either number moves, the comments in the example are wrong.
-    assert_eq!(checked.obligations_at(Tier::Proven), 45);
+    assert_eq!(checked.obligations_at(Tier::Proven), 48);
     assert_eq!(checked.obligations_at(Tier::Guarded), 2);
 }
 
