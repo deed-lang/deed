@@ -81,6 +81,10 @@ pub(crate) enum Helper {
     ListExtended,
     /// A list holding the same value a number of times.
     ListFilled,
+    /// An empty list with room already reserved for a number of elements.
+    ListRoom,
+    /// The same list, one longer, written where it stands.
+    ListAppended,
 }
 
 impl Helper {
@@ -101,6 +105,8 @@ impl Helper {
         Helper::ListElement,
         Helper::ListExtended,
         Helper::ListFilled,
+        Helper::ListRoom,
+        Helper::ListAppended,
     ];
 
     /// Which helper answers for a runtime name the IR asked for.
@@ -120,6 +126,8 @@ impl Helper {
             runtime::LIST_AT => Helper::ListElement,
             runtime::LIST_PUSH => Helper::ListExtended,
             runtime::LIST_REPEAT => Helper::ListFilled,
+            runtime::LIST_ROOM => Helper::ListRoom,
+            runtime::LIST_APPEND => Helper::ListAppended,
             _ => return None,
         })
     }
@@ -143,6 +151,8 @@ impl Helper {
             Helper::ListElement => runtime::LIST_AT,
             Helper::ListExtended => runtime::LIST_PUSH,
             Helper::ListFilled => runtime::LIST_REPEAT,
+            Helper::ListRoom => runtime::LIST_ROOM,
+            Helper::ListAppended => runtime::LIST_APPEND,
         }
     }
 
@@ -159,7 +169,8 @@ impl Helper {
             | Helper::PiecesText
             | Helper::ListElement
             | Helper::ListExtended
-            | Helper::ListFilled => two(vec![ValType::I64]),
+            | Helper::ListFilled
+            | Helper::ListAppended => two(vec![ValType::I64]),
             Helper::TextSlice | Helper::TextSearch => FuncType {
                 params: vec![ValType::I64, ValType::I64, ValType::I64],
                 results: vec![ValType::I64],
@@ -168,6 +179,7 @@ impl Helper {
             | Helper::TextNumber
             | Helper::TrimmedText
             | Helper::RaisedText
+            | Helper::ListRoom
             | Helper::LoweredText => FuncType {
                 params: vec![ValType::I64],
                 results: vec![ValType::I64],
@@ -204,6 +216,8 @@ impl Helper {
             Helper::ListElement => list_element(at),
             Helper::ListExtended => list_extended(),
             Helper::ListFilled => list_filled(),
+            Helper::ListRoom => list_with_room(),
+            Helper::ListAppended => list_appended(),
         }
     }
 }
@@ -949,8 +963,78 @@ fn list_extended() -> (Vec<ValType>, Vec<Ins>) {
     )
 }
 
-/// `repeat(value, count) -> List<T>`.
+/// An empty list with room for `count` elements already reserved.
 ///
+/// Not something a program can write, and not a list of `count` elements: it
+/// has none, and says so. Only a walk that will fill it reaches this, and it
+/// knows the bound because the list it walks is the bound. See
+/// `design/decisions/2026-08-04-a-walk-that-only-pushes.md`.
+fn list_with_room() -> (Vec<ValType>, Vec<Ins>) {
+    const COUNT: u32 = 0;
+    const N: u32 = 1;
+    const OUT: u32 = 2;
+
+    let mut body = vec![Ins::LocalGet(COUNT), Ins::I32WrapI64, Ins::LocalSet(N)];
+    // A negative bound is no room rather than a refusal, the same answer
+    // `repeat` gives, and it cannot arise here anyway: the bound is a length.
+    body.extend(when(
+        vec![Ins::LocalGet(COUNT), Ins::I64Const(0), Ins::I64LtS],
+        vec![Ins::I32Const(0), Ins::LocalSet(N)],
+    ));
+    body.extend(allocate(OUT, |ins| ins.extend(list_room(N))));
+    body.extend([
+        Ins::LocalGet(OUT),
+        Ins::I64Const(0),
+        Ins::I64Store(0),
+        Ins::LocalGet(OUT),
+        Ins::I64ExtendI32S,
+        Ins::Return,
+    ]);
+
+    (vec![ValType::I32, ValType::I32], body)
+}
+
+/// The same list, one longer, written where it stands.
+///
+/// The one thing here that changes a list, and it is sound only where
+/// [`Helper::ListRoom`] reserved the room and nothing else is holding the
+/// list. A walk whose accumulator is only ever pushed onto meets both, which
+/// is what that decision is about; nothing else lowers to this.
+fn list_appended() -> (Vec<ValType>, Vec<Ins>) {
+    const XS: u32 = 0;
+    const VALUE: u32 = 1;
+    const AT: u32 = 2;
+    const N: u32 = 3;
+
+    let mut body = vec![
+        Ins::LocalGet(XS),
+        Ins::I32WrapI64,
+        Ins::LocalSet(AT),
+        Ins::LocalGet(AT),
+        Ins::I64Load(0),
+        Ins::I32WrapI64,
+        Ins::LocalSet(N),
+    ];
+
+    let mut last = element_at(AT, N);
+    last.extend([Ins::LocalGet(VALUE), Ins::I64Store(0)]);
+    body.extend(last);
+
+    body.extend([
+        Ins::LocalGet(AT),
+        Ins::LocalGet(N),
+        Ins::I32Const(1),
+        Ins::I32Add,
+        Ins::I64ExtendI32S,
+        Ins::I64Store(0),
+        Ins::LocalGet(XS),
+        Ins::Return,
+    ]);
+
+    (vec![ValType::I32, ValType::I32], body)
+}
+
+/// `repeat(value, count) -> List<T>`.///
 /// A count of zero or less is the empty list rather than a refusal. The call
 /// this exists for is `repeat(" ", width - length(text))`, which goes negative
 /// exactly when the text is already wider than the column, and what it means
