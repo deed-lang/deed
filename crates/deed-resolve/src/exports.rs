@@ -341,7 +341,7 @@ impl Exports {
             }
 
             let (name, kind, members, row, row_complete, row_from) = match item {
-                Item::Deprecate(_) => continue,
+                Item::Deprecate(_) | Item::Operator(_) => continue,
                 Item::TypeAlias(decl) => (
                     &decl.name,
                     ExportKind::Type,

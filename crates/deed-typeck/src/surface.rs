@@ -557,7 +557,7 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
         .collect();
     for item in &module.items {
         match item {
-            Item::Deprecate(_) => {}
+            Item::Deprecate(_) | Item::Operator(_) => {}
             Item::Function(decl) => {
                 // What this module's own checker calls them, so an imported
                 // generic function arrives with its parameters still in it and

@@ -836,7 +836,7 @@ impl Resolver<'_> {
 
         for item in &module.items {
             match item {
-                Item::Deprecate(_) => {}
+                Item::Deprecate(_) | Item::Operator(_) => {}
                 Item::TypeAlias(alias) => {
                     self.declare_item(&alias.name, DefKind::Type, None);
                 }
@@ -889,6 +889,12 @@ impl Resolver<'_> {
         for item in &module.items {
             match item {
                 Item::Deprecate(_) => {}
+                // The name is looked up like any other, so a binding to a
+                // function that is not there is the ordinary message about a
+                // name, and binding one is a use of it.
+                Item::Operator(decl) => {
+                    self.use_name(&decl.function);
+                }
                 Item::TypeAlias(alias) => self.resolve_type_alias(alias),
                 Item::Record(record) => self.resolve_record(record),
                 Item::Choice(choice) => self.resolve_choice(choice),

@@ -74,7 +74,7 @@ fn exported_names(module: &Module) -> Vec<String> {
             Item::TypeAlias(alias) => Some(alias.name.name.clone()),
             Item::Effect(effect) => Some(effect.name.name.clone()),
             Item::Handler(handler) => Some(handler.name.name.clone()),
-            Item::Deprecate(_) | Item::Test(_) => None,
+            Item::Deprecate(_) | Item::Operator(_) | Item::Test(_) => None,
         })
         .collect()
 }

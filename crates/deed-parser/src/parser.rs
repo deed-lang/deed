@@ -13,8 +13,8 @@
 use deed_ast::{
     Accumulator, BinaryOp, Block, ChoiceDecl, Contract, DeprecateDecl, EditionDecl, EffectDecl,
     EffectRef, Ensures, Expr, FieldDecl, FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item,
-    MatchArm, Module, ModulePath, Outcome, Param, Pattern, PatternField, RecordDecl, Stmt,
-    TestDecl, Type, TypeAlias, UnaryOp, Use, Variant,
+    MatchArm, Module, ModulePath, OperatorDecl, Outcome, Param, Pattern, PatternField, RecordDecl,
+    Stmt, TestDecl, Type, TypeAlias, UnaryOp, Use, Variant,
 };
 use deed_diagnostics::{Applicability, Diagnostic, FileId, Span, SuggestedEdit};
 use deed_lexer::{Keyword, Token, TokenKind};
@@ -72,7 +72,9 @@ impl Parsed {
 /// matches that shape. The test in `crates/deed-parser/tests/grammar.rs`
 /// walks alternation groups, so a word that is coloured by shape rather than
 /// by name is neither missing from the grammar nor invented by it.
-pub const SOFT_KEYWORDS: [&str; 7] = ["state", "at", "while", "refuses", "ok", "err", "finally"];
+pub const SOFT_KEYWORDS: [&str; 8] = [
+    "state", "at", "while", "refuses", "ok", "err", "finally", "operator",
+];
 
 /// Parses a token stream. Always produces a module, possibly containing error nodes.
 pub fn parse(file: FileId, tokens: &[Token]) -> Parsed {
@@ -604,6 +606,10 @@ impl<'a> Parser<'a> {
     // -- items -------------------------------------------------------------
 
     fn parse_item(&mut self) -> Option<Item> {
+        if self.at_operator_binding() {
+            return self.parse_operator().map(Item::Operator);
+        }
+
         let TokenKind::Keyword(kw) = self.kind() else {
             let span = self.span();
             let found = self.kind().describe();
@@ -683,6 +689,66 @@ impl<'a> Parser<'a> {
             span: start.to(new.span),
             old,
             new,
+        })
+    }
+
+    /// Whether an item starts here and is `operator <op> = <name>`.
+    ///
+    /// `operator` stays an ordinary name everywhere else, so the shape has to
+    /// decide. Nothing else can put an operator token straight after a name at
+    /// the start of a declaration: a name followed by `+` is an expression,
+    /// and an expression is not a declaration.
+    fn at_operator_binding(&self) -> bool {
+        matches!(self.kind(), TokenKind::Ident(name) if name == "operator")
+            && binary_op(self.nth_kind(1)).is_some()
+    }
+
+    /// `operator + = added`
+    fn parse_operator(&mut self) -> Option<OperatorDecl> {
+        let start = self.bump().span;
+        let op_span = self.span();
+        let (op, _) = binary_op(self.kind()).expect("the caller looked");
+        self.bump();
+
+        if !op.is_bindable() {
+            let spelled = op.as_str();
+            let listed = BinaryOp::BINDABLE
+                .iter()
+                .map(|op| format!("`{}`", op.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.emit(
+                Diagnostic::error(
+                    codes::UNBINDABLE_OPERATOR,
+                    self.file,
+                    op_span,
+                    format!("`{spelled}` is not an operator a module can give a meaning to"),
+                )
+                .with_primary_label("cannot be bound")
+                .with_note(format!("{listed} can be bound"))
+                .with_note(match op {
+                    BinaryOp::Div | BinaryOp::Rem => {
+                        "an operator answers with the type it was given, and dividing does \
+                         not always have such an answer; a function returning a `Result` says so"
+                    }
+                    BinaryOp::Eq | BinaryOp::Ne => {
+                        "equality is structural and already answers about every type"
+                    }
+                    _ => {
+                        "ordering is a separate question, because a caller that wants two \
+                         things ranked passes the comparison in"
+                    }
+                }),
+            );
+        }
+
+        self.expect(TokenKind::Eq, "an operator binding")?;
+        let function = self.expect_ident("an operator binding")?;
+        Some(OperatorDecl {
+            span: start.to(function.span),
+            op,
+            op_span,
+            function,
         })
     }
 

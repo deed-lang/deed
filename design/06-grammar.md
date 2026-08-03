@@ -76,7 +76,7 @@ The following words are contextual: they lex as ordinary identifiers and are rea
 parser in specific positions only. A variable may still be named any of them.
 
 ```
-soft-keyword  ::=  "at"  |  "err"  |  "finally"  |  "ok"  |  "refuses"  |  "state"  |  "while"
+soft-keyword  ::=  "at"  |  "err"  |  "finally"  |  "ok"  |  "operator"  |  "refuses"  |  "state"  |  "while"
 ```
 
 ### Integer literals
@@ -150,6 +150,7 @@ use          ::=  "use" module-path "." "{" ident ("," ident)* ","? "}"
 ```
 item  ::=
     deprecate-decl
+  | operator-decl
   | type-alias
   | record-decl
   | choice-decl
@@ -161,6 +162,10 @@ item  ::=
 
 ```
 deprecate-decl  ::=  "deprecated" ident "->" ident
+```
+
+```
+operator-decl  ::=  "operator" ("+" | "-" | "*") "=" ident
 ```
 
 #### Type alias
