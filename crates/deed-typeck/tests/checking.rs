@@ -1416,6 +1416,34 @@ fn a_clause_bounded_by_the_limit_is_proven_rather_than_guarded() {
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
 }
 
+/// And a field read that is not one of the two is a value nothing knows.
+///
+/// The two names fold to a number where they are written, and everything else
+/// spelled `a.b` has to keep falling through to "anything at all". Reading a
+/// field as a number would be the checker inventing a fact, which is the one
+/// thing a tier is supposed to rule out.
+#[test]
+fn an_ordinary_field_read_is_not_a_number_the_checker_knows() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         record Box {\n\
+         \x20   n: Int,\n\
+         }\n\n\
+         fn take(b: Box) -> Positive\n\
+         \x20 where\n\
+         \x20   b.n > 0,\n\
+         {\n\
+         \x20   b.n\n\
+         }\n",
+    );
+    assert!(
+        !checked.has_errors(),
+        "{:?}",
+        codes_of(&checked.diagnostics)
+    );
+}
+
 /// A field that is not one of the two is an ordinary missing field, and a
 /// record with a field called `max` is untouched.
 #[test]
