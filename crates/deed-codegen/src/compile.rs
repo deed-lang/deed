@@ -1126,6 +1126,42 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
+    /// The same, for a handler's state, on the frame stack.
+    ///
+    /// A `with` block writes its state where the frame goes rather than on
+    /// the value heap, so that ending the block gives both back. The state a
+    /// handler is installed with is always written out at the `with`, which
+    /// is what makes this a matter of choosing an allocator rather than of
+    /// working out where a value came from. Anything else is lowered the
+    /// ordinary way and stays on the heap, which costs a block per `with` and
+    /// is what this did for every one of them before.
+    fn state_on_the_frame_stack(&mut self, state: &Expr, into: u32) -> Result<(), Unsupported> {
+        let Expr::Make {
+            layout: id,
+            variant,
+            fields,
+        } = state
+        else {
+            self.expr(state)?;
+            self.instructions.push(Ins::LocalSet(into));
+            return Ok(());
+        };
+
+        let tagged = self.program.layout(*id).is_tagged();
+        self.allocate_frame(layout::aggregate_size(tagged, fields.len()), into);
+
+        if tagged {
+            self.instructions.push(Ins::LocalGet(into));
+            self.instructions.push(Ins::I32WrapI64);
+            self.instructions.push(Ins::I64Const(*variant as i64));
+            self.instructions.push(Ins::I64Store(0));
+        }
+        for (index, field) in fields.iter().enumerate() {
+            self.store_word(into, layout::field_offset(tagged, index), field)?;
+        }
+        Ok(())
+    }
+
     fn expr(&mut self, expr: &Expr) -> Result<(), Unsupported> {
         match expr {
             Expr::Unit => {}
@@ -1210,10 +1246,25 @@ impl<'a> Builder<'a> {
                 body,
                 ..
             } => {
-                // The state first, since the frame points at it.
+                // Where the frame stack stood before any of this, which is
+                // where it goes back to. Read once rather than derived from
+                // the frame's address, because the state is reserved first
+                // and rewinding to the frame would leave it behind.
+                let mark = self.temporary(ValType::I64);
+                self.instructions
+                    .push(Ins::I32Const(layout::FRAME_BUMP as i32));
+                self.instructions.push(Ins::I64Load(0));
+                self.instructions.push(Ins::LocalSet(mark));
+
+                // The state first, since the frame points at it, and on the
+                // frame stack for the same reason the frame is: its lifetime
+                // is exactly this block. Nothing in a program can hold the
+                // state itself. `DEED4030` refuses a closure over it, an
+                // operation hands back the value in a field rather than the
+                // block holding it, and a field holding an address holds one
+                // into the value heap, which this does not touch.
                 let held = self.temporary(ValType::I64);
-                self.expr(state)?;
-                self.instructions.push(Ins::LocalSet(held));
+                self.state_on_the_frame_stack(state, held)?;
 
                 let frame = self.temporary(ValType::I64);
                 self.allocate_frame(layout::frame_size(operations.len()), frame);
@@ -1257,10 +1308,11 @@ impl<'a> Builder<'a> {
                 self.instructions.push(Ins::I64Load(0));
                 self.instructions.push(Ins::I64Store(0));
 
-                // And the frame stack goes back to where this block found it.
+                // And the frame stack goes back to where this block found it,
+                // which gives back the state along with the frame.
                 self.instructions
                     .push(Ins::I32Const(layout::FRAME_BUMP as i32));
-                self.instructions.push(Ins::LocalGet(frame));
+                self.instructions.push(Ins::LocalGet(mark));
                 self.instructions.push(Ins::I64Store(0));
             }
             Expr::Perform {
