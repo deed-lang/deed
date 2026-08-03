@@ -256,6 +256,16 @@ release notes.
 
 ### Measurements
 
+- Installing a handler is free. A handler's state is reserved from the frame
+  stack now rather than the value heap, so it is given back when the block
+  ends the way the frame already was, and a walk that installs one every turn
+  allocates exactly what the same walk without one does. What made it safe is
+  the rule that made the frame safe: nothing in a program can hold the state
+  itself, since `DEED4030` refuses a closure over it and an operation hands
+  back the value in a field rather than the block holding it.
+- A walk over numbers allocates a word a turn on its own, and nothing in it is
+  a value that lives in memory. Found while measuring the line above, which
+  had been credited to the handler.
 - What a compiled program allocates is what its memory reached, because
   nothing gives any of it back except a handler frame. So the number worth
   having is not the total but how much of the total is still worth anything,

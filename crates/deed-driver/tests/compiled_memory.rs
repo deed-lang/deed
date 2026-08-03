@@ -108,33 +108,69 @@ fn handler_loop(turns: usize) -> String {
     )
 }
 
-/// The one thing this backend gives back.
+/// The same walk with nothing installed, so the handler's cost can be read
+/// off the difference rather than guessed at.
+fn plain_loop(turns: usize) -> String {
+    let list = std::iter::repeat_n("1", turns)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "module a\n\n\
+         fn once() -> Int {{\n\
+         \x20   1\n\
+         }}\n\n\
+         fn answer() -> Int {{\n\
+         \x20   for n in [{list}] with total = 0 {{\n\
+         \x20       total + once()\n\
+         \x20   }}\n\
+         }}\n"
+    )
+}
+
+/// Bytes one more turn of a walk costs, given two lengths of it.
+fn a_turn(shape: fn(usize) -> String) -> u64 {
+    let small = measured(&shape(100)).expect("this should run");
+    let large = measured(&shape(400)).expect("this should run");
+    assert_eq!(small.value, Some(Value::I64(100)));
+    assert_eq!(large.value, Some(Value::I64(400)));
+    (large.allocated - small.allocated) / 300
+}
+
+/// A walk over numbers allocates a word a turn, and nothing in it is a value
+/// that lives in memory.
+///
+/// Measured rather than assumed, because it is the baseline the next test
+/// subtracts and a wrong baseline would credit the handler with the walk's
+/// cost or the other way round. What the word is has not been chased down;
+/// what it is not is anything the program named.
+#[test]
+fn a_walk_allocates_a_word_a_turn() {
+    assert_eq!(a_turn(plain_loop), 8);
+}
+
+/// Installing a handler costs nothing that is not given back.
 ///
 /// A frame's lifetime is exactly its `with` block, nothing in a program can
 /// hold one, and blocks nest, so frames are a stack and are reclaimed like
-/// one. Values are not, and cannot be by the same argument: a block's value
-/// outlives the block.
+/// one. The state a handler is installed with is on that stack too, and for
+/// the same reason: nothing in a program can hold the state itself either,
+/// since `DEED4030` refuses a closure over it, and an operation hands back
+/// the value in a field rather than the block holding it.
 ///
-/// A turn here still allocates sixteen bytes, and they are not the frame. A
-/// one-operation frame is four words, and what is left is the handler's state
-/// cell and the unit the operation answers with. The state cell could go the
-/// same way for the same reason (`DEED4030` already refuses a closure over
-/// handler state, so its lifetime is the block too) and that is written in
-/// `design/decisions/2026-07-31-compiled-memory-reclamation.md` as the next
-/// step rather than done here.
+/// So a walk that installs a handler every turn now allocates exactly what
+/// the same walk without one does. Values are still not given back and cannot
+/// be by this argument, because a block's value outlives the block, which is
+/// the whole of what is left in
+/// `design/decisions/2026-07-31-compiled-memory-reclamation.md`.
 #[test]
-fn a_handler_frame_is_given_back_when_its_block_ends() {
-    let small = measured(&handler_loop(100)).expect("this should run");
-    let large = measured(&handler_loop(400)).expect("this should run");
-
-    assert_eq!(small.value, Some(Value::I64(100)));
-    assert_eq!(large.value, Some(Value::I64(400)));
-
-    let a_turn = (large.allocated - small.allocated) / 300;
+fn installing_a_handler_costs_nothing_a_turn() {
+    let with_one = a_turn(handler_loop);
+    let without = a_turn(plain_loop);
     assert_eq!(
-        a_turn, 16,
-        "a turn allocates {a_turn} bytes; a one-operation frame is 32, so this is \
-         either the frame coming back or the rest of a turn changing size"
+        with_one, without,
+        "a turn that installs a handler allocates {with_one} bytes against {without} \
+         for the same walk without one, so something the `with` block reserved was \
+         not given back"
     );
 }
 

@@ -63,7 +63,19 @@ Measured, in `crates/deed-driver/tests/compiled_memory.rs`:
 - twenty thousand turns of it used to exhaust linear memory and now completes
 - the frame stack is bounded, and exceeding it traps rather than writing a frame over the value heap, which is checked by a nest deep enough to do it
 
-The sixteen bytes still leaking per turn are the handler's state cell and the unit its operation answers with. The state cell is the interesting one: `DEED4030` already refuses a closure over handler state, so its lifetime is the block as well, and it could go the same way for the same reason. That is the next step and it is deliberately not taken here, because it needs the state's address to stop being a heap address and every operation call reads it.
+The sixteen bytes still leaking per turn are the handler's state cell and the unit its operation answers with. The state cell is the interesting one: `DEED4030` already refuses a closure over handler state, so its lifetime is the block as well, and it could go the same way for the same reason.
+
+## Update: the state goes with the frame, and a `with` now costs nothing
+
+The state cell went the same way, and the reason it could is the reason the frame could: nothing in a program can hold it. `DEED4030` refuses a closure over handler state, and an operation hands back the value in a field rather than the block holding it, so the block's lifetime is exactly the `with`. It is now reserved from the frame stack rather than the value heap, immediately under the frame that points at it, and the block rewinds past both on the way out.
+
+What this took was not the machinery the earlier note expected. The state a handler is installed with is always written out at the `with`, so it arrives at the backend as a literal and this is a matter of choosing an allocator rather than of working out where a value came from.
+
+Measuring it turned up something the earlier note had guessed wrong. A turn was said to leak the state cell and the unit an operation answers with. Measured against the same walk with no `with` in it, the remaining eight bytes are the walk's: a walk over numbers allocates a word a turn on its own, and nothing in it is a value that lives in memory. So the number to compare against was never zero, and with the state moved, **a walk that installs a handler every turn now allocates exactly what the same walk without one does.** Installing a handler is free.
+
+Held by `crates/deed-driver/tests/compiled_memory.rs`, as the difference between the two walks rather than as a number, so neither the walk's own cost nor the frame's can change without the other being noticed.
+
+What is left is values, and they cannot follow by this argument at all, because a block's value outlives the block. That is the part the measurement above is about.
 
 ## Update: the first open question is answered, and the waste has a shape
 
