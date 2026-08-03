@@ -245,7 +245,22 @@ release notes.
 
 ### Measurements
 
-- None yet.
+- The tree-versus-table crossover, compiled. The decision in
+  `design/decisions/2026-07-31-tree-vs-table-decision.md` was measured on the
+  interpreter and predicted that a compiled backend would move the crossover
+  toward smaller N without reversing it. Both halves held: `std/map` is ahead
+  of `std/table` from sixteen keys for lookup and sixty-four for insert, where
+  interpreted it took a few hundred, and neither growth rate changed. The
+  compiled half is counted in instructions rather than seconds, because what
+  runs a module here is an interpreter over the instructions the compiler
+  emits: its clock is a fact about that runner, its instruction count is a
+  fact about the compiled program, and the second one is the same on every
+  machine.
+- A compiled program cannot build a thousand-key structure. It gets one
+  megabyte and a handler frame is the only thing it gives back, so the list
+  runs out of memory copying itself and the tree runs out two hundred inserts
+  later. Above a few hundred keys the module a program picks is not what stops
+  it; value reclamation is.
 
 ## 0.2.3 (2026-08-01)
 

@@ -2,17 +2,25 @@
 //!
 //! The benchmark in `examples/interpreting.rs` measures actual timing for the
 //! tree-vs-list comparison. This file ratchets the structural claims that the
-//! timing rests on: that the tree is a sorted keyed structure and that it
-//! keeps all keys it was given.
+//! timing rests on: that the tree is a sorted keyed structure, that it keeps
+//! all keys it was given, and where the two modules cross over.
 //!
 //! A structural claim is one that a count or an exact equality can decide, not
-//! one that depends on how fast the machine is. "Map lookup is faster than
-//! table lookup at 1024 keys" is a timing claim. "Entries come back in sorted
-//! order after inserts in reverse order" is a structural claim. Both matter;
-//! only the second belongs in a ratchet.
+//! one that depends on how fast the machine is. "Entries come back in sorted
+//! order after inserts in reverse order" is a structural claim. "Map lookup
+//! takes fewer nanoseconds than table lookup at 1024 keys" is a timing claim
+//! and does not belong here.
+//!
+//! The crossover used to be in the second group and is now in the first, and
+//! the reason is a change of unit rather than a change of mind. Compiled code
+//! is counted in instructions, and an instruction count is the same number on
+//! every machine on every run. So which of the two modules costs less at a
+//! given key count is something an exact comparison can decide, and the
+//! measurement the decision rests on stops being one nobody would notice going
+//! stale.
 //!
 //! See `design/decisions/2026-07-31-tree-vs-table-decision.md` for the
-//! measured timing numbers and the decision they produced.
+//! measured numbers and the decision they produced.
 
 use deed_diagnostics::SourceMap;
 use deed_driver::{check_all, shipped_source};
@@ -149,4 +157,139 @@ test "replacing a key keeps size at one" {
 "#,
         "replacing a key keeps size at one",
     );
+}
+
+/// How many keys the two sides of the crossover sit at, and how many inserts
+/// each measurement makes.
+///
+/// Insert rather than lookup because it has the wider margin on both sides:
+/// the list is ahead by 1.3x at sixteen keys and behind by 1.9x at sixty-four,
+/// so neither half of this test is decided by a handful of instructions.
+const FEW: usize = 16;
+const MANY: usize = 64;
+const TURNS: usize = 20;
+
+/// Enough instructions for the largest of these to finish, and a number a
+/// stuck program will reach.
+const BUDGET: u64 = 100_000_000;
+
+/// The tree overtakes the list between sixteen keys and sixty-four, compiled.
+///
+/// Two claims, and each one fails on its own. The list is the cheaper
+/// substrate for a handful of keys, which is why `std/table` is still in the
+/// library. The tree is the cheaper substrate once there are a few dozen,
+/// which is why `std/map` was written. A change that made either module
+/// uniformly better than the other would fail one half of this and take the
+/// decision with it.
+#[test]
+fn the_compiled_tree_overtakes_the_compiled_list_between_sixteen_keys_and_sixty_four() {
+    let list_with_few = inserting(table_insert, FEW);
+    let tree_with_few = inserting(map_insert, FEW);
+    let list_with_many = inserting(table_insert, MANY);
+    let tree_with_many = inserting(map_insert, MANY);
+
+    assert!(
+        list_with_few < tree_with_few,
+        "with {FEW} keys the list should still be the cheaper insert, and it took \
+         {list_with_few} instructions against the tree's {tree_with_few}"
+    );
+    assert!(
+        tree_with_many < list_with_many,
+        "with {MANY} keys the tree should be the cheaper insert, and it took \
+         {tree_with_many} instructions against the list's {list_with_many}"
+    );
+}
+
+/// What one insert costs, in instructions: the walk with the inserts in it
+/// minus the same program with none, so building the structure is out of it.
+fn inserting(bench: fn(usize, usize) -> String, size: usize) -> u64 {
+    let walked = instructions(&bench(size, TURNS));
+    let setup = instructions(&bench(size, 0));
+    (walked - setup) / TURNS as u64
+}
+
+fn table_insert(size: usize, turns: usize) -> String {
+    format!(
+        "module bench
+
+use std/table.{{set}}
+
+test \"inserting\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
+    let turns = {turns}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{ sum + length(set(base, \"new\", 0)) }}
+    assert got == turns * {}
+}}
+",
+        size + 1
+    )
+}
+
+fn map_insert(size: usize, turns: usize) -> String {
+    format!(
+        "module bench
+
+use std/map.{{insert, cmp_string, Empty}}
+
+test \"inserting\" {{
+    let keys = repeat(0, {size})
+    let base = for _k at i in keys with m = Empty {{ insert(m, to_string(i), i, cmp_string) }}
+    let turns = {turns}
+    let ns = repeat(0, turns)
+    let got = for _n in ns with sum = 0 {{
+        let _m = insert(base, \"new\", 0, cmp_string)
+        sum + 1
+    }}
+    assert got == turns
+}}
+"
+    )
+}
+
+/// Compiles `bench` with whatever it imports and counts what running its one
+/// test executes.
+fn instructions(bench: &str) -> u64 {
+    let mut sources = SourceMap::new();
+    let mut ids = vec![sources.add("bench.deed", bench.to_string())];
+    for module in deed_driver::shipped_for([bench]) {
+        let text = shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add("<shipped>", text.to_string()));
+    }
+
+    let checks = check_all(&sources, &ids);
+    for checked in &checks {
+        if let Some(diagnostic) = checked.diagnostics.iter().find(|d| d.is_error()) {
+            panic!(
+                "the benchmark should check cleanly:\n{}",
+                deed_diagnostics::render_human(&sources, diagnostic)
+            );
+        }
+    }
+
+    let alongside: Vec<deed_mir::Alongside<'_>> = checks[1..]
+        .iter()
+        .map(|checked| deed_mir::Alongside {
+            module: &checked.module,
+            resolutions: &checked.resolutions,
+            types: &checked.types,
+        })
+        .collect();
+    let lowered = deed_mir::lower_with_tests_alongside(
+        &checks[0].module,
+        &checks[0].resolutions,
+        &checks[0].types,
+        &alongside,
+    )
+    .expect("the benchmark should lower");
+    let compiled = deed_codegen::compile(&lowered).expect("the benchmark should compile");
+    let test = lowered
+        .tests
+        .first()
+        .expect("the benchmark declares a test");
+
+    deed_codegen::call_within(&compiled, &test.body, &[], BUDGET)
+        .unwrap_or_else(|trap| panic!("the benchmark should pass in the backend: {trap}"))
+        .steps
 }

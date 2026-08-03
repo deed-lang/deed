@@ -12,15 +12,18 @@
 //! cargo run -p deed-driver --example interpreting --release
 //! ```
 //!
-//! Four things are printed. What one turn of a walk costs, with one more
+//! Five things are printed. What one turn of a walk costs, with one more
 //! thing in it each time, so the difference between two rows is what the added
 //! thing costs. What one call costs by how many arguments it takes, which is
 //! separate because the first table's call rows call different functions and
 //! so cannot say what an argument costs on its own. What one `push` costs onto
 //! a list of a given length, which is separate because a list is copied rather
 //! than extended and the copy was the thing everyone expected to be expensive.
-//! And a real program from `examples/`, whole and then a stage at a time,
-//! which is the only one of the four that anybody would run.
+//! What a lookup and an insert cost by key count, over `std/table` and
+//! `std/map`, interpreted in nanoseconds and compiled in instructions, which
+//! is the measurement `design/decisions/2026-07-31-tree-vs-table-decision.md`
+//! decides with. And a real program from `examples/`, whole and then a stage
+//! at a time, which is the only one of the five that anybody would run.
 //!
 //! No dependency and no framework, for the same reason as
 //! `examples/edit_loop.rs`: a question this coarse does not need one.
@@ -40,6 +43,16 @@ const TURNS: usize = 100_000;
 /// changes.
 const PUSHES: usize = 50_000;
 const LENGTHS: [usize; 5] = [0, 16, 64, 256, 1024];
+
+/// How many turns the compiled table walks, and how far it is willing to count.
+///
+/// The compiled half is measured in instructions rather than in seconds, so it
+/// does not need the turns the timed half needs to lose the noise: it needs
+/// enough of them that the setup, which is subtracted anyway, is not the whole
+/// number. The budget is what a walk of the largest size costs and then some;
+/// a run that reaches it says so rather than reporting a small number.
+const COMPILED_TURNS: usize = 200;
+const COMPILED_BUDGET: u64 = 2_000_000_000;
 
 /// How many blocks of [`SAMPLE`] the real program reads.
 const BLOCKS: [usize; 4] = [20, 40, 80, 160];
@@ -612,11 +625,16 @@ fn map_files(bench: String) -> Vec<(&'static str, String)> {
     ]
 }
 
-/// Look the last key up, `PUSHES` times, over a structure holding `size` keys.
+/// Look the last key up, `turns` times, over a structure holding `size` keys.
 ///
 /// Worst-case discipline on both sides: the key asked for is one that is
 /// present, so the list walks all of it and the tree walks to a leaf.
-fn lookup_sources(size: usize) -> (String, String) {
+///
+/// The turns are a parameter because the two halves that use this count in
+/// different units. The timed half needs enough of them to lose the noise; the
+/// compiled half counts instructions, and the same number there would be a
+/// walk nobody is waiting for.
+fn lookup_sources(size: usize, turns: usize) -> (String, String) {
     let last = size.saturating_sub(1);
     let table = format!(
         "module bench
@@ -626,7 +644,7 @@ use std/table.{{set, or_else}}
 test \"lookup\" {{
     let keys = repeat(0, {size})
     let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
-    let turns = {PUSHES}
+    let turns = {turns}
     let ns = repeat(0, turns)
     let got = for _n in ns with sum = 0 {{ sum + or_else(base, \"{last}\", 0) }}
     assert got == turns * {last}
@@ -650,7 +668,7 @@ fn lookup(m: Map<String, Int>, key: String) -> Int
 test \"lookup\" {{
     let keys = repeat(0, {size})
     let base = for _k at i in keys with m = Empty {{ insert(m, to_string(i), i, cmp_string) }}
-    let turns = {PUSHES}
+    let turns = {turns}
     let ns = repeat(0, turns)
     let got = for _n in ns with sum = 0 {{ sum + lookup(base, \"{last}\") }}
     assert got == turns * {last}
@@ -660,12 +678,12 @@ test \"lookup\" {{
     (table, map)
 }
 
-/// Insert a key that is not already there, `PUSHES` times.
+/// Insert a key that is not already there, `turns` times.
 ///
 /// The map half avoids calling `size` on the result, which would be O(N) and
 /// would dominate the O(log N) insert. The body runs the insert and adds one,
 /// so `got == turns` confirms nothing was skipped without walking the result.
-fn insert_sources(size: usize) -> (String, String) {
+fn insert_sources(size: usize, turns: usize) -> (String, String) {
     let table = format!(
         "module bench
 
@@ -674,7 +692,7 @@ use std/table.{{set}}
 test \"inserting\" {{
     let keys = repeat(0, {size})
     let base = for _k at i in keys with entries = [] {{ set(entries, to_string(i), i) }}
-    let turns = {PUSHES}
+    let turns = {turns}
     let ns = repeat(0, turns)
     let got = for _n in ns with sum = 0 {{ sum + length(set(base, \"new\", 0)) }}
     assert got == turns * {}
@@ -690,7 +708,7 @@ use std/map.{{insert, cmp_string, Empty}}
 test \"inserting\" {{
     let keys = repeat(0, {size})
     let base = for _k at i in keys with m = Empty {{ insert(m, to_string(i), i, cmp_string) }}
-    let turns = {PUSHES}
+    let turns = {turns}
     let ns = repeat(0, turns)
     let got = for _n in ns with sum = 0 {{
         let _m = insert(base, \"new\", 0, cmp_string)
@@ -716,7 +734,7 @@ fn per_map() {
     println!("------------------------------------------------------");
 
     for size in LENGTHS {
-        let (table_source, map_source) = lookup_sources(size);
+        let (table_source, map_source) = lookup_sources(size, PUSHES);
         let t = time(&table_files(table_source), 0);
         let m = time(&map_files(map_source), 0);
 
@@ -735,7 +753,7 @@ fn per_map() {
     println!("------------------------------------------------------");
 
     for size in LENGTHS {
-        let (table_source, map_source) = insert_sources(size);
+        let (table_source, map_source) = insert_sources(size, PUSHES);
         let t = time(&table_files(table_source), 0);
         let m = time(&map_files(map_source), 0);
 
@@ -749,7 +767,7 @@ fn per_map() {
     }
 }
 
-/// The same two questions, compiled.
+/// The same two questions, compiled, counted in instructions.
 ///
 /// The open question left by `design/decisions/2026-07-31-tree-vs-table-decision.md`:
 /// the crossover it measured is the interpreter's, and the tree's constant
@@ -757,39 +775,86 @@ fn per_map() {
 /// Compiled code pays less for a call, so the crossover should move toward
 /// smaller N. This is that measurement, over the same programs, so the two
 /// sets of numbers are about the same work.
+///
+/// Instructions rather than seconds, and the reason is not that timing a
+/// compiled program is hard. The runner in `deed-codegen` is an interpreter
+/// over the instructions the compiler emits, so its clock is a fact about that
+/// runner. Its instruction count is a fact about the compiled program: it is
+/// what any engine would have to execute, it is the same number on every
+/// machine, and a document that keeps it does not have to be reread when the
+/// machine underneath changes. The decision this feeds wants the shape of the
+/// two curves and where they cross, and a count answers that.
+///
+/// Each row is the walk with the turns minus the walk with none of them, so
+/// building the structure is out of the number and what is left is the
+/// lookups, or the inserts, alone.
 fn per_map_compiled() {
-    println!("{PUSHES} lookups, compiled: std/table vs std/map");
-    println!("keys       table      table/key  map        map/key");
+    println!("instructions per lookup, compiled, over {COMPILED_TURNS} of them");
+    println!("keys       table                          map");
     println!("------------------------------------------------------");
 
     for size in LENGTHS {
-        let (table_source, map_source) = lookup_sources(size);
-        compiled_row(size, &table_files(table_source), &map_files(map_source));
+        compiled_row(size, lookup_sources);
     }
 
     println!();
-    println!("{PUSHES} inserts of a key not already there, compiled");
-    println!("keys       table      table/ins  map        map/ins");
+    println!("instructions per insert of a key not already there, compiled");
+    println!("keys       table                          map");
     println!("------------------------------------------------------");
 
     for size in LENGTHS {
-        let (table_source, map_source) = insert_sources(size);
-        compiled_row(size, &table_files(table_source), &map_files(map_source));
+        compiled_row(size, insert_sources);
     }
 }
 
-fn compiled_row(size: usize, table: &[(&str, String)], map: &[(&str, String)]) {
-    let t = time_compiled(table, 0);
-    let m = time_compiled(map, 0);
-    match (t, m) {
-        (Some(t), Some(m)) => println!(
-            "{size:<10} {:<10} {:<10} {:<10} {}",
-            millis(t),
-            nanos(t / PUSHES as u32),
-            millis(m),
-            nanos(m / PUSHES as u32),
-        ),
-        _ => println!("{size:<10} the backend refused one of them"),
+fn compiled_row(size: usize, sources: fn(usize, usize) -> (String, String)) {
+    let walked = COMPILED_TURNS;
+    let (table, map) = sources(size, walked);
+    let (empty_table, empty_map) = sources(size, 0);
+
+    let t = counted(&table_files(table), &table_files(empty_table)).each(walked);
+    let m = counted(&map_files(map), &map_files(empty_map)).each(walked);
+
+    // Through a string because a `Display` that writes rather than pads
+    // ignores the width.
+    println!("{size:<10} {:<30} {m}", t.to_string());
+}
+
+/// What counting one compiled program came back with.
+enum Counted {
+    Steps(u64),
+    /// The backend could not lower or compile it.
+    NotCompiled,
+    /// It compiled and then stopped. An answer about the backend rather than
+    /// a broken benchmark, so it is reported in the row rather than raised.
+    Stopped(deed_codegen::Trap),
+}
+
+impl Counted {
+    /// Per operation, which is the unit every number in this table is in.
+    fn each(self, turns: usize) -> Counted {
+        match self {
+            Counted::Steps(steps) => Counted::Steps(steps / turns as u64),
+            other => other,
+        }
+    }
+}
+
+impl std::fmt::Display for Counted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Counted::Steps(steps) => write!(f, "{steps}"),
+            Counted::NotCompiled => write!(f, "not compiled"),
+            Counted::Stopped(trap) => write!(f, "{trap}"),
+        }
+    }
+}
+
+/// The walk minus the setup, so what is left is the operations alone.
+fn counted(all: &[(&str, String)], setup: &[(&str, String)]) -> Counted {
+    match (steps_compiled(all, 0), steps_compiled(setup, 0)) {
+        (Counted::Steps(all), Counted::Steps(setup)) => Counted::Steps(all.saturating_sub(setup)),
+        (Counted::Steps(_), other) | (other, _) => other,
     }
 }
 
@@ -989,12 +1054,16 @@ fn time(files: &[(&str, String)], entry: usize) -> Duration {
     best
 }
 
-/// The same, through the compiled backend.
+/// The same, through the compiled backend, counted in instructions.
 ///
-/// `None` when the backend cannot lower or compile the program, which is the
-/// honest answer for a row rather than a zero that reads like a fast one.
-/// Compiling is outside the measurement for the same reason checking is.
-fn time_compiled(files: &[(&str, String)], entry: usize) -> Option<Duration> {
+/// [`Counted::NotCompiled`] when the backend cannot lower or compile the
+/// program, which is the honest answer for a row rather than a zero that reads
+/// like a fast one. Compiling is outside the measurement for the same reason
+/// checking is.
+///
+/// One run rather than [`ROUNDS`] of them: the count is the same every time,
+/// which is most of why it is the number this table reports.
+fn steps_compiled(files: &[(&str, String)], entry: usize) -> Counted {
     let mut sources = SourceMap::new();
     let ids: Vec<_> = files
         .iter()
@@ -1023,30 +1092,30 @@ fn time_compiled(files: &[(&str, String)], entry: usize) -> Option<Duration> {
         })
         .collect();
 
-    let lowered = deed_mir::lower_with_tests_alongside(
+    let Ok(lowered) = deed_mir::lower_with_tests_alongside(
         &subject.module,
         &subject.resolutions,
         &subject.types,
         &alongside,
-    )
-    .ok()?;
-    let compiled = deed_codegen::compile(&lowered).ok()?;
-    let test = lowered.tests.first()?;
+    ) else {
+        return Counted::NotCompiled;
+    };
+    let Ok(compiled) = deed_codegen::compile(&lowered) else {
+        return Counted::NotCompiled;
+    };
+    let Some(test) = lowered.tests.first() else {
+        return Counted::NotCompiled;
+    };
 
-    let mut best = Duration::MAX;
-    for _ in 0..ROUNDS {
-        let start = Instant::now();
-        let outcome = deed_codegen::call(&compiled, &test.body, &[]);
-        let elapsed = start.elapsed();
-        assert!(
-            outcome.is_ok(),
-            "`{}` should have passed in the backend: {:?}",
-            test.name,
-            outcome.err()
-        );
-        best = best.min(elapsed);
+    match deed_codegen::call_within(&compiled, &test.body, &[], COMPILED_BUDGET) {
+        Ok(outcome) => Counted::Steps(outcome.steps),
+        // A contract or an assertion that did not hold means the benchmark
+        // program is wrong, which is not something to report in a column.
+        Err(trap @ deed_codegen::Trap::Failed { .. }) => {
+            panic!("`{}` should have passed in the backend: {trap}", test.name)
+        }
+        Err(trap) => Counted::Stopped(trap),
     }
-    Some(best)
 }
 
 fn notes() {

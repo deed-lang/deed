@@ -19,7 +19,9 @@ The benchmark runs 50,000 operations per row, takes the best of five rounds, and
 reports the per-operation cost. Source is `crates/deed-driver/examples/interpreting.rs`;
 run it with `cargo run -p deed-driver --example interpreting --release`.
 
-Machine: Linux CI runner, single-threaded, interpreter engine only.
+Machine: Linux CI runner, single-threaded, interpreter engine only. The compiled
+section added below is in instructions rather than seconds and so does not have a
+machine.
 
 ## Measured results
 
@@ -57,12 +59,84 @@ Growth rate check (1024 vs 16 keys):
 - table: 180405 / 3807 = 47.4x (O(N), consistent)
 - map:   54607 / 26887 =  2.0x (O(log N), consistent)
 
+## Measured results, compiled
+
+Added 2026-08-03, answering the open question this document left. Same programs,
+same key counts, through `deed`'s WebAssembly backend rather than the interpreter.
+
+The unit is instructions rather than nanoseconds, and the reason is not that timing
+compiled code is hard. What runs the module here is `crates/deed-codegen/src/run.rs`,
+an interpreter over the instructions the compiler emits, so its clock is a fact about
+that runner. Its instruction count is a fact about the compiled program: it is the
+work any engine would have to do, it is the same number on every machine, and a
+number kept in a document should not have to be reread when the machine underneath
+it changes. Each row is the walk with 200 operations minus the same program with
+none, so building the structure is subtracted out and what is left is the operations.
+
+### Lookup (get a key that is present)
+
+```
+keys       table/lookup  map/lookup    map faster
+0          146           147           the same
+16         1533          979           map 1.57x faster
+64         5851          1573          map 3.72x faster
+256        22613         2204          map 10.26x faster
+1024       out of memory 2451          the table does not run
+```
+
+Growth rate check (256 vs 16 keys, 16x more keys):
+- table: 22613 / 1533 = 14.8x (expected ~16x for O(N), consistent)
+- map:   2204 / 979   =  2.3x (expected log2(256)/log2(16) = 2.0x, consistent)
+
+### Insert (key not already present)
+
+```
+keys       table/insert  map/insert    map faster
+0          187           267           map 1.43x slower
+16         1675          2198          map 1.31x slower
+64         6139          3196          map 1.92x faster
+256        27739         4021          map 6.90x faster
+1024       out of memory out of memory neither runs
+```
+
+Growth rate check (256 vs 16 keys):
+- table: 27739 / 1675 = 16.6x (O(N), consistent)
+- map:   4021 / 2198  =  1.8x (O(log N), consistent)
+
+### The crossover moved, in the direction this document predicted
+
+| | interpreted | compiled |
+|---|---|---|
+| lookup | between 64 and 256 keys | below 16 keys |
+| insert | between 256 and 1024 keys | between 16 and 64 keys |
+
+The tree's constant factor was the interpreter's per-call cost, as predicted. Removing
+it does not change either growth rate, which is what makes this a compiler question
+rather than an algorithm one: the two curves are the same shape and the tree's starts
+lower.
+
+### A thousand keys does not run at all
+
+Both 1024-key rows stop with `reached past the end of memory`, and that is not a
+benchmark accident. A compiled module gets sixteen pages, one megabyte
+(`crates/deed-codegen/src/compile.rs`), and a handler frame is the only thing this
+backend reclaims (`crates/deed-codegen/src/layout.rs` says why: a block's value
+outlives the block). `std/table`'s `set` copies the list, so building a 1024-key table
+allocates on the order of half a million entries. The tree allocates a fresh path per
+insert rather than a fresh table, which is why it survives the lookup benchmark and
+not the insert one: building the tree is already close to the megabyte, and 200 more
+inserts cross it.
+
+So above a few hundred keys the choice between these two modules is not the thing
+stopping a compiled program. Value reclamation is.
+
 ## Decision
 
 The tree is the right default for programs with more than roughly 100 keys for
-lookup, or more than roughly 250 keys for insert. Below those sizes the list's
-lower constant factor wins. Above them the tree's logarithmic growth wins, and
-the gap widens: at 1024 keys lookup is 12.8x faster and insert is 3.3x faster.
+lookup, or more than roughly 250 keys for insert, when the program is interpreted.
+Compiled, both of those numbers drop by about four: the tree is ahead by sixteen keys
+for lookup and by sixty-four for insert. Below those sizes the list's lower constant
+factor wins. Above them the tree's logarithmic growth wins, and the gap widens.
 
 Outcome two from #616 (the tree wins asymptotically but loses for small N due to
 constant factor) partially describes the result, but the crossover is at 64 and 256
@@ -74,19 +148,24 @@ in `examples/logs.deed`) pays less with the list, and a file that imports `std/t
 continues to work. The question of rewriting `std/table` on top of `std/map` is not
 reopened by this measurement, because the two modules serve different size ranges and
 making `std/table` a thin wrapper would slow down the small-N case it is designed for.
+The compiled numbers narrow that range without emptying it: at sixteen keys the list
+is still ahead on insert, and a handful of keys is what the module is for.
 
 ## What would change this answer
 
-The backend. The map's fixed overhead per insert at small N (26887ns at 16 keys vs
-3807ns for the table) is dominated by the recursive function calls and pattern
-matches the interpreter pays per tree level. A compiled backend reduces per-call
-cost by roughly the ratio in the first table of `interpreting.rs` (walking a turn in
-the interpreter vs what compiled code would cost), which would lower the tree's
-constant factor and shift the crossover toward smaller N. The measurement above is
-interpreter-only and is the right number for programs run under `deed run`. Once the
-backend is ready a second measurement is needed; the decision may move but the
-direction will not reverse: the tree's growth rate is algorithmic, not a property of
-the implementation.
+The backend was the thing, and it has now been measured rather than reasoned about.
+The prediction written here was that a compiled backend would lower the tree's
+constant factor and shift the crossover toward smaller N without reversing the
+direction. Both halves held: the crossover moved by about a factor of four in key
+count, and neither growth rate changed. The numbers are above.
+
+What is left that could still move it: value reclamation, which today stops both
+modules at a thousand keys and stops the list first. A backend that reclaims what a
+program is done with would let the measurement run past the sizes where the tree is
+already far ahead, so it would widen the gap rather than close it. And integer keys:
+the benchmark compares with `cmp_string` because the logs example has string keys,
+and a cheaper comparator takes the same fraction off both sides but a larger absolute
+amount off the list, which walks more of them.
 
 ## Drawbacks (required)
 
@@ -115,10 +194,9 @@ no type-level enforcement. This is documented in `std/map` and in `examples/tree
 
 ## Open Questions (required)
 
-- The backend answer: does compiled code change the crossover point, and if so where?
-  This requires a second benchmark once `deed compile` can compile `std/map`. The
-  structural ratchet in `crates/deed-driver/tests/map_scaling.rs` does not depend on
-  the backend; it validates tree correctness for both.
+- Value reclamation. A compiled program gets one megabyte and gives none of it back,
+  so neither module reaches a thousand keys. That is a larger question than this one
+  and it is now the binding constraint above a few hundred keys.
 
 - String-key cost: the benchmark uses `cmp_string`, which calls into a built-in string
   comparison. Integer keys via `cmp_int` would be faster and might shift the crossover.

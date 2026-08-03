@@ -120,6 +120,13 @@ block. The note in `crates/deed-codegen/src/layout.rs` about when monotonic allo
 being acceptable still applies to everything else, and
 `design/decisions/2026-07-31-compiled-memory-reclamation.md` has the numbers.
 
+There is now a size where this is what stops a program rather than a note about later. A
+module gets sixteen pages, and building a thousand-key `std/table` copies the list once per
+key, so it reaches the end of memory before the first lookup;
+`design/decisions/2026-07-31-tree-vs-table-decision.md` measured both keyed modules and
+neither of them survives a thousand keys. Below a few hundred the question that measurement
+set out to answer is the algorithm; above it, the question is this paragraph.
+
 ## A capability is a handle, and everything it reaches is an import
 A WebAssembly module cannot open a file, write a line or read a clock. It says what it wants
 from its host and the host decides. That reads like a limitation and is the opposite of one:
