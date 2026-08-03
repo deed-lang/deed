@@ -1813,29 +1813,25 @@ impl Lowering<'_> {
                     let err = self.convert(err, span)?;
                     Ty::Aggregate(result_layout(&mut self.shapes, ok, err))
                 } else {
-                    match self.function.ret.clone() {
-                        Ty::Aggregate(id) if self.layout(id).name.starts_with("Result<") => {
-                            Ty::Aggregate(id)
+                    // One half is written and the other is not, which is what
+                    // `ok(4)` is: what a success holds says nothing about
+                    // what the error would have held. The function this is
+                    // inside says the shape when it hands one back, and what
+                    // this is being compared against says it otherwise. When
+                    // neither does, the half nobody settled stands in as a
+                    // number, the same as a type argument nothing says.
+                    let context = [self.function.ret.clone(), self.expected.clone().unwrap_or(Ty::Unit)]
+                        .into_iter()
+                        .find(|ty| {
+                            matches!(ty, Ty::Aggregate(id) if self.layout(*id).name.starts_with("Result<"))
+                        });
+                    match context {
+                        Some(ty) => ty,
+                        None => {
+                            let ok = self.type_argument(ok, span)?;
+                            let err = self.type_argument(err, span)?;
+                            Ty::Aggregate(result_layout(&mut self.shapes, ok, err))
                         }
-                        // Neither half is written here and the function this
-                        // is inside does not hand one back either, which is
-                        // where a test block asking a library a question
-                        // lands. What it is being compared against says the
-                        // shape when there is one, and otherwise the half
-                        // nobody settled stands in as a number, the same as a
-                        // type argument nothing says.
-                        _ => match self.expected.clone() {
-                            Some(Ty::Aggregate(id))
-                                if self.layout(id).name.starts_with("Result<") =>
-                            {
-                                Ty::Aggregate(id)
-                            }
-                            _ => {
-                                let ok = self.type_argument(ok, span)?;
-                                let err = self.type_argument(err, span)?;
-                                Ty::Aggregate(result_layout(&mut self.shapes, ok, err))
-                            }
-                        },
                     }
                 }
             }
@@ -3579,36 +3575,6 @@ impl Lowering<'_> {
                 .iter()
                 .position(|variant| variant.name == name)
         {
-            return Ok((id, at));
-        }
-
-        // A variant of a generic choice, written where nothing says what the
-        // arguments are. `Empty` is that: it carries no fields, so a `Map<K,
-        // V>` holding none of either is the same value whatever `K` and `V`
-        // turn out to be, and the tag is all there is to build. The arguments
-        // stand in as numbers for the reason an empty list's element type
-        // does.
-        let generic = self.nominals.iter().find_map(|(nominal, held)| {
-            let Nominal::Choice(choice) = held else {
-                return None;
-            };
-            choice
-                .variants
-                .iter()
-                .position(|variant| variant.name.name == name)
-                .map(|at| (nominal.clone(), choice.generics.len(), at))
-        });
-        if let Some((nominal, arity, at)) = generic {
-            let args = vec![Ty::Int; arity];
-            let id = instantiate_nominal(
-                &nominal,
-                &args,
-                span,
-                self.layouts,
-                self.aliases,
-                self.nominals,
-                &mut self.shapes,
-            )?;
             return Ok((id, at));
         }
 
