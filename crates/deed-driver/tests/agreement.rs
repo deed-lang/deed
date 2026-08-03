@@ -489,6 +489,26 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 3,
         },
+        // An effect that takes a row variable, and a handler holding a queue
+        // of values typed by it. The tasks are named functions, which arrive
+        // as wrapper closures, and the handler calls them out of its own
+        // state.
+        Agreed {
+            name: "a handler that holds a queue of tasks",
+            source: "module a\n\neffect Task<uses r> {\n    fn fork(step: Fn() uses r -> ()) -> ()\n    fn run() -> ()\n}\n\neffect Tally {\n    fn add(n: Int) -> ()\n    fn total() -> Int\n}\n\nhandler Summer implements Tally {\n    state sum: Int\n\n    fn add(n) -> () {\n        sum = sum + n\n    }\n\n    fn total() -> Int { sum }\n}\n\nhandler Queued implements Task {\n    state queue: List<Fn() uses r -> ()>\n\n    fn fork(step) -> () {\n        queue = push(queue, step)\n    }\n\n    fn run() -> ()\n      uses\n        r,\n    {\n        for held in queue with done = () {\n            held()\n        }\n    }\n}\n\nfn one() -> ()\n  uses\n    Tally.add,\n{\n    Tally.add(1)\n}\n\nfn ten() -> ()\n  uses\n    Tally.add,\n{\n    Tally.add(10)\n}\n\nfn queued() -> Int\n  uses\n    Tally.add,\n    Tally.total,\n{\n    with Queued { queue: [] } {\n        Task.fork(one)\n        Task.fork(ten)\n        Task.run()\n    }\n    Tally.total()\n}\n\nfn answer() -> Int {\n    with Summer { sum: 0 } {\n        queued()\n    }\n}\n\ntest \"the whole queue ran\" {\n    assert answer() == 11\n}\n",
+            call: "answer",
+            expect: 11,
+        },
+        // The same, with a closure task that forks another closure while the
+        // handler is running. A closure whose body lifts anything used to
+        // come out pointing at whatever the body lifted first, and naming a
+        // function as a value is one of the things that lifts.
+        Agreed {
+            name: "a closure task that forks another closure",
+            source: "module a\n\neffect Task<uses r> {\n    fn fork(step: Fn() uses r -> ()) -> ()\n    fn run() -> ()\n}\n\neffect Tally {\n    fn add(n: Int) -> ()\n    fn total() -> Int\n}\n\nhandler Summer implements Tally {\n    state sum: Int\n\n    fn add(n) -> () {\n        sum = sum + n\n    }\n\n    fn total() -> Int { sum }\n}\n\nhandler Queued implements Task {\n    state queue: List<Fn() uses r -> ()>\n\n    fn fork(step) -> () {\n        queue = push(queue, step)\n    }\n\n    fn run() -> ()\n      uses\n        r,\n    {\n        for held in queue with done = () {\n            held()\n        }\n    }\n}\n\nfn hundred() -> ()\n  uses\n    Tally.add,\n{\n    Tally.add(100)\n}\n\nfn queued() -> Int\n  uses\n    Tally.add,\n    Tally.total,\n{\n    with Queued { queue: [] } {\n        Task.fork(|| {\n            Tally.add(1)\n            Task.fork(hundred)\n        })\n        Task.fork(|| Tally.add(10))\n        Task.run()\n    }\n    Tally.total()\n}\n\nfn answer() -> Int {\n    with Summer { sum: 0 } {\n        queued()\n    }\n}\n\ntest \"a closure that lifts something still points at itself\" {\n    assert answer() == 11\n}\n",
+            call: "answer",
+            expect: 11,
+        },
         Agreed {
             name: "a match on a choice",
             source: "module a\n\nchoice Tone {\n    Plain,\n    Loud,\n}\n\nfn weight(tone: Tone) -> Int {\n    match tone {\n        Plain => 1,\n        Loud => 10,\n    }\n}\n\nfn answer() -> Int { weight(Loud) }\n\ntest \"each variant answers for itself\" {\n    assert weight(Plain) == 1\n    assert answer() == 10\n}\n",

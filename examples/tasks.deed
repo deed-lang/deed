@@ -1,0 +1,112 @@
+// Tasks, out of the library.
+//
+// The scheduler is `std/task`. Nothing in this file implements one: it forks
+// three tasks that log, runs them, and reads the log back. What is worth
+// noticing is that `std/task` says nothing about logging. `Task.fork` takes a
+// `Fn() uses r -> ()`, `r` is filled in from the value passed at each fork,
+// and that is why `main` below has to declare `Log.note` even though it never
+// calls it directly. The tasks perform it, `main` chose them, and the row
+// says so.
+//
+// `examples/scheduler.deed` is the same scheduler written out by hand, from
+// before an effect could take a row variable. Its queue names `Log.note` in
+// its own type, which is why it could not be a library and this can.
+
+module examples/tasks
+
+use std/task.{Task, RoundRobin, run, run_up_to}
+
+effect Log {
+    fn note(message: String) -> ()
+    fn messages() -> List<String>
+}
+
+handler Recorder implements Log {
+    state log: List<String>
+
+    fn note(message) -> () {
+        log = push(log, message)
+    }
+
+    fn messages() -> List<String> {
+        log
+    }
+}
+
+fn greet() -> ()
+  uses
+    Log.note,
+{
+    Log.note("hello")
+}
+
+fn count() -> ()
+  uses
+    Log.note,
+{
+    Log.note("one")
+    Log.note("two")
+}
+
+// A task that forks the rest of itself. This is how a task leaves room for
+// another one to run: there are no resumptions, so a task that wants to yield
+// splits, and the second half goes behind whatever else is waiting.
+fn later() -> ()
+  uses
+    Log.note,
+    Task.fork,
+{
+    Log.note("first half")
+    Task.fork(rest)
+}
+
+fn rest() -> ()
+  uses
+    Log.note,
+{
+    Log.note("second half")
+}
+
+// Everything the three tasks perform, and nothing about scheduling beyond
+// installing the handler.
+fn transcript() -> List<String>
+  uses
+    Log.note,
+    Log.messages,
+    Diverge,
+{
+    with RoundRobin { queue: [] } {
+        Task.fork(greet)
+        Task.fork(later)
+        Task.fork(count)
+        run()
+        Log.messages()
+    }
+}
+
+// The bounded runner, for when the number of tasks is the point.
+fn first_two() -> Int
+  uses
+    Log.note,
+{
+    with RoundRobin { queue: [] } {
+        Task.fork(greet)
+        Task.fork(count)
+        Task.fork(greet)
+        run_up_to(2)
+    }
+}
+
+test "tasks run in the order they were forked" {
+    let log = with Recorder { log: [] } {
+        transcript()
+    }
+    assert log == ["hello", "first half", "one", "two", "second half"]
+}
+
+test "a bounded run stops at the limit" {
+    let ran = with Recorder { log: [] } {
+        first_two()
+    }
+    assert ran == 2
+}

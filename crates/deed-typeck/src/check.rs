@@ -60,6 +60,17 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         def_types: HashMap::new(),
         type_params: HashMap::new(),
         nominal_generics: HashMap::new(),
+        effect_rows: module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                deed_ast::Item::Effect(effect) => {
+                    Some((effect.name.name.clone(), effect.rows.clone()))
+                }
+                _ => None,
+            })
+            .collect(),
+        enclosing_rows: Vec::new(),
         signatures: HashMap::new(),
         aliases: HashMap::new(),
         alias_targets: HashMap::new(),
@@ -221,6 +232,17 @@ struct Checker<'a> {
     /// Kept as names rather than a count, so a message about the wrong number
     /// of arguments can say which ones were wanted.
     nominal_generics: HashMap<DefId, Vec<String>>,
+    /// The row variables each effect declared in this module takes.
+    ///
+    /// Keyed by name rather than by definition, because the two places that
+    /// need it read a name off the syntax: a handler says which effect it
+    /// implements, and an operation is written inside the effect that declares
+    /// it.
+    effect_rows: HashMap<String, Vec<deed_ast::Ident>>,
+    /// Row variables in scope because of the declaration being walked rather
+    /// than because of the signature being lowered. A handler's are its
+    /// effect's, and they are empty everywhere else.
+    enclosing_rows: Vec<deed_ast::Ident>,
     signatures: HashMap<DefId, Signature>,
     aliases: HashMap<DefId, &'a TypeAlias>,
     alias_targets: HashMap<DefId, Ty>,
@@ -533,6 +555,12 @@ impl<'a> Checker<'a> {
                 Item::Effect(effect) => {
                     // An operation is called like a function and should be
                     // checked like one, so it gets the same signature entry.
+                    //
+                    // The effect's own row variables are in scope for every
+                    // one of them, which is what makes `Fn() uses r -> ()` a
+                    // type that takes anything rather than one that names an
+                    // effect called `r`.
+                    self.rows.declaring(&effect.rows);
                     for operation in &effect.operations {
                         let Some(def) = self.def_of(&operation.name) else {
                             continue;
@@ -540,12 +568,22 @@ impl<'a> Checker<'a> {
                         let signature = self.lower_signature(operation);
                         self.signatures.insert(def, signature);
                     }
+                    self.rows.declaring(&[]);
                 }
                 Item::Handler(handler) => {
                     let Some(def) = self.def_of(&handler.name) else {
                         continue;
                     };
+                    // A handler's state may hold values typed by the effect's
+                    // row variable: a queue of tasks is the reason this exists.
+                    let variables = self
+                        .effect_rows
+                        .get(&handler.effect.name)
+                        .cloned()
+                        .unwrap_or_default();
+                    self.rows.declaring(&variables);
                     let state = self.lower_fields(&handler.state);
+                    self.rows.declaring(&[]);
                     self.types.set_nominal(
                         def,
                         handler.name.name.clone(),
@@ -2078,7 +2116,16 @@ impl<'a> Checker<'a> {
             match item {
                 Item::Function(function) => self.check_fn(function),
                 Item::Handler(handler) => {
+                    // The effect's row variables are in scope for the whole
+                    // handler: its state holds values typed by one, and so
+                    // does anything an operation body writes down.
+                    self.enclosing_rows = self
+                        .effect_rows
+                        .get(&handler.effect.name)
+                        .cloned()
+                        .unwrap_or_default();
                     for field in &handler.state {
+                        self.rows.declaring(&self.enclosing_rows.clone());
                         let ty = self.lower_type(&field.ty);
                         if let Some(def) = self.def_of(&field.name) {
                             self.def_types.insert(def, ty);
@@ -2095,6 +2142,7 @@ impl<'a> Checker<'a> {
                         self.check_block(finally);
                     }
                     self.check_handler_is_whole(handler);
+                    self.enclosing_rows = Vec::new();
                 }
                 Item::Test(test) => {
                     self.check_block(&test.body);
@@ -2338,8 +2386,12 @@ impl<'a> Checker<'a> {
     fn check_fn_against(&mut self, function: &'a FnDecl, declared: Option<(Vec<Ty>, Ty)>) {
         // A row variable means nothing outside the signature that declared it,
         // so what the rows in this body may name is set before anything in it
-        // is lowered.
-        self.rows.declaring(&function.sig.rows);
+        // is lowered. A handler operation adds the ones its effect declared,
+        // which are in scope for the whole handler rather than for any one
+        // operation.
+        let mut variables = function.sig.rows.clone();
+        variables.extend(self.enclosing_rows.iter().cloned());
+        self.rows.declaring(&variables);
 
         // Reuse the signature computed during collection where there is one.
         // Lowering the same annotation twice would report anything wrong with

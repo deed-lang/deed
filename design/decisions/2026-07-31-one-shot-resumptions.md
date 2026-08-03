@@ -82,6 +82,21 @@ not taken now.
   is the right direction but is not yet worked out. Resolving this is required
   before resumptions ship.
 
+  Half of it now has a shape. An effect declares row variables, its handler
+  can hold values typed by one, and each call to an operation fills the
+  variable in from what it was passed, so `Resume<A, R> uses r` inside a
+  handler for `E<uses r>` names the row the same way the queue in `std/task`
+  does. What is still open is where the *other* rows come from: a computation
+  suspended inside two nested `with` blocks needs both of them back, and only
+  one of them belongs to the effect that suspended it. So this is narrower
+  than it was and still not answered.
+
+  What the row variables did settle is that a scheduler does not have to wait
+  for this. `std/task` ships without resumptions: a task runs to completion,
+  and a task that wants to leave room for another forks the rest of itself.
+  What is missing without resumptions is suspending in the middle, which is
+  what generators and preemption need and what fork-and-join does not.
+
 - Whether a `Resume<A, R>` that is never called should be an error, a warning,
   or neither. A dropped resumption silently abandons the computation it was
   meant to continue.

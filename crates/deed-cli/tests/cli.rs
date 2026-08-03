@@ -1341,6 +1341,54 @@ fn fix_is_quiet_when_there_is_nothing_to_do() {
 }
 
 #[test]
+fn fix_reads_the_modules_the_file_imports() {
+    // Checking the file on its own is cheaper and wrong. A call into another
+    // module has no row when that module is not there, so a function that
+    // performs an effect only through such a call looks like one declaring an
+    // effect it never performs, and the fix on offer is to delete the row.
+    //
+    // The typo is here so that there is something to fix at all: without it
+    // the file is clean, and clean is also what a wrong answer looks like.
+    let scratch = Scratch::new("fix-imports");
+    let source = "module scratch/forks\n\n\
+         use std/task.{Task, RoundRobin, run_up_to}\n\n\
+         effect Log {\n\
+         \x20   fn note(message: String) -> ()\n\
+         }\n\n\
+         fn balance() -> Int { 0 }\n\n\
+         fn noisy() -> ()\n\
+         \x20 uses\n\
+         \x20   Log.note,\n\
+         {\n\
+         \x20   Log.note(\"hello\")\n\
+         }\n\n\
+         fn go() -> Int\n\
+         \x20 uses\n\
+         \x20   Log.note,\n\
+         {\n\
+         \x20   with RoundRobin { queue: [] } {\n\
+         \x20       Task.fork(noisy)\n\
+         \x20       run_up_to(balanse())\n\
+         \x20   }\n\
+         }\n";
+    let file = scratch.write("forks.deed", source);
+
+    let output = run(&["fix", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("1 fix"), "{}", stdout(&output));
+
+    let after = std::fs::read_to_string(&file).unwrap();
+    assert!(after.contains("balance()"), "{after}");
+    assert!(
+        after.contains("Log.note,"),
+        "the row `go` keeps because of what it forks was taken off it:\n{after}"
+    );
+
+    let output = run(&["check", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stdout(&output));
+}
+
+#[test]
 fn the_examples_have_nothing_left_to_fix() {
     let output = run(&["fix", "--check", EXAMPLES]);
     assert_eq!(code(&output), 0, "{}", stdout(&output));

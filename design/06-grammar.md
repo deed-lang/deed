@@ -191,10 +191,14 @@ Variant payloads are named, not positional. `Circle(Int)` is not a valid variant
 #### Effect
 
 ```
-effect-decl  ::=  "effect" ident "{" fn-sig* "}"
+effect-decl  ::=  "effect" ident row-params? "{" fn-sig* "}"
+row-params   ::=  "<" "uses" ident ("," "uses" ident)* ","? ">"
 ```
 
-An effect declares operation signatures only; it has no bodies.
+An effect declares operation signatures only; it has no bodies. Its row
+variables are in scope in those signatures and in the state of any handler
+that implements it. Only row variables go in the list: a type parameter parses
+and is refused, because what one means for a handler's state is not decided.
 
 #### Handler
 

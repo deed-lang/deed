@@ -251,6 +251,7 @@ fn compiled_tests_run_in_the_expected_files() {
         "scheduler.deed",
         "stack_machine.deed",
         "strings.deed",
+        "tasks.deed",
         "tic_tac_toe.deed",
         "todo.deed",
         "using_list.deed",

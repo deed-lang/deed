@@ -913,6 +913,30 @@ impl<'a> Parser<'a> {
     fn parse_effect(&mut self) -> Option<EffectDecl> {
         let start = self.bump().span;
         let name = self.expect_ident("an effect declaration")?;
+
+        // `<uses r>`. Row variables only: see `codes::EFFECT_TYPE_PARAM` for
+        // why the type-parameter half of the list is read and then refused
+        // rather than left to fail as an unresolved name later on.
+        let (generics, rows) = self.parse_declaration_params();
+        for parameter in &generics {
+            let span = parameter.span;
+            let named = &parameter.name;
+            self.emit(
+                Diagnostic::error(
+                    codes::EFFECT_TYPE_PARAM,
+                    self.file,
+                    span,
+                    format!("`{named}` is a type parameter, and an effect takes row variables"),
+                )
+                .with_primary_label("only `uses r` belongs here")
+                .with_note(
+                    "a row variable is filled in at the calls that supply it and erased \
+                     everywhere else; a type parameter would have to reach the handler, and \
+                     what one means for a handler's state is not decided",
+                ),
+            );
+        }
+
         self.expect(TokenKind::LBrace, "an effect declaration")?;
 
         let mut operations = Vec::new();
@@ -951,6 +975,7 @@ impl<'a> Parser<'a> {
         let end = self.read_to();
         Some(EffectDecl {
             name,
+            rows,
             operations,
             span: start.to(end),
         })

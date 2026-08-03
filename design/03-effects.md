@@ -504,6 +504,65 @@ whose call sites cannot work out what it means is not a signature.
 What is deliberately absent is row subtraction, or anything that says "this row minus `Log`".
 A `with` block already handles an effect; saying that in a type is a much larger thing.
 
+### An effect takes them too
+
+An effect declares row variables the way a function does, and they are in scope in its
+operation signatures and in the state of any handler that implements it.
+
+```deed
+effect Task<uses r> {
+    fn fork(step: Fn() uses r -> ()) -> ()
+    fn more() -> Bool
+    fn step() -> ()
+}
+
+handler RoundRobin implements Task {
+    state queue: List<Fn() uses r -> ()>
+    ..
+}
+```
+
+This is one rule applied to a second declaration rather than a second rule. `r` belongs to
+the effect, so an operation signature and a handler's state that both write it are talking
+about one variable, and it is filled in at the calls that supply it: `Task.fork(step)`
+charges the caller with whatever `step` performs, exactly as a call to a function with a row
+variable does. A program that forks a task which logs is a program that logs, and its row
+says so.
+
+A handler's `state` is the one position an effect's variable has that a function's does not.
+It is not a signature, so nobody reads it at a call and nothing has to be able to fill it in
+from there. What the queue holds is decided by the forks, and those are checked where they
+are written.
+
+And by the installation, which is the one way into a handler's state that does not go through
+an operation. `with RoundRobin { queue: [noisy] }` puts a task in the queue without a
+`Task.fork` anywhere, so a function value written into a handler at a `with` is charged to
+the function that wrote it there, the same as one passed at a fork. What that does not reach
+is a value arriving from a call, as in `queue: tasks()`: what `tasks` built is a question
+about its body rather than about this expression.
+
+`std/task` is the reason this exists. A library scheduler cannot know what the tasks it is
+handed will perform, so before this its queue had to name a concrete row and every program
+that wanted a scheduler had to copy one. `examples/scheduler.deed` is such a copy, kept for
+the comparison: its queue holds `Fn() uses Schedule.fork, Schedule.yield, Log.note -> ()`,
+and `Log.note` is in there because those particular tasks log.
+
+Everything the previous section rules out is still ruled out for an effect's variable, and
+for the same reasons. An operation's return type cannot carry one, and neither can a variable
+buried inside a parameter that is not itself a function type, as in
+`fn fork_all(steps: List<Fn() uses r -> ()>)`. `DEED5008` covers both.
+
+What an effect does not take is a type parameter. A row variable costs nothing to carry
+because it is erased; a type parameter would have to reach the handler, which is a value with
+state and a single installation, and what `with Q { items: [] }` means when two different
+`T`s go through it is not decided. `DEED2024` says that rather than leaving the reader with a
+name-resolution error from inside an operation signature.
+
+What has not crossed yet is the boundary. A row variable travels as a position, which is what
+a call needs and not what a declaration needs, so a handler for an imported parameterised
+effect cannot name the variable. `std/task` ships its handler alongside its effect, which is
+what a program wants anyway, and `crates/deed-driver/tests/row_parameters.rs` holds the edge.
+
 ## The run checks too
 
 Everything above is one pass deciding whether a program keeps its promises. For a long time

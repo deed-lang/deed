@@ -853,6 +853,15 @@ impl Resolver<'_> {
                 }
                 Item::Effect(effect) => {
                     let id = self.declare_item(&effect.name, DefKind::Effect, None);
+                    // A row variable belongs to the effect rather than to any
+                    // one operation, because a handler's state has to be able
+                    // to name the same one. Declared here, once, so that the
+                    // effect's signatures and the handler's state are talking
+                    // about the same variable and not two of the same name.
+                    for variable in &effect.rows {
+                        let def = self.declare_member(variable, DefKind::RowParam, id);
+                        self.used.insert(def);
+                    }
                     // Operations are reachable only through the effect.
                     for operation in &effect.operations {
                         self.declare_member(&operation.name, DefKind::EffectOp, id);
@@ -990,6 +999,8 @@ impl Resolver<'_> {
     }
 
     fn resolve_effect(&mut self, effect: &EffectDecl) {
+        self.push_scope(ScopeKind::Local);
+        self.bring_row_params_into_scope(self.resolutions.resolution(effect.name.span));
         for operation in &effect.operations {
             for param in &operation.params {
                 if let Some(ty) = &param.ty {
@@ -1000,12 +1011,38 @@ impl Resolver<'_> {
                 self.resolve_type(ret);
             }
         }
+        self.pop_scope();
+    }
+
+    /// Puts an effect's row variables in scope, by name.
+    ///
+    /// The definitions are the effect's own, so an operation signature and a
+    /// handler's state that both write `r` resolve to one variable rather than
+    /// to two that happen to be spelled alike. That is the whole reason this
+    /// is not a fresh declaration in each place.
+    fn bring_row_params_into_scope(&mut self, effect: Option<DefId>) {
+        let Some(effect) = effect else {
+            return;
+        };
+        if self.resolutions.def(effect).kind != DefKind::Effect {
+            return;
+        }
+        let variables: Vec<(String, DefId)> = self
+            .resolutions
+            .defs()
+            .filter(|(_, data)| data.parent == Some(effect) && data.kind == DefKind::RowParam)
+            .map(|(id, data)| (data.name.clone(), id))
+            .collect();
+        for (name, def) in variables {
+            self.insert(&name, def);
+        }
     }
 
     fn resolve_handler(&mut self, handler: &HandlerDecl) {
         self.use_name(&handler.effect);
 
         self.push_scope(ScopeKind::Local);
+        self.bring_row_params_into_scope(self.resolutions.resolution(handler.effect.span));
         for field in &handler.state {
             self.resolve_type(&field.ty);
             self.declare_local(&field.name, DefKind::State);

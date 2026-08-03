@@ -545,6 +545,16 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
     }
 
     let mut items = BTreeMap::new();
+    // A handler's state is typed by the effect it implements, row variables
+    // and all, so lowering it needs to know which names those are.
+    let effect_rows: BTreeMap<&str, &[Ident]> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Effect(decl) => Some((decl.name.name.as_str(), decl.rows.as_slice())),
+            _ => None,
+        })
+        .collect();
     for item in &module.items {
         match item {
             Item::Deprecate(_) => {}
@@ -677,6 +687,11 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
                 );
             }
             Item::Effect(decl) => {
+                // The effect's own row variables, so `Fn() uses r -> ()`
+                // crosses as a type with a variable in its row rather than
+                // one naming an effect called `r` that the far side would go
+                // looking for and not find.
+                lowerer.rows.declaring(&decl.rows);
                 let mut operations = BTreeMap::new();
                 for op in &decl.operations {
                     operations.insert(
@@ -708,6 +723,12 @@ pub fn surface(file: FileId, module: &Module, resolutions: &Resolutions) -> Surf
                 );
             }
             Item::Handler(decl) => {
+                lowerer.rows.declaring(
+                    effect_rows
+                        .get(decl.effect.name.as_str())
+                        .copied()
+                        .unwrap_or(&[]),
+                );
                 items.insert(
                     decl.name.name.clone(),
                     SurfaceItem::Handler {
