@@ -509,7 +509,7 @@ impl<'a> Checker<'a> {
                     return None;
                 }
                 Some((
-                    (op, module.to_string(), name.to_string()),
+                    (op, owner.to_string(), name.to_string()),
                     (module.to_string(), function.to_string()),
                 ))
             })
@@ -5249,15 +5249,17 @@ impl<'a> Checker<'a> {
         if left != right {
             return None;
         }
+        // Nothing asks whether the type has arguments. A binding for one
+        // could not have been collected: a function over `Pair<A, B>` is
+        // generic and refused, and so is one over a type this module imported.
+        // Asking again here would be a condition no program can make false.
         let key = match &left {
-            Ty::Named { def, args } if args.is_empty() => (
+            Ty::Named { def, .. } => (
                 op,
                 self.here.clone(),
                 self.resolutions.def(*def).name.clone(),
             ),
-            Ty::External { module, name, args } if args.is_empty() => {
-                (op, module.to_string(), name.to_string())
-            }
+            Ty::External { module, name, .. } => (op, module.to_string(), name.to_string()),
             _ => return None,
         };
         let target = self.operators.get(&key)?.clone();

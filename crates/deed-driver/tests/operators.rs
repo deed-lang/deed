@@ -317,6 +317,167 @@ fn an_operator_cannot_be_bound_twice_for_one_type() {
     );
 }
 
+/// The codes the *importing* module is refused with, given a library that
+/// wrote a binding of its own.
+///
+/// Only the importing module's, because the library's mistake is the
+/// library's and is reported there. What this asks is whether a binding that
+/// should not have been made survives the boundary, which is a different
+/// question and one nothing else here can ask: a module trusts what it
+/// imports, so what it trusts has to be worth trusting.
+fn refused_importing(library: &str, app: &str) -> Vec<String> {
+    let mut sources = SourceMap::new();
+    let app_id = sources.add("app.deed".to_string(), app.to_string());
+    let library_id = sources.add("lib.deed".to_string(), library.to_string());
+
+    let checks = check_all(&sources, &[app_id, library_id]);
+    checks
+        .iter()
+        .filter(|one| one.file == app_id)
+        .flat_map(|one| one.diagnostics.iter())
+        .filter(|diagnostic| diagnostic.is_error())
+        .map(|diagnostic| diagnostic.code.to_string())
+        .collect()
+}
+
+/// A binding the module that wrote it was refused for does not cross.
+///
+/// Each of these is refused where it is written, and the shape is read again
+/// on the far side rather than trusted, because the surface carries what the
+/// module said rather than what it was allowed to say. A binding that got
+/// through would give the importing file an operator whose function cannot
+/// take what the operator hands it.
+#[test]
+fn a_binding_that_does_not_hold_up_does_not_cross_the_boundary() {
+    let app = "module app\n\n\
+         use lib.{Money, coins}\n\n\
+         test \"the operator is not there\" {\n\
+         \x20   assert coins(1) + coins(2) == coins(3)\n\
+         }\n";
+
+    let cases = [
+        (
+            "three parameters",
+            "fn combine(a: Money, b: Money, c: Money) -> Money { a }\n",
+        ),
+        (
+            "a result of another type",
+            "fn combine(a: Money, b: Money) -> Int { a.cents }\n",
+        ),
+        (
+            "operands of two types",
+            "fn combine(a: Money, b: Int) -> Money { a }\n",
+        ),
+        (
+            "a generic function",
+            "fn combine<T>(a: T, b: T) -> T { a }\n",
+        ),
+    ];
+
+    for (what, combine) in cases {
+        let library = format!(
+            "module lib\n\n\
+             record Money {{\n\
+             \x20   cents: Int,\n\
+             }}\n\n\
+             operator + = combine\n\n\
+             fn coins(cents: Int) -> Money {{\n\
+             \x20   Money {{ cents: cents }}\n\
+             }}\n\n\
+             {combine}"
+        );
+        let codes = refused_importing(&library, app);
+        assert!(
+            !codes.is_empty(),
+            "a binding to {what} reached the importing module and gave it an operator"
+        );
+    }
+}
+
+/// An operator the parser turned away does not cross either.
+///
+/// `/` cannot be bound, and a module that writes the binding anyway is told
+/// so. What this holds is the other half: the file that imports it does not
+/// quietly get a `/` the language does not have.
+#[test]
+fn an_operator_that_cannot_be_bound_does_not_cross_the_boundary() {
+    let library = "module lib\n\n\
+         record Money {\n\
+         \x20   cents: Int,\n\
+         }\n\n\
+         operator / = combine\n\n\
+         fn coins(cents: Int) -> Money {\n\
+         \x20   Money { cents: cents }\n\
+         }\n\n\
+         fn combine(a: Money, b: Money) -> Money { a }\n";
+    let app = "module app\n\n\
+         use lib.{Money, coins}\n\n\
+         test \"there is no such operator\" {\n\
+         \x20   assert coins(6) / coins(2) == coins(3)\n\
+         }\n";
+
+    assert!(
+        !refused_importing(library, app).is_empty(),
+        "`/` crossed the boundary, and it is not an operator a module can bind"
+    );
+}
+
+/// A binding for a type the binder did not declare does not cross either.
+///
+/// Written as three modules because that is the only shape that can tell the
+/// difference: one declares the type, one binds an operator for it, and the
+/// third asks what `+` means. The binding is refused where it is written, and
+/// what this holds is that the third module does not get an operator anyway.
+/// The table is keyed by the module that declares the type, so a binding from
+/// somewhere else has to be turned away rather than filed under its author.
+#[test]
+fn a_binding_for_someone_elses_type_does_not_cross_the_boundary() {
+    let mut sources = SourceMap::new();
+    let app = sources.add(
+        "app.deed".to_string(),
+        "module app\n\n\
+         use owner.{Money, coins}\n\n\
+         test \"there is no such operator\" {\n\
+         \x20   assert coins(1) + coins(2) == coins(3)\n\
+         }\n"
+        .to_string(),
+    );
+    let owner = sources.add(
+        "owner.deed".to_string(),
+        "module owner\n\n\
+         record Money {\n\
+         \x20   cents: Int,\n\
+         }\n\n\
+         fn coins(cents: Int) -> Money {\n\
+         \x20   Money { cents: cents }\n\
+         }\n"
+        .to_string(),
+    );
+    let binder = sources.add(
+        "binder.deed".to_string(),
+        "module binder\n\n\
+         use owner.{Money}\n\n\
+         operator + = combine\n\n\
+         fn combine(a: Money, b: Money) -> Money {\n\
+         \x20   a\n\
+         }\n"
+        .to_string(),
+    );
+
+    let checks = check_all(&sources, &[app, owner, binder]);
+    let refused: Vec<&str> = checks
+        .iter()
+        .filter(|one| one.file == app)
+        .flat_map(|one| one.diagnostics.iter())
+        .filter(|diagnostic| diagnostic.is_error())
+        .map(|diagnostic| diagnostic.code)
+        .collect();
+    assert!(
+        !refused.is_empty(),
+        "a module gave `+` a meaning on somebody else's type and a third file got it"
+    );
+}
+
 /// The operators that cannot be bound at all are still refused by name.
 ///
 /// `/` and `%` are partial and this language spells a partial answer with a
