@@ -1494,16 +1494,9 @@ impl<'a> Checker<'a> {
     /// handler given a function it never calls is a handler with a field it
     /// does not need.
     fn handed_over(&mut self, handler: &Expr) -> Row {
-        let Expr::StructLit { fields, .. } = handler else {
-            return Row::new();
-        };
-        let mut row = Row::new();
         let mut values = Vec::new();
-        for field in fields {
-            if let Some(value) = &field.value {
-                function_values(value, &mut values);
-            }
-        }
+        function_values(handler, &mut values);
+        let mut row = Row::new();
         for value in values {
             let held = self.function_value_row(value);
             row.extend(&held);
