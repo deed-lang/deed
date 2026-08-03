@@ -79,6 +79,7 @@ fn run_all(files: &[(String, String)]) -> (SourceMap, Vec<Diagnostic>) {
             &one.resolutions,
             one.guards(),
             one.rows(),
+            one.operators(),
         );
     }
 
@@ -402,7 +403,14 @@ fn a_row_that_does_not_cover_what_ran_names_the_function_that_promised_it() {
     );
 
     let mut program = Program::new();
-    program.add(one.file, &one.module, &one.resolutions, one.guards(), rows);
+    program.add(
+        one.file,
+        &one.module,
+        &one.resolutions,
+        one.guards(),
+        rows,
+        one.operators(),
+    );
 
     let failures: Vec<Diagnostic> = run_tests(&program, one.file)
         .into_iter()

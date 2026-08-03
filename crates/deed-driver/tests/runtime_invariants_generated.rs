@@ -255,6 +255,7 @@ fn assert_invariants(case: &Case) -> Option<&'static str> {
         &checked.resolutions,
         guards,
         checked.rows(),
+        checked.operators(),
     );
 
     let outcomes = run_tests(&program, checked.file);

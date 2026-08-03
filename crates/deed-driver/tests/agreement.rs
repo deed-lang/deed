@@ -776,6 +776,7 @@ fn the_backend_and_the_interpreter_answer_the_same_thing() {
             &one.resolutions,
             one.guards(),
             one.rows(),
+            one.operators(),
         );
         let outcomes = run_tests(&interpreted, one.file);
         assert!(
@@ -862,6 +863,7 @@ test \"a call across a file boundary\" {\n\
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
     let outcomes = run_tests(&interpreted, checks[0].file);
@@ -953,6 +955,7 @@ test \"a record and a choice cross a boundary\" {\n\
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
     let outcomes = run_tests(&interpreted, checks[0].file);
@@ -1202,6 +1205,7 @@ fn overflow_near_the_boundary_fails_the_same_way_under_both_engines() {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let outcomes = run_tests(&interpreted, one.file);
     assert_eq!(outcomes.len(), 1);
@@ -1334,6 +1338,7 @@ fn a_program_the_backend_refuses_still_runs_under_the_interpreter() {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let outcomes = run_tests(&interpreted, one.file);
     assert_eq!(outcomes.len(), 1);
@@ -1446,6 +1451,7 @@ fn run_generated_case(input: &InterpretedValue) -> Finding {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let interpreted_run = run_main(&interpreted, one.file, std::path::Path::new("."), &[])
         .expect("generated source should declare main");
@@ -1496,6 +1502,7 @@ fn generated_programs_keep_the_interpreter_and_backend_in_agreement() {
         &generated.resolutions,
         generated.guards(),
         generated.rows(),
+        generated.operators(),
     );
 
     let function = generated

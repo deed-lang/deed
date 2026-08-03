@@ -9,8 +9,9 @@ use std::fmt::Write;
 
 use deed_ast::{
     BinaryOp, Block, ChoiceDecl, Contract, DeprecateDecl, EffectDecl, EffectRef, Expr, FieldDecl,
-    FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module, Outcome, Param, Pattern,
-    PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias, UnaryOp, Use, Variant,
+    FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item, MatchArm, Module, OperatorDecl, Outcome,
+    Param, Pattern, PatternField, RecordDecl, Stmt, TestDecl, Type, TypeAlias, UnaryOp, Use,
+    Variant,
 };
 use deed_lexer::Trivia;
 
@@ -235,6 +236,7 @@ impl Printer<'_> {
     fn item(&mut self, item: &Item) {
         match item {
             Item::Deprecate(decl) => self.deprecate(decl),
+            Item::Operator(decl) => self.operator(decl),
             Item::TypeAlias(decl) => self.type_alias(decl),
             Item::Record(decl) => self.record(decl),
             Item::Choice(decl) => self.choice(decl),
@@ -251,6 +253,15 @@ impl Printer<'_> {
         self.push(&decl.old.name);
         self.push(" -> ");
         self.push(&decl.new.name);
+        self.newline();
+    }
+
+    fn operator(&mut self, decl: &OperatorDecl) {
+        self.line_start();
+        self.push("operator ");
+        self.push(decl.op.as_str());
+        self.push(" = ");
+        self.push(&decl.function.name);
         self.newline();
     }
 

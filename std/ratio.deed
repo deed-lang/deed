@@ -162,6 +162,17 @@ fn multiplied(left: Ratio, right: Ratio) -> Ratio {
     simplified(left.top * right.top, left.bottom * right.bottom)
 }
 
+// The three total operations, spelled the way arithmetic is spelled.
+//
+// A binding rather than a definition, so each function keeps its name and can
+// still be handed to something that takes one. Division is not here: it
+// answers with a `Result`, and an operator answers with the type it was given.
+operator + = added
+
+operator - = subtracted
+
+operator * = multiplied
+
 // Division, refused when the divisor is zero.
 //
 // The same shape as `ratio` and for the same reason: dividing by nothing is a

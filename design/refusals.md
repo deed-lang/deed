@@ -50,11 +50,14 @@ for now: keep refusing every fractional number type. That page is no longer only
 `std/ratio` ships, holds exact fractions as two `Int`s in a record, and `examples/logs.deed`
 has the percentage column that raised the question. Writing it settled two of the three
 worries: canonical equality turned out to be a constructor, and the proof model was never
-asked anything, because no contract in the library says anything about a ratio. What is left
-is that `1/2 + 1/3` has to be spelled `added(half, third)`, which is an argument about
-operator overloading rather than about numbers. Binary floating point is still the wrong
-answer for money and decimal is still the leading candidate for stored base ten quantities,
-but neither has a program here that wants one.
+asked anything, because no contract in the library says anything about a ratio. The third,
+that `1/2 + 1/3` had to be spelled `added(half, third)`, was an argument about operator
+overloading rather than about numbers, and that argument has since been made:
+[decisions/2026-08-03-operators-bound-to-functions.md](decisions/2026-08-03-operators-bound-to-functions.md)
+lets a module bind `+`, `-` and `*`, and `std/ratio` binds all three. What is left is a
+contract that has to say something about a fractional quantity. Binary floating point is
+still the wrong answer for money and decimal is still the leading candidate for stored base
+ten quantities, but neither has a program here that wants one.
 
 ## No ranges
 

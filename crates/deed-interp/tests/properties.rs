@@ -3,8 +3,8 @@
 use deed_ast::Item;
 use deed_diagnostics::{SourceMap, render_human};
 use deed_interp::{
-    DeclaredRows, Guards, Program, PropertyConfig, PropertyOutcome, Value, codes, generate_inputs,
-    run_properties, shrink_inputs,
+    DeclaredRows, Guards, OperatorCalls, Program, PropertyConfig, PropertyOutcome, Value, codes,
+    generate_inputs, run_properties, shrink_inputs,
 };
 use deed_lexer::tokenize;
 use deed_parser::parse;
@@ -36,6 +36,7 @@ fn properties_in(
         &resolved.resolutions,
         Guards::new(),
         DeclaredRows::new(),
+        OperatorCalls::new(),
     );
     let outcomes = run_properties(
         &program,
@@ -522,6 +523,7 @@ fn direct_generation_uses_the_whole_rejection_budget() {
         &resolved.resolutions,
         Guards::new(),
         DeclaredRows::new(),
+        OperatorCalls::new(),
     );
 
     let generated = generate_inputs(
@@ -563,6 +565,7 @@ fn direct_generation_counts_arguments_it_cannot_make() {
         &resolved.resolutions,
         Guards::new(),
         DeclaredRows::new(),
+        OperatorCalls::new(),
     );
 
     let generated = generate_inputs(
@@ -591,6 +594,7 @@ fn direct_shrinking_honours_the_predicate_and_finds_the_smallest_integer() {
         &resolved.resolutions,
         Guards::new(),
         DeclaredRows::new(),
+        OperatorCalls::new(),
     );
 
     let unchanged = shrink_inputs(
@@ -636,6 +640,7 @@ fn the_counter_example_has_a_property_and_it_passes() {
                 &resolved.resolutions,
                 Guards::new(),
                 DeclaredRows::new(),
+                OperatorCalls::new(),
             );
             program
         },

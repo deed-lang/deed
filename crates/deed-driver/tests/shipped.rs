@@ -120,6 +120,7 @@ fn the_shipped_modules_pass_their_own_tests() {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
 

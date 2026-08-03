@@ -225,6 +225,80 @@ fn a_deprecation_declaration_names_the_old_and_new_items() {
     }
 }
 
+/// `operator + = added` binds an operator to a function the module declares.
+#[test]
+fn an_operator_binding_names_its_operator_and_its_function() {
+    let parsed = parse_ok(
+        "module a\n\noperator + = added\n\nfn added(left: Int, right: Int) -> Int { left + right }\n",
+    );
+    match &parsed.module.items[0] {
+        Item::Operator(decl) => {
+            assert_eq!(decl.op, BinaryOp::Add);
+            assert_eq!(decl.function.name, "added");
+        }
+        other => panic!("expected an operator binding, got {other:?}"),
+    }
+}
+
+/// `operator` is a name everywhere else, which is what a soft keyword means.
+#[test]
+fn operator_is_still_an_ordinary_name() {
+    let parsed = parse_ok("module a\n\nfn f(operator: Int) -> Int { operator + 1 }\n");
+    assert_eq!(parsed.module.items.len(), 1);
+}
+
+/// Only the three total operators can be bound, and the rest say so where the
+/// operator is written rather than where the declaration starts.
+///
+/// The sentence as well as the code, because the three families are turned
+/// away for three different reasons and a reader told "no" without one of them
+/// learns nothing.
+#[test]
+fn an_operator_that_cannot_be_bound_is_named() {
+    for (spelled, because) in [
+        ("/", "does not always have such an answer"),
+        ("%", "does not always have such an answer"),
+        ("==", "equality is structural"),
+        ("!=", "equality is structural"),
+        ("<", "ordering is a separate question"),
+        ("&&", "ordering is a separate question"),
+    ] {
+        let source =
+            format!("module a\n\noperator {spelled} = f\n\nfn f(a: Int, b: Int) -> Int {{ a }}\n");
+        let (sources, parsed) = parse_source(&source);
+        assert!(
+            codes_of(&parsed.diagnostics).contains(&codes::UNBINDABLE_OPERATOR),
+            "`{spelled}` should not be bindable: {:?}",
+            codes_of(&parsed.diagnostics)
+        );
+        let rendered: String = parsed
+            .diagnostics
+            .iter()
+            .map(|d| render_human(&sources, d))
+            .collect();
+        assert!(
+            rendered.contains(because),
+            "`{spelled}` should be refused because {because:?}, and the reader was told:\n{rendered}"
+        );
+    }
+}
+
+/// A declaration that starts with a name is not an operator binding.
+///
+/// Both halves of the shape are load-bearing. An operator token after the
+/// first word is not enough on its own, or every stray expression at the top
+/// of a file would be read as a binding and answered with a message about a
+/// declaration form nobody was writing.
+#[test]
+fn a_name_followed_by_an_operator_is_not_an_operator_binding() {
+    let (_, parsed) = parse_source("module a\n\nfoo + bar\n");
+    assert!(
+        codes_of(&parsed.diagnostics).contains(&codes::EXPECTED_DECLARATION),
+        "a stray expression should not be read as an operator binding: {:?}",
+        codes_of(&parsed.diagnostics)
+    );
+}
+
 #[test]
 fn a_choice_variant_may_or_may_not_carry_fields() {
     let parsed = parse_ok(

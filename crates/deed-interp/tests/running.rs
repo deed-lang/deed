@@ -11,7 +11,7 @@
 
 use deed_diagnostics::{SourceMap, render_human};
 use deed_interp::{
-    DeclaredRows, Guards, Program, TestOutcome, codes, run_main_profiled, run_tests,
+    DeclaredRows, Guards, OperatorCalls, Program, TestOutcome, codes, run_main_profiled, run_tests,
 };
 use deed_lexer::tokenize;
 use deed_parser::parse;
@@ -41,6 +41,7 @@ fn run_in(src: &str, universe: &Universe) -> (SourceMap, Vec<TestOutcome>) {
         &resolved.resolutions,
         Guards::new(),
         DeclaredRows::new(),
+        OperatorCalls::new(),
     );
     let outcomes = run_tests(&program, file);
     (sources, outcomes)
@@ -82,6 +83,7 @@ fn run_together(sources_text: &[&str]) -> (SourceMap, Vec<TestOutcome>) {
             &resolved.resolutions,
             Guards::new(),
             DeclaredRows::new(),
+            OperatorCalls::new(),
         );
     }
 
@@ -174,6 +176,7 @@ fn main(sys: System) -> Int
         &resolved.resolutions,
         Guards::new(),
         DeclaredRows::new(),
+        OperatorCalls::new(),
     );
 
     let run = run_main_profiled(&program, file, std::path::Path::new(""), &[])
@@ -288,6 +291,7 @@ fn the_examples_pass_their_own_tests() {
             &resolved.resolutions,
             Guards::new(),
             DeclaredRows::new(),
+            OperatorCalls::new(),
         );
         let outcomes = run_tests(&program, file);
         assert!(!outcomes.is_empty(), "examples/{name} should have tests");

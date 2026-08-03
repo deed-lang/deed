@@ -80,9 +80,16 @@ pub fn check(file: FileId, module: &Module, resolutions: &Resolutions, world: &W
         refuting: false,
         in_closure: 0,
         walking: Vec::new(),
+        operators: HashMap::new(),
+        here: module
+            .name
+            .as_ref()
+            .map(|name| name.to_string_path())
+            .unwrap_or_default(),
     };
 
     checker.collect(module);
+    checker.collect_operators(module);
     checker.check_module(module);
 
     Checked {
@@ -182,6 +189,13 @@ fn imported_name(name: ClauseName) -> DefId {
     }
 }
 
+/// An operator, and the type it was written between two of: the module that
+/// declares that type and its name there.
+type OperatorKey = (BinaryOp, String, String);
+
+/// The module a bound function is declared in, and its name there.
+type OperatorTarget = (String, String);
+
 #[derive(Clone)]
 struct Signature {
     params: Vec<ParamTy>,
@@ -244,6 +258,17 @@ struct Checker<'a> {
     /// effect's, and they are empty everywhere else.
     enclosing_rows: Vec<deed_ast::Ident>,
     signatures: HashMap<DefId, Signature>,
+    /// What each operator in scope means, by the type it was bound for.
+    ///
+    /// Keyed and answered by module path and type name rather than by
+    /// definition, because a `DefId` is an index into one module's table and
+    /// a binding travels with the type it was written for. The value is the
+    /// module that declared the function and its name there, which is what
+    /// both engines need to reach it: nothing imported the function, so
+    /// nothing gave it a definition here.
+    operators: HashMap<OperatorKey, OperatorTarget>,
+    /// What this module is called, for keying its own bindings.
+    here: String,
     aliases: HashMap<DefId, &'a TypeAlias>,
     alias_targets: HashMap<DefId, Ty>,
     alias_stack: Vec<DefId>,
@@ -292,6 +317,208 @@ impl<'a> Checker<'a> {
     }
 
     // -- collecting --------------------------------------------------------
+
+    /// Works out what each `operator` binding in this module means.
+    ///
+    /// Runs after every signature is known, because the shape of the function
+    /// named is the whole question. What comes out is keyed by the type rather
+    /// than by the function, since that is what a `+` written between two
+    /// values has to be looked up by.
+    fn collect_operators(&mut self, module: &'a Module) {
+        for item in &module.items {
+            let Item::Operator(decl) = item else {
+                continue;
+            };
+            if !decl.op.is_bindable() {
+                continue;
+            }
+            let Some(def) = self.def_of(&decl.function) else {
+                continue;
+            };
+            let Some(signature) = self.signatures.get(&def).cloned() else {
+                continue;
+            };
+
+            let spelled = decl.op.as_str();
+            let name = &decl.function.name;
+
+            if !signature.generics.is_empty() {
+                self.emit(
+                    Diagnostic::error(
+                        codes::OPERATOR_SHAPE,
+                        self.file,
+                        decl.span,
+                        format!("`{name}` is generic, so `{spelled}` cannot mean it"),
+                    )
+                    .with_primary_label("a generic function cannot be an operator")
+                    .with_note(
+                        "the operand types are what choose the function, and a type parameter is not one of them yet",
+                    ),
+                );
+                continue;
+            }
+
+            if signature.params.len() != 2 {
+                let count = signature.params.len();
+                self.emit(
+                    Diagnostic::error(
+                        codes::OPERATOR_SHAPE,
+                        self.file,
+                        decl.span,
+                        format!("`{spelled}` sits between two values, and `{name}` takes {count}"),
+                    )
+                    .with_primary_label("wrong number of parameters"),
+                );
+                continue;
+            }
+
+            let left = &signature.params[0].ty;
+            let right = &signature.params[1].ty;
+            if left != right || &signature.ret != left {
+                let described = self.types.describe(left);
+                let other = self.types.describe(right);
+                let result = self.types.describe(&signature.ret);
+                self.emit(
+                    Diagnostic::error(
+                        codes::OPERATOR_SHAPE,
+                        self.file,
+                        decl.span,
+                        format!(
+                            "`{name}` takes {described} and {other} and gives back {result}, \
+                             and an operator takes two of one type and gives back that type"
+                        ),
+                    )
+                    .with_primary_label("not two of one type")
+                    .with_note(
+                        "an operator hands back what it was given, so that `a + b + c` reads the way it is written",
+                    ),
+                );
+                continue;
+            }
+
+            let Ty::Named { def: subject, args } = left else {
+                let described = self.types.describe(left);
+                self.emit(
+                    Diagnostic::error(
+                        codes::OPERATOR_SHAPE,
+                        self.file,
+                        decl.span,
+                        format!("`{spelled}` cannot be given a meaning on {described}"),
+                    )
+                    .with_primary_label("not a type this module declares")
+                    .with_note(
+                        "a module binds an operator for a type it declares, so what `+` means on a type is decided in one file",
+                    ),
+                );
+                continue;
+            };
+
+            if !args.is_empty() {
+                let described = self.types.describe(left);
+                self.emit(
+                    Diagnostic::error(
+                        codes::OPERATOR_SHAPE,
+                        self.file,
+                        decl.span,
+                        format!("`{spelled}` cannot be given a meaning on {described}"),
+                    )
+                    .with_primary_label("a type with arguments")
+                    .with_note(
+                        "the binding would have to hold for every argument, which is the question traits answer",
+                    ),
+                );
+                continue;
+            }
+
+            if !matches!(&signature.row, FnRow::Declared(entries) if entries.is_empty()) {
+                self.emit(
+                    Diagnostic::error(
+                        codes::OPERATOR_SHAPE,
+                        self.file,
+                        decl.span,
+                        format!("`{name}` performs something, so `{spelled}` cannot mean it"),
+                    )
+                    .with_primary_label("an operator performs nothing")
+                    .with_note(
+                        "an operator is reachable from a contract clause, and a clause that performs something is not a question about values",
+                    ),
+                );
+                continue;
+            }
+
+            let subject = self.resolutions.def(*subject).name.clone();
+            let key = (decl.op, self.here.clone(), subject);
+            let target = (self.here.clone(), name.clone());
+            if let Some((_, first)) = self.operators.insert(key, target) {
+                let described = self.types.describe(left);
+                self.emit(
+                    Diagnostic::error(
+                        codes::OPERATOR_SHAPE,
+                        self.file,
+                        decl.span,
+                        format!("`{spelled}` already means `{first}` on {described}"),
+                    )
+                    .with_primary_label("bound twice")
+                    .with_note("an operator between two values means one thing"),
+                );
+            }
+        }
+
+        self.collect_imported_operators();
+    }
+
+    /// The bindings the modules this one imports from wrote.
+    ///
+    /// Read rather than checked again: each was answered for where it was
+    /// written, and a module that reported someone else's mistake would report
+    /// it once per file that imports them. What is read here is the shape,
+    /// because that is what says which type the binding is for.
+    fn collect_imported_operators(&mut self) {
+        let found: Vec<(OperatorKey, OperatorTarget)> = self
+            .world
+            .operators()
+            .filter_map(|(module, op, function)| {
+                let SurfaceItem::Function {
+                    params,
+                    ret,
+                    generics,
+                    row,
+                    ..
+                } = self.world.get(module, function)?
+                else {
+                    return None;
+                };
+                if params.len() != 2 || !generics.is_empty() {
+                    return None;
+                }
+                if params[0] != params[1] || ret != &params[0] {
+                    return None;
+                }
+                if !matches!(row, FnRow::Declared(entries) if entries.is_empty()) {
+                    return None;
+                }
+                let Ty::External {
+                    module: owner,
+                    name,
+                    args,
+                } = &params[0]
+                else {
+                    return None;
+                };
+                if !args.is_empty() || owner.as_ref() != module {
+                    return None;
+                }
+                Some((
+                    (op, owner.to_string(), name.to_string()),
+                    (module.to_string(), function.to_string()),
+                ))
+            })
+            .collect();
+
+        for (key, target) in found {
+            self.operators.entry(key).or_insert(target);
+        }
+    }
 
     fn collect(&mut self, module: &'a Module) {
         for (name, params, ret) in io_signatures() {
@@ -4947,6 +5174,10 @@ impl<'a> Checker<'a> {
                 if unknown {
                     return Ty::Unknown;
                 }
+                if let Some((ty, target)) = self.bound_operator(op, left, right) {
+                    self.types.record_operator(span, target);
+                    return ty;
+                }
                 self.assign(left, &Ty::Int, Some(lhs), lhs.span(), None);
                 self.assign(right, &Ty::Int, Some(rhs), rhs.span(), None);
                 Ty::Int
@@ -4995,6 +5226,44 @@ impl<'a> Checker<'a> {
                 Ty::Bool
             }
         }
+    }
+
+    /// Which function an operator between these two means, and what it answers
+    /// with.
+    ///
+    /// Both sides have to be the same declared type, which is the whole
+    /// lookup: there is nothing to infer and nothing to pick between. A
+    /// refinement widens to its base first, so `Positive + Positive` finds
+    /// what `Int` would have found and a refined library type finds its own.
+    fn bound_operator(
+        &mut self,
+        op: BinaryOp,
+        left: &Ty,
+        right: &Ty,
+    ) -> Option<(Ty, (String, String))> {
+        if self.operators.is_empty() {
+            return None;
+        }
+        let left = self.widen(left);
+        let right = self.widen(right);
+        if left != right {
+            return None;
+        }
+        // Nothing asks whether the type has arguments. A binding for one
+        // could not have been collected: a function over `Pair<A, B>` is
+        // generic and refused, and so is one over a type this module imported.
+        // Asking again here would be a condition no program can make false.
+        let key = match &left {
+            Ty::Named { def, .. } => (
+                op,
+                self.here.clone(),
+                self.resolutions.def(*def).name.clone(),
+            ),
+            Ty::External { module, name, .. } => (op, module.to_string(), name.to_string()),
+            _ => return None,
+        };
+        let target = self.operators.get(&key)?.clone();
+        Some((left.clone(), target))
     }
 
     /// Insists that `ty` is something `<` could mean anything about.

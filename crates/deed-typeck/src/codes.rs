@@ -194,3 +194,26 @@ pub const HANDLER_MISSING_OPERATION: &str = "DEED4029";
 /// takes: read the state into a local and let the closure capture that. The
 /// value is then a number, which is what a `Fn() -> Int` says it is.
 pub const CLOSURE_OVER_STATE: &str = "DEED4030";
+
+/// `operator + = added` where `added` is not something an operator can mean.
+///
+/// A binding says an operator, written between two values of one type, means a
+/// function. The shape that makes that true is narrow and every part of it is
+/// load-bearing:
+///
+/// - Two parameters and a result, all of one type, so `a + b + c` is written
+///   the way it reads and the operator hands back what it was given.
+/// - That type declared in this module, so the meaning of `+` on a type is
+///   decided in one file. The same reasoning keeps module resolution free of a
+///   search path.
+/// - Nothing generic, because the operand types are what choose the function
+///   and a type parameter is not a type yet. That is the trait question, and
+///   it is not this one.
+/// - An empty row. An operator is reachable from a contract clause, and a
+///   clause that performs something is a clause that cannot be read as a
+///   question about values.
+///
+/// One code and several sentences, because they are one mistake: the function
+/// named is not the shape an operator is. See
+/// `design/decisions/2026-08-03-operators-bound-to-functions.md`.
+pub const OPERATOR_SHAPE: &str = "DEED4031";

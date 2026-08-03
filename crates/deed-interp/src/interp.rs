@@ -84,6 +84,7 @@ struct Entry<'a> {
     resolutions: &'a Resolutions,
     guards: Guards,
     rows: DeclaredRows,
+    operators: OperatorCalls,
 }
 
 /// Where the type checker gave up, and on what.
@@ -140,6 +141,17 @@ pub struct RowItem {
 /// leave it out would be one that could turn the check off by forgetting.
 pub type DeclaredRows = HashMap<Span, Vec<RowItem>>;
 
+/// Which function each operator a module bound goes to, by where the operator
+/// was written.
+///
+/// A `+` between two records is a call, and which call it is depends on the
+/// types of the two values. A value here carries its fields and not the name
+/// of its type, so this is the checker's answer rather than one worked out
+/// again while running. Not optional, for the reason [`DeclaredRows`] is not:
+/// a caller that could leave it out would be one that could turn `a + b` into
+/// "cannot add these" by forgetting.
+pub type OperatorCalls = HashMap<Span, (String, String)>;
+
 impl<'a> Program<'a> {
     pub fn new() -> Self {
         Self::default()
@@ -159,6 +171,7 @@ impl<'a> Program<'a> {
         resolutions: &'a Resolutions,
         guards: Guards,
         rows: DeclaredRows,
+        operators: OperatorCalls,
     ) {
         let path = match &module.name {
             Some(name) => name.to_string_path(),
@@ -171,6 +184,7 @@ impl<'a> Program<'a> {
             resolutions,
             guards,
             rows,
+            operators,
         });
     }
 
@@ -368,6 +382,7 @@ fn index_module<'a>(entry: &Entry<'a>) -> Code<'a> {
         subjects: HashMap::default(),
         guards: entry.guards.clone(),
         rows: entry.rows.clone(),
+        operators: entry.operators.clone(),
         state_names: HashMap::default(),
         variant_names: HashMap::default(),
         plans: HashMap::default(),
@@ -459,6 +474,8 @@ struct Code<'a> {
     guards: Guards,
     /// What each function in this module declared it performs.
     rows: DeclaredRows,
+    /// Which function each operator written in this module goes to.
+    operators: OperatorCalls,
     /// Handler state definition to the field name it stands for.
     state_names: HashMap<DefId, String, ByNumber>,
     variant_names: HashMap<DefId, String, ByNumber>,
@@ -753,6 +770,10 @@ impl<'a> Interp<'a> {
 
     fn resolutions(&self) -> &'a Resolutions {
         self.modules[self.current].resolutions
+    }
+
+    fn operators(&self) -> &OperatorCalls {
+        &self.modules[self.current].operators
     }
 
     fn file(&self) -> FileId {
@@ -1480,6 +1501,14 @@ impl<'a> Interp<'a> {
         let left = self.eval(lhs)?;
         let right = self.eval(rhs)?;
 
+        // A module that gave this operator a meaning turns it into the call
+        // the checker resolved. Read rather than worked out: the values here
+        // carry their fields and not the name of their type.
+        if let Some((module, function)) = self.operators().get(&span).cloned() {
+            let args = vec![(left, lhs.span()), (right, rhs.span())];
+            return self.call_named(&module, &function, args, span);
+        }
+
         if matches!(op, Eq | Ne) {
             let equal = left == right;
             return Ok(Value::Bool(if op == Eq { equal } else { !equal }));
@@ -1762,6 +1791,39 @@ impl<'a> Interp<'a> {
             }
         };
 
+        self.current = caller;
+        result
+    }
+
+    /// Calls a function by the module that declares it and its name there.
+    ///
+    /// The one caller is a bound operator, which reaches a function nothing
+    /// imported: there is no definition here to call it through, and the pair
+    /// is what the checker could hand over.
+    fn call_named(
+        &mut self,
+        module: &str,
+        function: &str,
+        args: Vec<(Value, Span)>,
+        span: Span,
+    ) -> Eval<Value> {
+        let here = self.file();
+        let Some(index) = self.by_path.get(module).copied() else {
+            return Err(self.not_runnable(span, &format!("an operator declared in `{module}`")));
+        };
+        let there = &self.modules[index];
+        let found = there
+            .functions
+            .iter()
+            .find(|(id, _)| there.resolutions.def(**id).name == function)
+            .map(|(_, declaration)| *declaration);
+        let Some(declaration) = found else {
+            return Err(self.not_runnable(span, &format!("`{function}` in `{module}`")));
+        };
+
+        let caller = self.current;
+        self.current = index;
+        let result = self.call(declaration, args, span, here, None);
         self.current = caller;
         result
     }
@@ -3128,7 +3190,7 @@ fn collect_olds<'a>(expr: &'a Expr, out: &mut Vec<(Span, &'a Expr)>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Interp, Promise};
+    use super::{Interp, OperatorCalls, Promise};
     use crate::{DeclaredRows, Guards, Program};
     use deed_ast::Item;
     use deed_diagnostics::SourceMap;
@@ -3189,6 +3251,7 @@ mod tests {
             &resolved.resolutions,
             Guards::new(),
             DeclaredRows::new(),
+            OperatorCalls::new(),
         );
 
         let module = program.module(file).expect("the module should be there");

@@ -54,6 +54,7 @@ fn run(src: &str) -> (SourceMap, Vec<TestOutcome>) {
         &checked.resolutions,
         checked.guards(),
         checked.rows(),
+        checked.operators(),
     );
     let outcomes = run_tests(&program, checked.file);
     (sources, outcomes)

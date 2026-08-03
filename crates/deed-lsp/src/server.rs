@@ -46,6 +46,7 @@ mod kind {
     pub const FUNCTION: i64 = 12;
     pub const ENUM_MEMBER: i64 = 22;
     pub const STRUCT: i64 = 23;
+    pub const OPERATOR: i64 = 25;
 }
 
 /// What the loop should do after a message.
@@ -1379,6 +1380,14 @@ impl Server {
                 decl.old.span,
                 Vec::new(),
             ),
+            Item::Operator(decl) => self.symbol(
+                document,
+                decl.op.as_str(),
+                kind::OPERATOR,
+                decl.span,
+                decl.op_span,
+                Vec::new(),
+            ),
             // The protocol has fewer kinds than this language has
             // declarations. A `type` is a named type with nothing to list
             // inside it, which is the closest thing to an interface the
@@ -2305,7 +2314,7 @@ fn touches(span: Span, start: u32, end: u32) -> bool {
 /// nested one level and each fold independently.
 fn item_folds(document: &Document, item: &Item, ranges: &mut Vec<Json>) {
     match item {
-        Item::Deprecate(_) => {}
+        Item::Deprecate(_) | Item::Operator(_) => {}
         Item::Function(decl) => {
             if let Some(r) = body_fold(document, decl.body.span) {
                 ranges.push(r);
@@ -2468,6 +2477,7 @@ fn collect_item_spans(offset: u32, item: &Item, spans: &mut Vec<Span>) {
         Item::Test(decl) => collect_test_spans(offset, decl, spans),
         Item::Handler(decl) => collect_handler_spans(offset, decl, spans),
         Item::Deprecate(_)
+        | Item::Operator(_)
         | Item::Record(_)
         | Item::Choice(_)
         | Item::Effect(_)

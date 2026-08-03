@@ -35,6 +35,7 @@ fn ran(source: &str) -> Vec<deed_interp::TestOutcome> {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let outcomes = run_tests(&program, one.file);
     assert!(!outcomes.is_empty(), "this program declares no test");

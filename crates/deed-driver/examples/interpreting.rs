@@ -1028,6 +1028,7 @@ fn time(files: &[(&str, String)], entry: usize) -> Duration {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
 

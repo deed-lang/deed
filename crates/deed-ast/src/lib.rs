@@ -86,6 +86,7 @@ pub struct Module {
 #[derive(Clone, Debug)]
 pub enum Item {
     Deprecate(DeprecateDecl),
+    Operator(OperatorDecl),
     TypeAlias(TypeAlias),
     Record(RecordDecl),
     Choice(ChoiceDecl),
@@ -99,6 +100,7 @@ impl Item {
     pub fn span(&self) -> Span {
         match self {
             Item::Deprecate(d) => d.span,
+            Item::Operator(d) => d.span,
             Item::TypeAlias(d) => d.span,
             Item::Record(d) => d.span,
             Item::Choice(d) => d.span,
@@ -108,6 +110,23 @@ impl Item {
             Item::Test(d) => d.span,
         }
     }
+}
+
+/// `operator + = added`
+///
+/// Says that an operator, written between two values of a type this module
+/// declares, means a function this module declares. A binding rather than a
+/// definition: the function keeps its name, so it can still be called and
+/// still be passed. See
+/// `design/decisions/2026-08-03-operators-bound-to-functions.md`.
+#[derive(Clone, Debug)]
+pub struct OperatorDecl {
+    pub op: BinaryOp,
+    /// Where the operator itself is written, which is what a diagnostic about
+    /// the choice of operator underlines.
+    pub op_span: Span,
+    pub function: Ident,
+    pub span: Span,
 }
 
 /// `deprecated old_name -> new_name`
@@ -422,7 +441,7 @@ impl Stmt {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BinaryOp {
     Or,
     And,
@@ -481,6 +500,21 @@ impl BinaryOp {
             BinaryOp::Div => "/",
             BinaryOp::Rem => "%",
         }
+    }
+
+    /// The operators a module may bind to one of its own functions.
+    ///
+    /// The three total ones. `/` and `%` are partial, and this language spells
+    /// a partial answer with `Result`, which is a shape an operator cannot
+    /// have without `a / b + c` meaning something nobody expects. `==` is
+    /// total and structural over every type already. The comparisons are a
+    /// separate decision because they run into generic sorting rather than
+    /// stopping at notation. See
+    /// `design/decisions/2026-08-03-operators-bound-to-functions.md`.
+    pub const BINDABLE: [BinaryOp; 3] = [BinaryOp::Add, BinaryOp::Sub, BinaryOp::Mul];
+
+    pub fn is_bindable(self) -> bool {
+        matches!(self, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
     }
 }
 

@@ -470,6 +470,7 @@ fn runtime_sample(files: &[(&str, String)], entry: usize) -> Sample {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
 

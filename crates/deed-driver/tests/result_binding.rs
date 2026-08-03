@@ -40,6 +40,7 @@ fn run(src: &str) -> (SourceMap, Vec<deed_interp::TestOutcome>) {
         &resolved.resolutions,
         deed_interp::Guards::new(),
         deed_interp::DeclaredRows::new(),
+        deed_interp::OperatorCalls::new(),
     );
     let outcomes = run_tests(&program, file);
     (sources, outcomes)

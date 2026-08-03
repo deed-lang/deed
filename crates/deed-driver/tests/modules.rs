@@ -515,6 +515,7 @@ fn run_together(files: &[&str]) -> (SourceMap, Vec<deed_interp::TestOutcome>) {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
     let outcomes = deed_interp::run_tests(&program, ids[0]);
@@ -674,6 +675,7 @@ fn the_multi_module_example_runs_its_tests() {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
 

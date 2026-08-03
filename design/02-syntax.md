@@ -94,16 +94,48 @@ needs to re-check it. This is P6.
 
 ## Operators
 
-There are fewer than it looks, because none of them are overloadable and there is no trait
-system for them to hang off.
+There are fewer than it looks. There is no trait system for them to hang off, and what a
+module can do is say that one of them means a function it already wrote.
 
 | | |
 | --- | --- |
-| `+ - * / %` | `Int`, and nothing else. Overflow and division by zero are errors, not wraps |
+| `+ - * / %` | `Int`, and nothing else |
+| `+ - *` | also whatever a module bound them to, on the type it bound them for |
 | `+` | also joins two `String`s |
 | `< <= > >=` | `Int` and `String`, and nothing else |
 | `== !=` | anything, structurally |
 | `&& \|\|` | `Bool`, and they short circuit |
+
+Overflow and division by zero are errors, not wraps.
+
+### An operator can be bound to a function
+
+```
+fn added(left: Ratio, right: Ratio) -> Ratio { .. }
+
+operator + = added
+```
+
+A binding rather than a definition. `added` keeps its name, stays callable and stays
+something a fold can be handed, which is the half an operator cannot do; the operator is
+the half a formula wants. `std/ratio` binds all three, so `1/2 + 1/3` is written the way
+arithmetic is written instead of as `added(half, third)`, and the binding travels with the
+type: a module that imports `Ratio` imports what `+` means on one.
+
+The shape is narrow and every part of it is load-bearing. Two parameters and a result, all
+of one type, so an operator hands back what it was given and `a + b + c` reads the way it
+is written. That type declared in the module doing the binding, so what `+` means on a type
+is decided in one file. Nothing generic, because the operand types are what choose the
+function. And an empty row, because a contract clause can reach an operator and a clause
+that performs something is not a question about values.
+
+Three operators and no more. `/` and `%` are partial, and this language spells a partial
+answer with a `Result`, which is not a shape an operator can have without `a / b + c`
+meaning something nobody expects. `==` is structural and total over every type already, so
+there is nothing for a module to decide. Ordering is left out because it does not stop at
+notation: `<` on a user type meets `sort`, which takes a comparison today, and that is the
+question traits would answer. `design/decisions/2026-08-03-operators-bound-to-functions.md`
+has the argument.
 
 There are five operators that mean two things: `+`, `<`, `<=`, `>` and `>=`. Each of them
 takes an `Int` or a `String` and nothing else, and none of them is ambiguous, for the same

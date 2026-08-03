@@ -1004,6 +1004,7 @@ fn the_readme_reports_the_number_of_tests_the_corpus_runs() {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
 

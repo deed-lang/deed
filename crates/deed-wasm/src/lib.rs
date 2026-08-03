@@ -256,6 +256,7 @@ pub fn test_source(source: &str) -> String {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
 
@@ -365,6 +366,7 @@ pub fn run_source(source: &str) -> String {
             &checked.resolutions,
             checked.guards(),
             checked.rows(),
+            checked.operators(),
         );
     }
 

@@ -249,6 +249,7 @@ fn main() -> Int\n\
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let run = run_main(&program, one.file, Path::new("."), &[]).expect("there is a `main`");
     let failure = run.result.expect_err("no host means it cannot run");

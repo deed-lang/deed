@@ -124,6 +124,7 @@ fn the_interpreter_and_compiler_stop_the_same_way_on_a_refinement() {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let run = deed_interp::run_main(&interpreted, one.file, std::path::Path::new(""), &[])
         .expect("the source should define `main`");
@@ -226,6 +227,7 @@ fn the_interpreter_stops_on_the_same_code() {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let outcomes = run_tests(&interpreted, one.file);
 
@@ -270,6 +272,7 @@ fn the_interpreter_and_compiler_stop_with_the_same_message() {
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let outcomes = run_tests(&interpreted, one.file);
 
@@ -319,6 +322,7 @@ fn main() -> Int {\n\
         &one.resolutions,
         one.guards(),
         one.rows(),
+        one.operators(),
     );
     let run = deed_interp::run_main(&interpreted, one.file, std::path::Path::new(""), &[])
         .expect("the source should define `main`");

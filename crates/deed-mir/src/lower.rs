@@ -1599,6 +1599,43 @@ impl Lowering<'_> {
     /// only when something reaches it: a module that ships thirty functions
     /// and is imported for one contributes one, which matters because the
     /// rest of it may use shapes this backend cannot compile.
+    /// The function a bound operator means.
+    ///
+    /// Reached by module and name rather than by definition, for the reason
+    /// the checker recorded it that way: nothing imported the function, so
+    /// there is no definition here that stands for it. Lowered as it is
+    /// reached, the same way a call into another module is.
+    fn operator_target(
+        &mut self,
+        module: &str,
+        function: &str,
+        span: Span,
+    ) -> Result<crate::FuncId, Unlowered> {
+        let Some(at) = self.units.iter().position(|unit| unit.path == module) else {
+            return Err(unlowered(
+                &format!(
+                    "an operator meaning `{function}`, whose module `{module}` was not compiled alongside"
+                ),
+                span,
+            ));
+        };
+        let Some(declaration) = self.units[at].declarations.get(function).copied() else {
+            return Err(unlowered(
+                &format!("an operator meaning `{function}`, which `{module}` does not declare"),
+                span,
+            ));
+        };
+
+        let copy = format!("{module}/{function}<>");
+        if let Some(found) = self.instantiated.get(&copy) {
+            return Ok(*found);
+        }
+        let was = self.enter(at);
+        let lowered = self.copy_of(declaration, copy, HashMap::new());
+        self.leave(was);
+        lowered
+    }
+
     fn crossed(
         &mut self,
         def: DefId,
@@ -2234,10 +2271,21 @@ impl Lowering<'_> {
                 let outer = self.expected.replace(operand.clone());
                 let right = self.expr(rhs);
                 self.expected = outer;
+                let right = right?;
+
+                if let Some((module, function)) = self.types.operators().get(span).cloned() {
+                    let func = self.operator_target(&module, &function, *span)?;
+                    return Ok(Expr::Call {
+                        func,
+                        args: vec![left, right],
+                        span: *span,
+                    });
+                }
+
                 Expr::Binary {
                     op: binary(*op, &operand, *span)?,
                     left: Box::new(left),
-                    right: Box::new(right?),
+                    right: Box::new(right),
                     span: *span,
                 }
             }

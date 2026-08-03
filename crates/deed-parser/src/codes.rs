@@ -231,3 +231,18 @@ pub const OUTCOME_IN_WHERE: &str = "DEED2023";
 /// otherwise gets a name-resolution error about `T` from inside an operation
 /// signature, which points at the use rather than the decision.
 pub const EFFECT_TYPE_PARAM: &str = "DEED2024";
+
+/// `operator / = divided`: an operator a module may not give a meaning to.
+///
+/// A module can bind `+`, `-` and `*` to one of its own functions, and the
+/// three were chosen rather than left over. An operator answers with the type
+/// it was handed, and `/` and `%` do not always have such an answer, which is
+/// what a `Result` is for and what a function returning one already says.
+/// Equality is structural and total over every type, so there is nothing for a
+/// module to decide. The comparisons are a separate decision, because ordering
+/// a user type runs into generic sorting rather than stopping at notation.
+///
+/// The binding parses either way, so the reader is told which operator is the
+/// problem rather than being shown the whole declaration form. See
+/// `design/decisions/2026-08-03-operators-bound-to-functions.md`.
+pub const UNBINDABLE_OPERATOR: &str = "DEED2025";
