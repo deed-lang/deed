@@ -54,6 +54,9 @@ struct Debugging {
     program: PathBuf,
     dir: PathBuf,
     seq: i64,
+    /// Everything the session has sent, in order, for the tests that are about
+    /// the stream rather than about one answer.
+    all: Vec<Json>,
 }
 
 impl Debugging {
@@ -72,6 +75,7 @@ impl Debugging {
             program,
             dir,
             seq: 0,
+            all: Vec::new(),
         }
     }
 
@@ -86,6 +90,7 @@ impl Debugging {
             fields.push(("arguments", arguments));
         }
         let (replies, _) = self.session.handle(&Json::object(fields));
+        self.all.extend(replies.iter().cloned());
         replies
     }
 
@@ -120,15 +125,19 @@ impl Debugging {
     }
 
     fn stack(&mut self) -> Vec<Json> {
-        let replies = self.ask(
-            "stackTrace",
-            Json::object(vec![("threadId", Json::number(1))]),
-        );
+        let replies = self.stack_messages();
         replies[0]
             .at(&["body", "stackFrames"])
             .and_then(Json::as_array)
             .map(<[Json]>::to_vec)
             .unwrap_or_default()
+    }
+
+    fn stack_messages(&mut self) -> Vec<Json> {
+        self.ask(
+            "stackTrace",
+            Json::object(vec![("threadId", Json::number(1))]),
+        )
     }
 
     /// The names and values a frame can see, as `name = value`.
@@ -429,6 +438,12 @@ fn each_frame_shows_its_own_bindings() {
 
 /// The protocol lets a client count lines from zero, and one that does is
 /// answered in its own terms rather than in ours.
+///
+/// The line a stop reports is not enough to hold this on its own: a breakpoint
+/// is converted one way and a stop is converted back the other, so an adapter
+/// that had both bases backwards would answer with the number it was given
+/// while stopping a line away from it. What says where it really stopped is
+/// what the frame can see, so this asks for that instead.
 #[test]
 fn a_client_that_counts_from_zero_is_answered_from_zero() {
     let mut run = Debugging::new("zero-based", PROGRAM);
@@ -447,6 +462,110 @@ fn a_client_that_counts_from_zero_is_answered_from_zero() {
     assert_eq!(stopped_for(&started).as_deref(), Some("breakpoint"));
     let stack = run.stack();
     assert_eq!(stack[0].get("line"), Some(&Json::number(13)));
+
+    let seen = run.variables(0);
+    assert!(
+        seen.contains(&"y = 3".to_string()),
+        "zero-based line 13 is `let answer`, so `let y` has already run: {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|line| line.starts_with("answer")),
+        "and `let answer` has not: {seen:?}"
+    );
+}
+
+/// A column is what an editor puts the arrow on. Nothing else here reads one,
+/// so without this it could be off by one, or zero for every stop, and every
+/// other assertion in this file would still hold.
+#[test]
+fn a_stop_says_which_column_the_statement_starts_at() {
+    let mut run = Debugging::new("column", PROGRAM);
+    run.launched(&[14], false);
+
+    let stack = run.stack();
+    assert_eq!(
+        stack[0].get("column"),
+        Some(&Json::number(5)),
+        "`let answer` is indented by four, and columns start at one"
+    );
+}
+
+// -- output ----------------------------------------------------------------
+
+/// What a program has printed by the time it stops, rather than only what it
+/// printed by the time it ended.
+///
+/// A run collects its output and hands it over at the end, which is fine for a
+/// test and useless for somebody watching one line at a time. This is the
+/// difference between a debug console that fills in as you step and one that
+/// stays empty until the program is over.
+#[test]
+fn what_a_program_printed_before_it_stopped_arrives_with_the_stop() {
+    let mut run = Debugging::new("printing", PRINTING);
+    let started = run.launched(&[8], false);
+
+    assert_eq!(stopped_for(&started).as_deref(), Some("breakpoint"));
+    assert_eq!(
+        written(&started),
+        vec!["before\n"],
+        "the line was written before the breakpoint, so it should be here"
+    );
+    assert_eq!(events(&started), vec!["output", "stopped"]);
+
+    // And it is not sent twice when the program goes on to end.
+    let carried_on = run.ask(
+        "continue",
+        Json::object(vec![("threadId", Json::number(1))]),
+    );
+    assert_eq!(written(&carried_on), Vec::<String>::new());
+}
+
+const PRINTING: &str = "module app\n\
+     \n\
+     fn main(sys: System) -> Int\n\
+     \x20 uses\n\
+     \x20   Io.write,\n\
+     {\n\
+     \x20   Io.write(sys.console, \"before\")\n\
+     \x20   let x = 1\n\
+     \x20   x\n\
+     }\n";
+
+// -- the envelope ----------------------------------------------------------
+
+/// Every message the protocol carries has a sequence number, and it goes up.
+///
+/// Nothing else in this file reads one, because nothing else needs to: the
+/// answers are correlated by `request_seq`. A client is entitled to the
+/// numbering anyway, and one that is not counting is one nobody would notice
+/// was not counting.
+#[test]
+fn every_message_is_numbered_in_order() {
+    let mut run = Debugging::new("numbered", PROGRAM);
+    run.launched(&[14], false);
+    run.stack_messages();
+    run.ask(
+        "continue",
+        Json::object(vec![("threadId", Json::number(1))]),
+    );
+
+    let numbers: Vec<i64> = run
+        .all
+        .iter()
+        .map(|message| {
+            message
+                .get("seq")
+                .and_then(Json::as_i64)
+                .expect("every message carries a sequence number")
+        })
+        .collect();
+
+    assert!(numbers.len() > 5, "{numbers:?}");
+    assert_eq!(numbers[0], 1, "numbering starts at one: {numbers:?}");
+    assert!(
+        numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "each message is one past the last: {numbers:?}"
+    );
 }
 
 // -- breakpoints -----------------------------------------------------------
@@ -610,16 +729,50 @@ fn write(path: &Path, text: &str) {
 /// reachable through it rather than only through `handle`.
 #[test]
 fn a_framed_stream_is_read_and_answered() {
-    let request = r#"{"seq":1,"type":"request","command":"initialize"}"#;
-    let framed = format!("Content-Length: {}\r\n\r\n{request}", request.len());
-    let mut input = std::io::Cursor::new(framed.into_bytes());
-    let mut output = Vec::new();
-
-    deed_dap::serve(&mut input, &mut output).unwrap();
-
-    let answered = String::from_utf8(output).unwrap();
+    let answered = served(&[r#"{"seq":1,"type":"request","command":"initialize"}"#]);
     assert!(answered.contains("Content-Length: "), "{answered}");
     assert!(answered.contains("\"initialized\""), "{answered}");
+}
+
+/// The loop reads until it is told to stop, and then stops.
+///
+/// Both halves matter and neither is visible from `handle`. A loop that
+/// carried on past a disconnect would answer a client that has gone; one that
+/// stopped after every message would answer the first request an editor sends
+/// and then appear to hang.
+#[test]
+fn the_stream_ends_at_a_disconnect_and_not_before() {
+    let carried_on = served(&[
+        r#"{"seq":1,"type":"request","command":"initialize"}"#,
+        r#"{"seq":2,"type":"request","command":"threads"}"#,
+    ]);
+    assert!(
+        carried_on.contains("\"threads\""),
+        "the second request should have been answered: {carried_on}"
+    );
+
+    let stopped = served(&[
+        r#"{"seq":1,"type":"request","command":"disconnect"}"#,
+        r#"{"seq":2,"type":"request","command":"threads"}"#,
+    ]);
+    assert!(
+        !stopped.contains("\"threads\""),
+        "nothing after a disconnect should be answered: {stopped}"
+    );
+}
+
+fn served(messages: &[&str]) -> String {
+    let mut framed = String::new();
+    for message in messages {
+        framed.push_str(&format!(
+            "Content-Length: {}\r\n\r\n{message}",
+            message.len()
+        ));
+    }
+    let mut input = std::io::Cursor::new(framed.into_bytes());
+    let mut output = Vec::new();
+    deed_dap::serve(&mut input, &mut output).unwrap();
+    String::from_utf8(output).unwrap()
 }
 
 #[test]
