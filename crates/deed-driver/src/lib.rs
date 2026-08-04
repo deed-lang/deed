@@ -113,7 +113,7 @@ mod clock_tests {
 use deed_ast::{Item, Module, Outcome};
 use deed_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use deed_effects::Effects;
-use deed_interp::{DeclaredRows, Guard, Guards, OperatorCalls, RowItem};
+use deed_interp::{DeclaredRows, Guard, Guards, OperatorCalls, Program, RowItem};
 use deed_lexer::tokenize;
 use deed_parser::parse;
 use deed_resolve::{Resolutions, Universe};
@@ -256,6 +256,28 @@ impl Checked {
     pub fn operators(&self) -> OperatorCalls {
         self.types.operators().clone()
     }
+}
+
+/// Every checked module as one program, so a call can be followed out of one.
+///
+/// The interpreter used to be handed a single module and stopped at the first
+/// call that left it. Building this is the whole of not doing that, and it is
+/// here rather than in whoever is about to run something because there is now
+/// more than one of those: `deed run`, `deed test` and the debug adapter all
+/// need the same set and would each be a chance to assemble a different one.
+pub fn program_of(checks: &[Checked]) -> Program<'_> {
+    let mut program = Program::new();
+    for checked in checks {
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+            checked.rows(),
+            checked.operators(),
+        );
+    }
+    program
 }
 
 /// The module a file declares and the modules it imports.

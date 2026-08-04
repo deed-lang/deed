@@ -15,6 +15,7 @@ path = "src/main.rs"
 deed-ast = { path = "../deed-ast" }
 deed-diagnostics = { path = "../deed-diagnostics" }
 deed-codegen = { path = "../deed-codegen" }
+deed-dap = { path = "../deed-dap" }
 deed-driver = { path = "../deed-driver" }
 deed-explain = { path = "../deed-explain" }
 deed-fetch = { path = "../deed-fetch" }

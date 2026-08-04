@@ -37,6 +37,7 @@ use deed_rt::reach::{self, Reach};
 use crate::codes;
 use crate::sandbox;
 use crate::value::{Capability, ClosureValue, Fields, Frame, Value, VariantValue};
+use crate::watch::{FrameView, Paused, Watcher};
 
 /// How deep a chain of calls may go before the interpreter gives up.
 ///
@@ -321,6 +322,39 @@ fn run_main_with_profile(
     reach: &Reach,
     profile: bool,
 ) -> Option<Run> {
+    run_main_inner(program, file, root, arguments, reach, profile, None)
+}
+
+/// Runs `main` with something watching every statement.
+///
+/// The watcher is handed over rather than borrowed. It is going to be told
+/// about a run that is happening inside this call and there is nothing useful
+/// to hand back afterwards, and taking it by reference would mean this
+/// function's signature outlived the run it describes.
+///
+/// A run that is being watched keeps a call stack the others do not, so the
+/// two are one function with a parameter rather than two copies of the setup:
+/// a second copy is a second place for what `main` is handed to drift.
+pub fn run_main_watched(
+    program: &Program,
+    file: FileId,
+    root: &Path,
+    arguments: &[String],
+    reach: &Reach,
+    watcher: Box<dyn Watcher>,
+) -> Option<Run> {
+    run_main_inner(program, file, root, arguments, reach, false, Some(watcher))
+}
+
+fn run_main_inner(
+    program: &Program,
+    file: FileId,
+    root: &Path,
+    arguments: &[String],
+    reach: &Reach,
+    profile: bool,
+    watcher: Option<Box<dyn Watcher>>,
+) -> Option<Run> {
     let main = program
         .module(file)?
         .items
@@ -334,6 +368,7 @@ fn run_main_with_profile(
     if profile {
         interp.profile = Some(ProfileState::new());
     }
+    interp.watcher = watcher;
     interp.entry = interp.promise_of(main);
     interp.root = sandbox::root(root).ok().map(Rc::from);
     interp.reach = Rc::new(reach.clone());
@@ -669,6 +704,34 @@ pub(crate) struct Interp<'a> {
     /// the test runner.
     arguments: Vec<Rc<str>>,
     profile: Option<ProfileState>,
+    /// Who is watching, if anybody is.
+    ///
+    /// `None` for every run that is not being debugged, which is nearly all
+    /// of them, and the one thing the hot path pays is that question.
+    watcher: Option<Box<dyn Watcher>>,
+    /// The active calls, kept only while something is watching.
+    ///
+    /// [`Interp::frames`] cannot answer this. It gains an entry for a
+    /// `finally` block and for a closure body as well as for a call, and it
+    /// holds bindings rather than saying whose they are. A stack trace needs
+    /// the name, the module and where the call has got to, and none of those
+    /// are anywhere else.
+    calls: Vec<CallRecord>,
+}
+
+/// One entry of the call stack a watcher sees.
+struct CallRecord {
+    function: String,
+    /// Which module the call is executing in, and which file that is.
+    ///
+    /// Written when the call runs a statement rather than when it starts,
+    /// because a call's module is settled inside its own body and a frame
+    /// that has not run a statement yet is a frame nothing can be stopped in.
+    module: usize,
+    file: FileId,
+    span: Span,
+    /// Which entry of [`Interp::frames`] holds this call's bindings.
+    frame: usize,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -733,6 +796,8 @@ impl<'a> Interp<'a> {
             reach: Rc::new(Reach::none()),
             arguments: Vec::new(),
             profile: None,
+            watcher: None,
+            calls: Vec::new(),
         }
     }
 
@@ -968,6 +1033,95 @@ impl<'a> Interp<'a> {
 
     fn frame(&mut self) -> &mut Frame {
         self.frames.last_mut().expect("there is always a frame")
+    }
+
+    // -- being watched -----------------------------------------------------
+
+    /// Offers a watcher the point before `span` runs.
+    ///
+    /// One question on the hot path, asked once per statement, and everything
+    /// else behind it. A run nobody is watching pays a null check.
+    #[inline]
+    fn watch(&mut self, span: Span) {
+        if self.watcher.is_some() {
+            self.stop_at(span);
+        }
+    }
+
+    /// Holds the program at `span` for as long as the watcher wants it.
+    ///
+    /// The watcher is taken out and put back rather than borrowed, because it
+    /// is being handed the interpreter it lives in. Nothing runs while it is
+    /// out: a watcher is told where the program is, not asked to move it.
+    #[inline(never)]
+    fn stop_at(&mut self, span: Span) {
+        let file = self.file();
+        let current = self.current;
+        if let Some(call) = self.calls.last_mut() {
+            call.module = current;
+            call.file = file;
+            call.span = span;
+        }
+
+        let Some(mut watcher) = self.watcher.take() else {
+            return;
+        };
+        watcher.at(Paused {
+            interp: self,
+            file,
+            span,
+        });
+        self.watcher = Some(watcher);
+    }
+
+    /// Every active call, innermost first, with its bindings rendered.
+    pub(crate) fn stack_view(&self, file: FileId, span: Span) -> Vec<FrameView> {
+        let mut stack: Vec<FrameView> = self
+            .calls
+            .iter()
+            .map(|call| FrameView {
+                function: call.function.clone(),
+                module: self.modules[call.module].path.to_string(),
+                file: call.file,
+                span: call.span,
+                variables: self.bindings_of(call),
+            })
+            .collect();
+
+        // The innermost call is about to run `span`, which is one statement
+        // further on than the last one it was watched at. Saying otherwise
+        // would point a reader at the line that has already happened.
+        if let Some(innermost) = stack.last_mut() {
+            innermost.file = file;
+            innermost.span = span;
+        }
+
+        stack.reverse();
+        stack
+    }
+
+    /// What one call can see, by name, sorted so two stops agree.
+    fn bindings_of(&self, call: &CallRecord) -> Vec<(String, String)> {
+        let Some(frame) = self.frames.get(call.frame) else {
+            return Vec::new();
+        };
+        let resolutions = self.modules[call.module].resolutions;
+        let mut named: Vec<(String, String)> = frame
+            .iter()
+            .map(|(def, value)| (resolutions.def(*def).name.clone(), value.to_string()))
+            .collect();
+        named.sort();
+        named
+    }
+
+    /// Lines written through a `Console` so far.
+    pub(crate) fn written(&self) -> &[String] {
+        &self.output
+    }
+
+    /// How many calls are active.
+    pub(crate) fn active_calls(&self) -> usize {
+        self.calls.len()
     }
 
     /// Binds a name in the running frame, replacing whatever was there.
@@ -2346,6 +2500,15 @@ impl<'a> Interp<'a> {
         }
 
         self.frames.push(frame);
+        if self.watcher.is_some() {
+            self.calls.push(CallRecord {
+                function: function.sig.name.name.clone(),
+                module: self.current,
+                file: call_file,
+                span: call_span,
+                frame: self.frames.len() - 1,
+            });
+        }
         self.rows.push(RowFrame {
             handled: self.handlers.len(),
             handler,
@@ -2363,6 +2526,9 @@ impl<'a> Interp<'a> {
             self.inside_handler.pop();
         }
         self.rows.pop();
+        if self.watcher.is_some() {
+            self.calls.pop();
+        }
         self.frames.pop();
         self.finish_profiled_call(profile_call, handler.is_some());
         result
@@ -2922,7 +3088,14 @@ impl<'a> Interp<'a> {
             self.exec(stmt)?;
         }
         match &block.tail {
-            Some(tail) => self.eval(tail),
+            Some(tail) => {
+                // A block's last expression is where a function that is one
+                // expression long spends all of its time, so a debugger that
+                // only stopped at statements could not stop in `fn answer()
+                // -> Int { 42 }` at all.
+                self.watch(tail.span());
+                self.eval(tail)
+            }
             None => Ok(Value::Unit),
         }
     }
@@ -2998,6 +3171,7 @@ impl<'a> Interp<'a> {
     }
 
     fn exec(&mut self, stmt: &'a Stmt) -> Eval<()> {
+        self.watch(stmt.span());
         match stmt {
             Stmt::Let {
                 pattern,

@@ -1,0 +1,18 @@
+[package]
+name = "deed-dap"
+description = "A debug adapter for Deed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deed-diagnostics = { path = "../deed-diagnostics" }
+deed-driver = { path = "../deed-driver" }
+deed-interp = { path = "../deed-interp" }
+deed-lsp = { path = "../deed-lsp" }
+deed-rt = { path = "../deed-rt" }
+
+[lints]
+workspace = true

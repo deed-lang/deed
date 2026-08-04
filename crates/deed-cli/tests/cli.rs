@@ -436,6 +436,57 @@ fn lsp_takes_no_arguments() {
     );
 }
 
+// -- the debugger ----------------------------------------------------------
+
+/// Same shape as the language server test above, and about the same thing: the
+/// subcommand exists, it reads the framing on stdin, and nothing the binary
+/// prints for its own reasons lands on stdout, which is the protocol.
+#[test]
+fn debug_speaks_the_protocol_on_stdin_and_stdout() {
+    let body = "{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\"}";
+    let input = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+
+    let mut child = Command::new(DEED)
+        .arg("debug")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the deed binary should run");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("it should finish");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.starts_with("Content-Length: "), "{text}");
+    assert!(
+        text.contains("\"supportsConfigurationDoneRequest\":true"),
+        "{text}"
+    );
+    assert!(text.contains("\"initialized\""), "{text}");
+}
+
+/// The program comes from the client's `launch` request. A path here is
+/// somebody typing what they meant to type after `deed run`, and starting an
+/// adapter that reads a pipe nobody is writing looks exactly like a hang.
+#[test]
+fn debug_takes_no_arguments() {
+    let output = run(&["debug", EXAMPLE]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("launch request"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 // -- the agent surface -----------------------------------------------------
 
 #[test]

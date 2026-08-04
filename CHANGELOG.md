@@ -49,6 +49,15 @@ release notes.
 
 ### Tools
 
+- `deed debug` speaks the Debug Adapter Protocol on stdin and stdout, so an
+  editor can set breakpoints, step in, over and out, and read the stack and the
+  bindings of every active call. The program is held still by a hook the
+  interpreter calls before each statement: a watcher stops by not returning, so
+  the host stack is the program's stack and nothing is re-run or simulated.
+  What a breakpoint is and what a step means live in `deed-dap` and not in the
+  interpreter, which knows nothing about lines. There is no `pause` and no
+  `evaluate`, both stated with their reasons in
+  `design/decisions/2026-08-04-a-place-to-stand.md`.
 - A `deed.manifest` can declare a module by where its bytes are and what they
   hash to: `module https://example.com/list.deed sha256:9f2c...`. The bytes are
   fetched when the cache does not already hold them, refused outright when they

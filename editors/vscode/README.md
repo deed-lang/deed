@@ -1,6 +1,6 @@
 # Deed for VS Code
 
-Syntax highlighting and language-server wiring for `.deed` files.
+Syntax highlighting, language-server wiring and a debugger for `.deed` files.
 
 ## Installing it
 
@@ -35,6 +35,34 @@ workspace search and quick fixes.
 By default the extension launches `deed lsp`. If your binary is somewhere else,
 set `deed.server.path`. To pass additional arguments after `lsp`, set
 `deed.server.args`.
+
+## Debugging
+
+Press F5 in a `.deed` file, or add a launch configuration:
+
+```json
+{
+  "type": "deed",
+  "request": "launch",
+  "name": "Run this file",
+  "program": "${file}",
+  "stopOnEntry": false
+}
+```
+
+Breakpoints, step in, step over, step out, the call stack and the bindings of
+every active call. A program writes through a `Console` and those lines arrive
+in the debug console as it runs.
+
+The adapter is the same binary, started with `debug` instead of `lsp`, so
+`deed.server.path` is the only setting. Two paths to one executable would let
+an editor talk to two versions of the compiler at once.
+
+Two things it does not do. There is no **pause**: a program stops where it was
+told to and runs otherwise, so one with no breakpoints and no end has to be
+killed. And there is no **watch expression or conditional breakpoint**, because
+both mean running Deed code inside a program that is currently held still.
+`design/decisions/2026-08-04-a-place-to-stand.md` has the reasoning for both.
 
 Highlighting comes from a TextMate grammar rather than from the compiler,
 which means it works on a file that does not parse. That is the right way

@@ -56,6 +56,7 @@ pub mod codes;
 pub mod interp;
 pub mod property;
 pub mod value;
+pub mod watch;
 
 /// Where a `Dir` capability's rules live now.
 ///
@@ -67,7 +68,7 @@ pub use deed_rt::sandbox;
 pub use interp::{
     DeclaredRows, FunctionProfile, Guard, Guards, OperatorCalls, Program, RowItem, Run,
     RuntimeProfile, TestOutcome, run_main, run_main_profiled, run_main_profiled_reaching,
-    run_main_reaching, run_tests,
+    run_main_reaching, run_main_watched, run_tests,
 };
 pub use property::{
     GeneratedInputs, PropertyConfig, PropertyOutcome, generate_inputs, is_testable, run_properties,
@@ -75,3 +76,4 @@ pub use property::{
 };
 pub use sandbox::Refused;
 pub use value::{Capability, Fields, Value, VariantValue};
+pub use watch::{FrameView, Paused, Watcher};

@@ -230,8 +230,9 @@ Read them in order. Each one leans on the one before it.
 | `deed-interp` | Runs `test` blocks, property tests and `main`, with contracts enforced |
 | `deed-fmt` | The one canonical form, with no options for the output |
 | `deed-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, signature help, quick fixes, an outline, workspace search and formatting |
+| `deed-dap` | A debug adapter: breakpoints, stepping, the call stack and the bindings of every active call |
 | `deed-driver` | Runs all of the above, in one place, so nothing drifts |
-| `deed-cli` | The `deed` binary: `check`, `test`, `run`, `fmt`, `fix` and `lsp` |
+| `deed-cli` | The `deed` binary: `check`, `test`, `run`, `fmt`, `fix`, `lsp` and `debug` |
 
 `deed lsp` is a language server, and most of it is plumbing over things that already existed:
 the compiler produces structured diagnostics with spans, `Types::type_of` can say what an
@@ -316,6 +317,31 @@ worth reading. Positions: the protocol counts UTF-16 code units and the compiler
 bytes, which agree for ASCII and stop agreeing the moment somebody writes a comment in
 Turkish. And URIs: a space arrives as `%20`, a Windows drive as `/c%3A/`, and a Turkish
 letter as two escapes that are bytes rather than characters. Getting either wrong is silent.
+
+`deed debug` is the other half of that stream: the Debug Adapter Protocol has the same
+framing and the same JSON, so neither is written twice. What it needed that did not exist was
+somewhere for a running program to be held still. The interpreter is recursive and single
+pass, so there is no state machine to suspend, and there was no plan to write one: what it
+has instead is a point before every statement where nothing is half done. It calls a watcher
+there and carries on when the call returns, and **a watcher stops by not returning**. That is
+the whole of suspension. The host stack is the program's stack, so the frames and bindings a
+client reads are the ones the program is actually in, and nothing is re-run to reach them.
+
+The interpreter decides nothing about debugging. It does not know what a line is. Breakpoints,
+what "step over" means, and when to carry on all live in `deed-dap`, because they are protocol
+questions and putting them in both crates is how a debugger comes to stop somewhere the
+compiler says is nowhere. Stepping is defined against the number of active calls: over is not
+deeper than here, out is shallower, in is anywhere. Stepping into a `perform` lands in the
+handler body with no special sentence attached, because an operation is a call and the stack
+already says where it went.
+
+Two things it does not do, both written down rather than left to be found. There is no
+`pause`: a session answers one message with the messages it caused, including running to the
+next stop, so nothing is reading the client while the program runs. And there is no
+`evaluate`, so there are no watch expressions and no conditional breakpoints. Evaluating one
+means running Deed code inside a watcher, which is re-entering an interpreter that is
+currently lent out, and the shape that makes suspension free is exactly the shape that makes
+that unsafe.
 
 The examples are [transfer.deed](examples/transfer.deed),
 [counter.deed](examples/counter.deed), [hello.deed](examples/hello.deed),
