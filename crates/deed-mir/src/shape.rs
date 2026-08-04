@@ -131,23 +131,15 @@ pub fn pushed_fields(name: &str, init: &Expr, body: &Block) -> Vec<String> {
 }
 
 /// Whether two struct literals name the same thing.
+///
+/// A bare name and nothing else. Anything a program can write in front of a
+/// `{` that is not one is a path nothing resolves, so a walk carrying one
+/// never reaches here, and refusing is the direction that costs nothing.
 fn same_path(one: &Expr, other: &Expr) -> bool {
-    match (one, other) {
-        (Expr::Ident(one), Expr::Ident(other)) => one.name == other.name,
-        (
-            Expr::Field {
-                receiver: one,
-                name: named,
-                ..
-            },
-            Expr::Field {
-                receiver: other,
-                name: other_named,
-                ..
-            },
-        ) => named.name == other_named.name && same_path(one, other),
-        _ => false,
-    }
+    matches!(
+        (one, other),
+        (Expr::Ident(one), Expr::Ident(other)) if one.name == other.name
+    )
 }
 
 /// Whether one field of a record accumulator is only ever pushed onto.

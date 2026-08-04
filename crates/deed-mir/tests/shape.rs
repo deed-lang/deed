@@ -387,6 +387,23 @@ fn a_turn_that_hands_back_a_different_shape_is_refused() {
     );
 }
 
+/// A record built under something that is not a bare name.
+///
+/// The parser will read anything in front of a `{` as what is being built, and
+/// nothing but a name resolves to a shape, so a walk carrying one of these
+/// never gets as far as being compiled. Refusing it here is what lets the rule
+/// compare two literals by name alone.
+#[test]
+fn a_record_built_under_a_path_is_refused() {
+    assert!(
+        built(
+            EMPTY,
+            "        held.Parts { kept: push(out.kept, item), rest: out.rest }"
+        )
+        .is_empty()
+    );
+}
+
 /// A turn that hands back a record built somewhere else.
 ///
 /// Nothing here knows what that record holds, so nothing here knows that the
