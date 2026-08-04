@@ -353,3 +353,77 @@ fn imports_are_in_sorted_order() {
         "imports should appear in sorted order, got:\n{world}"
     );
 }
+
+// -- the network -----------------------------------------------------------
+
+/// The claim the component story rests on, made about the operation that
+/// motivated it. A program that reaches a host says so in its row, the row is
+/// the world, and the host is whatever runs the component. Nothing here writes
+/// the world by hand.
+#[test]
+fn reaching_the_network_appears_in_the_world() {
+    let world = world_for(
+        "module main\n\n\
+         fn main(sys: System) -> Int\n\
+           uses\n\
+             Io.fetch,\n\
+         {\n\
+           match Io.fetch(sys.net, \"http://example.com/x\") {\n\
+             ok(text) => length(text),\n\
+             err(why) => 0,\n\
+           }\n\
+         }\n",
+    );
+    assert_eq!(world, "world program {\n  import deed:io.fetch;\n}\n");
+}
+
+/// Reading and writing over the network are two imports, not one, because
+/// they are two entries in the row. A host that wants to offer one and not the
+/// other can, which is the whole reason they are separate.
+#[test]
+fn fetching_and_sending_are_two_imports() {
+    let world = world_for(
+        "module main\n\n\
+         fn main(sys: System) -> Int\n\
+           uses\n\
+             Io.fetch,\n\
+             Io.send,\n\
+         {\n\
+           let a = Io.fetch(sys.net, \"http://example.com/x\")\n\
+           let b = Io.send(sys.net, \"http://example.com/x\", \"y\")\n\
+           0\n\
+         }\n",
+    );
+    assert_eq!(
+        world,
+        "world program {\n  import deed:io.fetch;\n  import deed:io.send;\n}\n"
+    );
+}
+
+/// A program that narrows its reach and then only reads asks for two things
+/// and not the third. The world is the row, so dropping `send` from the body
+/// drops the import.
+#[test]
+fn a_program_that_only_reads_does_not_ask_to_send() {
+    let world = world_for(
+        "module main\n\n\
+         fn main(sys: System) -> Int\n\
+           uses\n\
+             Io.reach,\n\
+             Io.fetch,\n\
+         {\n\
+           match Io.reach(sys.net, \"example.com\") {\n\
+             ok(narrower) => match Io.fetch(narrower, \"http://example.com/x\") {\n\
+               ok(text) => length(text),\n\
+               err(why) => 0,\n\
+             },\n\
+             err(why) => 0,\n\
+           }\n\
+         }\n",
+    );
+    assert_eq!(
+        world,
+        "world program {\n  import deed:io.fetch;\n  import deed:io.reach;\n}\n"
+    );
+    assert!(!world.contains("send"), "{world}");
+}

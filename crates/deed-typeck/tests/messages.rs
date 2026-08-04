@@ -401,7 +401,7 @@ fn values_fields_and_literals_are_read() {
         .under(codes::NO_SUCH_FIELD)
         .says("`System` carries no `power`")
         .says("no such capability")
-        .says("it carries `console`, `clock` and `files`");
+        .says("it carries `console`, `clock`, `files` and `net`");
 
     message("module a\n\nrecord R { alpha: Int }\n\nfn f(r: R) -> Int { r.beta }\n")
         .under(codes::NO_SUCH_FIELD)

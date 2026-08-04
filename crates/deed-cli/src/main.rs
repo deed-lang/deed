@@ -306,8 +306,11 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 &sources,
                 &checks,
                 subject,
-                args.dir.as_deref(),
-                &args.arguments,
+                &Grants {
+                    dir: args.dir.as_deref(),
+                    allow: &args.allow,
+                    arguments: &args.arguments,
+                },
                 args.runtime_profile,
             )
         } {
@@ -1113,6 +1116,21 @@ fn context_for(path: &Path) -> Vec<(String, String)> {
     context
 }
 
+/// What the host hands a run, as opposed to what the program is.
+///
+/// One type rather than three parameters because these three are one decision:
+/// how much of the outside a program gets. Read together they are the answer
+/// to "what could this do", and read apart the next one gets appended to a
+/// list of arguments nobody is counting.
+struct Grants<'a> {
+    /// What `sys.files` is rooted at. `None` means the working directory.
+    dir: Option<&'a Path>,
+    /// The hosts `sys.net` may reach. Empty means none.
+    allow: &'a [String],
+    /// What `Io.args` answers with.
+    arguments: &'a [String],
+}
+
 /// Calls `main`, handing it the one `System` there is.
 ///
 /// Exactly one is required. Two entry points in one invocation is not a
@@ -1123,14 +1141,15 @@ fn run_main(
     sources: &SourceMap,
     checks: &[Checked],
     subject: usize,
-    dir: Option<&Path>,
-    arguments: &[String],
+    grants: &Grants<'_>,
     runtime_profile: bool,
 ) -> io::Result<Option<bool>> {
-    let root = match dir {
+    let root = match grants.dir {
         Some(dir) => dir.to_path_buf(),
         None => std::env::current_dir()?,
     };
+    let reach = deed_rt::Reach::granting(grants.allow);
+    let arguments = grants.arguments;
 
     // Every checked module, so a call that goes through an import has a body
     // to walk into. The interpreter used to be handed one module and stopped
@@ -1142,9 +1161,15 @@ fn run_main(
     // needed it is not an answer to "which program did you mean".
     for checked in &checks[..subject.min(checks.len())] {
         let run = if runtime_profile {
-            deed_interp::run_main_profiled(&program, checked.file, &root, arguments)
+            deed_interp::run_main_profiled_reaching(
+                &program,
+                checked.file,
+                &root,
+                arguments,
+                &reach,
+            )
         } else {
-            deed_interp::run_main(&program, checked.file, &root, arguments)
+            deed_interp::run_main_reaching(&program, checked.file, &root, arguments, &reach)
         };
         if let Some(run) = run {
             runs.push((sources.file(checked.file).name().to_string(), run));

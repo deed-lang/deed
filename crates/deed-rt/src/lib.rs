@@ -11,10 +11,25 @@
 //! what [`sandbox`] is doing here rather than inside `deed-interp`: the
 //! interpreter uses it, and it is not the interpreter's.
 //!
+//! [`reach`] is the same argument about the other resource. A `Dir` is worth
+//! something because there is no way out of it, and a `Net` is worth the same
+//! only if the set of hosts it reaches can shrink and never grow. Both live
+//! here for the same reason: the rule has to be one rule, or the guarantee is
+//! about one runtime rather than about the language.
+//!
+//! [`http`] is the interpreter's answer to a network capability, and it is
+//! deliberately the smallest one that can be exercised. A compiled program
+//! never reaches it: a component asks its host for `deed:io.fetch` and the
+//! host answers, the same way it answers `deed:io.read`.
+//!
 //! Nothing else has moved. List and string helpers are still emitted inline
 //! by the backend, and putting them here would be duplication until
 //! something outside a module calls them.
 
+pub mod http;
+pub mod reach;
 pub mod sandbox;
 
+pub use http::{Response, request};
+pub use reach::{Reach, Target};
 pub use sandbox::{Refused, resolve, resolve_new, root};

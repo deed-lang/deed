@@ -17,6 +17,7 @@ use std::rc::Rc;
 
 use deed_diagnostics::ByNumber;
 use deed_resolve::DefId;
+use deed_rt::Reach;
 
 /// What names a running call can see, and what they are bound to.
 ///
@@ -105,6 +106,15 @@ pub enum Capability {
     /// canonicalizes. A `Dir` that held a path with a `..` still in it would be
     /// a `Dir` whose reach depended on when you looked.
     Dir(Rc<Path>),
+    /// A set of hosts, and nothing else.
+    ///
+    /// The `Dir` argument on the other resource. The set only ever shrinks:
+    /// `Io.reach` hands back one holding a subset, and there is no operation
+    /// that adds to one. A run that was granted no hosts holds an empty set,
+    /// which is a `Net` that reaches nothing rather than an absent capability,
+    /// because the difference a program can see is the same either way and one
+    /// of the two needs no second shape to represent.
+    Net(Rc<Reach>),
 }
 
 impl Capability {
@@ -114,6 +124,7 @@ impl Capability {
             Capability::Console => "Console",
             Capability::Clock => "Clock",
             Capability::Dir(_) => "Dir",
+            Capability::Net(_) => "Net",
         }
     }
 }

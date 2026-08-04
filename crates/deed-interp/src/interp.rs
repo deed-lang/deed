@@ -32,6 +32,7 @@ use deed_ast::{
 };
 use deed_diagnostics::{ByNumber, Diagnostic, FileId, Span};
 use deed_resolve::{DefId, DefKind, ExportKind, Resolutions};
+use deed_rt::reach::{self, Reach};
 
 use crate::codes;
 use crate::sandbox;
@@ -271,7 +272,24 @@ pub struct RuntimeProfile {
 /// so nothing about how the compiler was invoked can leak into the program it
 /// is running.
 pub fn run_main(program: &Program, file: FileId, root: &Path, arguments: &[String]) -> Option<Run> {
-    run_main_with_profile(program, file, root, arguments, false)
+    run_main_with_profile(program, file, root, arguments, &Reach::none(), false)
+}
+
+/// Runs `main` with the network granted as well.
+///
+/// Separate from [`run_main`] rather than a fifth parameter on it, because
+/// every caller that does not name a host wants the same answer and the
+/// answer is "nothing". A default that has to be spelled out at each call site
+/// is a default one call site will get wrong, and the one it would get wrong
+/// is the one that grants more than it meant to.
+pub fn run_main_reaching(
+    program: &Program,
+    file: FileId,
+    root: &Path,
+    arguments: &[String],
+    reach: &Reach,
+) -> Option<Run> {
+    run_main_with_profile(program, file, root, arguments, reach, false)
 }
 
 /// Runs `main` and records where runtime went.
@@ -281,7 +299,18 @@ pub fn run_main_profiled(
     root: &Path,
     arguments: &[String],
 ) -> Option<Run> {
-    run_main_with_profile(program, file, root, arguments, true)
+    run_main_with_profile(program, file, root, arguments, &Reach::none(), true)
+}
+
+/// Runs `main`, reaching the given hosts, and records where runtime went.
+pub fn run_main_profiled_reaching(
+    program: &Program,
+    file: FileId,
+    root: &Path,
+    arguments: &[String],
+    reach: &Reach,
+) -> Option<Run> {
+    run_main_with_profile(program, file, root, arguments, reach, true)
 }
 
 fn run_main_with_profile(
@@ -289,6 +318,7 @@ fn run_main_with_profile(
     file: FileId,
     root: &Path,
     arguments: &[String],
+    reach: &Reach,
     profile: bool,
 ) -> Option<Run> {
     let main = program
@@ -306,6 +336,7 @@ fn run_main_with_profile(
     }
     interp.entry = interp.promise_of(main);
     interp.root = sandbox::root(root).ok().map(Rc::from);
+    interp.reach = Rc::new(reach.clone());
     interp.arguments = arguments
         .iter()
         .map(|argument| Rc::from(&**argument))
@@ -625,6 +656,12 @@ pub(crate) struct Interp<'a> {
     /// the case for `test` blocks: a test that could reach the filesystem
     /// would be a test of the filesystem.
     root: Option<Rc<Path>>,
+    /// What `sys.net` reaches. Empty when nothing granted a host, which is the
+    /// case for `test` blocks and for every run that did not say `--allow`: a
+    /// test that could reach the network would be a test of the network, and a
+    /// run that reaches a host nobody named is the ambient authority the whole
+    /// design is against.
+    reach: Rc<Reach>,
     /// What the program was invoked with, for `Io.args`.
     ///
     /// Empty for a `test` block, for the same reason as `root`: a test whose
@@ -693,6 +730,7 @@ impl<'a> Interp<'a> {
             output: Vec::new(),
             ticks: 0,
             root: None,
+            reach: Rc::new(Reach::none()),
             arguments: Vec::new(),
             profile: None,
         }
@@ -1454,6 +1492,14 @@ impl<'a> Interp<'a> {
                         ),
                     )),
                 },
+                // Unlike `files`, this always answers. A `Net` reaching no
+                // hosts is a value, where a `Dir` rooted at no directory is
+                // not, so the run that was granted nothing hands out a
+                // capability that refuses every URL and names the rule, rather
+                // than failing at the point the capability is taken out. The
+                // program sees the same thing either way and one of the two
+                // needs no second shape.
+                "net" => Ok(Value::Capability(Capability::Net(Rc::clone(&self.reach)))),
                 other => Err(self.not_runnable(
                     name.span,
                     &format!("`System.{other}`, which does not exist"),
@@ -2114,6 +2160,37 @@ impl<'a> Interp<'a> {
                     Err(refused) => Value::err(Value::str(refused.message(&name_arg))),
                 })
             }
+            // `open` on the other resource, and the one that has to hold for
+            // the same reason: what comes back reaches a subset of what went
+            // in, never more. Asking for a host this `Net` did not already
+            // reach is refused rather than granted, so this cannot be used to
+            // widen one, and `crates/deed-rt/src/reach.rs` is where that is
+            // decided for every runtime rather than for this one.
+            ("reach", Capability::Net(reach)) => {
+                let host = self.io_name(args.get(1), span)?;
+                Ok(match reach::narrow(&reach, &host) {
+                    Ok(narrowed) => {
+                        Value::ok(Value::Capability(Capability::Net(Rc::new(narrowed))))
+                    }
+                    Err(refused) => Value::err(Value::str(refused.message(&host))),
+                })
+            }
+            // Asking a question of the other end. A status other than success
+            // is an answer rather than an error: whether a 404 is a problem is
+            // the caller's question and this cannot know, so the status is put
+            // in front of the body and the program decides.
+            ("fetch", Capability::Net(reach)) => {
+                let url = self.io_name(args.get(1), span)?;
+                Ok(Self::over_the_network(&reach, &url, "GET", None))
+            }
+            // Sending something that may change what is on the other end.
+            // Separate from `fetch` in the row for the reason `save` is
+            // separate from `read`.
+            ("send", Capability::Net(reach)) => {
+                let url = self.io_name(args.get(1), span)?;
+                let body = self.io_name(args.get(2), span)?;
+                Ok(Self::over_the_network(&reach, &url, "POST", Some(&body)))
+            }
             (_, held) => Err(self.fail(
                 Diagnostic::error(
                     codes::NO_HANDLER,
@@ -2127,15 +2204,55 @@ impl<'a> Interp<'a> {
         }
     }
 
-    /// The name argument of a filesystem operation.
+    /// The string argument of an `Io` operation: a filename, a host, a URL or
+    /// a body.
     fn io_name(&self, arg: Option<&(Value, Span)>, span: Span) -> Eval<String> {
         match arg {
             Some((Value::Str(text), _)) => Ok(text.to_string()),
             Some((other, at)) => Err(self.not_runnable(
                 *at,
-                &format!("a filesystem name that is {}", other.describe()),
+                &format!(
+                    "an `Io` operation given {} where it wants text",
+                    other.describe()
+                ),
             )),
-            None => Err(self.not_runnable(span, "a filesystem operation with no name")),
+            None => Err(self.not_runnable(span, "an `Io` operation with an argument missing")),
+        }
+    }
+
+    /// One request, and the answer as a `Result`.
+    ///
+    /// A status outside the two hundreds becomes an `err`, for the reason a
+    /// missing file does: the caller asked for something and did not get it,
+    /// and a program that cannot tell "here is your answer" from "the host
+    /// said no" has a bug waiting. The body comes along in the message when
+    /// there is one, because the body of a refusal is usually the explanation.
+    ///
+    /// What this cannot do, written down rather than worked around: hand back
+    /// the status as a number. A `Result` carries one value and this language
+    /// has no tuple, so the shapes available are "the body" and "a string with
+    /// the status in it", and parsing a number back out of a message is worse
+    /// than not having it. The fix is a record the prelude declares, and the
+    /// prelude declaring a record is a larger decision than one operation gets
+    /// to make. `design/04-capabilities.md` carries it as an open question.
+    fn over_the_network(reach: &Reach, url: &str, method: &str, body: Option<&str>) -> Value {
+        let target = match reach::resolve(reach, url) {
+            Ok(target) => target,
+            Err(refused) => return Value::err(Value::str(refused.message(url))),
+        };
+
+        match deed_rt::http::request(&target, method, body) {
+            Ok(answer) if (200..300).contains(&answer.status) => Value::ok(Value::str(answer.body)),
+            Ok(answer) => {
+                let status = answer.status;
+                let explanation = answer.body.trim();
+                Value::err(Value::str(if explanation.is_empty() {
+                    format!("`{url}` answered {status}")
+                } else {
+                    format!("`{url}` answered {status}: {explanation}")
+                }))
+            }
+            Err(why) => Value::err(Value::str(why)),
         }
     }
 
