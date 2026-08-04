@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use deed_ast::{Accumulator, Block, Expr, Item, Stmt};
 use deed_driver::shipped_modules;
-use deed_mir::only_pushes;
+use deed_mir::{only_pushes, pushed_fields};
 
 /// Where the repository is, from this test binary.
 fn root() -> PathBuf {
@@ -57,8 +57,16 @@ fn sources() -> Vec<String> {
     found
 }
 
-/// Every walk in one file that carries an accumulator, with its name.
-fn walks(text: &str) -> Vec<(String, Block)> {
+/// One walk that carries an accumulator: what it is called, what it starts
+/// from, and what a turn does.
+struct Walk {
+    name: String,
+    init: Expr,
+    body: Block,
+}
+
+/// Every walk in one file that carries an accumulator.
+fn walks(text: &str) -> Vec<Walk> {
     let mut sources = deed_diagnostics::SourceMap::new();
     let file = sources.add("walk.deed".to_string(), text.to_string());
     let lexed = deed_lexer::tokenize(file, sources.file(file).text());
@@ -77,7 +85,7 @@ fn walks(text: &str) -> Vec<(String, Block)> {
     found
 }
 
-fn collect(block: &Block, found: &mut Vec<(String, Block)>) {
+fn collect(block: &Block, found: &mut Vec<Walk>) {
     for stmt in &block.stmts {
         match stmt {
             Stmt::Let { init, .. } => in_expr(init, found),
@@ -98,7 +106,7 @@ fn collect(block: &Block, found: &mut Vec<(String, Block)>) {
     }
 }
 
-fn in_expr(expr: &Expr, found: &mut Vec<(String, Block)>) {
+fn in_expr(expr: &Expr, found: &mut Vec<Walk>) {
     match expr {
         Expr::For {
             accumulator,
@@ -109,7 +117,11 @@ fn in_expr(expr: &Expr, found: &mut Vec<(String, Block)>) {
             in_expr(iterable, found);
             if let Some(Accumulator { name, init, .. }) = accumulator {
                 in_expr(init, found);
-                found.push((name.name.clone(), body.clone()));
+                found.push(Walk {
+                    name: name.name.clone(),
+                    init: (**init).clone(),
+                    body: body.clone(),
+                });
             }
             collect(body, found);
         }
@@ -175,8 +187,8 @@ fn counted() -> (usize, usize) {
     let mut appending = 0usize;
     let mut other = 0usize;
     for text in sources() {
-        for (name, body) in walks(&text) {
-            if only_pushes(&name, &body) {
+        for walk in walks(&text) {
+            if only_pushes(&walk.name, &walk.body) {
                 appending += 1;
             } else {
                 other += 1;
@@ -184,6 +196,42 @@ fn counted() -> (usize, usize) {
         }
     }
     (appending, other)
+}
+
+/// How many of the other walks carry a record with a field built in place,
+/// and how many fields that is between them.
+fn into_records() -> (usize, usize) {
+    let mut carrying = 0usize;
+    let mut fields = 0usize;
+    for text in sources() {
+        for walk in walks(&text) {
+            if only_pushes(&walk.name, &walk.body) {
+                continue;
+            }
+            let built = pushed_fields(&walk.name, &walk.init, &walk.body);
+            if !built.is_empty() {
+                carrying += 1;
+                fields += built.len();
+            }
+        }
+    }
+    (carrying, fields)
+}
+
+/// What a number the record says has to be.
+fn printed(page: &str, marker: &str) -> usize {
+    let path = root().join("design").join("decisions").join(page);
+    let text = std::fs::read_to_string(&path).expect("the decision record should be readable");
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(marker))
+        .unwrap_or_else(|| panic!("{page} should carry a line starting `{marker}`"))
+        .to_string();
+    line.split_whitespace()
+        .next_back()
+        .and_then(|last| last.parse().ok())
+        .unwrap_or_else(|| panic!("`{line}` should end in a number"))
 }
 
 /// Most walks that carry an accumulator are ones a single list would do.
@@ -206,40 +254,56 @@ fn most_walks_that_build_a_list_only_ever_push_onto_it() {
     );
 }
 
-/// The decision record prints these two numbers, so they have to be these two.
+/// Some of the rest carry a record whose fields are the lists being built.
 ///
-/// The test above is a floor on purpose, and a floor is exactly what lets an
-/// exact number written down elsewhere go quietly wrong: the record shipped
-/// saying forty-four and thirty-four against a rule that answered forty and
-/// thirty-eight, and nothing was in a position to notice. A record whose
-/// measurement no longer holds is worse than one with no measurement, because
-/// the reasoning above it is read as resting on something.
+/// The floor is small because the shape is: this is the tail of the same
+/// measurement, and what makes it worth answering is not how many walks it is
+/// but that `partition`, `unzip` and `scan` are all of them and all three used
+/// to allocate along the square of what they walked.
 #[test]
-fn the_decision_record_prints_the_counts_this_measures() {
-    let page = root()
-        .join("design")
-        .join("decisions")
-        .join("2026-08-04-a-walk-that-only-pushes.md");
-    let text = std::fs::read_to_string(&page).expect("the decision record should be readable");
-    let printed = |marker: &str| -> usize {
-        let line = text
-            .lines()
-            .map(str::trim)
-            .find(|line| line.starts_with(marker))
-            .unwrap_or_else(|| panic!("the record should carry a line starting `{marker}`"));
-        line.split_whitespace()
-            .next_back()
-            .and_then(|last| last.parse().ok())
-            .unwrap_or_else(|| panic!("`{line}` should end in a number"))
-    };
+fn some_of_the_other_walks_build_a_list_inside_a_record() {
+    let (carrying, fields) = into_records();
+
+    assert!(
+        carrying >= 3 && fields >= carrying,
+        "{carrying} walks in the library and the corpus build {fields} lists inside a \
+         record accumulator, so answering that shape specifically buys less than it looked"
+    );
+}
+
+/// The decision records print these numbers, so they have to be these numbers.
+///
+/// The tests above are floors on purpose, and a floor is exactly what lets an
+/// exact number written down elsewhere go quietly wrong: the first record
+/// shipped saying forty-four and thirty-four against a rule that answered
+/// forty and thirty-eight, and nothing was in a position to notice. A record
+/// whose measurement no longer holds is worse than one with no measurement,
+/// because the reasoning above it is read as resting on something.
+#[test]
+fn the_decision_records_print_the_counts_this_measures() {
+    const PUSHES: &str = "2026-08-04-a-walk-that-only-pushes.md";
+    const RECORD: &str = "2026-08-04-a-walk-that-pushes-into-a-record.md";
 
     let (appending, other) = counted();
     assert_eq!(
         (
-            printed("walks whose accumulator is only ever pushed onto"),
-            printed("walks of every other shape"),
+            printed(PUSHES, "walks whose accumulator is only ever pushed onto"),
+            printed(PUSHES, "walks of every other shape"),
         ),
         (appending, other),
-        "the decision record's counts are not the ones the rule gives today"
+        "the counts in {PUSHES} are not the ones the rule gives today"
+    );
+
+    let (carrying, fields) = into_records();
+    assert_eq!(
+        (
+            printed(
+                RECORD,
+                "walks that carry a record with a field built in place"
+            ),
+            printed(RECORD, "fields those walks build in place"),
+        ),
+        (carrying, fields),
+        "the counts in {RECORD} are not the ones the rule gives today"
     );
 }

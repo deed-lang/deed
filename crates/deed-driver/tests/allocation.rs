@@ -175,3 +175,51 @@ test \"walked\" {
          {twice} bytes against {once} for one"
     );
 }
+
+/// A walk that carries a record of lists builds each of them once too.
+///
+/// `partition` and `unzip` and `scan` all carry one, and the accumulator being
+/// a record is the only thing that used to put them on the copying path. The
+/// record is still built a turn, which is a fixed size and therefore linear,
+/// so what this asks is that the part that used to be quadratic no longer is:
+/// the two lists together are the answer, and the rest is a record a turn.
+/// See `design/decisions/2026-08-04-a-walk-that-pushes-into-a-record.md`.
+#[test]
+fn a_walk_that_pushes_into_a_record_allocates_along_the_length() {
+    let source = |size: usize| {
+        format!(
+            "module bench
+
+record Parts {{
+    kept: List<Int>,
+    rest: List<Int>,
+}}
+
+test \"walked\" {{
+    let source = repeat(0, {size})
+    let built = for n at i in source with parts = Parts {{ kept: [], rest: [] }} {{
+        if i > 0 {{
+            Parts {{ kept: push(parts.kept, i), rest: parts.rest }}
+        }} else {{
+            Parts {{ kept: parts.kept, rest: push(parts.rest, i) }}
+        }}
+    }}
+    assert length(built.kept) + length(built.rest) == length(source)
+}}
+"
+        )
+    };
+
+    let short = 64usize;
+    let long = short * 4;
+    let near = allocated(&source(short)).expect("a short walk should run")
+        - allocated(&walked(short)).expect("the walk alone should run");
+    let far = allocated(&source(long)).expect("a longer walk should run")
+        - allocated(&walked(long)).expect("the walk alone should run");
+
+    assert!(
+        far < near * 8,
+        "four times the length allocated {far} bytes against {near}, which is more \
+         than a constant a turn, so the record's lists are being copied again"
+    );
+}

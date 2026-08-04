@@ -188,10 +188,10 @@ which could keep it. This answers the walk, and that is a different shape.
   `length(out)`. It keeps nothing, so it is safe, and `std/list`'s `take` reads one in its
   `while` clause rather than its body. Left out until a walk in the corpus wants it.
 
-- Whether the same argument reaches a record rebuilt in a loop. The accumulator of
-  `for ... with cell = Cell { .. }` is unreachable by the same reasoning, and a record's
-  size does not change, so the block could be written over rather than reserved again.
-  That is nearer to reuse analysis than this is, and it is the next thing to measure.
+- Whether the same argument reaches a record rebuilt in a loop. Answered in
+  `design/decisions/2026-08-04-a-walk-that-pushes-into-a-record.md`: it reaches the lists
+  inside the record, one field at a time, and stops at the record itself, which is still
+  built a turn because the walk hands it back.
 
 - What `std/table` would take. Its cost is across calls to `set` rather than inside a
   walk, so nothing here touches it, and a keyed structure of a few hundred entries is

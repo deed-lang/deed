@@ -1,44 +1,65 @@
-//! What the rule in `deed_mir::only_pushes` refuses, asked one shape at a time.
+//! What the rules in `deed_mir` refuse, asked one shape at a time.
 //!
-//! `crates/deed-driver/tests/walks.rs` counts how much of the library the rule
-//! accepts, which is the measurement the change rests on, but a corpus only
+//! `crates/deed-driver/tests/walks.rs` counts how much of the library they
+//! accept, which is the measurement the change rests on, but a corpus only
 //! contains the shapes somebody happened to write. The dangerous direction is
 //! the other one: a body that keeps the accumulator somewhere and is accepted
 //! anyway compiles without complaint and answers differently, so every place
 //! a name can be kept needs a case here whether or not the library has one.
 //!
-//! See `design/decisions/2026-08-04-a-walk-that-only-pushes.md`.
+//! See `design/decisions/2026-08-04-a-walk-that-only-pushes.md` and
+//! `design/decisions/2026-08-04-a-walk-that-pushes-into-a-record.md`.
 
-use deed_ast::{Accumulator, Expr, Item};
-use deed_mir::only_pushes;
+use deed_ast::{Accumulator, Block, Expr, Item};
+use deed_mir::{only_pushes, pushed_fields};
 
-/// Whether the rule accepts a walk whose body is this.
-fn accepts(body: &str) -> bool {
-    let source = format!(
-        "module a\n\nfn f(items: List<Int>) -> List<Int> {{\n    for item in items with out = [] {{\n{body}\n    }}\n}}\n"
-    );
-
+/// The one walk in a module written around a body.
+fn walk(source: &str) -> (Accumulator, Block) {
     let mut sources = deed_diagnostics::SourceMap::new();
-    let file = sources.add("shape.deed".to_string(), source.clone());
+    let file = sources.add("shape.deed".to_string(), source.to_string());
     let lexed = deed_lexer::tokenize(file, sources.file(file).text());
     assert!(!lexed.has_errors(), "this body should lex:\n{source}");
     let parsed = deed_parser::parse(file, &lexed.tokens);
     assert!(!parsed.has_errors(), "this body should parse:\n{source}");
 
-    let Some(Item::Function(decl)) = parsed.module.items.first() else {
-        panic!("the module holds one function");
+    let Some(Item::Function(decl)) = parsed.module.items.last() else {
+        panic!("the module ends in a function");
     };
     let Some(Expr::For {
-        accumulator: Some(Accumulator { name, .. }),
+        accumulator: Some(accumulator),
         body,
         ..
     }) = decl.body.tail.as_deref()
     else {
         panic!("the function's value should be a walk carrying an accumulator");
     };
-
-    only_pushes(&name.name, body)
+    (accumulator.clone(), body.clone())
 }
+
+/// Whether the rule accepts a walk whose body is this.
+fn accepts(body: &str) -> bool {
+    let source = format!(
+        "module a\n\nfn f(items: List<Int>) -> List<Int> {{\n    for item in items with out = [] {{\n{body}\n    }}\n}}\n"
+    );
+    let (accumulator, body) = walk(&source);
+    only_pushes(&accumulator.name.name, &body)
+}
+
+/// Which fields of a record accumulator the rule builds in place.
+fn built(init: &str, body: &str) -> Vec<String> {
+    let source = format!(
+        "module a\n\n\
+         record Parts {{\n    kept: List<Int>,\n    rest: List<Int>,\n}}\n\n\
+         fn keep(held: Parts) -> Int {{\n    length(held.kept)\n}}\n\n\
+         fn seen(xs: List<Int>) -> Int {{\n    length(xs)\n}}\n\n\
+         fn f(items: List<Int>) -> Parts {{\n    for item in items with out = {init} {{\n{body}\n    }}\n}}\n"
+    );
+    let (accumulator, body) = walk(&source);
+    pushed_fields(&accumulator.name.name, &accumulator.init, &body)
+}
+
+/// The record every case below starts from.
+const EMPTY: &str = "Parts { kept: [], rest: [] }";
 
 /// The shape the rule is for.
 #[test]
@@ -224,4 +245,146 @@ fn the_accumulator_under_a_handler_is_refused() {
     assert!(!accepts(
         "        let held = with Held { count: 0 } {\n            out\n        }\n        push(out, item)"
     ));
+}
+
+// The accumulator that is a record of lists. The record is rebuilt a turn
+// either way; what these decide is which of its fields are one block for the
+// whole walk rather than one a turn.
+
+/// The shape the rule is for, which is `unzip`.
+#[test]
+fn a_record_whose_fields_are_only_pushed_onto_is_accepted() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        Parts { kept: push(out.kept, item), rest: push(out.rest, item) }"
+        ),
+        ["kept", "rest"]
+    );
+}
+
+/// A field handed on untouched by the turn that pushes the other, which is
+/// `partition`.
+#[test]
+fn a_field_handed_on_by_the_other_branch_is_accepted() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        if item > 0 {\n            Parts { kept: push(out.kept, item), rest: out.rest }\n        } else {\n            Parts { kept: out.kept, rest: push(out.rest, item) }\n        }"
+        ),
+        ["kept", "rest"]
+    );
+}
+
+/// A field nothing ever pushes onto is left alone, which is `scan`'s left.
+///
+/// Reserving room for a field the walk never appends to would allocate the
+/// length of the walk to hold nothing.
+#[test]
+fn a_field_that_is_only_handed_on_is_left_alone() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        Parts { kept: push(out.kept, item), rest: out.rest }"
+        ),
+        ["kept"]
+    );
+}
+
+/// A field that does not start empty, which a reserved block does.
+#[test]
+fn a_field_that_starts_from_something_is_left_alone() {
+    assert_eq!(
+        built(
+            "Parts { kept: items, rest: [] }",
+            "        Parts { kept: push(out.kept, item), rest: push(out.rest, item) }"
+        ),
+        ["rest"]
+    );
+}
+
+/// A field read anywhere but the two places the rule is about.
+#[test]
+fn a_field_read_somewhere_else_is_left_alone() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        let held = seen(out.kept)\n        Parts { kept: push(out.kept, held), rest: push(out.rest, item) }"
+        ),
+        ["rest"]
+    );
+}
+
+/// A second push into a field, away from the value the turn hands back.
+///
+/// The same mistake as `intersperse` written through a field: the turn grows
+/// that block by two while the room reserved is one a turn.
+#[test]
+fn pushing_into_a_field_away_from_the_value_of_a_turn_is_left_alone() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        let ahead = push(out.kept, item)\n        let _ = seen(ahead)\n        Parts { kept: push(out.kept, item), rest: push(out.rest, item) }"
+        ),
+        ["rest"]
+    );
+}
+
+/// A field given something that is neither the field nor a push onto it.
+#[test]
+fn a_field_given_a_different_list_is_left_alone() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        Parts { kept: items, rest: push(out.rest, item) }"
+        ),
+        ["rest"]
+    );
+}
+
+/// A turn that hands back a record built somewhere else.
+///
+/// Nothing here knows what that record holds, so nothing here knows that the
+/// block the next turn appends to is the block this walk reserved.
+#[test]
+fn a_turn_whose_value_is_not_a_record_written_here_is_refused() {
+    assert!(
+        built(
+            EMPTY,
+            "        let next = Parts { kept: push(out.kept, item), rest: out.rest }\n        next"
+        )
+        .is_empty()
+    );
+}
+
+/// Nothing may hold the record itself, however the fields are written.
+///
+/// A field is reachable through the record, so a rule that only asked about
+/// fields would let the record out and the field with it.
+#[test]
+fn naming_the_record_is_refused() {
+    assert!(
+        built(
+            EMPTY,
+            "        let held = out\n        Parts { kept: push(out.kept, item), rest: push(out.rest, item) }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn passing_the_record_to_something_else_is_refused() {
+    assert!(
+        built(
+            EMPTY,
+            "        let held = keep(out)\n        Parts { kept: push(out.kept, item), rest: push(out.rest, item) }"
+        )
+        .is_empty()
+    );
+}
+
+/// An accumulator that is not a record literal at all.
+#[test]
+fn an_accumulator_that_is_not_a_record_has_no_fields() {
+    assert!(built("items", "        out").is_empty());
 }
