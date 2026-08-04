@@ -1033,7 +1033,7 @@ struct Lowering<'a> {
     ///
     /// A slot rather than a name, so a `push` onto anything else inside the
     /// same body is still the copy it always was.
-    appending: Option<Local>,
+    appending: Option<Appending>,
     /// Where each bound name lives.
     slots: HashMap<DefId, Local>,
     /// Every refinement the checker could not settle, by the span of the
@@ -1051,6 +1051,17 @@ struct Lowering<'a> {
     /// A predicate is an ordinary expression and is lowered as one, so
     /// without this a guard inside one would ask for itself forever.
     checking: bool,
+}
+
+/// Where the walk being lowered writes the block it is building.
+///
+/// Both cases name a slot rather than a name, so a `push` onto anything else
+/// inside the same body is still the copy it always was.
+enum Appending {
+    /// The accumulator is the list.
+    Whole(Local),
+    /// The accumulator is a record, and these of its fields are the lists.
+    Fields(Local, Vec<usize>),
 }
 
 /// One refinement, as the lowering needs it.
@@ -2454,12 +2465,7 @@ impl Lowering<'_> {
                             // written where it stands rather than copied. The
                             // slot is what identifies it, so a `push` onto
                             // anything else in the same body is still a copy.
-                            ("push", _)
-                                if matches!(
-                                    (self.appending, lowered.first()),
-                                    (Some(carried), Some(Expr::Local(local))) if *local == carried
-                                ) =>
-                            {
+                            ("push", _) if self.appends_in_place(lowered.first()) => {
                                 crate::runtime::LIST_APPEND
                             }
                             ("push", _) => crate::runtime::LIST_PUSH,
@@ -3374,6 +3380,72 @@ impl Lowering<'_> {
         })
     }
 
+    /// Whether this `push` writes where it stands rather than copying.
+    ///
+    /// The first argument is what says so: the accumulator's own slot, or a
+    /// field of it that the walk reserved room for. Anything else is a list
+    /// somebody could still be holding.
+    fn appends_in_place(&self, first: Option<&Expr>) -> bool {
+        match (&self.appending, first) {
+            (Some(Appending::Whole(carried)), Some(Expr::Local(local))) => local == carried,
+            (Some(Appending::Fields(carried, built)), Some(Expr::Field { value, field, .. })) => {
+                matches!(&**value, Expr::Local(local) if local == carried) && built.contains(field)
+            }
+            _ => false,
+        }
+    }
+
+    /// The accumulator a walk starts from, with the fields it builds reserved.
+    ///
+    /// `built` names them, because the rule is about the source; which slot
+    /// each one is comes from the layout the literal already lowered to, so
+    /// the two places that know a record's field order stay one place. The
+    /// rule holds every turn to the same shape as this one, so a field is in
+    /// the same place every turn. The indices reserved are written into
+    /// `reserved`.
+    fn reserve(
+        &mut self,
+        start: Expr,
+        built: &[String],
+        list: Local,
+        reserved: &mut Vec<usize>,
+    ) -> Expr {
+        let Expr::Make {
+            layout,
+            variant,
+            mut fields,
+        } = start
+        else {
+            return start;
+        };
+
+        let places: Vec<(usize, Ty)> = self.layout(layout).variants[variant]
+            .fields
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| built.iter().any(|name| name == &field.name))
+            .map(|(at, field)| (at, field.ty.clone()))
+            .collect();
+        for (at, ty) in places {
+            fields[at] = Expr::Runtime {
+                name: crate::runtime::LIST_ROOM,
+                args: vec![Expr::Runtime {
+                    name: crate::runtime::LIST_LEN,
+                    args: vec![Expr::Local(list)],
+                    ret: Box::new(Ty::Int),
+                }],
+                ret: Box::new(ty),
+            };
+            reserved.push(at);
+        }
+
+        Expr::Make {
+            layout,
+            variant,
+            fields,
+        }
+    }
+
     /// A `for` walk: a counter, the list's own length as the bound, and a
     /// body that rebinds the accumulator.
     ///
@@ -3411,6 +3483,16 @@ impl Lowering<'_> {
                 && crate::shape::only_pushes(&one.name.name, body)
         });
 
+        // The same argument one field at a time, for the accumulator that is
+        // a record of lists. A list accumulator answers none, because the two
+        // rules ask about different shapes of what a walk starts from. See
+        // `design/decisions/2026-08-04-a-walk-that-pushes-into-a-record.md`.
+        let built_fields = match accumulator {
+            Some(one) => crate::shape::pushed_fields(&one.name.name, &one.init, body),
+            None => Vec::new(),
+        };
+
+        let mut reserved = Vec::new();
         let (carried, start) = match accumulator {
             Some(one) => {
                 let ty = self.ty_at(one.init.span())?;
@@ -3426,7 +3508,8 @@ impl Lowering<'_> {
                         ret: Box::new(ty.clone()),
                     }
                 } else {
-                    self.expr(&one.init)?
+                    let built = self.expr(&one.init)?;
+                    self.reserve(built, &built_fields, list, &mut reserved)
                 };
                 (self.function.add_local(ty), value)
             }
@@ -3471,8 +3554,14 @@ impl Lowering<'_> {
         }
 
         let turn = {
-            let outer = self.appending;
-            self.appending = in_place.then_some(carried);
+            let outer = self.appending.take();
+            self.appending = if in_place {
+                Some(Appending::Whole(carried))
+            } else if reserved.is_empty() {
+                None
+            } else {
+                Some(Appending::Fields(carried, reserved))
+            };
             let turn = self.block(body);
             self.appending = outer;
             turn?

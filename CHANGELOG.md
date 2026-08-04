@@ -28,6 +28,11 @@ release notes.
 
 ### Tools
 
+- A walk that carries a record of lists builds each field that is only ever
+  pushed onto once rather than once a turn. `partition`, `unzip` and `scan` in
+  `std/list` are the shape: all three used to allocate along the square of the
+  list they walked, and none of them could be used past a few hundred
+  elements. The record itself is still built a turn.
 - Fixed: a compiled walk that pushed onto its accumulator twice in a turn, with
   the second push away from the value the turn hands back, was read as the
   shape that builds one list. It grew the list by two a turn into room reserved
@@ -39,6 +44,9 @@ release notes.
 
 ### Measurements
 
+- `partition` over a list of 256, with the list it walks subtracted off,
+  allocated 267304 bytes and now allocates 8224. Over 1024 it ran out of
+  memory and now allocates 32800.
 - The counts in `design/decisions/2026-08-04-a-walk-that-only-pushes.md` said
   forty-four walks of the shape against thirty-four of every other. The rule
   that shipped answered forty and thirty-eight. The record now says what the
