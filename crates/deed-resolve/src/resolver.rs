@@ -94,6 +94,7 @@ pub const PRELUDE: &[&str] = &[
     "Console",
     "Clock",
     "Dir",
+    "Net",
 ];
 
 /// Operations of the built-in `Io` effect.
@@ -128,8 +129,20 @@ pub const PRELUDE: &[&str] = &[
 /// same answer twice. Holding a `Clock` says nothing about which of the two a
 /// function may do, so the row does, and a signature saying `uses Io.epoch` is
 /// a function whose output can change between two runs of the same program.
+///
+/// `reach`, `fetch` and `send` are the `Dir` split applied to the network.
+/// `reach` narrows a `Net` to one host and is the `open` of this group: what
+/// comes back reaches a subset of what went in and there is no way to widen
+/// one. `fetch` reads and `send` writes, and they are two entries rather than
+/// one for the reason `read` and `save` are: holding the capability says
+/// nothing about which of them a function may do, and sending a request that
+/// changes something on the other end is not the same permission as asking a
+/// question. All three also carry what `epoch` carries, that the answer can
+/// differ between two runs, and more so: the other end is a machine nobody
+/// here controls.
 pub const IO_OPERATIONS: &[&str] = &[
-    "write", "now", "epoch", "open", "read", "save", "remove", "make", "list", "args",
+    "write", "now", "epoch", "open", "read", "save", "remove", "make", "list", "args", "reach",
+    "fetch", "send",
 ];
 
 /// The effects the language provides, available in every module without an

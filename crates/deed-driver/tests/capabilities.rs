@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use deed_diagnostics::{Diagnostic, SourceMap, render_human};
 use deed_driver::{Checked, check_text};
 use deed_interp::{Program, Run, run_main};
+use deed_rt::Reach;
 use deed_typeck::{Ty, io_signatures, is_capability};
 
 /// A directory nothing was granted, for programs that do not touch files.
@@ -68,6 +69,20 @@ fn run_with(src: &str, root: &Path, arguments: &[String]) -> (SourceMap, Run) {
     (sources, run)
 }
 
+/// Runs a program that was granted the network, and nothing else.
+fn run_reaching(src: &str, hosts: &[&str]) -> (SourceMap, Run) {
+    let (sources, checked) = check_ok(src);
+    let run = deed_interp::run_main_reaching(
+        &program_of(&checked),
+        checked.file,
+        nowhere(),
+        &[],
+        &Reach::granting(hosts.iter().copied()),
+    )
+    .expect("there should be a main");
+    (sources, run)
+}
+
 fn codes_of(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics.iter().map(|d| d.code).collect()
 }
@@ -101,16 +116,15 @@ fn hands_back_a_capability(ty: &Ty) -> bool {
 ///
 /// A capability is reached only by being handed one, which is the first half
 /// and is why every operation takes one first. The second half is not that a
-/// capability cannot be produced, because two operations produce one; it is
+/// capability cannot be produced, because three operations produce one; it is
 /// that what comes back reaches strictly less than what went in.
 ///
-/// Both of those two have a test right below this one. A third would need the
-/// same argument made for it, and the way that goes wrong is quietly: `Io.make`
-/// joined the set in #152 and the prose about the set was not revisited, which
-/// is the second time that happened. So the set is counted rather than
-/// described.
+/// All three have a test below this one. A fourth would need the same argument
+/// made for it, and the way that goes wrong is quietly: `Io.make` joined the
+/// set in #152 and the prose about the set was not revisited, which is the
+/// second time that happened. So the set is counted rather than described.
 #[test]
-fn the_operations_that_hand_a_capability_back_are_the_two_with_an_escape_test() {
+fn the_operations_that_hand_a_capability_back_are_the_three_with_an_escape_test() {
     let signatures = io_signatures();
 
     for (name, params, _) in &signatures {
@@ -132,7 +146,7 @@ fn the_operations_that_hand_a_capability_back_are_the_two_with_an_escape_test() 
 
     assert_eq!(
         producing,
-        vec!["make", "open"],
+        vec!["make", "open", "reach"],
         "the operations handing a capability back have changed, so the narrowing argument \
          in design/04-capabilities.md needs making for the new one, with a test beside \
          `opening_narrows_and_there_is_no_way_back`"
@@ -323,6 +337,51 @@ fn a_handler_costs_the_same_from_another_module() {
 
 // -- what it can do --------------------------------------------------------
 
+/// A capability in an exported signature keeps being a capability on the other
+/// side of the boundary.
+///
+/// The surface is lowered by a second pass, and a type it does not recognise
+/// becomes `Unknown`, which agrees with everything. So a capability the
+/// exported signature failed to carry would not be a type error at the call
+/// site, it would be a parameter nothing checks, and `takes(5)` would compile.
+/// That is the shape this repository has been caught by before, which is why
+/// the test is written from the wrong argument rather than the right one.
+#[test]
+fn a_capability_crossing_a_module_boundary_is_still_a_capability() {
+    for (capability, wrong) in [
+        ("Console", "5"),
+        ("Clock", "\"x\""),
+        ("Dir", "5"),
+        ("Net", "5"),
+        ("System", "5"),
+    ] {
+        let mut sources = SourceMap::new();
+        let ids = [
+            sources.add(
+                "lib.deed",
+                format!("module lib\n\nfn takes(it: {capability}) -> Int {{ 1 }}\n").as_str(),
+            ),
+            sources.add(
+                "app.deed",
+                format!(
+                    "module app\n\nuse lib.{{takes}}\n\nfn call() -> Int {{ takes({wrong}) }}\n"
+                )
+                .as_str(),
+            ),
+        ];
+        let checked = deed_driver::check_all(&sources, &ids);
+        let said: Vec<Diagnostic> = checked
+            .iter()
+            .flat_map(|one| one.diagnostics.iter().cloned())
+            .collect();
+        assert!(
+            said.iter().any(Diagnostic::is_error),
+            "`takes({wrong})` should not be accepted where a `{capability}` was wanted:\n{}",
+            rendered(&sources, &said)
+        );
+    }
+}
+
 #[test]
 fn a_function_handed_a_console_can_write_to_it() {
     check_ok(
@@ -501,6 +560,312 @@ fn opening_narrows_and_there_is_no_way_back() {
         !run.output[1].contains("REACHED THE PARENT"),
         "a narrowed `Dir` read its parent: {:?}",
         run.output
+    );
+}
+
+// -- the network -----------------------------------------------------------
+
+/// A server that answers a fixed number of requests and then stops.
+///
+/// Bound to `127.0.0.1` on a port the operating system picks, so these tests
+/// reach a machine that is already running them and nothing else. A test that
+/// went out to a real host would be a test of that host, of the network
+/// between, and of whoever is paying for it, and it would fail on an aeroplane.
+struct Answering {
+    port: u16,
+    seen: std::sync::mpsc::Receiver<String>,
+}
+
+impl Answering {
+    /// Serves `answers` in order, one per request, then closes.
+    fn with(answers: &[&str]) -> Answering {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port should be free");
+        let port = listener.local_addr().expect("a bound address").port();
+        let answers: Vec<String> = answers.iter().map(|answer| (*answer).to_string()).collect();
+        let (sender, seen) = std::sync::mpsc::channel();
+
+        // Not joined when this is dropped. A server that was handed more
+        // answers than it was asked questions sits in `accept`, and a `Drop`
+        // that waits for it would hang the suite rather than fail it. The
+        // thread serves a bounded number of requests and the process ends when
+        // the test binary does.
+        std::thread::spawn(move || {
+            for answer in answers {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                // Read only the request head. Reading to the end would wait
+                // for a close the client is not going to make until it has
+                // been answered.
+                let mut request = Vec::new();
+                let mut byte = [0_u8; 1];
+                while let Ok(1) = std::io::Read::read(&mut stream, &mut byte) {
+                    request.push(byte[0]);
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let head = String::from_utf8_lossy(&request).to_string();
+                // A body, when the request said it has one, so a test can
+                // check that `send` actually sent what it was given.
+                let length = head
+                    .split("\r\n")
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut body = vec![0_u8; length];
+                if length > 0 {
+                    let _ = std::io::Read::read_exact(&mut stream, &mut body);
+                }
+                let _ = sender.send(format!("{head}{}", String::from_utf8_lossy(&body)));
+
+                let _ = std::io::Write::write_all(&mut stream, answer.as_bytes());
+                let _ = std::io::Write::flush(&mut stream);
+            }
+        });
+
+        Answering { port, seen }
+    }
+
+    fn ok(body: &str) -> Answering {
+        Answering::with(&[&format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )])
+    }
+
+    fn host(&self) -> String {
+        format!("127.0.0.1:{}", self.port)
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}{path}", self.port)
+    }
+
+    /// What the server was actually sent, so a test can check the request
+    /// rather than only the answer.
+    fn request(&self) -> String {
+        self.seen
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the server should have seen a request")
+    }
+}
+
+impl Drop for Answering {
+    fn drop(&mut self) {}
+}
+
+#[test]
+fn a_net_fetches_from_a_host_it_was_granted() {
+    let server = Answering::ok("the body");
+    let (_, run) = run_reaching(
+        &report(
+            &["write", "fetch"],
+            &format!(
+                "  match Io.fetch(sys.net, \"{}\") {{\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }}",
+                server.url("/thing")
+            ),
+        ),
+        &[&server.host()],
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["the body".to_string()]);
+    let request = server.request();
+    assert!(request.starts_with("GET /thing HTTP/1.1"), "{request}");
+}
+
+#[test]
+fn sending_carries_the_body_it_was_given() {
+    let server = Answering::ok("thanks");
+    let (_, run) = run_reaching(
+        &report(
+            &["write", "send"],
+            &format!(
+                "  match Io.send(sys.net, \"{}\", \"the payload\") {{\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }}",
+                server.url("/inbox")
+            ),
+        ),
+        &[&server.host()],
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["thanks".to_string()]);
+    let request = server.request();
+    assert!(request.starts_with("POST /inbox HTTP/1.1"), "{request}");
+    assert!(request.ends_with("the payload"), "{request}");
+}
+
+/// The default, and the one that matters. A run that named no host reaches
+/// nothing, so a program cannot phone home just by being run.
+#[test]
+fn a_program_granted_no_hosts_reaches_nothing() {
+    let (_, run) = run_reaching(
+        &report(
+            &["write", "fetch"],
+            "  match Io.fetch(sys.net, \"http://example.com/x\") {\n    ok(text) => Io.write(sys.console, \"REACHED IT\"),\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        &[],
+    );
+
+    assert!(run.result.is_ok());
+    assert!(
+        run.output[0].contains("is not one of the hosts this `Net` reaches"),
+        "{:?}",
+        run.output
+    );
+}
+
+#[test]
+fn a_net_cannot_reach_a_host_it_was_not_granted() {
+    let (_, run) = run_reaching(
+        &report(
+            &["write", "fetch"],
+            "  match Io.fetch(sys.net, \"http://elsewhere.example/x\") {\n    ok(text) => Io.write(sys.console, \"REACHED IT\"),\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        &["granted.example"],
+    );
+
+    assert!(run.result.is_ok());
+    assert!(
+        !run.output[0].contains("REACHED IT"),
+        "a `Net` reached a host nobody granted: {:?}",
+        run.output
+    );
+    assert!(
+        run.output[0].contains("elsewhere.example"),
+        "{:?}",
+        run.output
+    );
+}
+
+/// The `opening_narrows_and_there_is_no_way_back` argument, made for the third
+/// operation that hands a capability back. What comes out of `Io.reach`
+/// reaches one host, and the one it did not name is gone for good.
+#[test]
+fn reaching_narrows_and_there_is_no_way_back() {
+    let server = Answering::with(&[
+        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\ninside",
+    ]);
+    let host = server.host();
+    let (_, run) = run_reaching(
+        &report(
+            &["write", "fetch", "reach"],
+            &format!(
+                "  match Io.reach(sys.net, \"{host}\") {{\n    \
+                   ok(narrower) => match Io.fetch(narrower, \"{}\") {{\n      \
+                     ok(text) => Io.write(sys.console, text),\n      \
+                     err(why) => Io.write(sys.console, why),\n    \
+                   }},\n    \
+                   err(why) => Io.write(sys.console, why),\n  \
+                 }}\n  \
+                 match Io.reach(sys.net, \"{host}\") {{\n    \
+                   ok(narrower) => match Io.fetch(narrower, \"http://other.example/x\") {{\n      \
+                     ok(text) => Io.write(sys.console, \"REACHED THE OTHER HOST\"),\n      \
+                     err(why) => Io.write(sys.console, why),\n    \
+                   }},\n    \
+                   err(why) => Io.write(sys.console, why),\n  \
+                 }}",
+                server.url("/x")
+            ),
+        ),
+        &[&host, "other.example"],
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output[0], "inside");
+    assert!(
+        !run.output[1].contains("REACHED THE OTHER HOST"),
+        "a narrowed `Net` reached a host it had given up: {:?}",
+        run.output
+    );
+}
+
+/// Narrowing cannot add a host, which is what separates it from a way of
+/// asking for one.
+#[test]
+fn reaching_for_a_host_that_was_not_granted_is_refused() {
+    let (_, run) = run_reaching(
+        &report(
+            &["write", "reach"],
+            "  match Io.reach(sys.net, \"elsewhere.example\") {\n    ok(narrower) => Io.write(sys.console, \"GOT ONE\"),\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        &["granted.example"],
+    );
+
+    assert!(run.result.is_ok());
+    assert!(
+        !run.output[0].contains("GOT ONE"),
+        "narrowing minted a host: {:?}",
+        run.output
+    );
+}
+
+/// Refused by name with the reason, rather than by failing to connect. A
+/// reader who gets "connection reset" from an `https` URL goes looking at
+/// their network.
+#[test]
+fn https_says_why_rather_than_failing_to_connect() {
+    let (_, run) = run_reaching(
+        &report(
+            &["write", "fetch"],
+            "  match Io.fetch(sys.net, \"https://granted.example/x\") {\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        &["granted.example"],
+    );
+
+    assert!(run.result.is_ok());
+    assert!(run.output[0].contains("TLS"), "{:?}", run.output);
+    assert!(
+        run.output[0].contains("no dependencies"),
+        "{:?}",
+        run.output
+    );
+}
+
+/// A status the caller did not ask for is an answer about the request, not a
+/// failure of the runtime, and the body of a refusal is usually the reason.
+#[test]
+fn a_status_that_is_not_success_comes_back_as_an_error_carrying_the_body() {
+    let server = Answering::with(&[
+        "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nno such x",
+    ]);
+    let (_, run) = run_reaching(
+        &report(
+            &["write", "fetch"],
+            &format!(
+                "  match Io.fetch(sys.net, \"{}\") {{\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }}",
+                server.url("/x")
+            ),
+        ),
+        &[&server.host()],
+    );
+
+    assert!(run.result.is_ok());
+    assert!(run.output[0].contains("404"), "{:?}", run.output);
+    assert!(run.output[0].contains("no such x"), "{:?}", run.output);
+}
+
+/// A test block reaches no host for the reason it reaches no directory: a
+/// test whose answer depends on a machine nobody in this repository controls
+/// is a test of that machine. The rule is the language's rather than the
+/// runner's, and this is where it is: nothing inside a test block can name a
+/// capability, so there is no `Net` to hand to `Io.fetch`.
+#[test]
+fn a_test_block_has_no_way_to_name_a_net() {
+    let (_, refused) = check(
+        "module a\n\n\
+         fn ask(net: Net) -> String\n  uses Io.fetch,\n{\n  \
+           match Io.fetch(net, \"http://x.example/\") {\n    ok(text) => text,\n    err(why) => why,\n  }\n\
+         }\n\n\
+         test \"reaching out\" {\n  assert ask(Net) == \"\"\n}\n",
+    );
+    assert!(
+        codes_of(&refused.diagnostics).contains(&deed_typeck::codes::NOT_A_VALUE),
+        "{:?}",
+        codes_of(&refused.diagnostics)
     );
 }
 

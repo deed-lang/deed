@@ -114,6 +114,15 @@ fn probe_for_io(operation: &str) -> &'static str {
         "args" => {
             "module probe\n\nfn f(sys: System) -> List<String>\n  uses\n    Io.args,\n{\n    Io.args(sys)\n}\n"
         }
+        "reach" => {
+            "module probe\n\nfn f(sys: System) -> Result<Net, String>\n  uses\n    Io.reach,\n{\n    Io.reach(sys.net, \"x\")\n}\n"
+        }
+        "fetch" => {
+            "module probe\n\nfn f(sys: System) -> Result<String, String>\n  uses\n    Io.fetch,\n{\n    Io.fetch(sys.net, \"x\")\n}\n"
+        }
+        "send" => {
+            "module probe\n\nfn f(sys: System) -> Result<String, String>\n  uses\n    Io.send,\n{\n    Io.send(sys.net, \"x\", \"y\")\n}\n"
+        }
         other => panic!("no probe written for `Io.{other}`, add one"),
     }
 }
@@ -180,11 +189,18 @@ fn every_callable_prelude_name_is_named_by_whether_the_backend_compiles_it() {
 /// Every `Io` operation, and whether the backend compiles it, pinned by
 /// name.
 ///
-/// All ten do: capabilities reach the backend as host imports (#569), and a
-/// call through one compiles the same way any other direct call does. That
+/// All thirteen do: capabilities reach the backend as host imports (#569), and
+/// a call through one compiles the same way any other direct call does. That
 /// contradicts `compile.rs`'s own doc comment, which still says capabilities
 /// are refused by name; fixed alongside this test, since a stale comment a
 /// reader would trust over the code is worse than no comment.
+///
+/// The three network operations are in here for a reason worth stating: the
+/// interpreter speaks `http` and nothing else, and a compiled program does not
+/// go through the interpreter at all. `Io.fetch` becomes `deed:io.fetch` in
+/// the world the module asks its host for, and what the host does with it is
+/// the host's business. So the backend compiling them is not the same claim as
+/// the interpreter performing them, and this test makes the first one.
 #[test]
 fn every_io_operation_is_named_by_whether_the_backend_compiles_it() {
     for operation in IO_OPERATIONS {

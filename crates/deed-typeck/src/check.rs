@@ -1360,7 +1360,7 @@ impl<'a> Checker<'a> {
                         // about one except that you were handed it, and there
                         // is exactly one `Console`, so it is named under the
                         // prelude rather than under this module.
-                        "System" | "Console" | "Clock" | "Dir" => capability(&name.name),
+                        "System" | "Console" | "Clock" | "Dir" | "Net" => capability(&name.name),
                         "Result" => {
                             if lowered_args.len() == 2 {
                                 return Ty::Result(
@@ -3788,7 +3788,10 @@ impl<'a> Checker<'a> {
         )
         .with_primary_label(format!("`{name}` cannot be used here"));
 
-        if matches!(name.as_str(), "System" | "Console" | "Clock" | "Dir") {
+        if matches!(
+            name.as_str(),
+            "System" | "Console" | "Clock" | "Dir" | "Net"
+        ) {
             diagnostic = diagnostic.with_note(format!(
                 "a `{name}` cannot be constructed, only received, which is the point: \
                  a function that was not handed one cannot reach one"
@@ -3834,6 +3837,7 @@ impl<'a> Checker<'a> {
                 "console" => Some("Console"),
                 "clock" => Some("Clock"),
                 "files" => Some("Dir"),
+                "net" => Some("Net"),
                 _ => None,
             };
             return match narrower {
@@ -3847,7 +3851,7 @@ impl<'a> Checker<'a> {
                             format!("`System` carries no `{}`", name.name),
                         )
                         .with_primary_label("no such capability")
-                        .with_note("it carries `console`, `clock` and `files`"),
+                        .with_note("it carries `console`, `clock`, `files` and `net`"),
                     );
                     Ty::Unknown
                 }
@@ -5352,11 +5356,12 @@ fn capability(name: &str) -> Ty {
 /// Public because it is the only place the compiler writes down which
 /// operations hand a capability back, and that is the claim the capability
 /// argument rests on: authority narrows on the way down and there is no
-/// operation that widens it. Two operations return a `Dir`, both of them
-/// rooted inside the one they were given, and each has a test that climbing
-/// out of what came back is refused. A third would need the same, and a
-/// declaration nothing outside this file can read is a declaration nobody
-/// checks that against.
+/// operation that widens it. Three operations hand a capability back. Two
+/// return a `Dir`, both of them rooted inside the one they were given; one
+/// returns a `Net` reaching a subset of the hosts the one it was given
+/// reached. Each has a test that climbing out of what came back is refused. A
+/// fourth would need the same, and a declaration nothing outside this file can
+/// read is a declaration nobody checks that against.
 pub fn io_signatures() -> Vec<(&'static str, Vec<Ty>, Ty)> {
     // Every `Io` operation takes the capability it acts on as its first
     // argument. The row says what kind of thing is happening, the argument
@@ -5364,6 +5369,7 @@ pub fn io_signatures() -> Vec<(&'static str, Vec<Ty>, Ty)> {
     let console = capability("Console");
     let clock = capability("Clock");
     let dir = capability("Dir");
+    let net = capability("Net");
 
     // `open` hands back a narrower `Dir` and `read` hands back the file's
     // contents. Both can fail, because a path that is not there is not a
@@ -5412,10 +5418,23 @@ pub fn io_signatures() -> Vec<(&'static str, Vec<Ty>, Ty)> {
             vec![capability("System")],
             Ty::List(Box::new(Ty::Str)),
         ),
+        // `open` for the network. What comes back reaches one host out of the
+        // ones that went in, so the only direction is narrower, and asking for
+        // a host this `Net` did not already reach is refused rather than
+        // granted. A narrowing operation that can add a host is not one.
+        ("reach", vec![net.clone(), Ty::Str], io_error(net.clone())),
+        // Asking a question of the other end, and getting the answer as text.
+        // Separate from `send` for the reason `read` is separate from `save`:
+        // what a caller hands over is which of these a function may do.
+        ("fetch", vec![net.clone(), Ty::Str], io_error(Ty::Str)),
+        // Sending something that may change what is on the other end. The
+        // answer comes back the same way, because a request that says nothing
+        // about what happened is a request whose failure nobody can see.
+        ("send", vec![net, Ty::Str, Ty::Str], io_error(Ty::Str)),
     ]
 }
 
-/// Whether `ty` is one of the four builtin capabilities.
+/// Whether `ty` is one of the five builtin capabilities.
 ///
 /// The names live here rather than in a list somewhere, because this is the
 /// function that builds them and a second copy is a second thing to keep in
@@ -5425,7 +5444,7 @@ pub fn is_capability(ty: &Ty) -> bool {
         ty,
         Ty::External { module, name, .. }
             if &**module == PRELUDE_MODULE
-                && matches!(&**name, "Console" | "Clock" | "Dir" | "System")
+                && matches!(&**name, "Console" | "Clock" | "Dir" | "Net" | "System")
     )
 }
 

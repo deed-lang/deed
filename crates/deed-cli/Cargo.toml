@@ -23,6 +23,7 @@ deed-fmt = { path = "../deed-fmt" }
 deed-interp = { path = "../deed-interp" }
 deed-lsp = { path = "../deed-lsp" }
 deed-mcp = { path = "../deed-mcp" }
+deed-rt = { path = "../deed-rt" }
 deed-typeck = { path = "../deed-typeck" }
 
 [dev-dependencies]

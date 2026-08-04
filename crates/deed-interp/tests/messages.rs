@@ -509,7 +509,7 @@ fn an_io_operation_with_no_capability_at_all_is_refused() {
 }
 
 #[test]
-fn a_filesystem_operation_with_no_name_is_refused() {
+fn an_operation_with_an_argument_missing_is_refused() {
     message_from_main(
         "module a\n\n\
          fn main(sys: System) -> ()\n\
@@ -520,11 +520,14 @@ fn a_filesystem_operation_with_no_name_is_refused() {
          }\n",
         somewhere(),
     )
-    .says("the interpreter cannot run a filesystem operation with no name");
+    .says("the interpreter cannot run an `Io` operation with an argument missing");
 }
 
+/// The message stopped saying "filesystem" when `Io.fetch` started sharing it.
+/// A URL is not a filename, and a message that calls one the other sends the
+/// reader looking at the wrong argument.
 #[test]
-fn a_filesystem_name_that_is_not_a_string_says_what_it_was() {
+fn an_operation_given_something_that_is_not_text_says_what_it_was() {
     message_from_main(
         "module a\n\n\
          fn main(sys: System) -> ()\n\
@@ -535,7 +538,7 @@ fn a_filesystem_name_that_is_not_a_string_says_what_it_was() {
          }\n",
         somewhere(),
     )
-    .says("the interpreter cannot run a filesystem name that is an Int");
+    .says("the interpreter cannot run an `Io` operation given an Int where it wants text");
 }
 
 #[test]

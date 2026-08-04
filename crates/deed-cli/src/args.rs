@@ -29,6 +29,10 @@ Options:
     --compiled              With `run` or `test`, use the compiled backend.
   --dir <path>            What `sys.files` reaches when running. Default: the
                           current directory. A program cannot get outside it.
+  --allow <host>          A host `sys.net` may reach when running. Repeatable.
+                          Default: none, so a program reaches nothing. A host
+                          may carry a port (`example.com:8080`), and one
+                          without a port grants every port on that host.
   --check                 With `fmt` or `fix`, change nothing and report what
                           would have changed.
   --compiled              With `test`, run test blocks through the compiled
@@ -122,6 +126,15 @@ pub struct CheckArgs {
     /// tool does and it is not obviously right, but making people spell it out
     /// every time would just teach them to type it without reading it.
     pub dir: Option<PathBuf>,
+    /// What `sys.net` reaches. Empty means nothing.
+    ///
+    /// Unlike `--dir`, this does not default to something. Running a command
+    /// in a directory is already a choice about that directory, so granting
+    /// the working one inherits a decision somebody made; there is no
+    /// equivalent ambient choice about the network, and "the network" is not
+    /// a place anyone is standing. So a program that was not told which hosts
+    /// it may reach reaches none, and says so rather than failing to connect.
+    pub allow: Vec<String>,
     /// With `fmt`, report rather than rewrite.
     pub check_only: bool,
     /// With `build`, produce a component instead of a standalone module.
@@ -218,6 +231,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut timings = false;
     let mut runtime_profile = false;
     let mut dir = None;
+    let mut allow: Vec<String> = Vec::new();
     let mut check_only = false;
     let mut component = false;
     let mut arguments = Vec::new();
@@ -257,6 +271,18 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             }
             other if other.starts_with("--dir=") => {
                 dir = Some(PathBuf::from(&other["--dir=".len()..]));
+            }
+            // Repeatable rather than comma separated. A host cannot contain a
+            // space and a shell already splits on one, so the list is the
+            // argument list, and there is no second escaping rule to know.
+            "--allow" => {
+                let value = args.next().ok_or_else(|| {
+                    "`--allow` needs a host, e.g. `--allow example.com`".to_string()
+                })?;
+                allow.push(value);
+            }
+            other if other.starts_with("--allow=") => {
+                allow.push(other["--allow=".len()..].to_string());
             }
             "--lock" => {
                 let value = args
@@ -302,6 +328,18 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         return Err("`--compiled` is only valid with `deed run` or `deed test`".to_string());
     }
 
+    // A grant nothing will read is a grant somebody believes they made. `deed
+    // check --allow` looks like it narrows what the check considers and it
+    // does not, and `deed test --allow` looks like it lets a test reach a
+    // host, which is the thing a test must not do.
+    if !allow.is_empty() && !matches!(mode, Mode::Run) {
+        return Err(
+            "`--allow` is only valid with `deed run`; a test that reaches a host is a \
+                    test of that host"
+                .to_string(),
+        );
+    }
+
     Ok(Command::Check(CheckArgs {
         mode,
         paths,
@@ -310,6 +348,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         timings,
         runtime_profile,
         dir,
+        allow,
         check_only,
         component,
         arguments,
@@ -359,6 +398,57 @@ mod tests {
     fn lsp_is_a_command_and_takes_nothing_else() {
         assert!(matches!(parse(args(&["lsp"])), Ok(Command::Lsp)));
         assert!(parse(args(&["lsp", "a.deed"])).is_err());
+    }
+
+    /// The default, and the one worth a test of its own: a run nobody told
+    /// about a host reaches none.
+    #[test]
+    fn a_run_that_names_no_host_grants_none() {
+        let Ok(Command::Check(check)) = parse(args(&["run", "a.deed"])) else {
+            panic!("should parse");
+        };
+        assert!(check.allow.is_empty());
+    }
+
+    #[test]
+    fn allow_is_repeatable_and_takes_either_spelling() {
+        let Ok(Command::Check(check)) = parse(args(&[
+            "run",
+            "a.deed",
+            "--allow",
+            "one.example",
+            "--allow=two.example:8080",
+        ])) else {
+            panic!("should parse");
+        };
+        assert_eq!(check.allow, vec!["one.example", "two.example:8080"]);
+    }
+
+    #[test]
+    fn allow_needs_a_host() {
+        assert!(parse(args(&["run", "a.deed", "--allow"])).is_err());
+    }
+
+    /// A grant nothing will read is a grant somebody believes they made.
+    #[test]
+    fn allow_is_refused_where_nothing_would_read_it() {
+        for mode in ["check", "test", "build", "fmt"] {
+            let refused = parse(args(&[mode, "a.deed", "--allow", "one.example"]))
+                .expect_err("`--allow` should only be valid with `run`");
+            assert!(refused.contains("only valid with `deed run`"), "{refused}");
+        }
+    }
+
+    /// Everything after `--` belongs to the program, including something that
+    /// looks like this tool's own flag.
+    #[test]
+    fn a_program_may_be_handed_something_spelled_like_allow() {
+        let Ok(Command::Check(check)) = parse(args(&["run", "a.deed", "--", "--allow", "x"]))
+        else {
+            panic!("should parse");
+        };
+        assert!(check.allow.is_empty());
+        assert_eq!(check.arguments, vec!["--allow", "x"]);
     }
 
     #[test]

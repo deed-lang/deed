@@ -16,11 +16,28 @@ release notes.
 
 ### Language
 
-- None yet.
+- A fifth capability, `Net`, taken out of `System` as `sys.net`, with three `Io`
+  operations: `reach` narrows a `Net` to one host, `fetch` asks a question of
+  it, and `send` may change something on it. Three entries in the row rather
+  than one, for the reason `read` and `save` are separate about the same `Dir`.
+  `Io.reach` is the third operation that hands a capability back, and it has
+  the escape test the other two have: a narrowed `Net` cannot reach a host it
+  gave up, and narrowing cannot mint one that was never granted. A host matches
+  by equality and never by suffix, so a grant of `example.com` does not grant
+  `evil-example.com`. Decision record:
+  `design/decisions/2026-08-04-a-capability-for-the-network.md`.
+- A compiled program's WIT world now derives network imports the same way it
+  derives every other one, so `deed build --component` produces something that
+  can ask its host for `deed:io.fetch`. Nothing in the world emitter changed;
+  it reads the row, and the row grew.
 
 ### Diagnostics
 
-- None yet.
+- `System carries no ...` now names `net` alongside `console`, `clock` and
+  `files`.
+- The interpreter's message for an `Io` operation handed something that is not
+  text stopped saying "filesystem". A URL is not a filename, and a message that
+  calls one the other sends the reader at the wrong argument.
 
 ### Standard library
 
@@ -28,6 +45,12 @@ release notes.
 
 ### Tools
 
+- `deed run --allow <host>` grants a host to `sys.net`. Repeatable. A host may
+  carry a port, and one without a port grants every port on that host. The
+  default is nothing: unlike `--dir`, which inherits the choice somebody made
+  by running the command where they did, there is no ambient choice about the
+  network for a default to inherit. `--allow` is refused on `check`, `test`,
+  `build` and `fmt`, where nothing would read it.
 - A walk that carries a record of lists builds each field that is only ever
   pushed onto once rather than once a turn. `partition`, `unzip` and `scan` in
   `std/list` are the shape: all three used to allocate along the square of the

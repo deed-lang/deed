@@ -892,12 +892,12 @@ fn written(
                 let err = written(&args[1], layouts, aliases, nominals, bindings, shapes)?;
                 Ty::Aggregate(result_layout(shapes, ok, err))
             }
-            // The four capabilities the language provides. All one type
+            // The five capabilities the language provides. All one type
             // here, because a handle is a handle: what a program may do with
             // one is decided by the effect row and by which host operation
             // it is handed to, and neither of those is a question about its
             // representation. See `design/04-capabilities.md`.
-            ("System" | "Console" | "Clock" | "Dir", 0) => Ty::Capability,
+            ("System" | "Console" | "Clock" | "Dir" | "Net", 0) => Ty::Capability,
             // A type parameter first, since a copy of a generic function was
             // lowered for exactly one thing and that is what it stands for
             // here.
@@ -960,7 +960,7 @@ fn lower_ty(ty: &CheckedTy, span: Span) -> Result<Ty, Unlowered> {
         CheckedTy::External { module, name, args }
             if &**module == "<prelude>"
                 && args.is_empty()
-                && matches!(&**name, "System" | "Console" | "Clock" | "Dir") =>
+                && matches!(&**name, "System" | "Console" | "Clock" | "Dir" | "Net") =>
         {
             Ty::Capability
         }
@@ -3803,5 +3803,67 @@ fn order(
         Ty::Int => Ok(on_int),
         Ty::Str => Ok(on_str),
         _ => Err(unlowered("an ordering on this type", span)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prelude(name: &str) -> CheckedTy {
+        CheckedTy::External {
+            module: std::rc::Rc::from("<prelude>"),
+            name: std::rc::Rc::from(name),
+            args: Vec::new(),
+        }
+    }
+
+    /// The five capabilities are one representation here, and nothing else
+    /// under the prelude is.
+    ///
+    /// Read directly rather than through a program, because the only caller
+    /// handles every other kind of external type before this is reached. That
+    /// makes the guard unobservable from outside the crate: a mutation
+    /// widening it to every external type changes no answer any program can
+    /// ask for, and a rule nothing can be wrong about is a rule nobody is
+    /// keeping.
+    #[test]
+    fn a_capability_lowers_to_a_handle_and_nothing_else_under_the_prelude_does() {
+        for name in ["System", "Console", "Clock", "Dir", "Net"] {
+            assert_eq!(
+                lower_ty(&prelude(name), Span::at(0)),
+                Ok(Ty::Capability),
+                "`{name}` should lower to a handle"
+            );
+        }
+        assert!(
+            lower_ty(&prelude("Nonesuch"), Span::at(0)).is_err(),
+            "a prelude type that is not a capability has no representation here"
+        );
+    }
+
+    /// A type from another module is the caller's business, not this
+    /// function's. Answering for one here would mean two places decide, and
+    /// the other one already knows the layouts.
+    #[test]
+    fn a_type_from_another_module_is_not_lowered_here() {
+        let elsewhere = CheckedTy::External {
+            module: std::rc::Rc::from("other"),
+            name: std::rc::Rc::from("Dir"),
+            args: Vec::new(),
+        };
+        assert!(lower_ty(&elsewhere, Span::at(0)).is_err());
+    }
+
+    /// A capability takes no type arguments, so one that was handed some is
+    /// not the capability it is named after.
+    #[test]
+    fn a_capability_applied_to_something_is_not_a_capability() {
+        let applied = CheckedTy::External {
+            module: std::rc::Rc::from("<prelude>"),
+            name: std::rc::Rc::from("Dir"),
+            args: vec![CheckedTy::Int],
+        };
+        assert!(lower_ty(&applied, Span::at(0)).is_err());
     }
 }

@@ -1339,15 +1339,15 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is twenty-two names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
+**The prelude is twenty-three names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
 `err`, `length`, `List`, `at`, `push`, `repeat`, `split`, `join`, `trim`, `upper`, `lower`,
 `to_string`,
 `to_int`, `System`,
-`Console`, `Clock`, `Dir`, and the effects `Io`, with its `write`, `now`, `epoch`, `open`,
-`read`, `save`, `remove`, `make`, `list` and `args` operations, and `Diverge`. Everything else
+`Console`, `Clock`, `Dir`, `Net`, and the effects `Io`, with its `write`, `now`, `epoch`, `open`,
+`read`, `save`, `remove`, `make`, `list`, `args`, `reach`, `fetch` and `send` operations, and `Diverge`. Everything else
 is imported. Each prelude entry is a name that
 cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
-is short on purpose. The four capability types are there because a capability that could be
+is short on purpose. The five capability types are there because a capability that could be
 imported would not be a capability.
 **A module is named by its own `module` line, not by where it sits on disk.** `use
 payments/ledger` is answered by looking for the file that says `module payments/ledger`

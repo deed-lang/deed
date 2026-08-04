@@ -3,14 +3,14 @@
 Effects say *what kind* of thing a function does. Capabilities say *which particular
 resource* it is allowed to do it to.
 
-`uses Net.send` means a function can send over the network. It does not say where. A
+`uses Io.send` means a function can send over the network. It does not say where. A
 capability is the value that answers that, and it can only be obtained by being handed one.
 
-That sentence, and the `Fs` and `Net` effects in the illustrations further down, are the
-shape of the argument rather than the state of the compiler. What exists is one built-in
-effect, `Io`, with `write`, `now`, `epoch`, `open`, `read`, `save`, `remove`, `make`, `list`
-and `args`, and a `System` carrying `console`,
-`clock` and `files`. The next section is the part that runs.
+The `Fs` illustration further down is the shape of the argument rather than the state of the
+compiler. What exists is one built-in
+effect, `Io`, with `write`, `now`, `epoch`, `open`, `read`, `save`, `remove`, `make`, `list`,
+`args`, `reach`, `fetch` and `send`, and a `System` carrying `console`,
+`clock`, `files` and `net`. The next section is the part that runs.
 
 ## What actually exists
 
@@ -285,6 +285,39 @@ model working.
 `examples/journal.deed` is the file to argue with. It reads a journal, appends a line and
 saves it, and everything it is refused is refused in front of you.
 
+### The network is the same argument about a different resource
+
+`Net` is the fifth capability and it is deliberately shaped like `Dir`. `Io.reach` is
+`Io.open`: it narrows a `Net` to one host, what comes back reaches a subset of what went
+in, and asking for a host this `Net` did not already reach is refused rather than granted.
+`Io.fetch` is `Io.read` and `Io.send` is `Io.save`, three entries in the row rather than
+one, because holding the capability says nothing about whether a function may change
+something on the other end.
+
+The rule that has to hold is the same rule, and it is in the same place: `deed-rt` decides
+what a `Net` reaches, the way it decides what a `Dir` reaches, so the interpreter and any
+other host answer the same question the same way. A host matches by equality and never by
+suffix. A grant of `example.com` does not grant `evil-example.com` or
+`example.com.evil.net`, and if it did, an allowlist would be a suggestion.
+
+`deed run --allow <host>` grants one, repeatably, and the default is nothing. That is not
+what `--dir` does and the difference is the point: running a command in a directory is
+already a choice about that directory, so defaulting to the working one inherits a decision
+somebody made. There is no equivalent ambient choice about the network. "The network" is
+not a place anyone is standing, so a program that was not told which hosts it may reach
+reaches none, and says so rather than failing to connect.
+
+Two things the interpreter cannot do, both written down rather than worked around. It
+speaks `http` and not `https`, because a TLS client is a cryptographic implementation and
+this workspace has no dependencies; `https` is refused by name with that reason, since a
+reader who gets "connection reset" from an `https` URL goes looking at their own network. A
+compiled component is unaffected: it asks its host for `deed:io.fetch` and the host speaks
+whatever it likes. And an answer cannot carry its status as a number, because a `Result`
+carries one value and this language has no tuple, so a status outside the two hundreds
+becomes an `err` carrying the status and the body as text. The full argument, and the six
+options that were turned down, are in
+[`design/decisions/2026-08-04-a-capability-for-the-network.md`](decisions/2026-08-04-a-capability-for-the-network.md).
+
 ### Where the root comes from
 
 `deed run --dir <path>` decides, defaulting to the working directory. The runtime does not
@@ -303,7 +336,7 @@ and nothing else does, so the runtime never reads its own invocation on the prog
 
 ### Arguments are input, not authority
 
-`Io.args(sys)` hands back a `List<String>`. It is the odd operation of the ten: it does
+`Io.args(sys)` hands back a `List<String>`. It is the odd operation of the thirteen: it does
 nothing, it returns data rather than something opaque, and it takes the whole `System` rather
 than a narrower capability. It reads like it does not belong.
 
@@ -356,6 +389,13 @@ The list is longer than I would like, and this is the least settled document her
   compiler now warns when a row grants everything a capability carries, on the grounds that
   granting everything is the same as promising nothing, and that saying so is better than
   reporting a clean check it never performed. The warning is not a fix.
+- **An answer cannot carry its status.** `Io.fetch` hands back a `Result<String, String>`,
+  so a program that wants to branch on `429` rather than `404` reads a message and looks
+  for a number in it. The shape that fixes this is a record the prelude declares, and it
+  would be the first data type the language ships that is not a container. `Io.read` and
+  `Io.list` did not need one; this is the first operation that does, and one operation is
+  not enough to decide it. What would change the answer: a second operation wanting the
+  same thing, or a program in the corpus that gets this wrong.
 - **Ergonomics.** Threading capabilities through deep call stacks is exactly the argument
   that killed explicit dependency passing before, and "just use a container" won that
   argument for a reason. Implicit parameters would fix the plumbing and would put a hole

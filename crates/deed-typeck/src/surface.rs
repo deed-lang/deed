@@ -875,7 +875,7 @@ impl Lowerer<'_> {
                         // is exactly one `Console`, so it is named under the
                         // prelude rather than under whichever module happened
                         // to mention it.
-                        "System" | "Console" | "Clock" | "Dir" => {
+                        "System" | "Console" | "Clock" | "Dir" | "Net" => {
                             self.external(&Rc::from(PRELUDE_MODULE), name, Vec::new())
                         }
                         _ => Ty::Unknown,
