@@ -16,6 +16,54 @@ release notes.
 
 ### Language
 
+- None yet.
+
+### Diagnostics
+
+- None yet.
+
+### Standard library
+
+- None yet.
+
+### Tools
+
+- None yet.
+
+### Measurements
+
+- None yet.
+
+## 0.2.4 (2026-08-04)
+
+Most of this release is one question asked properly: what does a compiled
+program do with memory. The answer was that building a list of 256 allocated
+129 times what the answer was worth, and that a list of 1024 could not be
+built at all, because every turn of a walk copied the accumulator to append
+one item. Nothing about that was visible from a clock, which is why it went
+unnoticed for four releases: what makes it visible is counting instructions
+and bytes rather than timing them, and a count is the same on every machine
+and can therefore be held to a ratchet.
+
+Two things came out of the counting. A handler's state was allocated where a
+handler was installed and never given back, so a program that installs one in
+a loop grew without bound; it goes on the frame stack now and installing one
+is free. And a walk whose accumulator is only ever pushed onto builds one
+list, which is not reuse analysis and does not stand in for it: it asks
+nothing about whether a value is unshared, it arranges for there to be nothing
+to share. That works because `for` is the only loop and a `for` is a fold, so
+the intermediate lists exist only as values of one name.
+
+The rest is notation. `1/2 + 1/3` is written the way arithmetic is written,
+`Int.max` is a number rather than nineteen digits, and an effect takes row
+variables, which is what a scheduler needed before it could be shipped.
+
+### Programs that used to compile and no longer do
+
+- None yet.
+
+### Language
+
 - An operator can be bound to a function a module declares: `operator + = added`
   says that `+`, written between two values of the type that function takes,
   means it. `+`, `-` and `*`, and nothing else: an operator answers with the
