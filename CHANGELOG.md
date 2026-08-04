@@ -256,6 +256,19 @@ release notes.
 
 ### Measurements
 
+- A walk that only pushes builds one list. `for` is the only loop and a `for`
+  is a fold, so the lists a walk builds on the way exist only as values of its
+  accumulator: when every mention of that name is `push`'s first argument or a
+  branch handing it on, and the value of every path is the accumulator or one
+  `push` onto it, nothing can reach an intermediate list and the walk builds a
+  single one at the length of the list it walks. Building a list of 256 used to
+  allocate 129 times what the answer is worth and now allocates the answer, and
+  at 1024 the answer was always eight kilobytes while building it exhausted a
+  megabyte, so what changed there is not that it got cheaper but that it runs.
+  This is not reuse analysis and does not stand in for it: it asks nothing
+  about whether a value is unshared, it arranges for there to be nothing to
+  share. `std/table` is untouched, because its cost is across calls to `set`
+  rather than inside a walk.
 - Most of what a compiled program wastes is one shape. `for` is the only loop
   and a `for` is a fold, so the lists a walk builds on the way exist only as
   values of its accumulator, and whether any of them can be observed is a

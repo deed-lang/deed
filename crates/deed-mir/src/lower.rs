@@ -1028,6 +1028,12 @@ struct Lowering<'a> {
     /// `Result` with a half nobody wrote down reads it.
     expected: Option<Ty>,
     function: Function,
+    /// The accumulator of the walk being lowered, when that walk builds one
+    /// list rather than one a turn.
+    ///
+    /// A slot rather than a name, so a `push` onto anything else inside the
+    /// same body is still the copy it always was.
+    appending: Option<Local>,
     /// Where each bound name lives.
     slots: HashMap<DefId, Local>,
     /// Every refinement the checker could not settle, by the span of the
@@ -1253,6 +1259,7 @@ impl<'a> Lowering<'a> {
             state: None,
             expected: None,
             function,
+            appending: None,
             slots: HashMap::new(),
             guards: &unit.guards,
             refinements: &unit.refinements,
@@ -2443,6 +2450,18 @@ impl Lowering<'_> {
                             ("length", Ty::Str) => crate::runtime::STR_LEN,
                             ("length", Ty::List(_)) => crate::runtime::LIST_LEN,
                             ("at", _) => crate::runtime::LIST_AT,
+                            // The accumulator of a walk that only pushes is
+                            // written where it stands rather than copied. The
+                            // slot is what identifies it, so a `push` onto
+                            // anything else in the same body is still a copy.
+                            ("push", _)
+                                if matches!(
+                                    (self.appending, lowered.first()),
+                                    (Some(carried), Some(Expr::Local(local))) if *local == carried
+                                ) =>
+                            {
+                                crate::runtime::LIST_APPEND
+                            }
                             ("push", _) => crate::runtime::LIST_PUSH,
                             ("repeat", _) => crate::runtime::LIST_REPEAT,
                             ("split", _) => crate::runtime::STR_SPLIT,
@@ -3383,10 +3402,32 @@ impl Lowering<'_> {
         let counter = self.function.add_local(Ty::Int);
         let element = self.function.add_local((*element_ty).clone());
 
+        // A walk whose accumulator is only ever pushed onto builds one list
+        // rather than one a turn. Decided from the body before any of it is
+        // lowered, because the rule is about what the source does with a name.
+        // See `design/decisions/2026-08-04-a-walk-that-only-pushes.md`.
+        let in_place = accumulator.is_some_and(|one| {
+            matches!(&*one.init, ast::Expr::List { elements, .. } if elements.is_empty())
+                && crate::shape::only_pushes(&one.name.name, body)
+        });
+
         let (carried, start) = match accumulator {
             Some(one) => {
                 let ty = self.ty_at(one.init.span())?;
-                let value = self.expr(&one.init)?;
+                let value = if in_place {
+                    // As long as the list being walked, which bounds it.
+                    Expr::Runtime {
+                        name: crate::runtime::LIST_ROOM,
+                        args: vec![Expr::Runtime {
+                            name: crate::runtime::LIST_LEN,
+                            args: vec![Expr::Local(list)],
+                            ret: Box::new(Ty::Int),
+                        }],
+                        ret: Box::new(ty.clone()),
+                    }
+                } else {
+                    self.expr(&one.init)?
+                };
                 (self.function.add_local(ty), value)
             }
             None => (self.function.add_local(Ty::Unit), Expr::Unit),
@@ -3429,7 +3470,13 @@ impl Lowering<'_> {
             };
         }
 
-        let turn = self.block(body)?;
+        let turn = {
+            let outer = self.appending;
+            self.appending = in_place.then_some(carried);
+            let turn = self.block(body);
+            self.appending = outer;
+            turn?
+        };
         let inner = vec![
             Stmt::Assign {
                 local: element,

@@ -1,14 +1,9 @@
-# Decision: a walk that only pushes should build one list
+# Decision: a walk that only pushes builds one list
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-04
 - Supersedes: None
 - Superseded by: None
-
-**Nothing here is written yet.** The measurement is, and it is what this page is for: the
-shape below is the majority of the walks in the library and the corpus, which is the thing
-that had to be true before any of the machinery was worth writing. What is decided is which
-machinery, and the code is the next change rather than this one.
 
 ## Context
 
@@ -45,14 +40,19 @@ be separate lists.
 
 ## Decision
 
-A walk whose accumulator is only ever pushed onto should build one list.
+A walk whose accumulator is only ever pushed onto builds one list.
 
-The rule is on the shape of the body, and both halves of it are load-bearing:
+The rule is on the shape of the body, and all three parts of it are load-bearing:
 
 - Every mention of the accumulator is the first argument of a `push`, or the value of a
   branch, and nothing else. A mention anywhere else is a place that could keep it.
-- The list being walked bounds how many turns there are, so the result is never longer than
-  it, and the block can be reserved once at that size.
+- The value of every path through the body is the bare accumulator or a `push` straight
+  onto it, so the block that comes out of a turn is the block that went in and a turn grows
+  it by at most one.
+- The list being walked bounds how many turns there are, so with the rule above the result
+  is never longer than it, and the block can be reserved once at that size.
+
+The second was learned rather than designed, and it is written up below because of how.
 
 The length is written as the walk goes, so the accumulator's length is right at every turn
 and a walk that reads it gets the answer it would have got. The slack a filter leaves is
@@ -63,12 +63,31 @@ This is not reuse analysis and does not stand in for it. It needs no reference c
 layout metadata and no ownership reasoning, because it does not ask whether a value is
 unshared: it arranges for there to be nothing to share.
 
-The risk is worth writing down before anybody starts, because it is not the usual one. A
-walk that got this wrong would not fail to compile or stop with a trap; it would hand back
-a different answer, quietly, in a program that checks. So the shape test is the whole of
-the safety argument and belongs where it can be read, and the change wants breaking on
-purpose in both directions before it lands: a body that mentions the accumulator somewhere
-else must not take this path, and a walk that takes it must answer what it answered before.
+The risk is worth writing down, because it is not the usual one. A walk that got this wrong
+would not fail to compile or stop with a trap; it would hand back a different answer,
+quietly, in a program that checks. So the shape test is the whole of the safety argument.
+
+## What the first version got wrong
+
+The rule above had two parts rather than three, and the missing one was found the way this
+repository finds things: `crates/deed-driver/tests/shipped.rs` runs every test in the
+shipped library through both engines and holds them to the same answer, and it said that
+`intersperse` in `std/list` passed in one and not the other.
+
+`intersperse` writes `push(push(out, sep), item)`. Every mention of `out` is a `push`'s
+first argument, so the first version admitted it, and two things went wrong at once. A turn
+grew the list by two while the room reserved was one a turn. And the accumulator came out of
+the turn as the copy the outer `push` made, which was never given room at all, so the next
+turn wrote past the end of it.
+
+One condition rules out both, because both are the same mistake: the block that comes out
+of a turn has to be the block that went in. The rule is now written that way rather than as
+two separate guards, and `crates/deed-driver/tests/allocation.rs` holds the other side of
+it, that a walk growing by more than one still copies.
+
+Worth saying plainly: the shape test was wrong, it was wrong in the direction that corrupts
+memory, and what caught it was a ratchet nobody wrote for this. That is the argument for
+the ratchet, not for the reviewer.
 
 ## Drawbacks (required)
 
@@ -106,6 +125,29 @@ thousand and holds it for as long as the answer lives.
   - Rejected because: the backend is what a host embeds, and a keyed structure of a few
     hundred entries is not a workload anybody would call demanding.
 
+## What it came to
+
+Bytes a compiled program allocates to build a list, with the list it walks subtracted off
+both sides, before and after:
+
+```
+length     written out  folded before  folded after
+16         136          1224           136
+64         520          17160          520
+256        2056         265224         2056
+1024       8200         out of memory  8200
+```
+
+A walk that builds a list now allocates the list. The 1024 row is the one to read: the
+answer was always eight kilobytes and building it used to exhaust a megabyte, so what
+changed is not that it got cheaper but that it runs.
+
+What did not change is the keyed benchmark in
+`design/decisions/2026-07-31-tree-vs-table-decision.md`, which still cannot reach a
+thousand keys. That is correct rather than disappointing. `std/table`'s quadratic is across
+calls to `set` rather than inside one walk, and the accumulator there is handed to `set`,
+which could keep it. This answers the walk, and that is a different shape.
+
 ## Open Questions (required)
 
 - Whether the rule should allow the accumulator in read-only positions such as
@@ -117,8 +159,9 @@ thousand and holds it for as long as the answer lives.
   size does not change, so the block could be written over rather than reserved again.
   That is nearer to reuse analysis than this is, and it is the next thing to measure.
 
-- What is left after this, measured rather than assumed. The 129 becomes something and
-  this page should say what.
+- What `std/table` would take. Its cost is across calls to `set` rather than inside a
+  walk, so nothing here touches it, and a keyed structure of a few hundred entries is
+  still where a compiled program stops.
 
 ## References
 
