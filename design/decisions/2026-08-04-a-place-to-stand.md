@@ -84,19 +84,20 @@ One `Option::is_some` per statement, and a call stack that is only maintained
 while a watcher is installed.
 
 Measured with `cargo run -p deed-driver --example interpreting --release`,
-against the same tree with the two `self.watch(..)` calls removed:
+against the same tree with the two `self.watch(..)` calls removed. Five runs
+each way, reported as the range rather than as one number, because one number
+from this harness is a number somebody would believe:
 
 | | with the hook | without |
 | --- | --- | --- |
-| a turn of a `for` | 54ns, 48ns | 50ns |
-| a call with a contract on it | 578ns, 555ns | 538ns |
-| an operation that reads state | 539ns, 508ns | 489ns |
+| a turn of a `for` | 48–54ns | 43–51ns |
+| a call with a contract on it | 555–601ns | 528–567ns |
+| an operation that reads state | 508–539ns | 485–513ns |
 
-**The difference is inside this harness's run-to-run spread**, which is what
-the two numbers in the first column are there to show: repeating the same
-build moves "a turn" by about as much as removing the hook does. So this is
-not a claim that the hook is free, it is a statement that a 100,000-turn
-benchmark cannot see it, and a smaller claim than that would not be honest.
+**Every row overlaps.** Repeating the same build moves each of them by more
+than removing the hook does. So this is not a claim that the hook is free; it
+is a statement that a 100,000-turn benchmark cannot separate the two, and a
+smaller claim than that would not be honest.
 
 What would catch a real regression is `deed-driver::scaling`, which fails when
 checking stops being close to linear, and re-running the table above.

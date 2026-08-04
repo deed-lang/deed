@@ -544,6 +544,9 @@ fn every_message_is_numbered_in_order() {
     let mut run = Debugging::new("numbered", PROGRAM);
     run.launched(&[14], false);
     run.stack_messages();
+    // A refusal is a message like any other, and it is the one that would go
+    // uncounted if only the answers a client wanted were.
+    run.ask("pause", Json::object(vec![("threadId", Json::number(1))]));
     run.ask(
         "continue",
         Json::object(vec![("threadId", Json::number(1))]),
