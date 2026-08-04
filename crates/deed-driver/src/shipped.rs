@@ -47,6 +47,7 @@ const SHIPPED: &[(&str, &str)] = &[
     ("std/list", include_str!("../../../std/list.deed")),
     ("std/table", include_str!("../../../std/table.deed")),
     ("std/map", include_str!("../../../std/map.deed")),
+    ("std/hashmap", include_str!("../../../std/hashmap.deed")),
     ("std/ratio", include_str!("../../../std/ratio.deed")),
     ("std/date", include_str!("../../../std/date.deed")),
     ("std/task", include_str!("../../../std/task.deed")),

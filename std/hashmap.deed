@@ -1,0 +1,330 @@
+// A hash map, written in Deed.
+//
+// `std/table` is a list its `get` walks, so it costs about 350ns per key
+// already in it. That is fine for a handful and it is the slowest part of any
+// program with a few thousand. This file is the answer that file asked for:
+// "when something here holds enough keys for that to matter, the answer is a
+// better table rather than a different language".
+//
+// What made it writable was `hash`, which arrived because taking a value of
+// any shape apart is one of the few things this language cannot say about
+// itself. Everything else was already here: a `List` is contiguous with O(1)
+// indexed access, `at` reads one element, and a `record` and a `fn` both take
+// type parameters.
+//
+// The shape is buckets, and a bucket is a `std/table`. A lookup hashes the
+// key, indexes straight to its bucket, and walks only that one. With the keys
+// spread evenly, a bucket holds `n / BUCKETS` entries, so a lookup is a
+// constant walk rather than a walk over everything.
+//
+// What it costs is `set`. Nothing here mutates, so putting a key in rebuilds
+// the list of buckets: `BUCKETS` steps whichever key it was, plus the bucket
+// itself. That is a constant rather than the length of the map, which is the
+// trade this file is: `get` stops growing and `set` stops being free.
+//
+// Measured, building a map of n keys and then reading all n back, against
+// `std/table` doing the same, through the interpreter:
+//
+//     keys      table    hashmap
+//     125        49ms       21ms
+//     250        53ms       19ms
+//     500       104ms       19ms
+//     1000      305ms       17ms
+//
+// About 17ms of each is the process starting. Past that the table quadruples
+// as the keys double, which is the quadratic its own header predicts, and the
+// map does not move: at a thousand keys the work is smaller than the noise.
+// That is the whole argument for this file.
+//
+// One thing this deliberately does not do is grow. The bucket count is fixed,
+// so a map of a hundred thousand keys has thousand-deep buckets and is a slow
+// list again. Growing means rehashing every key on the turn that crosses the
+// threshold, and the honest reason not to write that yet is that nothing here
+// has measured needing it.
+//
+// Compiled, this stops around fifty keys. Nothing is given back there, so what
+// a program allocates in total is what its memory reached, and `set` allocates
+// the whole bucket list every time: fifty keys is fifty copies of sixty-four
+// buckets. The interpreter has no such ceiling and the table above was taken
+// through it. That is the same limit
+// `design/decisions/2026-07-31-compiled-memory-reclamation.md` measured from
+// the other side, met by the first structure written to need it, which is what
+// `design/hash-map-requirements.md` said would decide what the reuse work does
+// next.
+
+module std/hashmap
+
+use std/table.{Entry}
+
+// A map is the list of its buckets and nothing else.
+//
+// Not a record and not an alias. A record would need a constructor whose type
+// parameters appear only in its return type, which `DEED4023` refuses, and an
+// alias over a list of lists does not expand where it is used. So the shape is
+// written out, and a bucket is a `std/table` with one more thing known about
+// it: every key in it hashes to the same place.
+
+// How many buckets a map has, for as long as it has one number.
+//
+// A power of two would let the index be a mask rather than a remainder, and
+// there is no bitwise operator in this language, so it is a remainder either
+// way and the number is chosen to be a reasonable spread rather than to suit
+// an operation that does not exist.
+fn buckets() -> Int {
+    64
+}
+
+// A map with nothing in it.
+//
+// It takes the key and the value it will never hold, and that is not an
+// oversight. `DEED4023` refuses a function whose type parameters appear only
+// in its return type, because a return type is what a call produces rather
+// than something it can be worked out from. `std/table` needs no such thing
+// because an empty table is `[]` and a list literal takes its element type
+// from where it is used; a map is a list of lists, and the inner one has
+// nothing to take a type from.
+//
+// `repeat` of nothing is what makes the shape without holding anything: the
+// element decides the type and the count decides that there is none of it.
+fn empty<K, V>(key: K, value: V) -> List<List<Entry<K, V>>> {
+    repeat(repeat(Entry { key: key, value: value }, 0), buckets())
+}
+
+// A map holding one key, which is how most of them start.
+fn holding<K, V>(key: K, value: V) -> List<List<Entry<K, V>>> {
+    set(empty(key, value), key, value)
+}
+
+// How many keys are in it.
+//
+// Walks the buckets, which is `buckets()` steps plus the keys. There is
+// nowhere to keep a count: an alias is the list it names, so there is no field
+// beside it to put one in.
+fn size<K, V>(map: List<List<Entry<K, V>>>) -> Int {
+    for slot in map with total = 0 {
+        total + length(slot)
+    }
+}
+
+// Which bucket a key belongs in.
+//
+// `hash` can answer with any `Int`, including a negative one, and a negative
+// remainder is not an index. Adding the count back is what turns it into one,
+// and it is written this way rather than by negating because negating the
+// smallest `Int` is the one case that has no answer.
+fn bucket_of<K>(key: K) -> Int {
+    let spread = hash(key) % buckets()
+    if spread < 0 {
+        spread + buckets()
+    } else {
+        spread
+    }
+}
+
+// The entries sharing a key's bucket.
+fn bucket_at<K, V>(map: List<List<Entry<K, V>>>, index: Int) -> List<Entry<K, V>> {
+    match at(map, index) {
+        ok(found) => found,
+        err(why) => [],
+    }
+}
+
+// What is under this key, or an error saying there is nothing.
+//
+// The `Result` `std/table` hands back, for the same reason: a key that is not
+// there is not a mistake in the caller, and nothing in this language traps.
+fn get<K, V>(map: List<List<Entry<K, V>>>, key: K) -> Result<V, String> {
+    for one in bucket_at(map, bucket_of(key)) with found = err("no such key") {
+        if one.key == key {
+            ok(one.value)
+        } else {
+            found
+        }
+    }
+}
+
+// Whether anything under this key is already here.
+fn holds<K, V>(map: List<List<Entry<K, V>>>, key: K) -> Bool {
+    match get(map, key) {
+        ok(found) => true,
+        err(why) => false,
+    }
+}
+
+// What is under this key, or `fallback` if there is nothing.
+//
+// The shape a counter wants, the same one `std/table` provides:
+// `set(m, k, or_else(m, k, 0) + 1)` adds the first one and bumps the rest
+// without asking which case it is in.
+fn or_else<K, V>(map: List<List<Entry<K, V>>>, key: K, fallback: V) -> V {
+    match get(map, key) {
+        ok(found) => found,
+        err(why) => fallback,
+    }
+}
+
+// This key holding this value, whether or not it held one before.
+//
+// Replaces rather than appends, which is the invariant everything else here
+// leans on: a key appears at most once, so `get` can stop at the first match.
+fn set<K, V>(map: List<List<Entry<K, V>>>, key: K, value: V) -> List<List<Entry<K, V>>> {
+    let index = bucket_of(key)
+    let had = holds(map, key)
+    for slot in range(buckets()) with out = [] {
+        if slot == index {
+            push(out, written(bucket_at(map, slot), key, value, had))
+        } else {
+            push(out, bucket_at(map, slot))
+        }
+    }
+}
+
+// One bucket with the key in it, replacing what was there or adding it.
+fn written<K, V>(entries: List<Entry<K, V>>, key: K, value: V, had: Bool)
+    -> List<Entry<K, V>>
+{
+    if had {
+        for one in entries with out = [] {
+            if one.key == key {
+                push(out, Entry { key: key, value: value })
+            } else {
+                push(out, one)
+            }
+        }
+    } else {
+        push(entries, Entry { key: key, value: value })
+    }
+}
+
+// Every entry, in no particular order.
+//
+// The one walk here that carries the accumulator into an inner walk, which is
+// the shape `design/decisions/2026-08-04-a-walk-that-only-pushes.md` cannot
+// build in one list. Written once so that `keys` and `values` are the shape it
+// can.
+fn entries<K, V>(map: List<List<Entry<K, V>>>) -> List<Entry<K, V>> {
+    for slot in map with out = [] {
+        for one in slot with inner = out {
+            push(inner, one)
+        }
+    }
+}
+
+// Every key, in no particular order.
+//
+// Unlike `std/table`, which keeps insertion order because it is a list. A hash
+// map's order is the hash's, so nothing here promises one and a caller that
+// needs an order sorts.
+fn keys<K, V>(map: List<List<Entry<K, V>>>) -> List<K> {
+    for one in entries(map) with out = [] {
+        push(out, one.key)
+    }
+}
+
+// Every value, in the order `keys` gives their keys.
+fn values<K, V>(map: List<List<Entry<K, V>>>) -> List<V> {
+    for one in entries(map) with out = [] {
+        push(out, one.value)
+    }
+}
+
+// The numbers from zero up to `count`, which a walk needs before it can walk.
+//
+// `for` walks a list that already exists, and the buckets are indexed rather
+// than held, so something has to turn a count into a list first. `repeat`
+// gives the length and `for` gives the position.
+fn range(count: Int) -> List<Int> {
+    let places = repeat(0, count)
+    for one in places with out = [] {
+        push(out, length(out))
+    }
+}
+
+test "a key put in comes back out" {
+    let m = set(holding("a", 1), "b", 2)
+    assert or_else(m, "a", 0) == 1
+    assert or_else(m, "b", 0) == 2
+    assert size(m) == 2
+}
+
+test "a key not there says so rather than trapping" {
+    let m = holding("a", 1)
+    assert !holds(m, "b")
+    assert or_else(m, "b", 9) == 9
+}
+
+test "putting a key twice replaces it and does not grow" {
+    let m = set(holding("a", 1), "a", 2)
+    assert or_else(m, "a", 0) == 2
+    assert size(m) == 1
+    assert length(keys(m)) == 1
+}
+
+test "keys that land in one bucket still tell each other apart" {
+    let m = set(holding(1, 10), 65, 650)
+    assert bucket_of(1) == bucket_of(65)
+    assert or_else(m, 1, 0) == 10
+    assert or_else(m, 65, 0) == 650
+    assert size(m) == 2
+}
+
+test "a bucket is never a negative index" {
+    assert bucket_of("a") >= 0
+    assert bucket_of("zzzzzzzz") >= 0
+    assert bucket_of(0 - 7) >= 0
+    assert bucket_of("a") < 64
+}
+
+test "many keys, some of them sharing a bucket" {
+    let many = for n in range(50) with m = empty(0, 0) {
+        set(m, n, n + n)
+    }
+    assert size(many) == 50
+    assert or_else(many, 0, 0 - 1) == 0
+    assert or_else(many, 49, 0 - 1) == 98
+    assert length(keys(many)) == 50
+}
+
+test "a record is a key like anything else" {
+    let m = holding(Entry { key: "a", value: 1 }, "held")
+    assert or_else(m, Entry { key: "a", value: 1 }, "") == "held"
+    assert or_else(m, Entry { key: "a", value: 2 }, "") == ""
+}
+
+test "the shape underneath is buckets, and a bucket is a table" {
+    let m = holding("a", 1)
+    assert length(m) == buckets()
+    assert length(bucket_at(m, bucket_of("a"))) == 1
+    assert length(bucket_at(m, 0 - 1)) == 0
+}
+
+test "a bucket that already holds the key is written rather than appended" {
+    let bucket = [Entry { key: "a", value: 1 }]
+    assert length(written(bucket, "a", 2, true)) == 1
+    assert length(written(bucket, "b", 2, false)) == 2
+}
+
+test "an empty map holds nothing and answers everything" {
+    let m = empty("a", 1)
+    assert size(m) == 0
+    assert length(keys(m)) == 0
+    assert length(values(m)) == 0
+    assert !holds(m, "a")
+    assert get(m, "a") == err("no such key")
+}
+
+test "values come back beside their keys" {
+    let m = set(holding("a", 1), "b", 2)
+    let total = for v in values(m) with sum = 0 {
+        sum + v
+    }
+    assert total == 3
+    assert length(keys(m)) == 2
+}
+
+test "range counts up from zero" {
+    assert length(entries(holding("a", 1))) == 1
+    assert length(range(3)) == 3
+    assert at(range(3), 0) == ok(0)
+    assert at(range(3), 2) == ok(2)
+}
