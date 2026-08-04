@@ -11,12 +11,14 @@
 //! of them disagreeing is the bug this split rules out.
 
 pub mod lower;
+pub mod shape;
 
 use deed_diagnostics::Span;
 
 pub use lower::{
     Alongside, Unlowered, lower, lower_alongside, lower_with_tests, lower_with_tests_alongside,
 };
+pub use shape::only_pushes;
 
 /// The diagnostic codes a compiled program can stop with.
 ///
@@ -546,6 +548,18 @@ pub mod runtime {
     pub const LIST_AT: &str = "deed_rt_list_at";
     pub const LIST_LEN: &str = "deed_rt_list_len";
     pub const LIST_REPEAT: &str = "deed_rt_list_repeat";
+    /// An empty list with room for this many, for a walk that only pushes.
+    ///
+    /// Not something a program can write. See
+    /// `design/decisions/2026-08-04-a-walk-that-only-pushes.md`: a walk whose
+    /// accumulator is only ever pushed onto has no intermediate list anything
+    /// can reach, so it builds one and this is how big it starts.
+    pub const LIST_ROOM: &str = "deed_rt_list_room";
+    /// The same list, one longer, written where it stands.
+    ///
+    /// Safe only where [`LIST_ROOM`] reserved the room and nothing else holds
+    /// the list, which is the pair of conditions that decision is about.
+    pub const LIST_APPEND: &str = "deed_rt_list_append";
     pub const CONTRACT_FAILED: &str = "deed_rt_contract_failed";
 
     /// Every name above, so something can check a call against the set.
@@ -566,6 +580,8 @@ pub mod runtime {
         LIST_AT,
         LIST_LEN,
         LIST_REPEAT,
+        LIST_ROOM,
+        LIST_APPEND,
         CONTRACT_FAILED,
     ];
 }

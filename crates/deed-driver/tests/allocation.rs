@@ -83,22 +83,16 @@ test \"walked\" {{
     )
 }
 
-/// Building a list by folding allocates it once per element.
+/// A walk that only pushes allocates what its answer is worth.
 ///
 /// Both rows have the list they walk subtracted off, so what is left is the
-/// structure being built: written out, that is the answer and nothing else;
-/// folded, it is the answer plus every intermediate copy. Each of those copies
-/// is dead the moment the next one is made and nothing else points at it,
-/// which is exactly the case a reuse analysis answers and the reason that is
-/// the direction rather than a collector.
-///
-/// Held as a floor rather than a number, because what it is about is the
-/// shape. A quadratic against a linear cannot be talked out of, and the floor
-/// leaves room for the layout to change without this needing an edit. If it
-/// ever fails, something reclaimed or reused, and the decision that says
-/// nothing does should be reread.
+/// structure being built: written out, that is the answer and nothing else,
+/// and folded it is now the same, because the walk builds one list rather
+/// than one a turn. It used to be the answer once per element, 129 times over
+/// at this length. See
+/// `design/decisions/2026-08-04-a-walk-that-only-pushes.md`.
 #[test]
-fn folding_a_list_allocates_it_once_per_element() {
+fn folding_a_list_allocates_what_the_answer_is_worth() {
     let base = allocated(&walked(LENGTH)).expect("the walk alone should run");
     let written = allocated(&literal(LENGTH)).expect("a literal should run") - base;
     let built = allocated(&folded(LENGTH)).expect("a fold should run") - base;
@@ -107,22 +101,59 @@ fn folding_a_list_allocates_it_once_per_element() {
         written > 0,
         "writing the list out should allocate something, and it allocated {written} bytes"
     );
-    let copies = built / written;
-    assert!(
-        copies >= (LENGTH / 4) as u64,
-        "folding a list of {LENGTH} allocated {built} bytes against {written} written out, \
-         which is {copies}x rather than the order of {LENGTH}x a copy per turn gives"
+    assert_eq!(
+        built, written,
+        "folding a list of {LENGTH} allocated {built} bytes against {written} written out"
     );
 }
 
-/// Nothing gives the copies back, so the total is what memory reached.
+/// A walk that does anything else with its accumulator still copies.
 ///
-/// This is the sentence the rest of the reasoning rests on, and it is one a
-/// test can hold: a compiled program that builds a structure twice allocates
-/// twice, rather than reusing what the first one stopped needing.
+/// The rule is narrow on purpose, and this is the half of it that would go
+/// quiet first: if the shape test stopped ruling anything out, everything
+/// would take the fast path and the answers would be wrong rather than slow.
+/// `std/list`'s `intersperse` is the shape that found this, by pushing twice
+/// in a turn, so a walk that grows by more than one is what this asks about.
+#[test]
+fn a_walk_that_grows_by_more_than_one_still_copies() {
+    // Shorter than the rest, because a walk that copies at the length they
+    // use runs out of memory, which is the whole reason for the change this
+    // is the other half of.
+    const SHORT: usize = 64;
+
+    let base = allocated(&walked(SHORT)).expect("the walk alone should run");
+    let written = allocated(&literal(SHORT)).expect("a literal should run") - base;
+    let twice_a_turn = allocated(&format!(
+        "module bench
+
+test \"walked\" {{
+    let source = repeat(0, {SHORT})
+    let built = for n in source with out = [] {{ push(push(out, n), n) }}
+    assert length(built) == length(source) * 2
+}}
+"
+    ))
+    .expect("a fold that pushes twice should run")
+        - base;
+
+    assert!(
+        twice_a_turn > written * 4,
+        "a walk that pushes twice a turn allocated {twice_a_turn} bytes against \
+         {written} for the answer, so it took a path that was not written for it"
+    );
+}
+
+/// Nothing gives a finished list back, so two of them cost two.
+///
+/// This is the sentence the rest of the reasoning rests on, and the walk
+/// building one list rather than one a turn does not change it: a compiled
+/// program that builds a structure twice allocates twice, rather than reusing
+/// what the first one stopped needing. What is subtracted is the list they
+/// both walk, which is built once and shared.
 #[test]
 fn building_the_same_thing_twice_allocates_twice() {
-    let once = allocated(&folded(64)).expect("a fold should run");
+    let base = allocated(&walked(64)).expect("the walk alone should run");
+    let once = allocated(&folded(64)).expect("a fold should run") - base;
     let twice = allocated(
         "module bench
 
@@ -134,11 +165,13 @@ test \"walked\" {
 }
 ",
     )
-    .expect("two folds should run");
+    .expect("two folds should run")
+        - base;
 
-    assert!(
-        twice >= once * 2 - once / 8,
-        "a second fold should cost about what the first did, and the pair allocated \
+    assert_eq!(
+        twice,
+        once * 2,
+        "a second fold should cost what the first did, and the pair allocated \
          {twice} bytes against {once} for one"
     );
 }
