@@ -337,6 +337,51 @@ fn a_handler_costs_the_same_from_another_module() {
 
 // -- what it can do --------------------------------------------------------
 
+/// A capability in an exported signature keeps being a capability on the other
+/// side of the boundary.
+///
+/// The surface is lowered by a second pass, and a type it does not recognise
+/// becomes `Unknown`, which agrees with everything. So a capability the
+/// exported signature failed to carry would not be a type error at the call
+/// site, it would be a parameter nothing checks, and `takes(5)` would compile.
+/// That is the shape this repository has been caught by before, which is why
+/// the test is written from the wrong argument rather than the right one.
+#[test]
+fn a_capability_crossing_a_module_boundary_is_still_a_capability() {
+    for (capability, wrong) in [
+        ("Console", "5"),
+        ("Clock", "\"x\""),
+        ("Dir", "5"),
+        ("Net", "5"),
+        ("System", "5"),
+    ] {
+        let mut sources = SourceMap::new();
+        let ids = [
+            sources.add(
+                "lib.deed",
+                format!("module lib\n\nfn takes(it: {capability}) -> Int {{ 1 }}\n").as_str(),
+            ),
+            sources.add(
+                "app.deed",
+                format!(
+                    "module app\n\nuse lib.{{takes}}\n\nfn call() -> Int {{ takes({wrong}) }}\n"
+                )
+                .as_str(),
+            ),
+        ];
+        let checked = deed_driver::check_all(&sources, &ids);
+        let said: Vec<Diagnostic> = checked
+            .iter()
+            .flat_map(|one| one.diagnostics.iter().cloned())
+            .collect();
+        assert!(
+            said.iter().any(Diagnostic::is_error),
+            "`takes({wrong})` should not be accepted where a `{capability}` was wanted:\n{}",
+            rendered(&sources, &said)
+        );
+    }
+}
+
 #[test]
 fn a_function_handed_a_console_can_write_to_it() {
     check_ok(

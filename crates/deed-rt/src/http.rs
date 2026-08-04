@@ -320,14 +320,19 @@ mod tests {
 
     /// The limit a released build actually carries, rather than one a test
     /// chose. Without this the constant is a number nothing reads, and
-    /// arithmetic on it that produced two kilobytes would look the same from
-    /// here as eight megabytes.
+    /// arithmetic on it that produced a kilobyte would look the same from here
+    /// as eight megabytes.
+    ///
+    /// Read in megabytes because that is the unit the number was chosen in. A
+    /// copy of the expression would be the same arithmetic written twice and
+    /// would agree with itself however it was wrong.
     #[test]
     fn the_shipped_limit_holds_an_ordinary_answer() {
         let megabyte = 1024 * 1024;
-        assert!(
-            LIMIT > megabyte,
-            "a limit of {LIMIT} bytes turns away answers a program should get"
+        assert_eq!(
+            LIMIT / megabyte,
+            8,
+            "the limit is eight megabytes, and {LIMIT} bytes is not that"
         );
         assert_eq!(
             read_with(LIMIT, megabyte)
