@@ -29,18 +29,29 @@ itself. That is a constant rather than the length of the map, which is the
 trade this file is: `get` stops growing and `set` stops being free.
 
 Measured, building a map of n keys and then reading all n back, against
-`std/table` doing the same, through the interpreter:
+`std/table` doing the same, through the interpreter. Least of three runs,
+with the cost of building the list of keys measured separately and taken
+off both sides:
 
     keys      table    hashmap
-    125        49ms       21ms
-    250        53ms       19ms
-    500       104ms       19ms
-    1000      305ms       17ms
+    250        18ms       46ms
+    500        62ms       96ms
+    1000      232ms      166ms
+    2000      939ms      335ms
 
-About 17ms of each is the process starting. Past that the table quadruples
-as the keys double, which is the quadratic its own header predicts, and the
-map does not move: at a thousand keys the work is smaller than the noise.
-That is the whole argument for this file.
+The table roughly quadruples as the keys double, which is the quadratic its
+own header predicts. This roughly doubles. **They cross at around seven
+hundred keys, and below that the table is faster**, because a constant of
+sixty-four buckets is worse than walking a list that is shorter than
+sixty-four. So this is not a better table; it is the one that keeps working
+when a table stops, and `std/table` is still the right answer for a handful
+of keys.
+
+An earlier version of this comment claimed the map was flat and nineteen
+times faster at every size. That measurement was taken before this module
+was in `crates/deed-driver/src/shipped.rs`, so the program under it did not
+check and `deed test` was timed refusing to run. The numbers above are what
+it does when it runs.
 
 One thing this deliberately does not do is grow. The bucket count is fixed,
 so a map of a hundred thousand keys has thousand-deep buckets and is a slow
@@ -48,11 +59,19 @@ list again. Growing means rehashing every key on the turn that crosses the
 threshold, and the honest reason not to write that yet is that nothing here
 has measured needing it.
 
-Compiled, this stops around fifty keys. Nothing is given back there, so what
-a program allocates in total is what its memory reached, and `set` allocates
-the whole bucket list every time: fifty keys is fifty copies of sixty-four
-buckets. The interpreter has no such ceiling and the table above was taken
-through it. That is the same limit
+Compiled, this stops between two and three hundred keys. Nothing is given
+back there, so what a program allocates in total is what its memory reached,
+and `set` allocates the whole bucket list every time. The interpreter has no
+such ceiling and the table above was taken through it.
+
+It used to stop at fifty, and finding out why is what
+`crates/deed-driver/tests/map_memory.rs` is: an insert cost nineteen
+kilobytes and seventeen of them were `range`, which read its own
+accumulator with `length(out)` and so could not be built in one list. The
+bucket list itself was five hundred bytes. Nothing about the language
+changed; one walk stopped mentioning its accumulator twice.
+
+That is the same limit
 `design/decisions/2026-07-31-compiled-memory-reclamation.md` measured from
 the other side, met by the first structure written to need it, which is what
 `design/hash-map-requirements.md` said would decide what the reuse work does
@@ -764,7 +783,7 @@ The numbers from zero up to `count`, which a walk needs before it can walk.
 
 `for` walks a list that already exists, and the buckets are indexed rather
 than held, so something has to turn a count into a list first. `repeat`
-gives the length and `for` gives the position.
+gives the length and this gives the position.
 
 ### Signature
 
