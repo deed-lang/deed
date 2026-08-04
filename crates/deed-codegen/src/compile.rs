@@ -1875,6 +1875,93 @@ mod tests {
     use deed_diagnostics::Span;
     use deed_mir::{Field, Layout, Variant};
 
+    /// Which shapes a program's `hash` calls ask for a fold of.
+    ///
+    /// Asked here rather than through a compiled module because the answer is
+    /// not in one. A shape collected that nothing calls is a function in the
+    /// module nothing reaches, which no program can tell apart from its
+    /// absence, so the only place this is observable is from inside.
+    fn folds_for(body: Block) -> Vec<Ty> {
+        let mut program = Program::new();
+        let mut function = Function::new("f", vec![], Ty::Int);
+        function.body = body;
+        program.add_function(function);
+        hashed(&program)
+    }
+
+    fn hash_of(value: Expr, ty: Ty) -> Expr {
+        Expr::Hashed {
+            value: Box::new(value),
+            ty: Box::new(ty),
+        }
+    }
+
+    /// A word needs no fold of its own, so collecting one would put a function
+    /// in the module that nothing can reach.
+    #[test]
+    fn hashing_a_word_asks_for_no_fold() {
+        assert_eq!(
+            folds_for(Block::of(hash_of(Expr::Int(1), Ty::Int))),
+            Vec::<Ty>::new()
+        );
+        assert_eq!(
+            folds_for(Block::of(hash_of(Expr::Bool(true), Ty::Bool))),
+            Vec::<Ty>::new()
+        );
+    }
+
+    /// Text has a helper rather than a fold per shape, for the same reason
+    /// comparing two strings does.
+    #[test]
+    fn hashing_text_asks_for_no_fold_either() {
+        assert_eq!(
+            folds_for(Block::of(hash_of(Expr::Str("a".to_string()), Ty::Str))),
+            Vec::<Ty>::new()
+        );
+    }
+
+    /// One fold per shape, however many times it is hashed. Two would be two
+    /// copies of one function.
+    #[test]
+    fn hashing_one_shape_twice_asks_for_one_fold() {
+        let list = Ty::List(Box::new(Ty::Int));
+        let once = hash_of(
+            Expr::List {
+                element: Box::new(Ty::Int),
+                items: vec![Expr::Int(1)],
+            },
+            list.clone(),
+        );
+        let twice = Expr::Binary {
+            op: BinaryOp::AddInt,
+            left: Box::new(once.clone()),
+            right: Box::new(once),
+            span: nowhere(),
+        };
+
+        assert_eq!(folds_for(Block::of(twice)), vec![list]);
+    }
+
+    /// A shape that holds a shape needs both, because the outer fold calls the
+    /// inner one by index.
+    #[test]
+    fn hashing_a_nested_shape_asks_for_the_shape_it_holds() {
+        let inner = Ty::List(Box::new(Ty::Int));
+        let outer = Ty::List(Box::new(inner.clone()));
+        let value = Expr::List {
+            element: Box::new(inner.clone()),
+            items: vec![Expr::List {
+                element: Box::new(Ty::Int),
+                items: vec![Expr::Int(1)],
+            }],
+        };
+
+        assert_eq!(
+            folds_for(Block::of(hash_of(value, outer.clone()))),
+            vec![outer, inner]
+        );
+    }
+
     fn nowhere() -> Span {
         Span::new(0, 0)
     }

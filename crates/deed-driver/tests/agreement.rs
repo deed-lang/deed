@@ -823,6 +823,45 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 1,
         },
+        // A shape holding another shape, which is where the fold stops being
+        // one function and starts being a call to the right one. Everything
+        // above holds only words, so all of them pass with the lookup broken.
+        Agreed {
+            name: "the hash of a list of lists",
+            source: "module a\n\nfn answer() -> Int { hash([[1], [2]]) }\n\ntest \"an element that is itself walked\" {\n    assert answer() == 7405462763612019104\n}\n",
+            call: "answer",
+            expect: 7405462763612019104,
+        },
+        Agreed {
+            name: "the hash of a record holding records",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nrecord Line { from: Point, to: Point }\n\nfn answer() -> Int {\n    hash(Line { from: Point { x: 1, y: 2 }, to: Point { x: 3, y: 4 } })\n}\n\ntest \"a field that is itself walked\" {\n    assert answer() == -3575623372190819330\n}\n",
+            call: "answer",
+            expect: -3575623372190819330,
+        },
+        // Two fields of different kinds, so the arm that picks the text helper
+        // and the arm that picks a shape's fold are both taken in one walk.
+        Agreed {
+            name: "the hash of a record holding text and a record",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nrecord Named { label: String, at: Point }\n\nfn answer() -> Int {\n    hash(Named { label: \"a\", at: Point { x: 1, y: 2 } })\n}\n\ntest \"a string beside a shape\" {\n    assert answer() == -4398552744554337326\n}\n",
+            call: "answer",
+            expect: -4398552744554337326,
+        },
+        Agreed {
+            name: "the hash of a list of records",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nfn answer() -> Int { hash([Point { x: 1, y: 2 }]) }\n\ntest \"an element that is a shape\" {\n    assert answer() == 2014630111992714994\n}\n",
+            call: "answer",
+            expect: 2014630111992714994,
+        },
+        // Comparing and hashing the same shape, which is the only way the
+        // number a fold is emitted at depends on how many comparisons there
+        // are. A program that only hashes has none, so the two are numbered
+        // from the same place and getting the arithmetic wrong is invisible.
+        Agreed {
+            name: "a shape that is both compared and hashed",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nfn answer() -> Int {\n    let one = Point { x: 1, y: 2 }\n    let other = Point { x: 1, y: 2 }\n    if one == other {\n        hash(one)\n    } else {\n        0\n    }\n}\n\ntest \"the fold and the comparison are different functions\" {\n    assert answer() == -663802745891465335\n}\n",
+            call: "answer",
+            expect: -663802745891465335,
+        },
     ]
 }
 
