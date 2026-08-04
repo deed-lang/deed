@@ -352,3 +352,68 @@ fn an_effect_the_program_handles_is_not_asked_of_the_host() {
         module.imports
     );
 }
+
+/// Which import a performed operation calls, when there is more than one.
+///
+/// Every test above this one leaves the module with a single import, and a
+/// lookup that picks the only entry is right however it is spelled. So the
+/// three comparisons that find the import were free to be wrong: matching on
+/// the interface alone, on the operation alone, or on either, all answer the
+/// same in a module with one. Getting it wrong is not a trap, it is a call to
+/// the wrong host function, which is a silently different answer.
+///
+/// So this program declares three, and two of them share an operation name
+/// across two interfaces.
+const TWO_INTERFACES: &str = "module a\n\n\
+effect Alpha from \"one:iface\" {\n\
+  fn ask(n: Int) -> Int\n\
+  fn tell(n: Int) -> Int\n\
+}\n\n\
+effect Beta from \"two:iface\" {\n\
+  fn ask(n: Int) -> Int\n\
+}\n\n\
+fn ask_one(n: Int) -> Int\n  uses Alpha.ask,\n{\n  Alpha.ask(n)\n}\n\n\
+fn tell_one(n: Int) -> Int\n  uses Alpha.tell,\n{\n  Alpha.tell(n)\n}\n\n\
+fn ask_two(n: Int) -> Int\n  uses Beta.ask,\n{\n  Beta.ask(n)\n}\n";
+
+#[test]
+fn a_performed_operation_calls_the_import_it_named_and_not_a_neighbour() {
+    let module = module_for(TWO_INTERFACES);
+
+    let mut host = Host::new();
+    host.offer("one:iface", "ask", |_| Some(Value::I64(100)))
+        .offer("one:iface", "tell", |_| Some(Value::I64(200)))
+        .offer("two:iface", "ask", |_| Some(Value::I64(300)));
+    let linked = host.link(&module).expect("the host offers all three");
+
+    for (function, expected) in [("ask_one", 100), ("tell_one", 200), ("ask_two", 300)] {
+        let answer = linked
+            .call(function, &[Value::I64(0)])
+            .unwrap_or_else(|trap| panic!("`{function}` should reach its host: {trap:?}"))
+            .expect("it answers with a number");
+        assert_eq!(
+            answer.as_i64(),
+            expected,
+            "`{function}` reached the wrong host function"
+        );
+    }
+}
+
+/// A host that does not offer one of them refuses the module before it runs.
+///
+/// The same property `deed:io` already has, on an interface the program named
+/// itself. Whoever runs a component decides what it may reach, and deciding
+/// happens at load rather than at the first call.
+#[test]
+fn a_host_missing_one_interface_refuses_the_module() {
+    let module = module_for(TWO_INTERFACES);
+
+    let mut host = Host::new();
+    host.offer("one:iface", "ask", |_| Some(Value::I64(100)))
+        .offer("one:iface", "tell", |_| Some(Value::I64(200)));
+    let refused = host
+        .link(&module)
+        .expect_err("the host offers nothing from `two:iface`");
+    assert_eq!(refused.module, "two:iface");
+    assert_eq!(refused.name, "ask");
+}
