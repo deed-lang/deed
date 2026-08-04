@@ -2301,7 +2301,7 @@ impl Lowering<'_> {
                     // `b < a` and `a <= b` is not `b < a`. Swapping here rather
                     // than looking up a second function is what keeps the four
                     // from being able to disagree.
-                    let (swap, negate) = op.from_less_than().unwrap_or((false, false));
+                    let (swap, negate) = op.from_less_than();
                     let args = if swap {
                         vec![right, left]
                     } else {

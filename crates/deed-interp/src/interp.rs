@@ -1554,7 +1554,7 @@ impl<'a> Interp<'a> {
             // A comparison asks the one binding for `<`. `a > b` is `b < a`
             // and `a <= b` is not `b < a`, so the operands are swapped and the
             // answer negated rather than a second function being looked up.
-            let (swap, negate) = op.from_less_than().unwrap_or((false, false));
+            let (swap, negate) = op.from_less_than();
             let args = if swap {
                 vec![(right, rhs.span()), (left, lhs.span())]
             } else {

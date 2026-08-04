@@ -548,16 +548,16 @@ impl BinaryOp {
 
     /// How a comparison is answered by a binding for `<`.
     ///
-    /// `Some((swap, negate))`: hand the operands to the bound function in that
-    /// order, and negate what comes back. `None` for an operator no order
-    /// answers.
-    pub fn from_less_than(self) -> Option<(bool, bool)> {
+    /// `(swap, negate)`: hand the operands to the bound function in that
+    /// order, and negate what comes back. `<` is the binding itself and
+    /// everything else is not a comparison at all, so neither is turned round,
+    /// which is why they share the last arm rather than each having one.
+    pub fn from_less_than(self) -> (bool, bool) {
         match self {
-            BinaryOp::Lt => Some((false, false)),
-            BinaryOp::Gt => Some((true, false)),
-            BinaryOp::Ge => Some((false, true)),
-            BinaryOp::Le => Some((true, true)),
-            _ => None,
+            BinaryOp::Gt => (true, false),
+            BinaryOp::Ge => (false, true),
+            BinaryOp::Le => (true, true),
+            _ => (false, false),
         }
     }
 }
