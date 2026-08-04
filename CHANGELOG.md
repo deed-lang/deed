@@ -16,6 +16,14 @@ release notes.
 
 ### Language
 
+- `<` can be bound to a function, and one binding answers all four comparisons:
+  `a > b` is `b < a`, and `a <= b` is not `b < a`. Binding four separately would
+  let them disagree about the same two values with nothing to say so. An order
+  answers with a `Bool` rather than with the type it was given, which is the
+  one place a bound operator's shape differs from the arithmetic three. This is
+  notation and not dispatch: `<` on a type parameter is still refused and
+  `sort` still takes a comparison, so the trait threshold has not moved.
+  Decision record: `design/decisions/2026-08-04-one-binding-for-an-order.md`.
 - An effect may name the interface its operations come from:
   `effect Random from "wasi:random/random" { .. }`. Without the clause an
   effect is its own interface and an unhandled operation is imported as
@@ -31,7 +39,9 @@ release notes.
 
 ### Standard library
 
-- None yet.
+- `std/ratio` binds `<` to `is_below`, so two ratios compare the way two `Int`s
+  do. `is_below` and `is_above` are unchanged and still exported, because a
+  comparison is what `sort` takes.
 
 ### Tools
 

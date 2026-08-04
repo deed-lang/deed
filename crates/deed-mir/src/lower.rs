@@ -2297,10 +2297,28 @@ impl Lowering<'_> {
 
                 if let Some((module, function)) = self.types.operators().get(span).cloned() {
                     let func = self.operator_target(&module, &function, *span)?;
-                    return Ok(Expr::Call {
+                    // A comparison asks the one binding for `<`, so `a > b` is
+                    // `b < a` and `a <= b` is not `b < a`. Swapping here rather
+                    // than looking up a second function is what keeps the four
+                    // from being able to disagree.
+                    let (swap, negate) = op.from_less_than();
+                    let args = if swap {
+                        vec![right, left]
+                    } else {
+                        vec![left, right]
+                    };
+                    let call = Expr::Call {
                         func,
-                        args: vec![left, right],
+                        args,
                         span: *span,
+                    };
+                    return Ok(if negate {
+                        Expr::Unary {
+                            op: UnaryOp::Not,
+                            operand: Box::new(call),
+                        }
+                    } else {
+                        call
                     });
                 }
 

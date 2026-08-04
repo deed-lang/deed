@@ -696,8 +696,7 @@ let why = reason_or(divided(whole(1), zero()), "it did not refuse")
 Whether `left` is below `right`.
 
 Cross multiplication, which is exact because both denominators are positive
-by construction. This is the comparison the language cannot give a `Ratio`
-for free: `<` is `Int` and `String` and nothing else.
+by construction.
 
 ### Signature
 

@@ -40,6 +40,17 @@ fn refused(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// What a reader is actually told, which is a separate claim from the code.
+fn told(source: &str) -> String {
+    let (sources, checks, _) = checked(source);
+    checks
+        .iter()
+        .flat_map(|one| one.diagnostics.iter())
+        .filter(|diagnostic| diagnostic.is_error())
+        .map(|diagnostic| deed_diagnostics::render_human(&sources, diagnostic))
+        .collect()
+}
+
 /// Runs a program's tests in the interpreter, insisting it checks first.
 fn interpreted(source: &str) -> Vec<String> {
     let (sources, checks, subject) = checked(source);
@@ -481,11 +492,12 @@ fn a_binding_for_someone_elses_type_does_not_cross_the_boundary() {
 /// The operators that cannot be bound at all are still refused by name.
 ///
 /// `/` and `%` are partial and this language spells a partial answer with a
-/// `Result`; `==` is structural and total already; ordering is a separate
-/// decision because it runs into generic sorting.
+/// `Result`; `==` is structural and total already; the three comparisons other
+/// than `<` are answered by the binding for `<` rather than by one of their
+/// own, so that they cannot disagree with it.
 #[test]
-fn only_the_total_arithmetic_operators_can_be_bound() {
-    for spelled in ["/", "%", "==", "<", ">=", "&&"] {
+fn only_the_total_arithmetic_operators_and_one_order_can_be_bound() {
+    for spelled in ["/", "%", "==", ">=", ">", "<=", "&&"] {
         let codes = refused(&format!(
             "module probe\n\n\
              record Money {{\n\
@@ -501,4 +513,92 @@ fn only_the_total_arithmetic_operators_can_be_bound() {
             "`{spelled}` was bindable: {codes:?}"
         );
     }
+}
+
+/// `<` is bound and answers with a `Bool`, which is not the shape every other
+/// bindable operator has.
+///
+/// An operator that combines hands back what it was given, so `a + b + c`
+/// reads the way it is written. An order answers a question about two values
+/// instead, and a binding that handed back a `Money` would be one nothing
+/// could put in an `if`.
+///
+/// The sentence is read as well as the code, because the two shapes are
+/// refused by the same code and a reader told the arithmetic sentence about
+/// their `<` learns the wrong rule.
+#[test]
+fn an_order_answers_with_a_bool_rather_than_the_type_it_was_given() {
+    let combining = "module probe\n\n\
+         record Money {\n\
+         \x20   cents: Int,\n\
+         }\n\n\
+         operator < = f\n\n\
+         fn f(left: Money, right: Money) -> Money {\n\
+         \x20   left\n\
+         }\n";
+    assert!(
+        refused(combining).contains(&"DEED4031".to_string()),
+        "an order handing back its operand type should be refused: {:?}",
+        refused(combining)
+    );
+    let text = told(combining);
+    assert!(text.contains("says whether"), "{text}");
+    assert!(text.contains("rather than combining them"), "{text}");
+
+    // The other way round, so the two sentences are held apart rather than one
+    // of them being whatever the code happens to print.
+    let ordering = "module probe\n\n\
+         record Money {\n\
+         \x20   cents: Int,\n\
+         }\n\n\
+         operator + = g\n\n\
+         fn g(left: Money, right: Money) -> Bool {\n\
+         \x20   left.cents < right.cents\n\
+         }\n";
+    let text = told(ordering);
+    assert!(text.contains("gives back that type"), "{text}");
+    assert!(text.contains("reads the way it is written"), "{text}");
+
+    let right = refused(
+        "module probe\n\n\
+         record Money {\n\
+         \x20   cents: Int,\n\
+         }\n\n\
+         operator < = below\n\n\
+         fn below(left: Money, right: Money) -> Bool {\n\
+         \x20   left.cents < right.cents\n\
+         }\n",
+    );
+    assert!(right.is_empty(), "{right:?}");
+}
+
+/// One binding answers all four, by swapping the operands and negating.
+///
+/// Written as one test over the four spellings rather than four, because the
+/// point is that they agree: `a > b` is `b < a` by construction rather than
+/// because somebody bound two functions that happened to line up.
+#[test]
+fn one_binding_answers_every_comparison() {
+    let source = "module probe\n\n\
+         record Money {\n\
+         \x20   cents: Int,\n\
+         }\n\n\
+         operator < = below\n\n\
+         fn below(left: Money, right: Money) -> Bool {\n\
+         \x20   left.cents < right.cents\n\
+         }\n\n\
+         fn word(held: Bool) -> String {\n\
+         \x20   if held { \"yes\" } else { \"no\" }\n\
+         }\n\n\
+         test \"an order answers all four\" {\n\
+         \x20   let small = Money { cents: 1 }\n\
+         \x20   let large = Money { cents: 2 }\n\
+         \x20   assert word(small < large) == \"yes\"\n\
+         \x20   assert word(large < small) == \"no\"\n\
+         \x20   assert word(large > small) == \"yes\"\n\
+         \x20   assert word(small >= large) == \"no\"\n\
+         \x20   assert word(small <= small) == \"yes\"\n\
+         \x20   assert word(large <= small) == \"no\"\n\
+         }\n";
+    assert_eq!(interpreted(source), Vec::<String>::new());
 }

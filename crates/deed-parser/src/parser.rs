@@ -734,10 +734,11 @@ impl<'a> Parser<'a> {
                     BinaryOp::Eq | BinaryOp::Ne => {
                         "equality is structural and already answers about every type"
                     }
-                    _ => {
-                        "ordering is a separate question, because a caller that wants two \
-                         things ranked passes the comparison in"
+                    BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                        "an order is one thing, so `<` is the one that is bound and this is \
+                         answered by swapping its operands or negating its answer"
                     }
+                    _ => "an operator is written between two values, and this one is not",
                 }),
             );
         }

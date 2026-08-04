@@ -527,17 +527,38 @@ impl BinaryOp {
 
     /// The operators a module may bind to one of its own functions.
     ///
-    /// The three total ones. `/` and `%` are partial, and this language spells
-    /// a partial answer with `Result`, which is a shape an operator cannot
-    /// have without `a / b + c` meaning something nobody expects. `==` is
-    /// total and structural over every type already. The comparisons are a
-    /// separate decision because they run into generic sorting rather than
-    /// stopping at notation. See
-    /// `design/decisions/2026-08-03-operators-bound-to-functions.md`.
-    pub const BINDABLE: [BinaryOp; 3] = [BinaryOp::Add, BinaryOp::Sub, BinaryOp::Mul];
+    /// The three total arithmetic ones, and `<`. `/` and `%` are partial, and
+    /// this language spells a partial answer with `Result`, which is a shape
+    /// an operator cannot have without `a / b + c` meaning something nobody
+    /// expects. `==` is total and structural over every type already.
+    ///
+    /// `<` is here and `<=`, `>` and `>=` are not, because binding four
+    /// separately lets them disagree: `a < b` and `b > a` could answer
+    /// differently and nothing would say so. One binding answers all four, by
+    /// swapping the operands and negating, which is what an order is. See
+    /// `design/decisions/2026-08-04-one-binding-for-an-order.md`.
+    pub const BINDABLE: [BinaryOp; 4] = [BinaryOp::Lt, BinaryOp::Add, BinaryOp::Sub, BinaryOp::Mul];
 
     pub fn is_bindable(self) -> bool {
-        matches!(self, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+        matches!(
+            self,
+            BinaryOp::Lt | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul
+        )
+    }
+
+    /// How a comparison is answered by a binding for `<`.
+    ///
+    /// `(swap, negate)`: hand the operands to the bound function in that
+    /// order, and negate what comes back. `<` is the binding itself and
+    /// everything else is not a comparison at all, so neither is turned round,
+    /// which is why they share the last arm rather than each having one.
+    pub fn from_less_than(self) -> (bool, bool) {
+        match self {
+            BinaryOp::Gt => (true, false),
+            BinaryOp::Ge => (false, true),
+            BinaryOp::Le => (true, true),
+            _ => (false, false),
+        }
     }
 }
 
