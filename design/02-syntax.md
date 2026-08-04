@@ -303,6 +303,15 @@ built on Okasaki's red-black tree. It takes a comparator so that any key type wo
 the same answer `examples/tree.deed` gave for an unbalanced BST and the one this file gives
 for a balanced one.
 
+And the keyed structure that stops growing. `std/hashmap` has `buckets`, `empty`, `holding`,
+`size`, `bucket_of`, `bucket_at`, `get`, `holds`, `or_else`, `set`, `written`,
+`entries`, `keys`, `values` and `range`. It is a list of buckets and each bucket is a `std/table`, so a lookup
+hashes the key, indexes straight to one bucket and walks only that. Measured against
+`std/table` building a map and reading it back, the table quadruples as the keys double and
+the map does not move; at a thousand keys the map's work is smaller than the process
+starting. What made it writable was `hash`, which is in the prelude because taking a value of
+any shape apart is one of the few things this language cannot say about itself.
+
 Exact fractions are there too, and they are a library rather than a number type on purpose.
 `std/ratio` has `euclid_steps`, `absolute`, `greatest_common_divisor`, `simplified`, `ratio`,
 `whole`, `zero`, `is_zero`, `is_negative`, `negated`, `added`, `subtracted`, `multiplied`,
@@ -351,8 +360,8 @@ were not anywhere. `trim` stays in the prelude because it cannot be written.
 The other thing that goes here is a library that was already written and had nowhere to be.
 `std/list` and `std/table` were both under `examples/`, which made their names paths into
 this repository, so a program elsewhere could not import them and had to copy the files
-instead. Seven modules ship today,
-`std/string`, `std/list`, `std/table`, `std/map`, `std/ratio`, `std/date` and `std/task`, and `crates/deed-driver/src/shipped.rs` is the
+instead. Eight modules ship today,
+`std/string`, `std/list`, `std/table`, `std/map`, `std/hashmap`, `std/ratio`, `std/date` and `std/task`, and `crates/deed-driver/src/shipped.rs` is the
 table.
 
 ## Lists

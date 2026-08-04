@@ -8,6 +8,7 @@ These pages are generated from the shipped module declarations under `std/` and 
 - [`std/list`](std/list.md)
 - [`std/table`](std/table.md)
 - [`std/map`](std/map.md)
+- [`std/hashmap`](std/hashmap.md)
 - [`std/ratio`](std/ratio.md)
 - [`std/date`](std/date.md)
 - [`std/task`](std/task.md)

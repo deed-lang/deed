@@ -28,11 +28,11 @@ about what the body does with that one name.
 Measured, in `crates/deed-driver/tests/walks.rs`, over the shipped library and the corpus:
 
 ```
-walks whose accumulator is only ever pushed onto     40
-walks of every other shape                           38
+walks whose accumulator is only ever pushed onto     45
+walks of every other shape                           44
 ```
 
-The 40 are `map`, `map_at`, `filter`, `filter_at` and everything written like them. In each
+The 45 are `map`, `map_at`, `filter`, `filter_at` and everything written like them. In each
 of them the accumulator appears once on each path through the body, as `push`'s first
 argument or as the value a branch hands on untouched, which is what `filter`'s `else` does.
 Nothing else holds one, so no intermediate list is reachable from anywhere, so there is no
