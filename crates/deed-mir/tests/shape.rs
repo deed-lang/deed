@@ -62,6 +62,34 @@ fn a_match_arm_that_hands_the_accumulator_on_is_accepted() {
     ));
 }
 
+/// And when the arm is written as a block rather than an expression.
+#[test]
+fn a_match_arm_block_that_hands_the_accumulator_on_is_accepted() {
+    assert!(accepts(
+        "        match item {\n            0 => {\n                out\n            },\n            _ => push(out, item),\n        }"
+    ));
+}
+
+/// An `else if` chain hands on from the branch that does, not from the chain.
+#[test]
+fn an_else_if_that_hands_the_accumulator_on_is_accepted() {
+    assert!(accepts(
+        "        if item > 0 {\n            push(out, item)\n        } else if item < 0 {\n            out\n        } else {\n            out\n        }"
+    ));
+}
+
+/// A block arm that pushes is not an arm that hands the accumulator on.
+///
+/// The pair of this and the one above is what tells the two apart: a rule that
+/// counted block arms rather than block arms whose value is the bare name
+/// would accept the one above and refuse this.
+#[test]
+fn a_match_arm_block_that_pushes_is_accepted() {
+    assert!(accepts(
+        "        match item {\n            0 => {\n                push(out, 0)\n            },\n            _ => push(out, item),\n        }"
+    ));
+}
+
 /// Both branches pushing is fine, and is not the same as handing on.
 ///
 /// This is the case that tells `handed_on` apart from a count of branches:

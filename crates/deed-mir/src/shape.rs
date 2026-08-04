@@ -117,10 +117,11 @@ fn handed_on(name: &str, expr: &Expr) -> usize {
             if tail_is_name(then_branch) {
                 count += 1;
             }
-            match else_branch.as_deref() {
-                Some(Expr::Block(block)) if tail_is_name(block) => count += 1,
-                Some(other) if is_name(other) => count += 1,
-                _ => {}
+            // An `else` is always a block or another `if`, never a bare name.
+            if let Some(Expr::Block(block)) = else_branch.as_deref()
+                && tail_is_name(block)
+            {
+                count += 1;
             }
         }
         Expr::Match { arms, .. } => {
