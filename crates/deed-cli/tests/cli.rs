@@ -2137,3 +2137,212 @@ fn lock_file_enumerates_all_transitive_inputs() {
     assert!(lock_text.contains("main.deed"), "{lock_text}");
     assert!(lock_text.contains("lib.deed"), "{lock_text}");
 }
+
+// -- a module fetched by hash ----------------------------------------------
+
+/// A dependency is a location and a hash, and the hash is what decides.
+///
+/// Run through the real binary because the thing being held is what somebody
+/// sees: the module arrives and is usable, and the same bytes under a hash
+/// that is not theirs are refused by name rather than quietly used.
+#[test]
+fn a_module_declared_in_a_manifest_is_fetched_and_checked() {
+    let scratch = Scratch::new("fetched-module");
+    let library = "module far/away\n\nfn answer() -> Int { 42 }\n";
+    let published = scratch.write("published.txt", library);
+    scratch.write(
+        "app.deed",
+        "module app\n\n\
+         use far/away.{answer}\n\n\
+         test \"it came from somewhere else\" {\n\
+         \x20 assert answer() == 42\n\
+         }\n",
+    );
+
+    let digest = {
+        let bytes = std::fs::read(&published).unwrap();
+        deed_fetch::sha256::hex(&deed_fetch::sha256::sha256(&bytes))
+    };
+    scratch.write(
+        "deed.manifest",
+        &format!("module {} sha256:{digest}\n", published.display()),
+    );
+
+    let app = scratch.path().join("app.deed");
+    let output = run(&["test", app.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&output.stdout).to_string()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("1 passed"), "{text}");
+
+    // The same bytes under a hash that is not theirs. Nothing is stored and
+    // nothing is compiled, and the reader is told both numbers.
+    scratch.write(
+        "deed.manifest",
+        &format!("module {} sha256:{}\n", published.display(), "0".repeat(64)),
+    );
+    let output = run(&["test", app.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&output.stdout).to_string()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("DEED7006"), "{text}");
+    assert!(
+        text.contains(&digest),
+        "the actual hash should be named: {text}"
+    );
+}
+
+/// A server that answers a fixed number of requests and then stops.
+///
+/// Bound to `127.0.0.1` on a port the operating system picks, so this reaches
+/// a machine that is already running the test and nothing else. A test that
+/// went out to a real host would be a test of that host, of the network
+/// between, and of whoever is paying for it, and it would fail on an aeroplane.
+struct Serving {
+    port: u16,
+    asked: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Serving {
+    /// Answers `answers` in order, one per request, then closes.
+    fn with(answers: &[&str]) -> Serving {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port should be free");
+        let port = listener.local_addr().expect("a bound address").port();
+        let answers: Vec<String> = answers.iter().map(|answer| (*answer).to_string()).collect();
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counting = std::sync::Arc::clone(&asked);
+
+        // Not joined when this is dropped. A server that was handed more
+        // answers than it was asked questions sits in `accept`, and waiting
+        // for it would hang the suite rather than fail it.
+        std::thread::spawn(move || {
+            for answer in answers {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                counting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // Only the request head. Reading to the end would wait for a
+                // close the client will not make until it has been answered.
+                let mut request = Vec::new();
+                let mut byte = [0_u8; 1];
+                while let Ok(1) = std::io::Read::read(&mut stream, &mut byte) {
+                    request.push(byte[0]);
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let _ = std::io::Write::write_all(&mut stream, answer.as_bytes());
+                let _ = std::io::Write::flush(&mut stream);
+            }
+        });
+
+        Serving { port, asked }
+    }
+
+    fn answering(body: &str) -> Serving {
+        Serving::with(&[&format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )])
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}{path}", self.port)
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Runs the binary with its dependency cache pointed at `cache`.
+///
+/// Every platform's cache root is derived from one of these, so setting all
+/// three puts the cache in a directory this test owns rather than in the one
+/// belonging to whoever is running the suite.
+fn run_caching_in(cache: &Path, args: &[&str]) -> Output {
+    Command::new(DEED)
+        .args(args)
+        .env("LOCALAPPDATA", cache)
+        .env("XDG_CACHE_HOME", cache)
+        .env("HOME", cache)
+        .output()
+        .expect("the deed binary should run")
+}
+
+fn fetching(scratch: &Scratch, url: &str, digest: &str) -> PathBuf {
+    scratch.write(
+        "app.deed",
+        "module app\n\n\
+         use far/away.{answer}\n\n\
+         test \"it came from somewhere else\" {\n\
+         \x20 assert answer() == 42\n\
+         }\n",
+    );
+    scratch.write("deed.manifest", &format!("module {url} sha256:{digest}\n"));
+    scratch.path().join("app.deed")
+}
+
+const LIBRARY: &str = "module far/away\n\nfn answer() -> Int { 42 }\n";
+
+fn digest_of(bytes: &str) -> String {
+    deed_fetch::sha256::hex(&deed_fetch::sha256::sha256(bytes.as_bytes()))
+}
+
+/// The whole point of the directive: bytes that are not on this machine yet.
+///
+/// And then the second half of it, which is that they only travel once. The
+/// cache is keyed by the hash the manifest states, so a hit means the bytes
+/// are already known to be the right ones. The server is handed exactly one
+/// answer and asked exactly one question across two builds.
+#[test]
+fn a_module_is_fetched_over_the_network_once_and_cached_after() {
+    let scratch = Scratch::new("fetched-over-http");
+    let cache = scratch.path().join("cache");
+    let server = Serving::answering(LIBRARY);
+    let app = fetching(&scratch, &server.url("/away.deed"), &digest_of(LIBRARY));
+    let app = app.to_str().unwrap();
+
+    let first = run_caching_in(&cache, &["test", app]);
+    let text = String::from_utf8_lossy(&first.stdout).to_string()
+        + &String::from_utf8_lossy(&first.stderr);
+    assert!(first.status.success(), "{text}");
+    assert!(text.contains("1 passed"), "{text}");
+    assert_eq!(server.asked(), 1, "the module should have been fetched");
+
+    let second = run_caching_in(&cache, &["test", app]);
+    let text = String::from_utf8_lossy(&second.stdout).to_string()
+        + &String::from_utf8_lossy(&second.stderr);
+    assert!(second.status.success(), "{text}");
+    assert_eq!(
+        server.asked(),
+        1,
+        "a cached module should not have gone over the network again"
+    );
+}
+
+/// A refusal is an answer too, and it is not source.
+///
+/// The hash would catch this on its own, because an error page does not hash
+/// to what the manifest says. But it would say the bytes were wrong when what
+/// happened is that there were no bytes, and being told the wrong thing about
+/// a failure is how somebody spends an afternoon checking a digest that is
+/// correct.
+#[test]
+fn a_location_that_answers_with_a_failure_is_refused_by_what_it_answered() {
+    let scratch = Scratch::new("fetch-refused");
+    let cache = scratch.path().join("cache");
+    let server = Serving::with(&["HTTP/1.1 404 Not Found\r\nContent-Length: 8\r\n\r\nnot here"]);
+    let app = fetching(&scratch, &server.url("/away.deed"), &digest_of(LIBRARY));
+
+    let output = run_caching_in(&cache, &["test", app.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&output.stdout).to_string()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("DEED7006"), "{text}");
+    assert!(
+        text.contains("answered 404"),
+        "the status should be what is named: {text}"
+    );
+}

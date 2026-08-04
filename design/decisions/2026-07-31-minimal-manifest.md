@@ -57,11 +57,18 @@ on the others.
 
 ### What it can say
 
-Exactly one thing: where to look for modules that are not in the current source tree.
+Where to look for modules that are not in the current source tree, and nothing else.
 
 It cannot select build targets, configure the compiler, set profiles, declare features, or
-do anything else. The format has one directive. The directive adds a root. There is no
-other directive, so there is no other effect.
+do anything else. Every directive adds somewhere to look. There is no directive that does
+anything else, so there is no other effect.
+
+> Since
+> [`2026-08-04-a-dependency-is-a-location-and-a-hash.md`](2026-08-04-a-dependency-is-a-location-and-a-hash.md)
+> there is a second directive, `module <url> sha256:<digest>`, which names bytes rather
+> than a directory. It says where to look in exactly the sense above: the module it brings
+> is named by its own `module` line and compiled like any other, so the paragraph below
+> holds for it without change.
 
 ### What it cannot do
 

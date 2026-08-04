@@ -1593,6 +1593,10 @@ fn resolve_imports(
 ) -> io::Result<()> {
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut component_roots: Vec<PathBuf> = Vec::new();
+    // Files whose bytes were fetched and verified, which are named by their
+    // own `module` line rather than by where they sit, so they are handed to
+    // the compiler directly instead of becoming a root to search.
+    let mut fetched: Vec<PathBuf> = Vec::new();
     let mut known_roots: HashSet<PathBuf> = HashSet::new();
     let mut new_files: Vec<PathBuf> = Vec::new();
     let mut known_files: HashSet<PathBuf> = files.iter().cloned().collect();
@@ -1606,12 +1610,24 @@ fn resolve_imports(
         if let Some((module, _)) = deed_driver::imports_of(&text) {
             if let Some(root) = root_of(path, &module) {
                 if known_roots.insert(root.clone()) {
-                    read_manifest(&root, &mut component_roots, manifests);
+                    read_manifest(&root, &mut component_roots, &mut fetched, manifests);
                     roots.push(root);
                 }
             }
         }
         seed_texts.push(text);
+    }
+
+    // A fetched module joins the seeds rather than becoming a root to search.
+    // It is named by its own `module` line and its bytes live under a hash, so
+    // there is no directory whose shape could say what it is called, and its
+    // own imports have to be resolved the same way the named files' are.
+    for path in std::mem::take(&mut fetched) {
+        if !known_files.insert(path.clone()) {
+            continue;
+        }
+        seed_texts.push(std::fs::read_to_string(&path).unwrap_or_default());
+        files.push(path);
     }
 
     // The finder: look for each needed module on disk, under every root the
@@ -1651,7 +1667,7 @@ fn resolve_imports(
                 if let Some((m, _)) = deed_driver::imports_of(&text) {
                     if let Some(new_root) = root_of(&candidate, &m) {
                         if known_roots.insert(new_root.clone()) {
-                            read_manifest(&new_root, &mut component_roots, manifests);
+                            read_manifest(&new_root, &mut component_roots, &mut fetched, manifests);
                             roots.push(new_root);
                         }
                     }
@@ -1665,6 +1681,15 @@ fn resolve_imports(
     );
 
     files.extend(new_files);
+    // A manifest a component root brought with it is read while the finder
+    // runs, so anything it fetched arrives after the seeds were built. Those
+    // are compiled, and their own imports are resolved on the next invocation
+    // rather than this one, which is a limit worth having written down.
+    for path in fetched {
+        if known_files.insert(path.clone()) {
+            files.push(path);
+        }
+    }
     *shipped = found_shipped;
     Ok(())
 }
@@ -1678,6 +1703,7 @@ fn resolve_imports(
 fn read_manifest(
     root: &Path,
     component_roots: &mut Vec<PathBuf>,
+    fetched: &mut Vec<PathBuf>,
     manifests: &mut Vec<(String, String, Vec<deed_diagnostics::Diagnostic>)>,
 ) {
     let manifest_path = root.join("deed.manifest");
@@ -1689,7 +1715,7 @@ fn read_manifest(
 
     let mut sources = deed_diagnostics::SourceMap::new();
     let file = sources.add(name.clone(), text.clone());
-    let parsed = deed_driver::parse_manifest(file, &text);
+    let mut parsed = deed_driver::parse_manifest(file, &text);
 
     for component in &parsed.components {
         let resolved = if component.path.is_absolute() {
@@ -1703,10 +1729,92 @@ fn read_manifest(
         component_roots.push(resolved);
     }
 
+    for module in &parsed.modules {
+        match retrieve(module) {
+            Ok(path) => {
+                if !fetched.contains(&path) {
+                    fetched.push(path);
+                }
+            }
+            Err(why) => parsed.diagnostics.push(
+                deed_diagnostics::Diagnostic::error(
+                    deed_driver::codes::MODULE_NOT_FETCHED,
+                    file,
+                    module.span,
+                    why,
+                )
+                .with_primary_label("this module was not obtained")
+                .with_note(
+                    "the cache is keyed by the hash, so bytes that do not match are bytes \
+                     for a different dependency and are never stored",
+                ),
+            ),
+        }
+    }
+
     if parsed.diagnostics.is_empty() {
         return;
     }
     manifests.push((name, text, parsed.diagnostics));
+}
+
+/// The path of a declared module's bytes, fetching them if the cache has none.
+///
+/// Offline first, and that is the whole shape: the cache is keyed by the hash
+/// the manifest states, so a hit means the bytes are already known to be the
+/// right ones and nothing goes over the network. A build that has run once
+/// runs again on an aeroplane.
+fn retrieve(module: &deed_driver::FetchedModule) -> Result<PathBuf, String> {
+    let cache = deed_fetch::Cache::platform_default()
+        .map_err(|why| format!("the dependency cache could not be opened: {why}"))?;
+    if cache.contains(&module.hash) {
+        return Ok(cache.path(&module.hash));
+    }
+
+    let bytes = read_location(&module.url)?;
+    deed_fetch::verify_and_cache(&cache, &module.hash, &bytes).map_err(|why| match why {
+        deed_fetch::FetchError::HashMismatch(mismatch) => format!(
+            "`{}` answered with bytes that hash to {}, and the manifest says {}",
+            module.url, mismatch.actual, module.hash
+        ),
+        other => format!("`{}` could not be cached: {other}", module.url),
+    })
+}
+
+/// The bytes at a location, which is a URL or a path.
+///
+/// A path is here because a dependency being developed alongside its user is
+/// the ordinary case, and asking somebody to publish before they can test is
+/// the thing that makes people vendor instead. The hash is checked either way,
+/// so a local file is not a way around the check.
+fn read_location(url: &str) -> Result<Vec<u8>, String> {
+    if let Some(rest) = url.strip_prefix("file://") {
+        return std::fs::read(rest).map_err(|why| format!("`{url}` could not be read: {why}"));
+    }
+    if !url.contains("://") {
+        return std::fs::read(url).map_err(|why| format!("`{url}` could not be read: {why}"));
+    }
+
+    let reach = deed_rt::Reach::granting([location_authority(url)]);
+    let target = deed_rt::reach::resolve(&reach, url).map_err(|refused| refused.message(url))?;
+    let answer = deed_rt::request(&target, "GET", None)?;
+    if !(200..300).contains(&answer.status) {
+        return Err(format!("`{url}` answered {}", answer.status));
+    }
+    Ok(answer.body.into_bytes())
+}
+
+/// The host a fetch is allowed to reach, which is the one its own URL names.
+///
+/// A `Reach` is granted rather than assumed even here, because the rule that
+/// decides what a URL may reach should have one implementation and this is a
+/// caller of it rather than an exception to it.
+fn location_authority(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .to_string()
 }
 
 /// The directory a module path is relative to, when the file is where its name
@@ -1814,8 +1922,9 @@ mod manifest_tests {
         .unwrap();
 
         let mut component_roots = Vec::new();
+        let mut fetched = Vec::new();
         let mut manifests = Vec::new();
-        read_manifest(&root, &mut component_roots, &mut manifests);
+        read_manifest(&root, &mut component_roots, &mut fetched, &mut manifests);
 
         assert_eq!(component_roots, [root.join("../shared")]);
         assert!(manifests.is_empty());
@@ -1829,14 +1938,65 @@ mod manifest_tests {
         std::fs::write(root.join("deed.manifest"), "component\n").unwrap();
 
         let mut component_roots = Vec::new();
+        let mut fetched = Vec::new();
         let mut manifests = Vec::new();
-        read_manifest(&root, &mut component_roots, &mut manifests);
+        read_manifest(&root, &mut component_roots, &mut fetched, &mut manifests);
 
         assert!(component_roots.is_empty());
         assert_eq!(manifests.len(), 1);
         assert_eq!(
             manifests[0].2[0].code,
             deed_driver::codes::MISSING_COMPONENT_PATH
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// A module whose bytes are somewhere else is fetched, checked and used.
+    ///
+    /// Written against a local file rather than a server, because what is held
+    /// here is that the hash decides: the same path with the wrong hash is
+    /// refused, and neither answer depends on a network.
+    #[test]
+    fn a_module_is_taken_from_where_it_says_and_checked_against_its_hash() {
+        let root = temporary_root("fetched");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = "module far/away\n\nfn answer() -> Int { 42 }\n";
+        let elsewhere = root.join("elsewhere.txt");
+        std::fs::write(&elsewhere, source).unwrap();
+        let digest = deed_fetch::sha256::hex(&deed_fetch::sha256::sha256(source.as_bytes()));
+
+        std::fs::write(
+            root.join("deed.manifest"),
+            format!("module {} sha256:{digest}\n", elsewhere.display()),
+        )
+        .unwrap();
+
+        let mut component_roots = Vec::new();
+        let mut fetched = Vec::new();
+        let mut manifests = Vec::new();
+        read_manifest(&root, &mut component_roots, &mut fetched, &mut manifests);
+
+        assert!(manifests.is_empty(), "{manifests:?}");
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(std::fs::read_to_string(&fetched[0]).unwrap(), source);
+
+        // The same bytes under a hash that is not theirs are refused, and
+        // nothing is handed back to be compiled.
+        std::fs::write(
+            root.join("deed.manifest"),
+            format!("module {} sha256:{}\n", elsewhere.display(), "0".repeat(64)),
+        )
+        .unwrap();
+        let mut component_roots = Vec::new();
+        let mut fetched = Vec::new();
+        let mut manifests = Vec::new();
+        read_manifest(&root, &mut component_roots, &mut fetched, &mut manifests);
+
+        assert!(fetched.is_empty());
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(
+            manifests[0].2[0].code,
+            deed_driver::codes::MODULE_NOT_FETCHED
         );
         std::fs::remove_dir_all(root).ok();
     }

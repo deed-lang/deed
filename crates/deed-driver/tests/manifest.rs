@@ -8,11 +8,17 @@
 //! The diagnostic codes tested here:
 //! - `DEED7001`: an unrecognized directive
 //! - `DEED7002`: a `component` directive with no path
+//! - `DEED7003`: a `module` directive with nothing after it
+//! - `DEED7004`: a `module` directive with a location and no hash
+//! - `DEED7005`: a hash that is not a lowercase SHA-256
 
 use std::path::PathBuf;
 
 use deed_diagnostics::SourceMap;
-use deed_driver::codes::{MISSING_COMPONENT_PATH, UNKNOWN_DIRECTIVE};
+use deed_driver::codes::{
+    BAD_MODULE_HASH, MISSING_COMPONENT_PATH, MISSING_MODULE_HASH, MISSING_MODULE_SOURCE,
+    UNKNOWN_DIRECTIVE,
+};
 use deed_driver::{ComponentRoot, parse_manifest};
 
 fn parse(text: &str) -> deed_driver::Manifest {
@@ -194,4 +200,101 @@ fn spans_account_for_crlf_and_surrounding_whitespace() {
     assert_eq!(m.diagnostics[0].primary.span.end, 22);
     assert_eq!(m.diagnostics[1].primary.span.start, 29);
     assert_eq!(m.diagnostics[1].primary.span.end, 38);
+}
+
+// ---- DEED7003-7005: a module declared by location and hash ----
+
+const A_DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+#[test]
+fn a_module_is_read_as_a_location_and_a_hash() {
+    let m = parse(&format!(
+        "module https://example.com/list.deed sha256:{A_DIGEST}\n"
+    ));
+    assert!(m.diagnostics.is_empty(), "{:?}", m.diagnostics);
+    assert_eq!(m.modules.len(), 1);
+    assert_eq!(m.modules[0].url, "https://example.com/list.deed");
+    assert_eq!(m.modules[0].hash, A_DIGEST);
+}
+
+/// The name is not in the directive on purpose. A fetched module is named by
+/// its own `module` line, so the location says where the bytes were and the
+/// hash says what they are, and two projects fetching the same bytes from two
+/// places get one module.
+#[test]
+fn a_module_directive_does_not_say_what_the_module_is_called() {
+    let m = parse(&format!(
+        "module https://example.com/anything sha256:{A_DIGEST}\n"
+    ));
+    assert!(m.diagnostics.is_empty(), "{:?}", m.diagnostics);
+    assert_eq!(m.modules.len(), 1);
+}
+
+#[test]
+fn module_with_nothing_after_it_is_deed7003() {
+    let m = parse("module\n");
+    assert!(m.modules.is_empty());
+    assert_eq!(m.diagnostics.len(), 1);
+    assert_eq!(m.diagnostics[0].code, MISSING_MODULE_SOURCE);
+}
+
+#[test]
+fn module_with_no_hash_is_deed7004() {
+    let m = parse("module https://example.com/list.deed\n");
+    assert!(m.modules.is_empty());
+    assert_eq!(m.diagnostics.len(), 1);
+    assert_eq!(m.diagnostics[0].code, MISSING_MODULE_HASH);
+}
+
+/// Every way of writing the hash wrong, because they are one mistake seen from
+/// different angles and a reader is told which angle they are at.
+#[test]
+fn a_hash_that_is_not_a_lowercase_sha256_is_deed7005() {
+    for spelled in [
+        "md5:0123456789abcdef",
+        "0123456789abcdef",
+        "sha256:abc",
+        "sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef",
+        "sha256:0123456789abcdeg0123456789abcdef0123456789abcdef0123456789abcdef",
+    ] {
+        let m = parse(&format!("module https://example.com/x {spelled}\n"));
+        assert!(m.modules.is_empty(), "`{spelled}` was accepted");
+        assert_eq!(
+            m.diagnostics.len(),
+            1,
+            "`{spelled}` should be one diagnostic: {:?}",
+            m.diagnostics
+        );
+        assert_eq!(m.diagnostics[0].code, BAD_MODULE_HASH, "`{spelled}`");
+    }
+}
+
+/// One module a line, so a diff shows which one changed.
+#[test]
+fn a_module_line_carrying_two_of_them_is_refused() {
+    let m = parse(&format!(
+        "module https://example.com/a sha256:{A_DIGEST} https://example.com/b\n"
+    ));
+    assert!(m.modules.is_empty());
+    assert_eq!(m.diagnostics.len(), 1);
+    assert_eq!(m.diagnostics[0].code, UNKNOWN_DIRECTIVE);
+}
+
+/// A word that starts with the directive is not the directive.
+#[test]
+fn a_directive_that_merely_starts_with_module_is_unknown() {
+    let m = parse("modules foo\n");
+    assert!(m.modules.is_empty());
+    assert_eq!(m.diagnostics.len(), 1);
+    assert_eq!(m.diagnostics[0].code, UNKNOWN_DIRECTIVE);
+}
+
+/// An error on one line does not hide what the others said, which is the
+/// property the whole file already had and now has across two directives.
+#[test]
+fn a_bad_module_line_does_not_hide_a_good_component_line() {
+    let m = parse("module nothing-after-me\ncomponent ../shared\n");
+    assert_eq!(m.components.len(), 1);
+    assert_eq!(m.diagnostics.len(), 1);
+    assert_eq!(m.diagnostics[0].code, MISSING_MODULE_HASH);
 }
