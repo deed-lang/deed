@@ -20,9 +20,15 @@
 //! module resolution. Paths are resolved relative to the directory that
 //! contains the manifest file.
 //!
+//! Each `module` line names bytes rather than a directory: where they are and
+//! what they hash to. What the module is called is not here, because the file
+//! says that on its own `module` line, so a location and a hash are the whole
+//! of what a dependency is.
+//!
 //! No other directives exist. An unrecognized line is `DEED7001`. A
-//! `component` with no path is `DEED7002`. Both are errors reported through
-//! the same diagnostic infrastructure as every other compiler error.
+//! `component` with no path is `DEED7002`, and the three ways of writing a
+//! `module` line wrong are `DEED7003` to `DEED7005`. All are errors reported
+//! through the same diagnostic infrastructure as every other compiler error.
 //!
 //! # What the manifest cannot do
 //!
@@ -47,11 +53,30 @@ pub struct ComponentRoot {
     pub path: PathBuf,
 }
 
+/// A module declared by where its bytes are and what they hash to.
+///
+/// The name is not here on purpose. A fetched module is named by its own
+/// `module` line, the same way every other module is, so the URL says where
+/// the bytes were and the hash says what they are and neither says what the
+/// module is called. Two projects that fetch the same bytes from two
+/// locations get one module and one cache entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FetchedModule {
+    /// Where to look when the cache does not already hold these bytes.
+    pub url: String,
+    /// The SHA-256 the bytes must have, as 64 lowercase hexadecimal digits.
+    pub hash: String,
+    /// Where the directive was written, for a diagnostic about the fetch.
+    pub span: Span,
+}
+
 /// The result of parsing one `deed.manifest` file.
 #[derive(Debug)]
 pub struct Manifest {
     /// Component roots in declaration order.
     pub components: Vec<ComponentRoot>,
+    /// Fetched modules in declaration order.
+    pub modules: Vec<FetchedModule>,
     /// Parse errors. A manifest with errors still returns whatever roots
     /// could be read, so an error on one line does not hide the others.
     pub diagnostics: Vec<Diagnostic>,
@@ -65,6 +90,7 @@ pub struct Manifest {
 /// [`SourceMap`]: deed_diagnostics::SourceMap
 pub fn parse_manifest(file: FileId, text: &str) -> Manifest {
     let mut components = Vec::new();
+    let mut modules = Vec::new();
     let mut diagnostics = Vec::new();
 
     let mut offset: u32 = 0;
@@ -107,6 +133,13 @@ pub fn parse_manifest(file: FileId, text: &str) -> Manifest {
             continue;
         }
 
+        if let Some(rest) = trimmed.strip_prefix("module")
+            && rest.chars().next().is_none_or(char::is_whitespace)
+        {
+            parse_module(file, line, line_start, rest, &mut modules, &mut diagnostics);
+            continue;
+        }
+
         // Anything else is unknown.
         let span = line_span(line, line_start);
         diagnostics.push(
@@ -120,14 +153,133 @@ pub fn parse_manifest(file: FileId, text: &str) -> Manifest {
                 ),
             )
             .with_primary_label("not a recognized directive")
-            .with_note("the only directive in a `deed.manifest` is `component <path>`"),
+            .with_note(
+                "a `deed.manifest` has `component <path>` and `module <url> sha256:<digest>`",
+            ),
         );
     }
 
     Manifest {
         components,
+        modules,
         diagnostics,
     }
+}
+
+/// Reads `module <url> sha256:<digest>`.
+///
+/// The hash is not optional and there is no second algorithm. A dependency
+/// without one is a dependency whose bytes are whatever the other end felt
+/// like today, and a build that accepts those is not a build anybody can
+/// repeat.
+fn parse_module(
+    file: FileId,
+    line: &str,
+    line_start: u32,
+    rest: &str,
+    modules: &mut Vec<FetchedModule>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let span = line_span(line, line_start);
+    let mut parts = rest.split_whitespace();
+    let Some(url) = parts.next() else {
+        diagnostics.push(
+            Diagnostic::error(
+                codes::MISSING_MODULE_SOURCE,
+                file,
+                directive_span(line, line_start, "module"),
+                "`module` needs a location and a hash",
+            )
+            .with_primary_label("nothing to fetch")
+            .with_note("write `module <url> sha256:<digest>`"),
+        );
+        return;
+    };
+
+    let Some(hash) = parts.next() else {
+        diagnostics.push(
+            Diagnostic::error(
+                codes::MISSING_MODULE_HASH,
+                file,
+                span,
+                format!("`{url}` was given no hash"),
+            )
+            .with_primary_label("no hash")
+            .with_note(
+                "a location says where bytes were and a hash says what they are; without \
+                 the second a build cannot be repeated, so it is not optional",
+            ),
+        );
+        return;
+    };
+
+    if parts.next().is_some() {
+        diagnostics.push(
+            Diagnostic::error(
+                codes::UNKNOWN_DIRECTIVE,
+                file,
+                span,
+                "`module` takes a location and a hash, and nothing else",
+            )
+            .with_primary_label("too much on this line")
+            .with_note("one module a line, so a diff shows which one changed"),
+        );
+        return;
+    }
+
+    let Some(digest) = hash.strip_prefix("sha256:") else {
+        diagnostics.push(
+            Diagnostic::error(
+                codes::BAD_MODULE_HASH,
+                file,
+                span,
+                format!("`{hash}` does not name an algorithm this understands"),
+            )
+            .with_primary_label("expected `sha256:`")
+            .with_note(
+                "SHA-256 is the only one, and it is spelled out so that a second one could \
+                 be told from it rather than guessed at by length",
+            ),
+        );
+        return;
+    };
+
+    if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        diagnostics.push(
+            Diagnostic::error(
+                codes::BAD_MODULE_HASH,
+                file,
+                span,
+                format!("`{digest}` is not a SHA-256 digest"),
+            )
+            .with_primary_label("not sixty-four hexadecimal digits")
+            .with_note("a digest that is nearly right is a digest nothing will ever match"),
+        );
+        return;
+    }
+
+    if digest.bytes().any(|b| b.is_ascii_uppercase()) {
+        diagnostics.push(
+            Diagnostic::error(
+                codes::BAD_MODULE_HASH,
+                file,
+                span,
+                format!("`{digest}` is not written in lowercase"),
+            )
+            .with_primary_label("uppercase digits")
+            .with_note(
+                "the cache is keyed by these characters, so two spellings of one digest \
+                 would be two entries for one set of bytes",
+            ),
+        );
+        return;
+    }
+
+    modules.push(FetchedModule {
+        url: url.to_string(),
+        hash: digest.to_string(),
+        span,
+    });
 }
 
 /// Span covering the entire trimmed content of a line.

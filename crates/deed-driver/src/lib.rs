@@ -31,7 +31,7 @@ mod shipped;
 pub mod wit;
 
 pub use inputs::resolve_inputs;
-pub use manifest::{ComponentRoot, Manifest, parse_manifest};
+pub use manifest::{ComponentRoot, FetchedModule, Manifest, parse_manifest};
 pub use report::json_report;
 pub use shipped::{shipped_for, shipped_modules, shipped_source, take_shipped};
 pub use wit::wit_world_for;

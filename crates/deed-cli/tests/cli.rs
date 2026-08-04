@@ -2137,3 +2137,57 @@ fn lock_file_enumerates_all_transitive_inputs() {
     assert!(lock_text.contains("main.deed"), "{lock_text}");
     assert!(lock_text.contains("lib.deed"), "{lock_text}");
 }
+
+// -- a module fetched by hash ----------------------------------------------
+
+/// A dependency is a location and a hash, and the hash is what decides.
+///
+/// Run through the real binary because the thing being held is what somebody
+/// sees: the module arrives and is usable, and the same bytes under a hash
+/// that is not theirs are refused by name rather than quietly used.
+#[test]
+fn a_module_declared_in_a_manifest_is_fetched_and_checked() {
+    let scratch = Scratch::new("fetched-module");
+    let library = "module far/away\n\nfn answer() -> Int { 42 }\n";
+    let published = scratch.write("published.txt", library);
+    scratch.write(
+        "app.deed",
+        "module app\n\n\
+         use far/away.{answer}\n\n\
+         test \"it came from somewhere else\" {\n\
+         \x20 assert answer() == 42\n\
+         }\n",
+    );
+
+    let digest = {
+        let bytes = std::fs::read(&published).unwrap();
+        deed_fetch::sha256::hex(&deed_fetch::sha256::sha256(&bytes))
+    };
+    scratch.write(
+        "deed.manifest",
+        &format!("module {} sha256:{digest}\n", published.display()),
+    );
+
+    let app = scratch.path().join("app.deed");
+    let output = run(&["test", app.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&output.stdout).to_string()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("1 passed"), "{text}");
+
+    // The same bytes under a hash that is not theirs. Nothing is stored and
+    // nothing is compiled, and the reader is told both numbers.
+    scratch.write(
+        "deed.manifest",
+        &format!("module {} sha256:{}\n", published.display(), "0".repeat(64)),
+    );
+    let output = run(&["test", app.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&output.stdout).to_string()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("DEED7006"), "{text}");
+    assert!(
+        text.contains(&digest),
+        "the actual hash should be named: {text}"
+    );
+}

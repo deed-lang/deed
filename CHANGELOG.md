@@ -33,6 +33,10 @@ release notes.
 
 ### Diagnostics
 
+- `DEED7003`, `DEED7004` and `DEED7005`: a `module` directive with nothing
+  after it, one with a location and no hash, and a hash that is not sixty-four
+  lowercase hexadecimal digits after `sha256:`. `DEED7006`: bytes that could
+  not be retrieved, or that did not hash to what the manifest said.
 - `DEED2026`: an interface name with nothing in it. Leaving the clause off is
   how an effect says it is its own interface, and that is a different thing
   from writing one and leaving it blank.
@@ -45,6 +49,17 @@ release notes.
 
 ### Tools
 
+- A `deed.manifest` can declare a module by where its bytes are and what they
+  hash to: `module https://example.com/list.deed sha256:9f2c...`. The bytes are
+  fetched when the cache does not already hold them, refused outright when they
+  do not hash to what the manifest says, and never stored when they do not. A
+  location may also be a path, because a dependency being developed alongside
+  its user is the ordinary case and the hash is checked either way.
+  The directive does not say what the module is called: a fetched module is
+  named by its own `module` line, so two projects fetching the same bytes from
+  two mirrors get one module. This makes `deed-fetch` reachable for the first
+  time; only its SHA-256 helper had a caller before. Decision record:
+  `design/decisions/2026-08-04-a-dependency-is-a-location-and-a-hash.md`.
 - `deed build --component` now writes what a component needs as well as what
   it offers. An effect the program performs and never handles becomes an
   `import` in the world and a WebAssembly import in the module, and the call
