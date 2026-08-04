@@ -63,14 +63,20 @@ fn is_name(name: &str, expr: &Expr) -> bool {
 /// which is the question this whole line of work exists to avoid asking.
 ///
 /// Three things have to hold. The field starts as an empty list, because a
-/// reserved block starts empty. Every path's value is a record literal whose
-/// entry for the field is either that field read off the accumulator or one
-/// `push` onto it, so the block that comes out of a turn is the block that
-/// went in. And those are the only places the field is read, so nothing else
-/// holds it. Fields that fail any of them are left alone: `scan` carries a
-/// `Pair` whose left is an ordinary value and whose right is built by pushing.
+/// reserved block starts empty. Every path's value is a record literal of the
+/// same shape as the one the walk started from, whose entry for the field is
+/// either that field read off the accumulator or one `push` onto it, so the
+/// block that comes out of a turn is the block that went in. And those are the
+/// only places the field is read, so nothing else holds it. Fields that fail
+/// any of them are left alone: `scan` carries a `Pair` whose left is an
+/// ordinary value and whose right is built by pushing.
 pub fn pushed_fields(name: &str, init: &Expr, body: &Block) -> Vec<String> {
-    let Expr::StructLit { fields, .. } = init else {
+    let Expr::StructLit {
+        path,
+        fields,
+        span: _,
+    } = init
+    else {
         return Vec::new();
     };
     let candidates: Vec<&str> = fields
@@ -96,9 +102,21 @@ pub fn pushed_fields(name: &str, init: &Expr, body: &Block) -> Vec<String> {
     };
     let mut rebuilt: Vec<&[FieldInit]> = Vec::new();
     for value in &values {
-        let Expr::StructLit { fields, .. } = value else {
+        // The same shape each turn, so a field sits in the same place each
+        // turn. A choice numbers its fields inside a variant, so a turn that
+        // handed back a different one would put a reserved block where a
+        // reader is looking for something else.
+        let Expr::StructLit {
+            path: built,
+            fields,
+            ..
+        } = value
+        else {
             return Vec::new();
         };
+        if !same_path(path, built) {
+            return Vec::new();
+        }
         rebuilt.push(fields);
     }
     if rebuilt.is_empty() {
@@ -110,6 +128,26 @@ pub fn pushed_fields(name: &str, init: &Expr, body: &Block) -> Vec<String> {
         .filter(|field| pushed_field(name, field, &whole, &rebuilt))
         .map(str::to_string)
         .collect()
+}
+
+/// Whether two struct literals name the same thing.
+fn same_path(one: &Expr, other: &Expr) -> bool {
+    match (one, other) {
+        (Expr::Ident(one), Expr::Ident(other)) => one.name == other.name,
+        (
+            Expr::Field {
+                receiver: one,
+                name: named,
+                ..
+            },
+            Expr::Field {
+                receiver: other,
+                name: other_named,
+                ..
+            },
+        ) => named.name == other_named.name && same_path(one, other),
+        _ => false,
+    }
 }
 
 /// Whether one field of a record accumulator is only ever pushed onto.

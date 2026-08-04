@@ -609,19 +609,22 @@ fn programs() -> Vec<Agreed> {
         // back has to be what a record built a turn would have held.
         Agreed {
             name: "a walk that pushes into a record",
-            source: "module a\n\nrecord Parts {\n    kept: List<Int>,\n    rest: List<Int>,\n}\n\nfn answer() -> Int {\n    let split = for n in [1, 2, 3, 4, 5] with parts = Parts { kept: [], rest: [] } {\n        if n > 3 {\n            Parts { kept: push(parts.kept, n), rest: parts.rest }\n        } else {\n            Parts { kept: parts.kept, rest: push(parts.rest, n) }\n        }\n    }\n    length(split.kept) * 100 + length(split.rest)\n}\n\ntest \"both sides of a walk keep what they were given\" {\n    assert answer() == 203\n}\n",
+            source: "module a\n\nrecord Parts {\n    kept: List<Int>,\n    rest: List<Int>,\n}\n\nfn total(xs: List<Int>) -> Int {\n    for n in xs with sum = 0 {\n        sum + n\n    }\n}\n\nfn answer() -> Int {\n    let split = for n in [1, 2, 3, 4, 5] with parts = Parts { kept: [], rest: [] } {\n        if n > 3 {\n            Parts { kept: push(parts.kept, n), rest: parts.rest }\n        } else {\n            Parts { kept: parts.kept, rest: push(parts.rest, n) }\n        }\n    }\n    total(split.kept) * 100 + total(split.rest)\n}\n\ntest \"both sides of a walk keep what they were given\" {\n    assert answer() == 906\n}\n",
             call: "answer",
-            expect: 203,
+            expect: 906,
         },
         // A field of the record read somewhere other than the two places the
         // rule is about, so that field is built a turn as it always was and
         // the other one is not. Both halves of one walk, which is the pair
-        // that says the rule is per field rather than per accumulator.
+        // that says the rule is per field rather than per accumulator. What
+        // is read back is what is in the lists rather than how long they are:
+        // a block appended to where no room was reserved answers about its
+        // length and lies about its contents.
         Agreed {
             name: "a walk that reads one field of the record it carries",
-            source: "module a\n\nrecord Parts {\n    kept: List<Int>,\n    rest: List<Int>,\n}\n\nfn answer() -> Int {\n    let split = for n in [1, 2, 3, 4, 5] with parts = Parts { kept: [], rest: [] } {\n        let so_far = length(parts.kept)\n        Parts { kept: push(parts.kept, so_far), rest: push(parts.rest, n) }\n    }\n    length(split.kept) * 100 + length(split.rest)\n}\n\ntest \"a field read along the way still counts up\" {\n    assert answer() == 505\n}\n",
+            source: "module a\n\nrecord Parts {\n    kept: List<Int>,\n    rest: List<Int>,\n}\n\nfn total(xs: List<Int>) -> Int {\n    for n in xs with sum = 0 {\n        sum + n\n    }\n}\n\nfn answer() -> Int {\n    let split = for n in [1, 2, 3, 4, 5] with parts = Parts { kept: [], rest: [] } {\n        let so_far = length(parts.kept)\n        Parts { kept: push(parts.kept, so_far), rest: push(parts.rest, n) }\n    }\n    total(split.kept) * 100 + total(split.rest)\n}\n\ntest \"a field read along the way still holds what was put in it\" {\n    assert answer() == 1015\n}\n",
             call: "answer",
-            expect: 505,
+            expect: 1015,
         },
         // A `where` the caller satisfies. The checker proves it where the
         // call is written, so the compiled form has nothing left to check

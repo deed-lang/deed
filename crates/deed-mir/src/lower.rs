@@ -3400,7 +3400,9 @@ impl Lowering<'_> {
     /// `built` names them, because the rule is about the source; which slot
     /// each one is comes from the layout the literal already lowered to, so
     /// the two places that know a record's field order stay one place. The
-    /// indices reserved are written into `reserved`.
+    /// rule holds every turn to the same shape as this one, so a field is in
+    /// the same place every turn. The indices reserved are written into
+    /// `reserved`.
     fn reserve(
         &mut self,
         start: Expr,
@@ -3416,19 +3418,8 @@ impl Lowering<'_> {
         else {
             return start;
         };
-        // A record has one variant. A choice does not, and its field
-        // positions are per variant, so a turn could hand back a different
-        // one and the index would mean something else.
-        let held = self.layout(layout);
-        if built.is_empty() || held.variants.len() != 1 {
-            return Expr::Make {
-                layout,
-                variant,
-                fields,
-            };
-        }
 
-        let places: Vec<(usize, Ty)> = held.variants[variant]
+        let places: Vec<(usize, Ty)> = self.layout(layout).variants[variant]
             .fields
             .iter()
             .enumerate()
@@ -3493,11 +3484,12 @@ impl Lowering<'_> {
         });
 
         // The same argument one field at a time, for the accumulator that is
-        // a record of lists. See
+        // a record of lists. A list accumulator answers none, because the two
+        // rules ask about different shapes of what a walk starts from. See
         // `design/decisions/2026-08-04-a-walk-that-pushes-into-a-record.md`.
         let built_fields = match accumulator {
-            Some(one) if !in_place => crate::shape::pushed_fields(&one.name.name, &one.init, body),
-            _ => Vec::new(),
+            Some(one) => crate::shape::pushed_fields(&one.name.name, &one.init, body),
+            None => Vec::new(),
         };
 
         let mut reserved = Vec::new();

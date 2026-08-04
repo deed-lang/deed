@@ -342,6 +342,51 @@ fn a_field_given_a_different_list_is_left_alone() {
     );
 }
 
+/// A field grown by something that is not `push`.
+///
+/// `concat` reads the field and hands back a list that is longer by however
+/// much, so the block that comes out of the turn is neither the block that
+/// went in nor one longer. It is a call reading the field, which is the pair
+/// of shapes the rule tells apart: what the call is, and what it is called on.
+#[test]
+fn a_field_grown_by_something_other_than_push_is_left_alone() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        Parts { kept: concat(out.kept, items), rest: push(out.rest, item) }"
+        ),
+        ["rest"]
+    );
+}
+
+/// A push onto a list that is not the field, written in the field's place.
+#[test]
+fn a_field_given_a_push_onto_something_else_is_left_alone() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        let held = seen(out.kept)\n        Parts { kept: push(items, held), rest: push(out.rest, item) }"
+        ),
+        ["rest"]
+    );
+}
+
+/// A turn that hands back a record of a different shape.
+///
+/// A choice numbers its fields inside a variant, so which slot a field is in
+/// is a question about which one was built. A walk that could hand back either
+/// would put a reserved block where a reader is looking for something else.
+#[test]
+fn a_turn_that_hands_back_a_different_shape_is_refused() {
+    assert!(
+        built(
+            EMPTY,
+            "        if item > 0 {\n            Parts { kept: push(out.kept, item), rest: out.rest }\n        } else {\n            Pieces { kept: push(out.kept, item), rest: out.rest }\n        }"
+        )
+        .is_empty()
+    );
+}
+
 /// A turn that hands back a record built somewhere else.
 ///
 /// Nothing here knows what that record holds, so nothing here knows that the
