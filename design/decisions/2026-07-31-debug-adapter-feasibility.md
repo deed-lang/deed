@@ -1,9 +1,9 @@
 # Decision: Debug adapter feasibility over existing LSP framing
 
-- Status: Proposed
+- Status: Superseded
 - Date: 2026-07-31
 - Supersedes: None
-- Superseded by: None
+- Superseded by: `design/decisions/2026-08-04-a-place-to-stand.md`
 
 ## Context
 

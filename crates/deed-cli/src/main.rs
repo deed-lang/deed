@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use deed_ast::Item;
 use deed_diagnostics::{Diagnostic, FileId, SourceMap, render_human};
 use deed_driver::{Checked, ObligationReport};
-use deed_interp::{Program, PropertyConfig, RuntimeProfile};
+use deed_interp::{PropertyConfig, RuntimeProfile};
 use deed_typeck::Tier;
 
 use crate::args::{CheckArgs, Command, Format, Mode, USAGE};
@@ -64,6 +64,7 @@ fn run() -> ExitCode {
         Command::Explain(code) => run_explain(&code),
         Command::Check(check) => run_check(check),
         Command::Lsp => run_lsp(),
+        Command::Debug => run_debug(),
         Command::Mcp => run_mcp(),
     }
 }
@@ -113,6 +114,27 @@ fn run_lsp() -> ExitCode {
     let mut output = stdout.lock();
 
     match deed_lsp::serve(&mut input, &mut output) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::from(EXIT_USAGE)
+        }
+    }
+}
+
+/// Speaks the debug adapter protocol until the client disconnects.
+///
+/// The same rule as `deed lsp`: stdout is the protocol, so nothing else may go
+/// there. The program being debugged writes through a `Console`, and that
+/// output reaches the client as `output` events rather than as lines on this
+/// stream, which is what keeps a program that prints from breaking the framing.
+fn run_debug() -> ExitCode {
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+
+    match deed_dap::serve(&mut input, &mut output) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -838,22 +860,6 @@ fn run_fmt(files: &[PathBuf], check_only: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Every checked module, so the interpreter can follow a call out of one.
-fn program_of(checks: &[Checked]) -> Program<'_> {
-    let mut program = Program::new();
-    for checked in checks {
-        program.add(
-            checked.file,
-            &checked.module,
-            &checked.resolutions,
-            checked.guards(),
-            checked.rows(),
-            checked.operators(),
-        );
-    }
-    program
-}
-
 fn compiled_diagnostic(file: FileId, trap: &deed_codegen::Trap) -> Option<Diagnostic> {
     let deed_codegen::Trap::Failed {
         code,
@@ -1160,7 +1166,7 @@ fn run_main(
     // Every checked module, so a call that goes through an import has a body
     // to walk into. The interpreter used to be handed one module and stopped
     // at the first call that left it.
-    let program = program_of(checks);
+    let program = deed_driver::program_of(checks);
 
     let mut runs = Vec::new();
     // Only the files that were named. A library pulled in because an import
@@ -1253,7 +1259,7 @@ fn run_tests(
 ) -> io::Result<bool> {
     let mut passed = 0usize;
     let mut failed = Vec::new();
-    let program = program_of(checks);
+    let program = deed_driver::program_of(checks);
 
     for checked in &checks[..subject.min(checks.len())] {
         let outcomes = deed_interp::run_tests(&program, checked.file);

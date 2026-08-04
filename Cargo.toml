@@ -4,6 +4,7 @@ members = [
     "crates/deed-ast",
     "crates/deed-cli",
     "crates/deed-codegen",
+    "crates/deed-dap",
     "crates/deed-diagnostics",
     "crates/deed-driver",
     "crates/deed-effects",

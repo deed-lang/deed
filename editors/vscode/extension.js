@@ -15,6 +15,20 @@ function serverCommand() {
   };
 }
 
+/// The adapter is the same binary as the server, started with `debug` instead
+/// of `lsp`. One setting rather than two, because two paths to the same
+/// executable is two chances for an editor to be talking to two versions of
+/// the compiler.
+function debugAdapterFactory() {
+  return {
+    createDebugAdapterDescriptor() {
+      const settings = vscode.workspace.getConfiguration('deed');
+      const command = settings.get('server.path', 'deed');
+      return new vscode.DebugAdapterExecutable(command, ['debug']);
+    },
+  };
+}
+
 function activate(context) {
   const launch = serverCommand();
   const serverOptions = {
@@ -31,6 +45,9 @@ function activate(context) {
 
   client = new LanguageClient('deed-lsp', 'Deed Language Server', serverOptions, clientOptions);
   context.subscriptions.push(client.start());
+  context.subscriptions.push(
+    vscode.debug.registerDebugAdapterDescriptorFactory('deed', debugAdapterFactory()),
+  );
 }
 
 function deactivate() {

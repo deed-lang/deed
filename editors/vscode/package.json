@@ -1,7 +1,7 @@
 {
   "name": "deed",
   "displayName": "Deed",
-  "description": "Language support for Deed, including syntax highlighting and language server wiring.",
+  "description": "Language support for Deed, including syntax highlighting, language server wiring and a debugger.",
   "version": "0.1.0",
   "publisher": "deed-lang",
   "license": "Apache-2.0",
@@ -14,7 +14,8 @@
     "vscode": "^1.75.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers"
   ],
   "contributes": {
     "languages": [
@@ -37,13 +38,66 @@
         "path": "./syntaxes/deed.tmLanguage.json"
       }
     ],
+    "breakpoints": [
+      {
+        "language": "deed"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "deed",
+        "label": "Deed",
+        "languages": [
+          "deed"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The .deed file whose `main` to run.",
+                "default": "${file}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop before the first statement of `main`.",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "deed",
+            "request": "launch",
+            "name": "Run this file",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Deed: run this file",
+            "description": "Run the open .deed file through its `main`.",
+            "body": {
+              "type": "deed",
+              "request": "launch",
+              "name": "Run this file",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "Deed",
       "properties": {
         "deed.server.path": {
           "type": "string",
           "default": "deed",
-          "description": "Path to the Deed executable used to start the language server."
+          "description": "Path to the Deed executable. The same binary serves the language server and the debug adapter, so there is one setting rather than two that can disagree."
         },
         "deed.server.args": {
           "type": "array",
@@ -58,7 +112,8 @@
   },
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:deed"
+    "onLanguage:deed",
+    "onDebugResolve:deed"
   ],
   "scripts": {
     "test": "node --test ./test/*.test.js"

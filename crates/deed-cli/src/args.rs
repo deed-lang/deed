@@ -19,6 +19,7 @@ Usage:
   deed fix   [--check] <path>...
   deed explain <code>
   deed lsp
+  deed debug
   deed mcp
 
 Options:
@@ -75,6 +76,11 @@ that name it.
 code identifier (`DEED4025`) or the constant name (`BROKEN_PRECONDITION`).
 `deed lsp` speaks the language server protocol on stdin and stdout. It is for an
 editor to start, not for a person to type.
+`deed debug` speaks the debug adapter protocol on stdin and stdout, so an editor
+can set breakpoints, step, and read the stack and the bindings of every active
+call. Which program to debug arrives in the client's `launch` request, so this
+command takes no path. There is no `pause`: a program stops where it was told to
+and runs otherwise.
 `deed mcp` speaks the Model Context Protocol on stdin and stdout, so an agent can
 ask the compiler the same questions an editor does. It holds no capability: a
 program arrives as text and the answer leaves as text, and nothing it runs can
@@ -160,6 +166,8 @@ pub enum Command {
     Explain(String),
     /// Speak the language server protocol on stdin and stdout.
     Lsp,
+    /// Speak the debug adapter protocol on stdin and stdout.
+    Debug,
     /// Speak the Model Context Protocol on stdin and stdout.
     Mcp,
     Help,
@@ -203,6 +211,18 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 Some(extra) => Err(format!("`deed mcp` takes no arguments, found `{extra}`")),
             };
         }
+        // The program is named by the client's `launch` request rather than
+        // here. A path on this line would be a second place to say which
+        // program is being debugged, and the two would disagree.
+        "debug" => {
+            return match args.next() {
+                None => Ok(Command::Debug),
+                Some(extra) => Err(format!(
+                    "`deed debug` takes no arguments, found `{extra}`: the program comes from the \
+                     client's launch request"
+                )),
+            };
+        }
         "explain" => {
             return match args.next() {
                 None => {
@@ -220,7 +240,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "doc" => Mode::Doc,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `check`, `test`, `run`, `build`, `fmt`, `fix`, `explain` and `lsp`"
+                "unknown command `{other}`, the choices are `check`, `test`, `run`, `build`, `fmt`, `fix`, `explain`, `lsp` and `debug`"
             ));
         }
     };
@@ -398,6 +418,16 @@ mod tests {
     fn lsp_is_a_command_and_takes_nothing_else() {
         assert!(matches!(parse(args(&["lsp"])), Ok(Command::Lsp)));
         assert!(parse(args(&["lsp", "a.deed"])).is_err());
+    }
+
+    /// A path here is somebody typing what belongs after `deed run`. The
+    /// refusal says where the program actually comes from, because "takes no
+    /// arguments" alone leaves a reader with no idea how to name one.
+    #[test]
+    fn debug_is_a_command_and_says_where_its_program_comes_from() {
+        assert!(matches!(parse(args(&["debug"])), Ok(Command::Debug)));
+        let refused = parse(args(&["debug", "a.deed"])).unwrap_err();
+        assert!(refused.contains("launch request"), "{refused}");
     }
 
     /// The default, and the one worth a test of its own: a run nobody told

@@ -15,6 +15,7 @@ version = "0.2.4"
 dependencies = [
  "deed-ast",
  "deed-codegen",
+ "deed-dap",
  "deed-diagnostics",
  "deed-driver",
  "deed-explain",
@@ -35,6 +36,17 @@ version = "0.2.4"
 dependencies = [
  "deed-diagnostics",
  "deed-mir",
+]
+
+[[package]]
+name = "deed-dap"
+version = "0.2.4"
+dependencies = [
+ "deed-diagnostics",
+ "deed-driver",
+ "deed-interp",
+ "deed-lsp",
+ "deed-rt",
 ]
 
 [[package]]
