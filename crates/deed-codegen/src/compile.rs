@@ -13,10 +13,10 @@
 //! program that runs and answers wrongly, which is worse than one that does
 //! not build.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use deed_diagnostics::Span;
-use deed_mir::{BinaryOp, Block, Expr, Function, Local, Program, Stmt, Ty, UnaryOp};
+use deed_mir::{BinaryOp, Block, EffectId, Expr, Function, Local, Program, Stmt, Ty, UnaryOp};
 
 use crate::layout;
 use crate::runtime::Helper;
@@ -123,6 +123,16 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         let type_index = module.intern_type(signature.clone());
         let (namespace, operation) = name.split_once('.').unwrap_or(("deed", name));
         module.add_import(&format!("deed:{namespace}"), operation, type_index);
+    }
+    // An effect nothing in the program handles is answered by whoever runs the
+    // module, the same way `Io` is. It reaches here as a `Perform` rather than
+    // a `Host` because a handler could have answered it, so the import is
+    // worked out from the program rather than read off the call.
+    let escaping = escaping_operations(program);
+    for (namespace, operation, effect, at) in &escaping {
+        let signature = performed_signature(program, *effect, *at);
+        let type_index = module.intern_type(signature);
+        module.add_import(namespace, operation, type_index);
     }
     // Give each import a debug name so a runtime can name the frame. The
     // operation name (the part after the namespace dot) is what a reader
@@ -329,6 +339,84 @@ fn host_calls(program: &Program) -> Vec<(String, FuncType)> {
                         results: val_type(ret).into_iter().collect(),
                     },
                 ));
+            }
+        });
+    }
+    found
+}
+
+/// Every operation the program can only get an answer to from its host.
+///
+/// An effect the program performs and never installs a handler for cannot be
+/// answered anywhere inside the program, under any call path, so every
+/// performance of it reaches the boundary. That is exact rather than an
+/// approximation, and it is why the rule is written this way round: an effect
+/// with an `Install` somewhere may still have performs that escape, and those
+/// are not counted here. They keep the behaviour they had, which is a trap.
+///
+/// Each entry is the namespace, the operation, and the pair a `Perform` names
+/// it by, so a body can find the import it should call.
+pub fn escaping_operations(program: &Program) -> Vec<(String, String, EffectId, usize)> {
+    let mut performed: BTreeSet<(EffectId, usize)> = BTreeSet::new();
+    let mut installed: BTreeSet<EffectId> = BTreeSet::new();
+    for function in &program.functions {
+        walk_block(&function.body, &mut |expr| match expr {
+            Expr::Perform {
+                effect, operation, ..
+            } => {
+                performed.insert((*effect, *operation));
+            }
+            Expr::Install { effect, .. } => {
+                installed.insert(*effect);
+            }
+            _ => {}
+        });
+    }
+
+    performed
+        .into_iter()
+        .filter(|(effect, _)| !installed.contains(effect))
+        .map(|(effect, operation)| {
+            let declared = program.effect(effect);
+            (
+                declared.namespace(),
+                declared.operations[operation].clone(),
+                effect,
+                operation,
+            )
+        })
+        .collect()
+}
+
+/// What the host is asked for when an operation escapes.
+///
+/// The state cell an installed handler would have been handed is not there,
+/// because there is no handler: a host takes the operation's own arguments and
+/// nothing else. The shape is read off the first `Perform` of it, which is
+/// enough because every performance of one operation has the same signature.
+fn performed_signature(program: &Program, effect: EffectId, at: usize) -> FuncType {
+    let mut found = FuncType {
+        params: Vec::new(),
+        results: Vec::new(),
+    };
+    for function in &program.functions {
+        walk_block(&function.body, &mut |expr| {
+            if let Expr::Perform {
+                effect: performed,
+                operation,
+                args,
+                ret,
+            } = expr
+                && *performed == effect
+                && *operation == at
+            {
+                found = FuncType {
+                    params: args
+                        .iter()
+                        .filter_map(|arg| val_type(&ty_in(program, function, arg)))
+                        .collect(),
+                    results: val_type(ret).into_iter().collect(),
+                };
             }
         });
     }
@@ -626,6 +714,45 @@ impl<'a> Builder<'a> {
             .position(|found| found.module == namespace && found.name == operation)
             .map(|at| at as u32)
             .ok_or_else(|| self.fail(&format!("a call to `{name}`, which nothing imported")))
+    }
+
+    /// The instructions that hand an escaped operation to the host, if the
+    /// host was asked for it.
+    ///
+    /// `None` when this operation is not one of the module's imports, which
+    /// means some `with` in the program answers for the effect and reaching
+    /// the end of the frame list would be the checker and the frames
+    /// disagreeing rather than an escape.
+    fn host_answer(
+        &mut self,
+        effect: EffectId,
+        operation: usize,
+        args: &[Expr],
+    ) -> Result<Option<Vec<Ins>>, Unsupported> {
+        let declared = self.program.effect(effect);
+        let namespace = declared.namespace();
+        let name = &declared.operations[operation];
+        let Some(index) = self
+            .imports
+            .iter()
+            .position(|found| found.module == namespace && found.name == *name)
+        else {
+            return Ok(None);
+        };
+
+        // Built into its own buffer so it can sit inside an `if`. The
+        // arguments are the operation's own: a host was handed no state cell,
+        // because there is no handler to keep one.
+        let saved = std::mem::take(&mut self.instructions);
+        for arg in args {
+            if let Err(why) = self.expr(arg) {
+                self.instructions = saved;
+                return Err(why);
+            }
+        }
+        self.instructions.push(Ins::Call(index as u32));
+        self.instructions.push(Ins::Return);
+        Ok(Some(std::mem::replace(&mut self.instructions, saved)))
     }
 
     /// Which interned signature this is.
@@ -1331,15 +1458,21 @@ impl<'a> Builder<'a> {
                 self.instructions.push(Ins::I64Load(0));
                 self.instructions.push(Ins::LocalSet(cursor));
 
+                // Nothing left to ask. If the host offers this operation, it
+                // is the outermost handler and this is where it answers;
+                // otherwise the effect row and the frames disagree, which is
+                // the checker having let something through.
+                let exhausted = match self.host_answer(*effect, *operation, args)? {
+                    Some(call) => call,
+                    None => vec![Ins::Unreachable],
+                };
+
                 let search = vec![
-                    // Nothing left to ask. The checker refuses a program
-                    // that performs outside a handler, so reaching this
-                    // means the effect row and the frames disagree.
                     Ins::LocalGet(cursor),
                     Ins::I64Eqz,
                     Ins::If {
                         result: None,
-                        then: vec![Ins::Unreachable],
+                        then: exhausted,
                         otherwise: Vec::new(),
                     },
                     Ins::LocalGet(cursor),
@@ -2053,6 +2186,7 @@ mod tests {
         let effect = program.add_effect(deed_mir::Effect {
             name: "Log".to_string(),
             operations: vec!["note".to_string()],
+            interface: None,
         });
 
         // Something for the indirect call and the perform to reach. Both

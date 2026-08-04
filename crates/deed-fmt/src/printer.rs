@@ -370,6 +370,10 @@ impl Printer<'_> {
         self.push("effect ");
         self.push(&decl.name.name);
         self.push(&type_params(&[], &decl.rows));
+        if let Some(interface) = &decl.interface {
+            self.push(" from ");
+            self.push(&string_literal(&interface.name));
+        }
         self.push(" {");
         self.newline();
         self.indent += 1;

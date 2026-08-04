@@ -136,7 +136,7 @@ pub struct Field {
     pub ty: Ty,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EffectId(pub usize);
 
 /// An effect, reduced to what dispatch needs.
@@ -147,6 +147,26 @@ pub struct EffectId(pub usize);
 pub struct Effect {
     pub name: String,
     pub operations: Vec<String>,
+    /// The world-level name an unhandled operation is imported under.
+    ///
+    /// `None` means the effect is its own interface and the import is named
+    /// after it. Written down by `effect X from "wasi:random/random"`, which
+    /// is the only way to ask a component's host for an interface somebody
+    /// else defined.
+    pub interface: Option<String>,
+}
+
+impl Effect {
+    /// What a host offering this effect's operations calls itself.
+    ///
+    /// A namespace rather than a full name, because an operation is one entry
+    /// inside it and the two are joined at the point of import.
+    pub fn namespace(&self) -> String {
+        match &self.interface {
+            Some(interface) => interface.clone(),
+            None => format!("deed:{}", self.name.to_lowercase()),
+        }
+    }
 }
 
 /// A whole program, ready to compile.
@@ -594,7 +614,27 @@ mod tests {
         Effect {
             name: name.to_string(),
             operations: Vec::new(),
+            interface: None,
         }
+    }
+
+    /// An effect that says nothing is named after itself, and one that names
+    /// an interface is named that. The first is a default rather than a
+    /// convention: a program that invented an effect gets an import nobody
+    /// else claims, and a program asking for one somebody else defined has to
+    /// say so.
+    #[test]
+    fn an_effect_is_imported_under_the_interface_it_names_or_under_itself() {
+        assert_eq!(effect("Random").namespace(), "deed:random");
+        assert_eq!(
+            Effect {
+                name: "Random".to_string(),
+                operations: Vec::new(),
+                interface: Some("wasi:random/random".to_string()),
+            }
+            .namespace(),
+            "wasi:random/random"
+        );
     }
 
     fn layout(name: &str) -> Layout {

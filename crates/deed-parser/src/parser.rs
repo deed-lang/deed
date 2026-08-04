@@ -12,9 +12,9 @@
 
 use deed_ast::{
     Accumulator, BinaryOp, Block, ChoiceDecl, Contract, DeprecateDecl, EditionDecl, EffectDecl,
-    EffectRef, Ensures, Expr, FieldDecl, FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Item,
-    MatchArm, Module, ModulePath, OperatorDecl, Outcome, Param, Pattern, PatternField, RecordDecl,
-    Stmt, TestDecl, Type, TypeAlias, UnaryOp, Use, Variant,
+    EffectRef, Ensures, Expr, FieldDecl, FieldInit, FnDecl, FnSig, HandlerDecl, Ident, Interface,
+    Item, MatchArm, Module, ModulePath, OperatorDecl, Outcome, Param, Pattern, PatternField,
+    RecordDecl, Stmt, TestDecl, Type, TypeAlias, UnaryOp, Use, Variant,
 };
 use deed_diagnostics::{Applicability, Diagnostic, FileId, Span, SuggestedEdit};
 use deed_lexer::{Keyword, Token, TokenKind};
@@ -72,8 +72,8 @@ impl Parsed {
 /// matches that shape. The test in `crates/deed-parser/tests/grammar.rs`
 /// walks alternation groups, so a word that is coloured by shape rather than
 /// by name is neither missing from the grammar nor invented by it.
-pub const SOFT_KEYWORDS: [&str; 8] = [
-    "state", "at", "while", "refuses", "ok", "err", "finally", "operator",
+pub const SOFT_KEYWORDS: [&str; 9] = [
+    "state", "at", "while", "refuses", "ok", "err", "finally", "operator", "from",
 ];
 
 /// Parses a token stream. Always produces a module, possibly containing error nodes.
@@ -1003,6 +1003,11 @@ impl<'a> Parser<'a> {
             );
         }
 
+        // `from "wasi:random/random"`. Between the name and the brace there is
+        // nowhere else a word can go, so this needs no lookahead beyond the
+        // word itself and `from` stays an ordinary name everywhere else.
+        let interface = self.parse_effect_interface();
+
         self.expect(TokenKind::LBrace, "an effect declaration")?;
 
         let mut operations = Vec::new();
@@ -1042,9 +1047,64 @@ impl<'a> Parser<'a> {
         Some(EffectDecl {
             name,
             rows,
+            interface,
             operations,
             span: start.to(end),
         })
+    }
+
+    /// Reads `from "wasi:random/random"` after an effect's name.
+    ///
+    /// A string rather than a path of identifiers, because a WIT interface
+    /// name carries a colon and a slash and neither is a token this language
+    /// has. Quoting it also says plainly that the compiler does not resolve
+    /// it: the name is handed to whoever links the component, and being wrong
+    /// about it is something they find out, not something checked here.
+    fn parse_effect_interface(&mut self) -> Option<Interface> {
+        if !self.eat_named("from") {
+            return None;
+        }
+        let span = self.span();
+        match self.kind() {
+            TokenKind::Str(name) => {
+                let name = name.clone();
+                self.bump();
+                if name.trim().is_empty() {
+                    self.emit(
+                        Diagnostic::error(
+                            codes::EMPTY_INTERFACE,
+                            self.file,
+                            span,
+                            "an interface name cannot be empty",
+                        )
+                        .with_primary_label("nothing to import from")
+                        .with_note(
+                            "the name goes into the world a compiled component asks its host \
+                             for; leave the clause off and the effect is named after itself",
+                        ),
+                    );
+                    return None;
+                }
+                Some(Interface { name, span })
+            }
+            found => {
+                let found = found.describe();
+                self.emit(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        self.file,
+                        span,
+                        format!("expected the interface name in quotes, found {found}"),
+                    )
+                    .with_primary_label("expected a string")
+                    .with_note(
+                        "an interface is written `from \"wasi:random/random\"`, quoted because \
+                         the name carries a colon and a slash and neither is a token here",
+                    ),
+                );
+                None
+            }
+        }
     }
 
     /// Reports `state count: Int = 0` and reads the value it was given.

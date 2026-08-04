@@ -246,3 +246,12 @@ pub const EFFECT_TYPE_PARAM: &str = "DEED2024";
 /// problem rather than being shown the whole declaration form. See
 /// `design/decisions/2026-08-03-operators-bound-to-functions.md`.
 pub const UNBINDABLE_OPERATOR: &str = "DEED2025";
+
+/// `effect Random from ""`: an interface name with nothing in it.
+///
+/// The name is what a compiled component's world asks its host for, so an
+/// empty one produces an import nothing can satisfy and a world nobody can
+/// read. Leaving the clause off is the way to say "this effect is its own
+/// interface", and it is a different thing from writing one and leaving it
+/// blank, which is why this is refused rather than treated as absent.
+pub const EMPTY_INTERFACE: &str = "DEED2026";
