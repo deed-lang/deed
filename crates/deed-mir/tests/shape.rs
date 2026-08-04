@@ -124,6 +124,33 @@ fn never_mentioning_the_accumulator_is_refused() {
     assert!(!accepts("        items"));
 }
 
+/// A second push in a turn, away from the value the turn hands back.
+///
+/// This is `intersperse` again with the two pushes written apart rather than
+/// nested, and it is what the rule missed when it counted pushes anywhere
+/// rather than asking about the value of a path. The turn grows the list by
+/// two while the room reserved is one a turn, so the walk writes past the end
+/// of what it was given and answers with a list of the wrong length. The
+/// compiled half of it is in `crates/deed-driver/tests/agreement.rs`.
+#[test]
+fn pushing_away_from_the_value_of_a_turn_is_refused() {
+    assert!(!accepts(
+        "        let ahead = push(out, item)\n        let _ = length(ahead)\n        push(out, item)"
+    ));
+}
+
+/// A branch that hands the accumulator on somewhere the turn's value is not.
+///
+/// Handing on is only handing on when it is what the next turn is given.
+/// Anywhere else the branch is a value like any other, and whatever reads it
+/// is holding the list the walk is about to write into.
+#[test]
+fn a_branch_that_keeps_the_accumulator_is_refused() {
+    assert!(!accepts(
+        "        let held = if item > 0 {\n            out\n        } else {\n            out\n        }\n        let _ = length(held)\n        push(out, item)"
+    ));
+}
+
 // Every remaining case is a place the accumulator could be kept. The walk ends
 // in a push each time, so the first half of the rule would hold if the mention
 // above it were not seen, and each of these asks that it is.

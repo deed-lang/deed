@@ -16,45 +16,59 @@ use deed_ast::{Block, Expr, Stmt};
 
 /// Whether a walk over a list can build one list rather than one a turn.
 ///
-/// Two things have to hold, and the second was learned rather than designed.
+/// Two things have to hold, and both are about the same one place: the value
+/// of a path through the body, which is what the next turn is handed.
 ///
-/// Every mention of `name` is one that keeps nothing. Two positions qualify,
-/// and they are the two the library is written in: `push(name, x)` reads the
-/// list and hands back the next one, so the list it read is finished with, and
-/// a branch whose value is the bare name hands the accumulator on untouched,
-/// which is what `filter`'s `else` does. Anywhere else is a place that could
-/// keep it, and there is no attempt to work out whether it would.
+/// Every path's value is either the bare name or one `push` straight onto it,
+/// so the block that comes out of a turn is the block that went in and a turn
+/// grows it by at most one. Without this, `std/list`'s `intersperse`
+/// qualifies: it writes `push(push(out, sep), item)`, and two things go wrong
+/// at once. The walk would grow by two on a turn while the room reserved is
+/// one a turn, and the accumulator would come out of the turn as a copy that
+/// was never given room at all, so the next turn would write past the end.
 ///
-/// And the value of every path through the body is either the bare name or a
-/// `push` straight onto it. Without this half, `std/list`'s `intersperse`
-/// qualifies: it writes `push(push(out, sep), item)`, whose mentions are all
-/// pushes. Two things go wrong at once. The walk would grow by two on a turn
-/// while the room reserved is one a turn, and the accumulator would come out
-/// of the turn as a copy that was never given room at all, so the next turn
-/// would write past the end of it. One condition rules out both, because both
-/// are the same mistake: the block that comes out has to be the block that
-/// went in.
+/// And those are the only places the name appears at all, which is what the
+/// count says. Anywhere else is a place that could keep the accumulator, or a
+/// second push in a turn the first condition never sees, and there is no
+/// attempt to work out whether it would matter.
 pub fn only_pushes(name: &str, body: &Block) -> bool {
     let whole = Expr::Block(body.clone());
-    let mentions = mentions(name, &whole);
-    mentions > 0
-        && mentions == pushed(name, &whole) + handed_on(name, &whole)
-        && grows_by_one(name, &Expr::Block(body.clone()))
+    let Some(values) = path_values(&whole) else {
+        return false;
+    };
+    values
+        .iter()
+        .all(|value| is_name(name, value) || pushes_onto(name, value))
+        && mentions(name, &whole) == values.len()
 }
 
-/// Whether the value of every path through `expr` is the accumulator or one
-/// `push` onto it.
-fn grows_by_one(name: &str, expr: &Expr) -> bool {
+/// Whether this expression is the bare name.
+fn is_name(name: &str, expr: &Expr) -> bool {
+    matches!(expr, Expr::Ident(ident) if ident.name == name)
+}
+
+/// Whether this expression is one `push` straight onto the name.
+fn pushes_onto(name: &str, expr: &Expr) -> bool {
+    let Expr::Call { callee, args, .. } = expr else {
+        return false;
+    };
+    matches!(&**callee, Expr::Ident(callee) if callee.name == "push")
+        && args.first().is_some_and(|first| is_name(name, first))
+}
+
+/// The value of every path through `expr`, or `None` when some path has none.
+///
+/// A block hands on its tail, a branch hands on each of its arms, and
+/// everything else is a value in its own right. A block with no tail is a
+/// path that produces nothing, which no walk this rule is about can have.
+fn path_values(expr: &Expr) -> Option<Vec<&Expr>> {
+    let mut found = Vec::new();
+    paths(expr, &mut found).then_some(found)
+}
+
+fn paths<'a>(expr: &'a Expr, found: &mut Vec<&'a Expr>) -> bool {
     match expr {
-        Expr::Ident(ident) => ident.name == name,
-        Expr::Call { callee, args, .. } => {
-            matches!(&**callee, Expr::Ident(callee) if callee.name == "push")
-                && matches!(args.first(), Some(Expr::Ident(first)) if first.name == name)
-        }
-        Expr::Block(block) => block
-            .tail
-            .as_deref()
-            .is_some_and(|tail| grows_by_one(name, tail)),
+        Expr::Block(block) => block.tail.as_deref().is_some_and(|tail| paths(tail, found)),
         Expr::If {
             then_branch,
             else_branch,
@@ -63,13 +77,16 @@ fn grows_by_one(name: &str, expr: &Expr) -> bool {
             then_branch
                 .tail
                 .as_deref()
-                .is_some_and(|tail| grows_by_one(name, tail))
+                .is_some_and(|tail| paths(tail, found))
                 && else_branch
                     .as_deref()
-                    .is_some_and(|otherwise| grows_by_one(name, otherwise))
+                    .is_some_and(|otherwise| paths(otherwise, found))
         }
-        Expr::Match { arms, .. } => arms.iter().all(|arm| grows_by_one(name, &arm.body)),
-        _ => false,
+        Expr::Match { arms, .. } => arms.iter().all(|arm| paths(&arm.body, found)),
+        other => {
+            found.push(other);
+            true
+        }
     }
 }
 
@@ -77,63 +94,9 @@ fn grows_by_one(name: &str, expr: &Expr) -> bool {
 fn mentions(name: &str, expr: &Expr) -> usize {
     let mut count = 0;
     each(expr, &mut |found| {
-        if let Expr::Ident(ident) = found
-            && ident.name == name
-        {
+        if is_name(name, found) {
             count += 1;
         }
-    });
-    count
-}
-
-/// How many of those are `push`'s first argument.
-fn pushed(name: &str, expr: &Expr) -> usize {
-    let mut count = 0;
-    each(expr, &mut |found| {
-        if let Expr::Call { callee, args, .. } = found
-            && let Expr::Ident(callee) = &**callee
-            && callee.name == "push"
-            && let Some(Expr::Ident(first)) = args.first()
-            && first.name == name
-        {
-            count += 1;
-        }
-    });
-    count
-}
-
-/// How many are the value of a branch rather than a use.
-fn handed_on(name: &str, expr: &Expr) -> usize {
-    let is_name = |expr: &Expr| matches!(expr, Expr::Ident(ident) if ident.name == name);
-    let tail_is_name = |block: &Block| block.tail.as_deref().is_some_and(&is_name);
-
-    let mut count = 0;
-    each(expr, &mut |found| match found {
-        Expr::If {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            if tail_is_name(then_branch) {
-                count += 1;
-            }
-            // An `else` is always a block or another `if`, never a bare name.
-            if let Some(Expr::Block(block)) = else_branch.as_deref()
-                && tail_is_name(block)
-            {
-                count += 1;
-            }
-        }
-        Expr::Match { arms, .. } => {
-            for arm in &arms[..] {
-                match &arm.body {
-                    Expr::Block(block) if tail_is_name(block) => count += 1,
-                    other if is_name(other) => count += 1,
-                    _ => {}
-                }
-            }
-        }
-        _ => {}
     });
     count
 }
