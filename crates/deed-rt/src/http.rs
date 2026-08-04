@@ -87,7 +87,7 @@ pub fn request(target: &Target, method: &str, body: Option<&str>) -> Result<Resp
         .flush()
         .map_err(|why| format!("could not send the request to `{address}`: {why}"))?;
 
-    let raw = read_all(&mut stream, &address)?;
+    let raw = read_all(&mut stream, &address, LIMIT)?;
     parse(&raw, &address)
 }
 
@@ -115,8 +115,12 @@ fn connect(address: &str) -> Result<TcpStream, String> {
     Ok(stream)
 }
 
-/// Reads until the server closes, refusing at [`LIMIT`].
-fn read_all(stream: &mut TcpStream, address: &str) -> Result<Vec<u8>, String> {
+/// Reads until the server closes, refusing past `limit`.
+///
+/// The limit is a parameter rather than a read of [`LIMIT`] so that a test can
+/// hand it a small one. A threshold nothing can cross in a test is a threshold
+/// nothing checks.
+fn read_all(stream: &mut TcpStream, address: &str, limit: usize) -> Result<Vec<u8>, String> {
     let mut raw = Vec::new();
     let mut chunk = [0_u8; 8192];
     loop {
@@ -126,9 +130,9 @@ fn read_all(stream: &mut TcpStream, address: &str) -> Result<Vec<u8>, String> {
         if read == 0 {
             break;
         }
-        if raw.len() + read > LIMIT {
+        if raw.len() + read > limit {
             return Err(format!(
-                "the answer from `{address}` is larger than {LIMIT} bytes, which is the most one \
+                "the answer from `{address}` is larger than {limit} bytes, which is the most one \
                  can be held as a string"
             ));
         }
@@ -194,11 +198,13 @@ fn dechunk(mut body: &[u8], address: &str) -> Result<Vec<u8>, String> {
         if size == 0 {
             break;
         }
-        if body.len() < size {
-            return Err(malformed());
-        }
+        // The chunk and the newline that ends it are asked for together. Two
+        // checks would leave one of them unreachable: a body exactly as long
+        // as the chunk has no room for the newline either, so nothing could
+        // tell the two refusals apart.
+        let rest = body.get(size + 2..).ok_or_else(malformed)?;
         out.extend_from_slice(&body[..size]);
-        body = body.get(size + 2..).ok_or_else(malformed)?;
+        body = rest;
     }
     Ok(out)
 }
@@ -260,6 +266,20 @@ mod tests {
         assert_eq!(answer.body, "ok");
     }
 
+    /// Both halves of the header decide. Reading the name alone would dechunk
+    /// a body that was framed some other way, and reading the value alone
+    /// would dechunk one because a different header happened to say the word.
+    #[test]
+    fn a_body_is_dechunked_only_when_the_header_says_both_things() {
+        let plain = response("HTTP/1.1 200 OK\r\nTransfer-Encoding: identity\r\n\r\n2\r\nok")
+            .expect("identity framing is not chunked");
+        assert_eq!(plain.body, "2\r\nok");
+
+        let elsewhere = response("HTTP/1.1 200 OK\r\nContent-Type: text/chunked\r\n\r\n2\r\nok")
+            .expect("a content type is not a framing");
+        assert_eq!(elsewhere.body, "2\r\nok");
+    }
+
     /// The failure this exists to prevent: framing read as content.
     #[test]
     fn a_truncated_chunked_body_is_an_error_rather_than_a_string_with_lengths_in_it() {
@@ -286,5 +306,49 @@ mod tests {
         raw.push(0xff);
         let why = parse(&raw, "test").expect_err("that is not text");
         assert!(why.contains("not UTF-8"), "{why}");
+    }
+
+    /// The size limit, exercised at a size a test can reach. A body one byte
+    /// over is refused and one exactly at it is not, which is the pair that
+    /// says where the line is rather than that there is one.
+    #[test]
+    fn a_body_past_the_limit_is_refused_and_one_at_it_is_not() {
+        assert_eq!(read_with(64, 64).expect("exactly at the limit").len(), 64);
+        let why = read_with(64, 65).expect_err("one byte over the limit");
+        assert!(why.contains("larger than 64 bytes"), "{why}");
+    }
+
+    /// The limit a released build actually carries, rather than one a test
+    /// chose. Without this the constant is a number nothing reads, and
+    /// arithmetic on it that produced two kilobytes would look the same from
+    /// here as eight megabytes.
+    #[test]
+    fn the_shipped_limit_holds_an_ordinary_answer() {
+        let megabyte = 1024 * 1024;
+        assert!(
+            LIMIT > megabyte,
+            "a limit of {LIMIT} bytes turns away answers a program should get"
+        );
+        assert_eq!(
+            read_with(LIMIT, megabyte)
+                .expect("a megabyte is ordinary")
+                .len(),
+            megabyte
+        );
+    }
+
+    /// Reads `bytes` from a loopback server, refusing past `limit`.
+    fn read_with(limit: usize, bytes: usize) -> Result<Vec<u8>, String> {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = listener.local_addr().expect("a bound address").port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.write_all(&vec![b'x'; bytes]);
+            }
+        });
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("a connection");
+        read_all(&mut stream, "test", limit)
     }
 }

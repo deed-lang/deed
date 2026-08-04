@@ -33,7 +33,11 @@ use std::collections::BTreeSet;
 /// Ordered and deduplicated so that two capabilities granted the same hosts in
 /// different orders compare equal, which is what makes a narrowed `Net`
 /// comparable to the one it came from.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// No `Default`. An empty one is spelled [`Reach::none`], and a capability
+/// that reaches nothing is worth saying out loud at the place it is made
+/// rather than falling out of a derive.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reach {
     hosts: BTreeSet<String>,
 }
@@ -41,7 +45,9 @@ pub struct Reach {
 impl Reach {
     /// A capability that reaches nothing. The default a run starts from.
     pub fn none() -> Self {
-        Reach::default()
+        Reach {
+            hosts: BTreeSet::new(),
+        }
     }
 
     /// A capability reaching exactly `hosts`.
@@ -61,16 +67,6 @@ impl Reach {
                 .filter(|host| !host.is_empty())
                 .collect(),
         }
-    }
-
-    /// Whether this reaches nothing at all.
-    pub fn is_empty(&self) -> bool {
-        self.hosts.is_empty()
-    }
-
-    /// The hosts, in order, for a message that has to name them.
-    pub fn hosts(&self) -> impl Iterator<Item = &str> {
-        self.hosts.iter().map(String::as_str)
     }
 
     /// Whether `authority` (a host, or a host and port) is reachable.
@@ -166,12 +162,12 @@ fn parts(url: &str) -> Result<(String, &str, String), Refused> {
     let Some((scheme, rest)) = url.split_once("://") else {
         return Err(Refused::NotAUrl);
     };
+    // Only emptiness is checked. Whatever else is in front of the `://` is a
+    // scheme this does not speak, and [`Refused::NotHttp`] names it, which is
+    // a better answer than deciding it was not a URL on the strength of a
+    // character.
     let scheme = scheme.to_ascii_lowercase();
-    if scheme.is_empty()
-        || !scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '+')
-    {
+    if scheme.is_empty() {
         return Err(Refused::NotAUrl);
     }
 
@@ -233,20 +229,18 @@ pub fn narrow(reach: &Reach, host: &str) -> Result<Reach, Refused> {
         format!("{name}:{port}")
     };
 
-    // Reachable either because the exact authority was granted, or because a
-    // bare host was granted and this narrows it to one port. Both directions
-    // only ever remove.
-    let kept: BTreeSet<String> = reach
-        .hosts
-        .iter()
-        .filter(|granted| **granted == asked || (port != 0 && **granted == name))
-        .map(|_| asked.clone())
-        .collect();
-
-    if kept.is_empty() {
+    // Admitted either because the exact authority was granted, or because a
+    // bare host was granted and this narrows it to one of its ports. Both
+    // directions only ever remove: there is no spelling of this that admits an
+    // authority no grant covers.
+    let admitted = reach.hosts.contains(&asked) || (port != 0 && reach.hosts.contains(&name));
+    if !admitted {
         return Err(Refused::NotGranted(asked));
     }
-    Ok(Reach { hosts: kept })
+
+    Ok(Reach {
+        hosts: BTreeSet::from([asked]),
+    })
 }
 
 /// Splits `host:port`, defaulting the port when there is none.
@@ -286,7 +280,6 @@ mod tests {
 
     #[test]
     fn a_new_capability_reaches_nothing() {
-        assert!(Reach::none().is_empty());
         assert_eq!(
             resolve(&Reach::none(), "http://example.com/x"),
             Err(Refused::NotGranted("example.com".to_string()))
@@ -379,12 +372,43 @@ mod tests {
         );
     }
 
+    /// The `https` sentence is about `https`. Every other scheme gets the
+    /// short answer, and handing them the paragraph about TLS would send a
+    /// reader who wrote `ftp` looking for a certificate.
+    #[test]
+    fn only_https_gets_the_sentence_about_tls() {
+        let ftp = Refused::NotHttp("ftp".to_string()).message("ftp://example.com/x");
+        assert!(!ftp.contains("TLS"), "{ftp}");
+        assert!(ftp.contains("a `Net` speaks `http`"), "{ftp}");
+
+        let https = Refused::NotHttp("https".to_string()).message("https://example.com/x");
+        assert!(https.contains("TLS"), "{https}");
+    }
+
     #[test]
     fn something_that_is_not_a_url_is_refused_as_one() {
         let reach = granting(&["example.com"]);
         assert_eq!(resolve(&reach, ""), Err(Refused::Empty));
         assert_eq!(resolve(&reach, "example.com/x"), Err(Refused::NotAUrl));
         assert_eq!(resolve(&reach, "http:///x"), Err(Refused::NotAUrl));
+    }
+
+    /// Nothing in front of the `://` is not a scheme this does not speak, it
+    /// is not a URL. The two answers are different sentences and the reader
+    /// needs the second one.
+    #[test]
+    fn a_url_with_no_scheme_is_not_a_scheme_nobody_speaks() {
+        let reach = granting(&["example.com"]);
+        assert_eq!(resolve(&reach, "://example.com/x"), Err(Refused::NotAUrl));
+    }
+
+    /// An empty host is refused by the same rule that refuses a missing one,
+    /// rather than resolving to a port on nothing.
+    #[test]
+    fn a_url_with_a_port_and_no_host_is_refused() {
+        let reach = granting(&["example.com"]);
+        assert_eq!(resolve(&reach, "http://:80/x"), Err(Refused::NotAUrl));
+        assert_eq!(narrow(&reach, ":80"), Err(Refused::NotAUrl));
     }
 
     /// A URL carrying a credential is refused rather than stripped, because a
@@ -470,6 +494,22 @@ mod tests {
         assert_eq!(
             narrow(&reach, "example.com"),
             Err(Refused::NotGranted("example.com".to_string()))
+        );
+    }
+
+    /// Naming a port does not by itself make a host reachable. Getting this
+    /// wrong turns narrowing into a way of minting one, which is the failure
+    /// the whole allowlist exists to prevent, and it is one operator away.
+    #[test]
+    fn asking_for_a_port_on_a_host_nobody_granted_is_still_refused() {
+        let reach = granting(&["a.example"]);
+        assert_eq!(
+            narrow(&reach, "b.example:8080"),
+            Err(Refused::NotGranted("b.example:8080".to_string()))
+        );
+        assert_eq!(
+            narrow(&Reach::none(), "a.example:80"),
+            Err(Refused::NotGranted("a.example:80".to_string()))
         );
     }
 
