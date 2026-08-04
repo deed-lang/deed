@@ -42,9 +42,19 @@ jobs:
         run: cargo test --doc --workspace
 
   mutants:
-    name: mutants on the diff
+    name: mutants on the diff, shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    # A mutant costs a build and a test run, so the wall clock is the count
+    # times about twenty seconds and a change to a compiler pass takes a
+    # quarter of an hour to hear back from. Nothing about that is parallel
+    # within one runner, so it is four of them. `fail-fast` is off because a
+    # surviving mutant in one shard is not a reason to stop hearing about the
+    # others: the list of what escaped is the whole output of this job.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,8 +89,14 @@ jobs:
             exit 1
           fi
 
+      # Round robin rather than consecutive ranges, because mutants arrive
+      # grouped by file and the ones that will not compile arrive in clumps.
+      # A slice can be a shard of those and finish in a minute while another
+      # runs the whole time.
       - name: cargo mutants
-        run: cargo mutants --in-diff pr.diff --no-shuffle
+        run: >
+          cargo mutants --in-diff pr.diff --no-shuffle
+          --shard ${{ matrix.shard }}/4 --sharding round-robin
 
       # How many it tested, which is worth reading and is not worth failing
       # over. A pull request that only adds tests changes Rust files and has
@@ -100,7 +116,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mutants
+          name: mutants-${{ matrix.shard }}
           path: mutants.out
 
   wasm-size:
