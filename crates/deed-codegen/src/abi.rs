@@ -904,6 +904,7 @@ mod tests {
     fn record_layout(name: &str, fields: Vec<(&str, Ty)>) -> Layout {
         Layout {
             name: name.to_string(),
+            choice: false,
             variants: vec![Variant {
                 name: name.to_string(),
                 fields: fields
@@ -920,6 +921,7 @@ mod tests {
     fn choice_layout(name: &str, variants: Vec<(&str, Vec<(&str, Ty)>)>) -> Layout {
         Layout {
             name: name.to_string(),
+            choice: true,
             variants: variants
                 .into_iter()
                 .map(|(vname, fields)| Variant {

@@ -774,6 +774,94 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 7,
         },
+        // A hash is an `Int` a program can print and assert on, so the two
+        // engines agreeing about it is not a nicety. These carry the exact
+        // number in both places for the reason the file header gives, and it
+        // is the whole compatibility surface of the algorithm: changing it is
+        // meant to break these.
+        Agreed {
+            name: "the hash of a number",
+            source: "module a\n\nfn answer() -> Int { hash(0) }\n\ntest \"a number folds to a number\" {\n    assert answer() == -5808590958014384161\n}\n",
+            call: "answer",
+            expect: -5808590958014384161,
+        },
+        Agreed {
+            name: "the hash of a string",
+            source: "module a\n\nfn answer() -> Int { hash(\"abc\") }\n\ntest \"a string folds its length then its bytes\" {\n    assert answer() == 3753867429526904406\n}\n",
+            call: "answer",
+            expect: 3753867429526904406,
+        },
+        Agreed {
+            name: "the hash of a list",
+            source: "module a\n\nfn answer() -> Int { hash([1, 2]) }\n\ntest \"a list folds its length then its elements\" {\n    assert answer() == -1541176547504009910\n}\n",
+            call: "answer",
+            expect: -1541176547504009910,
+        },
+        // The one that found a real disagreement: the backend absorbed the
+        // record's name and the interpreter had no name to absorb, because a
+        // record there is bare fields.
+        Agreed {
+            name: "the hash of a record",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nfn answer() -> Int { hash(Point { x: 1, y: 2 }) }\n\ntest \"a record folds its fields by name\" {\n    assert answer() == -663802745891465335\n}\n",
+            call: "answer",
+            expect: -663802745891465335,
+        },
+        // A choice does carry its variant's name, on both sides, because the
+        // interpreter holds one and equality tells two variants apart.
+        Agreed {
+            name: "the hash of a variant",
+            source: "module a\n\nchoice Tone {\n    Plain { n: Int },\n    Loud { n: Int },\n}\n\nfn answer() -> Int {\n    if hash(Plain { n: 1 }) == hash(Loud { n: 1 }) {\n        0\n    } else {\n        1\n    }\n}\n\ntest \"two variants holding the same field are not the same value\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // Field order is not part of a record, so it cannot be part of its
+        // hash. The interpreter walks a `BTreeMap` and the backend sorts the
+        // layout, which is the only order the two can agree on.
+        Agreed {
+            name: "a record built in either order",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nfn answer() -> Int {\n    if hash(Point { x: 1, y: 2 }) == hash(Point { y: 2, x: 1 }) {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"two ways of writing one record\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
+        // A shape holding another shape, which is where the fold stops being
+        // one function and starts being a call to the right one. Everything
+        // above holds only words, so all of them pass with the lookup broken.
+        Agreed {
+            name: "the hash of a list of lists",
+            source: "module a\n\nfn answer() -> Int { hash([[1], [2]]) }\n\ntest \"an element that is itself walked\" {\n    assert answer() == 7405462763612019104\n}\n",
+            call: "answer",
+            expect: 7405462763612019104,
+        },
+        Agreed {
+            name: "the hash of a record holding records",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nrecord Line { from: Point, to: Point }\n\nfn answer() -> Int {\n    hash(Line { from: Point { x: 1, y: 2 }, to: Point { x: 3, y: 4 } })\n}\n\ntest \"a field that is itself walked\" {\n    assert answer() == -3575623372190819330\n}\n",
+            call: "answer",
+            expect: -3575623372190819330,
+        },
+        // Two fields of different kinds, so the arm that picks the text helper
+        // and the arm that picks a shape's fold are both taken in one walk.
+        Agreed {
+            name: "the hash of a record holding text and a record",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nrecord Named { label: String, at: Point }\n\nfn answer() -> Int {\n    hash(Named { label: \"a\", at: Point { x: 1, y: 2 } })\n}\n\ntest \"a string beside a shape\" {\n    assert answer() == -4398552744554337326\n}\n",
+            call: "answer",
+            expect: -4398552744554337326,
+        },
+        Agreed {
+            name: "the hash of a list of records",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nfn answer() -> Int { hash([Point { x: 1, y: 2 }]) }\n\ntest \"an element that is a shape\" {\n    assert answer() == 2014630111992714994\n}\n",
+            call: "answer",
+            expect: 2014630111992714994,
+        },
+        // Comparing and hashing the same shape, which is the only way the
+        // number a fold is emitted at depends on how many comparisons there
+        // are. A program that only hashes has none, so the two are numbered
+        // from the same place and getting the arithmetic wrong is invisible.
+        Agreed {
+            name: "a shape that is both compared and hashed",
+            source: "module a\n\nrecord Point { x: Int, y: Int }\n\nfn answer() -> Int {\n    let one = Point { x: 1, y: 2 }\n    let other = Point { x: 1, y: 2 }\n    if one == other {\n        hash(one)\n    } else {\n        0\n    }\n}\n\ntest \"the fold and the comparison are different functions\" {\n    assert answer() == -663802745891465335\n}\n",
+            call: "answer",
+            expect: -663802745891465335,
+        },
     ]
 }
 

@@ -1350,8 +1350,8 @@ value > 0` has nothing else to talk about. Along with `result` in an `ensures` c
 one of only two names the language introduces implicitly, and both exist because the thing
 they name has no other way to be written down.
 
-**The prelude is twenty-three names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
-`err`, `length`, `List`, `at`, `push`, `repeat`, `split`, `join`, `trim`, `upper`, `lower`,
+**The prelude is twenty-four names and two effects:** `Int`, `String`, `Bool`, `Result`, `ok`,
+`err`, `length`, `hash`, `List`, `at`, `push`, `repeat`, `split`, `join`, `trim`, `upper`, `lower`,
 `to_string`,
 `to_int`, `System`,
 `Console`, `Clock`, `Dir`, `Net`, and the effects `Io`, with its `write`, `now`, `epoch`, `open`,
@@ -1360,6 +1360,14 @@ is imported. Each prelude entry is a name that
 cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
 is short on purpose. The five capability types are there because a capability that could be
 imported would not be a capability.
+
+**`hash` is there because it is one of the few things this language cannot say about
+itself.** Taking a value of any shape apart needs reflection or a trait to dispatch on and
+there is neither, so it cannot be written in `std`. It is the equality walk with a different
+accumulator: whatever `==` compares, `hash` absorbs, in the same order, which is why
+`a == b` implies `hash(a) == hash(b)`. It refuses the two things equality answers by
+identity rather than by content, a function value and a capability, with `DEED4032`. See
+`design/decisions/2026-08-05-a-hash-is-the-equality-walk.md`.
 **A module is named by its own `module` line, not by where it sits on disk.** `use
 payments/ledger` is answered by looking for the file that says `module payments/ledger`
 among the files handed to the compiler. The unit of compilation is that set of files, so

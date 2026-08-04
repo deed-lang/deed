@@ -305,7 +305,7 @@ impl<'m> Checker<'m> {
                 self.pop_expect(ValType::I32)?;
                 self.push(ValType::I32);
             }
-            Ins::I64Add | Ins::I64Sub | Ins::I64Mul | Ins::I64DivS | Ins::I64RemS => {
+            Ins::I64Add | Ins::I64Sub | Ins::I64Mul | Ins::I64Xor | Ins::I64DivS | Ins::I64RemS => {
                 self.pop_expect(ValType::I64)?;
                 self.pop_expect(ValType::I64)?;
                 self.push(ValType::I64);

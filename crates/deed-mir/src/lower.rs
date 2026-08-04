@@ -193,9 +193,9 @@ fn tables<'a>(
     }
 
     for item in &module.items {
-        let (name, generics) = match item {
-            Item::Record(record) => (record.name.name.to_string(), &record.generics),
-            Item::Choice(choice) => (choice.name.name.to_string(), &choice.generics),
+        let (name, generics, choice) = match item {
+            Item::Record(record) => (record.name.name.to_string(), &record.generics, false),
+            Item::Choice(choice) => (choice.name.name.to_string(), &choice.generics, true),
             _ => continue,
         };
         if !generics.is_empty() {
@@ -204,6 +204,7 @@ fn tables<'a>(
         let id = program.add_layout(crate::Layout {
             name: name.clone(),
             variants: Vec::new(),
+            choice,
         });
         layouts.insert(name, id);
     }
@@ -780,6 +781,7 @@ fn result_layout(shapes: &mut Vec<crate::Layout>, ok: Ty, err: Ty) -> crate::Lay
     shapes.push(crate::Layout {
         name,
         variants: vec![variant("ok", ok), variant("err", err)],
+        choice: true,
     });
     crate::LayoutId(shapes.len() - 1)
 }
@@ -828,6 +830,7 @@ fn instantiate_nominal(
     shapes.push(crate::Layout {
         name: instantiated.clone(),
         variants: Vec::new(),
+        choice: matches!(nominal, Nominal::Choice(_)),
     });
 
     let variants = match nominal {
@@ -2479,6 +2482,20 @@ impl Lowering<'_> {
                             });
                         }
 
+                        // Which walk answers this depends on what was hashed,
+                        // the same way `==` does, so it carries its type
+                        // rather than naming one runtime function.
+                        if name.name == "hash" {
+                            let value = lowered
+                                .into_iter()
+                                .next()
+                                .ok_or_else(|| unlowered("`hash` with nothing", name.span))?;
+                            return Ok(Expr::Hashed {
+                                value: Box::new(value),
+                                ty: Box::new(subject),
+                            });
+                        }
+
                         let which = match (name.name.as_str(), &subject) {
                             ("length", Ty::Str) => crate::runtime::STR_LEN,
                             ("length", Ty::List(_)) => crate::runtime::LIST_LEN,
@@ -2830,6 +2847,7 @@ impl Lowering<'_> {
         let shape = crate::LayoutId(self.shapes.len());
         self.shapes.push(crate::Layout {
             name: format!("state of {name}"),
+            choice: false,
             variants: vec![crate::Variant {
                 name: "state".to_string(),
                 fields: held,
@@ -2973,6 +2991,7 @@ impl Lowering<'_> {
         let shape = crate::LayoutId(self.shapes.len());
         self.shapes.push(crate::Layout {
             name: format!("closure at {}", span.start),
+            choice: false,
             variants: vec![crate::Variant {
                 name: "closure".to_string(),
                 fields,
@@ -3683,6 +3702,7 @@ impl Lowering<'_> {
         let shape = crate::LayoutId(self.shapes.len());
         self.shapes.push(crate::Layout {
             name: format!("value of `{name}`"),
+            choice: false,
             variants: vec![crate::Variant {
                 name: "closure".to_string(),
                 fields: vec![crate::Field {

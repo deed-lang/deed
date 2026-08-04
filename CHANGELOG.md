@@ -16,6 +16,17 @@ release notes.
 
 ### Language
 
+- `hash(value) -> Int` is a prelude function. Structural, with no trait bound,
+  which is what #617 decided. It is the equality walk with a different
+  accumulator: whatever `==` compares, `hash` absorbs, in the same order, which
+  is why `a == b` implies `hash(a) == hash(b)` by construction rather than by
+  care. One algorithm, written down once in `deed_rt::hashing` and read by both
+  engines, because a hash is an `Int` a program can assert on and two engines
+  computing it differently would be two engines disagreeing about what a
+  program means. It refuses a function value and a capability with `DEED4032`:
+  both are equal to another when they are the same one, so there is nothing to
+  read. Not cryptographic and not seeded, with the reasons in
+  `design/decisions/2026-08-05-a-hash-is-the-equality-walk.md`.
 - `<` can be bound to a function, and one binding answers all four comparisons:
   `a > b` is `b < a`, and `a <= b` is not `b < a`. Binding four separately would
   let them disagree about the same two values with nothing to say so. An order

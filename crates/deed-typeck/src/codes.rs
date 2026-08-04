@@ -217,3 +217,20 @@ pub const CLOSURE_OVER_STATE: &str = "DEED4030";
 /// named is not the shape an operator is. See
 /// `design/decisions/2026-08-03-operators-bound-to-functions.md`.
 pub const OPERATOR_SHAPE: &str = "DEED4031";
+
+/// `hash` given something with no parts to read.
+///
+/// A hash here is the equality walk with a different accumulator, so what it
+/// takes is what `==` takes, minus the two things equality answers by
+/// identity rather than by content.
+///
+/// A function value is one: two closures are equal when they are the same
+/// closure rather than when they hold the same thing, so the only thing to
+/// hash would be an address, and an address is not stable across runs or
+/// across engines. A capability is the other, and it holds nothing a program
+/// is allowed to look at, which is what makes being handed one mean anything.
+///
+/// Refused here rather than by the backend, because nothing is going to make
+/// either work later. See
+/// `design/decisions/2026-08-05-a-hash-is-the-equality-walk.md`.
+pub const NOT_HASHABLE: &str = "DEED4032";

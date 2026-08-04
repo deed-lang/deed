@@ -15,6 +15,7 @@
 pub mod abi;
 pub mod compile;
 mod equality;
+mod hashing;
 pub mod layout;
 pub mod run;
 mod runtime;

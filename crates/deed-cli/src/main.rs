@@ -2016,6 +2016,7 @@ mod component_tests {
     fn record(name: &str, fields: Vec<(&str, Ty)>) -> Layout {
         Layout {
             name: name.to_string(),
+            choice: false,
             variants: vec![Variant {
                 name: name.to_string(),
                 fields: fields
@@ -2046,6 +2047,7 @@ mod component_tests {
         let inner = program.add_layout(record("Inner_Record", vec![("flag_value", Ty::Bool)]));
         let outcome = program.add_layout(Layout {
             name: "Outcome_Type".to_string(),
+            choice: false,
             variants: vec![
                 Variant {
                     name: "None".to_string(),
@@ -2129,6 +2131,7 @@ mod component_tests {
         let mut program = Program::new();
         let only = program.add_layout(Layout {
             name: "Solo_Choice".to_string(),
+            choice: false,
             variants: vec![Variant {
                 name: "Only".to_string(),
                 fields: vec![Field {
