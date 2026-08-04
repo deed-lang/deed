@@ -308,8 +308,10 @@ And the keyed structure that stops growing. `std/hashmap` has `buckets`, `empty`
 `entries`, `keys`, `values` and `range`. It is a list of buckets and each bucket is a `std/table`, so a lookup
 hashes the key, indexes straight to one bucket and walks only that. Measured against
 `std/table` building a map and reading it back, the table quadruples as the keys double and
-the map does not move; at a thousand keys the map's work is smaller than the process
-starting. What made it writable was `hash`, which is in the prelude because taking a value of
+this roughly doubles, so the two cross at around seven hundred keys and below that the table
+is faster: sixty-four buckets is a worse constant than walking a list shorter than
+sixty-four. It is not a better table, it is the one that keeps working when a table stops.
+What made it writable was `hash`, which is in the prelude because taking a value of
 any shape apart is one of the few things this language cannot say about itself.
 
 Exact fractions are there too, and they are a library rather than a number type on purpose.

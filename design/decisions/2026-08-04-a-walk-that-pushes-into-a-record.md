@@ -31,15 +31,15 @@ and every turn copies both lists. Measured, with the list being walked subtracte
 walk of this shape over 256 elements allocated 267304 bytes for an answer worth about two
 thousand, and 1024 did not run.
 
-The three walks in the shipped library that carry a record are `partition`, `unzip` and
+The four walks in the shipped library that carry a record are `partition`, `unzip`, `std/hashmap`'s `range` and
 `scan`, which is to say both sides of a filter, the inverse of `zip`, and every partial
 fold. None of them could be used on a keyed structure of a few hundred entries.
 
 Measured, in `crates/deed-driver/tests/walks.rs`:
 
 ```
-walks that carry a record with a field built in place    3
-fields those walks build in place                        5
+walks that carry a record with a field built in place    4
+fields those walks build in place                        6
 ```
 
 ## Decision
