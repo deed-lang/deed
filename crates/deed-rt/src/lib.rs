@@ -22,14 +22,23 @@
 //! never reaches it: a component asks its host for `deed:io.fetch` and the
 //! host answers, the same way it answers `deed:io.read`.
 //!
+//! [`hashing`] is here for a third version of the same argument. There are two
+//! implementations of the hash walk and there have to be, because one reads a
+//! `Value` and the other reads linear memory. What cannot be written twice is
+//! the arithmetic: a hash is an `Int` a program can assert on, so two engines
+//! computing it differently is two engines disagreeing about what a program
+//! means. The constants live here and both read them.
+//!
 //! Nothing else has moved. List and string helpers are still emitted inline
 //! by the backend, and putting them here would be duplication until
 //! something outside a module calls them.
 
+pub mod hashing;
 pub mod http;
 pub mod reach;
 pub mod sandbox;
 
+pub use hashing::Hash;
 pub use http::{Response, request};
 pub use reach::{Reach, Target};
 pub use sandbox::{Refused, resolve, resolve_new, root};

@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 deed-diagnostics = { path = "../deed-diagnostics" }
 deed-mir = { path = "../deed-mir" }
+deed-rt = { path = "../deed-rt" }
 
 [lints]
 workspace = true

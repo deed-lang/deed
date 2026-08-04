@@ -32,6 +32,7 @@ use deed_ast::{
 };
 use deed_diagnostics::{ByNumber, Diagnostic, FileId, Span};
 use deed_resolve::{DefId, DefKind, ExportKind, Resolutions};
+use deed_rt::Hash;
 use deed_rt::reach::{self, Reach};
 
 use crate::codes;
@@ -419,6 +420,74 @@ fn is_contract_failure(diagnostic: &Diagnostic) -> bool {
 /// Whether a runtime variant is the one a pattern named.
 fn variant_is(variant: &VariantValue, id: &(Rc<str>, String)) -> bool {
     variant.origin == id.0 && variant.name == id.1
+}
+
+/// What a value is made of, folded into one number.
+///
+/// The same walk `==` does, in the same order, which is the whole of why
+/// `a == b` implies `hash(a) == hash(b)`. Anywhere equality reads a word, this
+/// absorbs one; anywhere equality compares a length or a tag first, this
+/// absorbs it first. Without the length `[[1], [2]]` and `[[1, 2]]` would
+/// agree, and without the tag two variants holding the same fields would.
+///
+/// `None` for a value with nothing to read, which is a closure, a function or
+/// a capability. `DEED4032` refuses those before a program runs, so reaching
+/// here means the checker was not asked.
+fn hash_of(value: &Value) -> Option<i64> {
+    let mut hash = Hash::new();
+    absorb(&mut hash, value)?;
+    Some(hash.done())
+}
+
+fn absorb(hash: &mut Hash, value: &Value) -> Option<()> {
+    match value {
+        Value::Unit => hash.word(0),
+        Value::Int(number) => hash.word(*number),
+        Value::Bool(yes) => hash.word(i64::from(*yes)),
+        Value::Str(text) => {
+            // The length first, so `["a", "bc"]` and `["ab", "c"]` differ by
+            // more than the order their bytes arrive in.
+            hash.word(text.chars().count() as i64);
+            hash.text(text);
+        }
+        Value::List(elements) => {
+            hash.word(elements.len() as i64);
+            for element in elements.iter() {
+                absorb(hash, element)?;
+            }
+        }
+        Value::Record(fields) => {
+            // Ordered by name, which is what `Fields` being a `BTreeMap` is
+            // for: two records built in different orders are equal, so they
+            // have to hash alike.
+            hash.word(fields.len() as i64);
+            for (name, held) in fields.iter() {
+                hash.text(name);
+                absorb(hash, held)?;
+            }
+        }
+        Value::Variant(variant) => {
+            // The variant's name and not the module that declared it, because
+            // the compiled backend has a layout and no module path, and the
+            // two engines have to agree. Two same-named variants from two
+            // modules therefore hash alike and compare unequal, which is a
+            // collision and not a mistake: equality decides, a hash only has
+            // to agree with it in one direction.
+            hash.text(&variant.name);
+            hash.word(variant.fields.len() as i64);
+            for (name, held) in variant.fields.iter() {
+                hash.text(name);
+                absorb(hash, held)?;
+            }
+        }
+        Value::Result { ok, value } => {
+            hash.word(i64::from(*ok));
+            absorb(hash, value)?;
+        }
+        // Nothing to read. `DEED4032` refuses both before a program runs.
+        Value::Capability(_) | Value::Closure(_) | Value::Function { .. } => return None,
+    }
+    Some(())
 }
 
 /// How a unary operator was written.
@@ -1842,6 +1911,11 @@ impl<'a> Interp<'a> {
                     ("length", Some(Value::List(elements))) => {
                         Ok(Value::Int(elements.len() as i64))
                     }
+                    // What a value is made of, in the order `==` reads it.
+                    ("hash", Some(value)) => match hash_of(&value) {
+                        Some(hash) => Ok(Value::Int(hash)),
+                        None => Err(self.not_runnable(callee.span(), "hashing this")),
+                    },
                     // An index nobody promised is there. Nothing in this
                     // language stops a program, so it comes back as an error
                     // value and the caller has to say what to do about it.

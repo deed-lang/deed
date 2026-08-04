@@ -36,6 +36,7 @@ version = "0.2.4"
 dependencies = [
  "deed-diagnostics",
  "deed-mir",
+ "deed-rt",
 ]
 
 [[package]]

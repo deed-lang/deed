@@ -111,6 +111,15 @@ pub struct Layout {
     pub name: String,
     /// One entry per variant. A record has exactly one.
     pub variants: Vec<Variant>,
+    /// Whether a `choice` declared this rather than a `record`.
+    ///
+    /// Not the same question as [`Layout::is_tagged`], which is about whether
+    /// there is more than one variant to tell apart. A one-variant choice has
+    /// nothing to tell apart and is still a choice, and the difference shows
+    /// in the interpreter: it holds a variant with a name, where a record is
+    /// bare fields. Hashing has to absorb the same thing on both sides, so
+    /// this is the flag that says which.
+    pub choice: bool,
 }
 
 impl Layout {
@@ -404,6 +413,16 @@ pub enum Expr {
     },
     /// Statements, then a value.
     Block(Box<Block>),
+    /// What a value is made of, folded into one number.
+    ///
+    /// Its own shape rather than a [`Expr::Runtime`] call, for the reason
+    /// `==` is: which code answers it depends on what was hashed, and a
+    /// runtime name is one function. The type is carried because the walk is
+    /// chosen from it.
+    Hashed {
+        value: Box<Expr>,
+        ty: Box<Ty>,
+    },
     /// A call into the runtime support library.
     ///
     /// The names are a closed set that [`runtime`] publishes. A backend does
@@ -641,6 +660,7 @@ mod tests {
         Layout {
             name: name.to_string(),
             variants: Vec::new(),
+            choice: false,
         }
     }
 
@@ -686,6 +706,7 @@ mod tests {
             !Layout {
                 name: "Pair".to_string(),
                 variants: vec![variant("Pair")],
+                choice: false,
             }
             .is_tagged()
         );
@@ -693,9 +714,33 @@ mod tests {
             Layout {
                 name: "Tone".to_string(),
                 variants: vec![variant("Plain"), variant("Loud")],
+                choice: true,
             }
             .is_tagged()
         );
+    }
+
+    /// Being a choice is not the same question as carrying a tag, and the
+    /// case that separates them is a `choice` with one variant: nothing to
+    /// tell apart, and still a variant with a name where a record has none.
+    ///
+    /// Held because hashing reads this rather than `is_tagged`, and reading
+    /// the wrong one would make the compiled backend absorb a name the
+    /// interpreter never sees. That is not a compile error and not a trap; it
+    /// is two engines quietly disagreeing about what a value is.
+    #[test]
+    fn a_choice_with_one_variant_is_still_a_choice() {
+        let one = Layout {
+            name: "Only".to_string(),
+            variants: vec![Variant {
+                name: "Just".to_string(),
+                fields: Vec::new(),
+            }],
+            choice: true,
+        };
+
+        assert!(!one.is_tagged());
+        assert!(one.choice);
     }
 
     /// What lives in memory and what fits in a slot.

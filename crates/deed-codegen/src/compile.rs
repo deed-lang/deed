@@ -146,7 +146,8 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
     // declares so that adding one moves nothing. Worked out before any body
     // is compiled, because a body calls one by index.
     let shapes = compared(program);
-    let helpers = helpers_used(program, &shapes);
+    let folded = hashed(program);
+    let helpers = helpers_used(program, &shapes, &folded);
     let base = shift + program.functions.len() as u32;
     let where_helpers: HashMap<Helper, u32> = helpers
         .iter()
@@ -163,6 +164,15 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         .map(|(at, shape)| (shape.clone(), after + at as u32))
         .collect();
 
+    // And one fold per shape a program hashes, after those, for the same
+    // reason again.
+    let folds_at = after + shapes.len() as u32;
+    let where_hashes: Vec<(Ty, u32)> = folded
+        .iter()
+        .enumerate()
+        .map(|(at, shape)| (shape.clone(), folds_at + at as u32))
+        .collect();
+
     let mut strings = Strings::new();
 
     for function in &program.functions {
@@ -172,6 +182,7 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
         let mut body = Builder::new(program, function, &mut strings, interned, imported, shift);
         body.helpers = where_helpers.clone();
         body.equals = where_equals.clone();
+        body.hashes = where_hashes.clone();
         body.block(&function.body)?;
         body.instructions.push(Ins::Return);
         let func_index = shift + module.funcs.len() as u32;
@@ -222,6 +233,21 @@ pub fn compile(program: &Program) -> Result<Module, Unsupported> {
             body,
         });
         module.names.push((func_index, format!("same {shape:?}")));
+    }
+
+    for (shape, _) in &where_hashes {
+        let type_index = module.intern_type(crate::hashing::signature());
+        let at = crate::hashing::Where {
+            hashes: &where_hashes,
+            hash_text: where_helpers.get(&Helper::HashedText).copied().unwrap_or(0),
+        };
+        let (locals, body) = crate::hashing::compile(program, shape, &at);
+        let func_index = module.add_func(Func {
+            type_index,
+            locals,
+            body,
+        });
+        module.names.push((func_index, format!("hash {shape:?}")));
     }
 
     // The bump pointer starts past every literal the data section placed.
@@ -449,18 +475,57 @@ fn compared(program: &Program) -> Vec<Ty> {
     found
 }
 
+/// Every shape a program hashes, and every shape those hold.
+///
+/// The same walk [`compared`] does, over `Hashed` rather than over `==`. Two
+/// collections rather than one because a program can hash a shape it never
+/// compares, and emitting a fold for every compared shape would put functions
+/// in a module that nothing calls.
+fn hashed(program: &Program) -> Vec<Ty> {
+    let mut found: Vec<Ty> = Vec::new();
+    for function in &program.functions {
+        walk_block(&function.body, &mut |expr| {
+            let Expr::Hashed { ty, .. } = expr else {
+                return;
+            };
+            if crate::hashing::walked(ty) && !found.contains(ty) {
+                found.push((**ty).clone());
+            }
+        });
+    }
+    crate::equality::close_over(program, &mut found);
+    found
+}
+
 /// Which of the functions this backend writes the program reaches.
 ///
 /// The same question a body asks when it meets one of these shapes, asked
 /// ahead of time because the answer is an index. Asking it twice is the
 /// arrangement, and the two places agreeing is what the emitted helper being
 /// the one that gets called depends on.
-fn helpers_used(program: &Program, shapes: &[Ty]) -> Vec<Helper> {
+fn helpers_used(program: &Program, shapes: &[Ty], folded: &[Ty]) -> Vec<Helper> {
     let mut found: Vec<Helper> = Vec::new();
     // A shape holding text is compared with the text helper, and nothing in
     // the program need write `==` on two strings for that to happen.
     if crate::equality::needs_text(program, shapes) {
         found.push(Helper::SameText);
+    }
+    // The same for hashing one, and a program that hashes a bare string needs
+    // it without holding any shape at all.
+    let hashes_text = crate::equality::needs_text(program, folded)
+        || program.functions.iter().any(|function| {
+            let mut wanted = false;
+            walk_block(&function.body, &mut |expr| {
+                if let Expr::Hashed { ty, .. } = expr
+                    && **ty == Ty::Str
+                {
+                    wanted = true;
+                }
+            });
+            wanted
+        });
+    if hashes_text {
+        found.push(Helper::HashedText);
     }
     for function in &program.functions {
         walk_block(&function.body, &mut |expr| {
@@ -530,6 +595,7 @@ fn ty_in(program: &Program, function: &Function, expr: &Expr) -> Ty {
         Expr::Int(_) => Ty::Int,
         Expr::Str(_) => Ty::Str,
         Expr::Local(local) => function.local_ty(*local).clone(),
+        Expr::Hashed { .. } => Ty::Int,
         Expr::Unary { op, .. } => match op {
             UnaryOp::Not => Ty::Bool,
             UnaryOp::Negate => Ty::Int,
@@ -658,6 +724,7 @@ struct Builder<'a> {
     /// Where the comparison for each shape a program compares two of is
     /// numbered.
     equals: Vec<(Ty, u32)>,
+    hashes: Vec<(Ty, u32)>,
     /// Source spans attached to selected instructions in this function.
     sites: Vec<SiteDraft>,
 }
@@ -701,6 +768,7 @@ impl<'a> Builder<'a> {
             shift,
             helpers: HashMap::new(),
             equals: Vec::new(),
+            hashes: Vec::new(),
             sites: Vec::new(),
         }
     }
@@ -1610,6 +1678,42 @@ impl<'a> Builder<'a> {
                 });
             }
             Expr::Block(block) => self.block(block)?,
+            Expr::Hashed { value, ty } => {
+                // The fold starts from the basis and ends when the value is
+                // read. Which code reads it depends on the shape, the same way
+                // `==` does.
+                self.instructions
+                    .push(Ins::I64Const(deed_rt::hashing::BASIS as i64));
+                self.expr(value)?;
+                if matches!(**ty, Ty::Bool) {
+                    self.instructions.push(Ins::I64ExtendI32S);
+                }
+                if **ty == Ty::Str {
+                    let at = self.helper(Helper::HashedText)?;
+                    self.instructions.push(Ins::Call(at));
+                } else if crate::hashing::walked(ty) {
+                    let at = self
+                        .hashes
+                        .iter()
+                        .find(|(shape, _)| shape == &**ty)
+                        .map(|(_, at)| *at)
+                        .ok_or_else(|| self.fail("hashing a shape nothing collected"))?;
+                    self.instructions.push(Ins::Call(at));
+                } else if ty.is_boxed() {
+                    return Err(self.fail("hashing a value that lives in memory"));
+                } else {
+                    // A word, folded where it stands. A type with no
+                    // representation put nothing on the stack, so the basis is
+                    // already the answer.
+                    if val_type(ty).is_some() {
+                        self.instructions.extend([
+                            Ins::I64Xor,
+                            Ins::I64Const(deed_rt::hashing::PRIME as i64),
+                            Ins::I64Mul,
+                        ]);
+                    }
+                }
+            }
             Expr::Runtime { name, args, ret } => {
                 use deed_mir::runtime;
                 match *name {
@@ -1854,6 +1958,7 @@ mod tests {
         let mut program = Program::new();
         let held = program.add_layout(Layout {
             name: "Point".to_string(),
+            choice: false,
             variants: vec![Variant {
                 name: "Point".to_string(),
                 fields: vec![
@@ -2175,6 +2280,7 @@ mod tests {
         let mut program = Program::new();
         let shape = program.add_layout(Layout {
             name: "Pair".to_string(),
+            choice: false,
             variants: vec![Variant {
                 name: "Pair".to_string(),
                 fields: vec![Field {
@@ -2401,6 +2507,7 @@ mod tests {
         let mut program = Program::new();
         let record = program.add_layout(Layout {
             name: "Pair".to_string(),
+            choice: false,
             variants: vec![Variant {
                 name: "Pair".to_string(),
                 fields: vec![
@@ -2443,6 +2550,7 @@ mod tests {
         let mut program = Program::new();
         let inner = program.add_layout(Layout {
             name: "Inner".to_string(),
+            choice: false,
             variants: vec![Variant {
                 name: "Inner".to_string(),
                 fields: vec![Field {
@@ -2453,6 +2561,7 @@ mod tests {
         });
         let outer = program.add_layout(Layout {
             name: "Outer".to_string(),
+            choice: false,
             variants: vec![Variant {
                 name: "Outer".to_string(),
                 fields: vec![Field {

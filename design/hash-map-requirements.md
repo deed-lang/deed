@@ -101,4 +101,45 @@ That is one of the three conditions rather than all of them, and it is about the
 
 ---
 
+## Update: two of the three gaps have moved, and the third is closed
+
+This page was written before the compiled backend had been measured, and two of
+its three gaps say something that is no longer true.
+
+**Gap 1 is already satisfied.** It asked for "contiguous slots and frequent
+indexed access in tight loops" and doubted that `List` provides it. A compiled
+list is `[length][element 0][element 1]...` with every element eight bytes
+(`crates/deed-codegen/src/layout.rs`), and `at` lowers to
+`base + ELEMENTS + index * WORD` in `runtime::element_at`. That is O(1) indexed
+access into contiguous storage. The doubt was about evidence and the evidence is
+the layout; nothing needs adding.
+
+**Gap 2 is half closed.**
+`design/decisions/2026-08-04-a-walk-that-only-pushes.md` removed the quadratic
+from forty of the seventy-eight walks in the corpus, without reference counting
+and without reuse analysis, by finding a property of `for` that makes the
+sharing question unnecessary. What is left is `push` at a function boundary,
+where no bound is known.
+
+**Gap 3 is closed.** `hash` is a prelude function, structural, with no trait
+bound, as decided. See
+`design/decisions/2026-08-05-a-hash-is-the-equality-walk.md`.
+
+### Why the hash went first
+
+The order this page implies is reuse analysis, then representation, then the
+hash. That order was right when it was written and is not right now, for one
+reason the page could not have known: `std/table`'s `set` rebuilds the whole
+list through a walk when the key is already there, so **perfect memory reuse
+leaves it O(n)**. The remaining memory work stops `Table` exhausting memory. It
+does not make a keyed structure fast. What does is a hash map, and the only
+thing stopping one being written was this gap.
+
+So the measurement this page asked for and could not take — whether a keyed
+structure in Deed misses its targets after the copying is accounted for — is now
+takeable, because the program that produces it can be written. That answer
+should decide what the reuse work does next, rather than the other way round.
+
+---
+
 AI assistance disclosure: This document was drafted with AI coding assistant support and then reviewed for alignment with issues #617 and #618.

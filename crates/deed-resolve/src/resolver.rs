@@ -71,6 +71,11 @@ use crate::exports::{ExportKind, Universe};
 ///
 /// The prelude is a place names go to become unavailable to everyone else, so
 /// it stays small and every addition to it is argued for rather than assumed.
+///
+/// `hash` is the newest and the argument for it is that it is one of the few
+/// things this language cannot say about itself: taking a value of any shape
+/// apart needs reflection or a trait to dispatch on, and there is neither. See
+/// `design/decisions/2026-08-05-a-hash-is-the-equality-walk.md`.
 pub const PRELUDE: &[&str] = &[
     "Int",
     "String",
@@ -79,6 +84,7 @@ pub const PRELUDE: &[&str] = &[
     "ok",
     "err",
     "length",
+    "hash",
     "List",
     "at",
     "push",

@@ -44,6 +44,8 @@ const PAYLOAD: u32 = layout::WORD;
 const STR_SLICE: &str = "deed_rt_str_slice";
 /// Where one string sits inside another, which `split` walks with.
 const STR_FIND: &str = "deed_rt_str_find";
+/// A string taken into a running hash, which every shape holding one calls.
+const STR_HASH: &str = "deed_rt_str_hash";
 
 /// One of the functions this module writes.
 ///
@@ -85,6 +87,8 @@ pub(crate) enum Helper {
     ListRoom,
     /// The same list, one longer, written where it stands.
     ListAppended,
+    /// A string taken into a running hash.
+    HashedText,
 }
 
 impl Helper {
@@ -107,6 +111,7 @@ impl Helper {
         Helper::ListFilled,
         Helper::ListRoom,
         Helper::ListAppended,
+        Helper::HashedText,
     ];
 
     /// Which helper answers for a runtime name the IR asked for.
@@ -153,6 +158,7 @@ impl Helper {
             Helper::ListFilled => runtime::LIST_REPEAT,
             Helper::ListRoom => runtime::LIST_ROOM,
             Helper::ListAppended => runtime::LIST_APPEND,
+            Helper::HashedText => STR_HASH,
         }
     }
 
@@ -170,7 +176,8 @@ impl Helper {
             | Helper::ListElement
             | Helper::ListExtended
             | Helper::ListFilled
-            | Helper::ListAppended => two(vec![ValType::I64]),
+            | Helper::ListAppended
+            | Helper::HashedText => two(vec![ValType::I64]),
             Helper::TextSlice | Helper::TextSearch => FuncType {
                 params: vec![ValType::I64, ValType::I64, ValType::I64],
                 results: vec![ValType::I64],
@@ -218,6 +225,7 @@ impl Helper {
             Helper::ListFilled => list_filled(),
             Helper::ListRoom => list_with_room(),
             Helper::ListAppended => list_appended(),
+            Helper::HashedText => hashed_text(),
         }
     }
 }
@@ -486,6 +494,65 @@ fn str_eq() -> (Vec<ValType>, Vec<Ins>) {
     body.extend([Ins::I32Const(1), Ins::Return]);
 
     (vec![ValType::I32, ValType::I32], body)
+}
+
+/// `str_hash(hash, text) -> hash`, taking a string into a running fold.
+///
+/// The length in characters first and then the bytes, which is what
+/// `deed_rt::hashing` does on the interpreter's side. The length is in
+/// characters because that is the length this language talks about, and the
+/// bytes are the bytes because two strings are equal exactly when theirs are.
+///
+/// Reading the length rather than only the bytes is what keeps `["a", "bc"]`
+/// and `["ab", "c"]` apart, which equality also tells apart.
+fn hashed_text() -> (Vec<ValType>, Vec<Ins>) {
+    const HASH: u32 = 0;
+    const TEXT_AT: u32 = 1;
+    const H: u32 = 2;
+    const N: u32 = 3;
+    const I: u32 = 4;
+
+    // `H = (H ^ what) * PRIME`, the same step the shape folds use.
+    let absorb = |what: Vec<Ins>| {
+        let mut ins = vec![Ins::LocalGet(H)];
+        ins.extend(what);
+        ins.extend([
+            Ins::I64Xor,
+            Ins::I64Const(deed_rt::hashing::PRIME as i64),
+            Ins::I64Mul,
+            Ins::LocalSet(H),
+        ]);
+        ins
+    };
+
+    let mut body = vec![Ins::LocalGet(HASH), Ins::LocalSet(H)];
+    body.extend(absorb(vec![
+        Ins::LocalGet(TEXT_AT),
+        Ins::I32WrapI64,
+        Ins::I64Load(0),
+    ]));
+    body.extend(byte_length(TEXT_AT));
+    body.push(Ins::LocalSet(N));
+
+    let mut each = text_at(TEXT_AT, I);
+    each.push(Ins::I32Load8U(0));
+    each.push(Ins::I64ExtendI32S);
+    let each = {
+        let mut ins = vec![Ins::LocalGet(H)];
+        ins.extend(each);
+        ins.extend([
+            Ins::I64Xor,
+            Ins::I64Const(deed_rt::hashing::PRIME as i64),
+            Ins::I64Mul,
+            Ins::LocalSet(H),
+        ]);
+        ins
+    };
+
+    body.extend(count_to(I, N, each));
+    body.extend([Ins::LocalGet(H), Ins::Return]);
+
+    (vec![ValType::I64, ValType::I32, ValType::I32], body)
 }
 
 /// `str_cmp(a, b) -> Int`, negative, zero or positive.
@@ -1918,7 +1985,7 @@ fn text_number(at: &mut Where<'_>) -> (Vec<ValType>, Vec<Ins>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Helper, STR_FIND, STR_SLICE};
+    use super::{Helper, STR_FIND, STR_HASH, STR_SLICE};
 
     /// Every helper is found again by the name it carries.
     ///
@@ -1930,10 +1997,13 @@ mod tests {
     fn every_helper_is_found_again_by_the_name_it_carries() {
         for &helper in Helper::ALL {
             let name = helper.name();
-            if name == STR_SLICE || name == STR_FIND {
-                // Two the backend only ever calls itself. No prelude
-                // function lowers to either, so there is no name to look up
-                // and `named` saying so is the answer.
+            if name == STR_SLICE || name == STR_FIND || name == STR_HASH {
+                // Three the backend only ever calls itself. No prelude
+                // function lowers to any of them, so there is no name to look
+                // up and `named` saying so is the answer. `hash` is a prelude
+                // function and still does not lower to a runtime name: which
+                // code answers it depends on the shape, so it arrives as
+                // `Expr::Hashed` and the shape picks the fold.
                 assert_eq!(
                     Helper::named(name),
                     None,

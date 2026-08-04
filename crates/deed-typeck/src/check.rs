@@ -4003,7 +4003,11 @@ impl<'a> Checker<'a> {
     fn infer_prelude_call(&mut self, name: &str, args: &'a [Expr], span: Span) -> Ty {
         let types: Vec<Ty> = args.iter().map(|arg| self.infer(arg)).collect();
 
-        let wanted = if name == "length" { 1 } else { 2 };
+        let wanted = if matches!(name, "length" | "hash") {
+            1
+        } else {
+            2
+        };
         if types.len() != wanted {
             self.emit(
                 Diagnostic::error(
@@ -4028,6 +4032,34 @@ impl<'a> Checker<'a> {
         if name == "repeat" {
             self.assign(&types[1], &Ty::Int, Some(&args[1]), args[1].span(), None);
             return Ty::List(Box::new(types[0].clone()));
+        }
+
+        // A hash is the equality walk with a different accumulator, so what it
+        // takes is what `==` takes, minus the two shapes with no parts to
+        // read. A function value is equal to another when it is the same one,
+        // so the only thing to hash is an address. A capability carries
+        // nothing a program is allowed to know, which is what makes holding
+        // one mean something.
+        if name == "hash" {
+            let receiver = self.widen(&types[0]);
+            if matches!(receiver, Ty::Fn { .. }) || is_capability(&receiver) {
+                let described = self.types.describe(&types[0]);
+                self.emit(
+                    Diagnostic::error(
+                        codes::NOT_HASHABLE,
+                        self.file,
+                        args[0].span(),
+                        format!("`hash` needs a value made of parts, and this is {described}"),
+                    )
+                    .with_primary_label("nothing to read")
+                    .with_note(
+                        "a hash reads what a value is made of: two functions are equal when \
+                         they are the same function rather than when they hold the same thing, \
+                         and a capability holds nothing a program may look at",
+                    ),
+                );
+            }
+            return Ty::Int;
         }
 
         let receiver = self.widen(&types[0]);
@@ -4135,7 +4167,7 @@ impl<'a> Checker<'a> {
                     Ty::Result(Box::new(Ty::Unknown), Box::new(carried))
                 };
             }
-            if matches!(name.as_str(), "length" | "at" | "push" | "repeat") {
+            if matches!(name.as_str(), "length" | "at" | "push" | "repeat" | "hash") {
                 return self.infer_prelude_call(&name, args, span);
             }
         }

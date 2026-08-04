@@ -645,6 +645,7 @@ impl Run<'_> {
             Ins::I32Add | Ins::I64Add => Value::I64(left.wrapping_add(right)),
             Ins::I32Sub | Ins::I64Sub => Value::I64(left.wrapping_sub(right)),
             Ins::I32Mul | Ins::I64Mul => Value::I64(left.wrapping_mul(right)),
+            Ins::I64Xor => Value::I64(left ^ right),
             Ins::I64DivS => {
                 if right == 0 {
                     return Err(Trap::DivideByZero);
