@@ -28,31 +28,33 @@ about what the body does with that one name.
 Measured, in `crates/deed-driver/tests/walks.rs`, over the shipped library and the corpus:
 
 ```
-walks whose accumulator is only ever pushed onto     44
-walks of every other shape                           34
+walks whose accumulator is only ever pushed onto     40
+walks of every other shape                           38
 ```
 
-The 44 are `map`, `map_at`, `filter`, `filter_at` and everything written like them. In each
-of them the accumulator appears only as `push`'s first argument, or as the value of a
-branch handing it on untouched, which is what `filter`'s `else` does. Nothing else holds
-one, so no intermediate list is reachable from anywhere, so there is no reason for them to
-be separate lists.
+The 40 are `map`, `map_at`, `filter`, `filter_at` and everything written like them. In each
+of them the accumulator appears once on each path through the body, as `push`'s first
+argument or as the value a branch hands on untouched, which is what `filter`'s `else` does.
+Nothing else holds one, so no intermediate list is reachable from anywhere, so there is no
+reason for them to be separate lists.
 
 ## Decision
 
 A walk whose accumulator is only ever pushed onto builds one list.
 
-The rule is on the shape of the body, and all three parts of it are load-bearing:
+The rule is on the shape of the body, and it asks about one place: the value of a path
+through it, which is what the next turn is handed.
 
-- Every mention of the accumulator is the first argument of a `push`, or the value of a
-  branch, and nothing else. A mention anywhere else is a place that could keep it.
-- The value of every path through the body is the bare accumulator or a `push` straight
-  onto it, so the block that comes out of a turn is the block that went in and a turn grows
-  it by at most one.
+- The value of every path is the bare accumulator or a `push` straight onto it, so the
+  block that comes out of a turn is the block that went in and a turn grows it by at most
+  one.
+- Those are the only places the accumulator appears at all. Anywhere else is a place that
+  could keep it, or a second push in a turn the condition above never sees.
 - The list being walked bounds how many turns there are, so with the rule above the result
   is never longer than it, and the block can be reserved once at that size.
 
-The second was learned rather than designed, and it is written up below because of how.
+Both of the first two were learned rather than designed, and they are written up below
+because of how.
 
 The length is written as the walk goes, so the accumulator's length is right at every turn
 and a walk that reads it gets the answer it would have got. The slack a filter leaves is
@@ -88,6 +90,38 @@ it, that a walk growing by more than one still copies.
 Worth saying plainly: the shape test was wrong, it was wrong in the direction that corrupts
 memory, and what caught it was a ratchet nobody wrote for this. That is the argument for
 the ratchet, not for the reviewer.
+
+## What the second version got wrong
+
+The rule that shipped counted mentions of the accumulator and asked that each was a `push`
+or a branch handed on, and separately asked that every path's value grew the list by one.
+Two conditions counted over the whole body, one condition about the paths, and nothing
+tying them together. A body can satisfy all of them and still be the mistake above:
+
+```
+let ahead = push(out, item)
+let _ = length(ahead)
+push(out, item)
+```
+
+Both mentions are pushes, so the counting is satisfied, and the value of the one path is a
+push straight onto the accumulator, so the last condition is satisfied. The turn still
+grows the list by two. Compiled, a walk over eight elements reserved room for eight, wrote
+sixteen, and answered with a list of a length the interpreter never produced. The same
+gap admitted a branch handing the accumulator on somewhere the turn's value was not, which
+hands a live view of the block the walk is about to write into to whatever reads it.
+
+The two conditions are now one question asked once. Every path's value is the bare
+accumulator or one push onto it, and the number of mentions of the accumulator in the body
+is the number of paths, so there is nowhere else it appears. This rejects nothing the
+library or the corpus writes: the count over both is the same on either side of the change,
+which is what says the tightening cost nothing.
+
+`crates/deed-driver/tests/agreement.rs` carries the program, so the two engines have to
+answer it the same, and `crates/deed-mir/tests/shape.rs` carries both shapes.
+
+Both mistakes are the same mistake twice: a rule about a shape written as several
+conditions over the body rather than as one question about the value a turn hands back.
 
 ## Drawbacks (required)
 

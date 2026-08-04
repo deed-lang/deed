@@ -170,16 +170,8 @@ fn in_expr(expr: &Expr, found: &mut Vec<(String, Block)>) {
     }
 }
 
-/// Most walks that carry an accumulator are ones a single list would do.
-///
-/// This is the measurement the change rests on: `allocation.rs` says what a
-/// walk that builds a list costs, and this says how much of the library and
-/// the corpus is the walk that can be built in one. A floor and a comparison
-/// rather than a number, because the corpus grows. If the shape ever stops
-/// being the common one, the argument for answering it specifically is weaker
-/// than it was and the decision should be reread.
-#[test]
-fn most_walks_that_build_a_list_only_ever_push_onto_it() {
+/// How many walks the rule accepts, and how many are every other shape.
+fn counted() -> (usize, usize) {
     let mut appending = 0usize;
     let mut other = 0usize;
     for text in sources() {
@@ -191,11 +183,63 @@ fn most_walks_that_build_a_list_only_ever_push_onto_it() {
             }
         }
     }
+    (appending, other)
+}
+
+/// Most walks that carry an accumulator are ones a single list would do.
+///
+/// This is the measurement the change rests on: `allocation.rs` says what a
+/// walk that builds a list costs, and this says how much of the library and
+/// the corpus is the walk that can be built in one. A floor and a comparison
+/// rather than a number, because the corpus grows. If the shape ever stops
+/// being the common one, the argument for answering it specifically is weaker
+/// than it was and the decision should be reread.
+#[test]
+fn most_walks_that_build_a_list_only_ever_push_onto_it() {
+    let (appending, other) = counted();
 
     assert!(
         appending >= 30 && appending > other,
         "{appending} walks in the library and the corpus build a list by pushing onto an \
          accumulator nothing else can reach, against {other} of every other shape, so \
          answering that shape specifically buys less than it looked"
+    );
+}
+
+/// The decision record prints these two numbers, so they have to be these two.
+///
+/// The test above is a floor on purpose, and a floor is exactly what lets an
+/// exact number written down elsewhere go quietly wrong: the record shipped
+/// saying forty-four and thirty-four against a rule that answered forty and
+/// thirty-eight, and nothing was in a position to notice. A record whose
+/// measurement no longer holds is worse than one with no measurement, because
+/// the reasoning above it is read as resting on something.
+#[test]
+fn the_decision_record_prints_the_counts_this_measures() {
+    let page = root()
+        .join("design")
+        .join("decisions")
+        .join("2026-08-04-a-walk-that-only-pushes.md");
+    let text = std::fs::read_to_string(&page).expect("the decision record should be readable");
+    let printed = |marker: &str| -> usize {
+        let line = text
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with(marker))
+            .unwrap_or_else(|| panic!("the record should carry a line starting `{marker}`"));
+        line.split_whitespace()
+            .next_back()
+            .and_then(|last| last.parse().ok())
+            .unwrap_or_else(|| panic!("`{line}` should end in a number"))
+    };
+
+    let (appending, other) = counted();
+    assert_eq!(
+        (
+            printed("walks whose accumulator is only ever pushed onto"),
+            printed("walks of every other shape"),
+        ),
+        (appending, other),
+        "the decision record's counts are not the ones the rule gives today"
     );
 }

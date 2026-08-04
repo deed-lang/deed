@@ -591,6 +591,18 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 7,
         },
+        // A walk whose accumulator is only ever pushed onto builds one list
+        // rather than one a turn, and this is the shape next door to it: the
+        // turn pushes twice, once away from the value it hands back. Read as
+        // the fast shape it grows by two a turn into room reserved for one,
+        // so it wrote past the end and answered with a list of the wrong
+        // length. See `crates/deed-mir/tests/shape.rs`.
+        Agreed {
+            name: "a walk that pushes away from the value of a turn",
+            source: "module a\n\nfn answer() -> Int {\n    let built = for n at i in [1, 2, 3, 4, 5, 6, 7, 8] with out = [] {\n        let ahead = push(out, i)\n        let _ = length(ahead)\n        push(out, i)\n    }\n    length(built)\n}\n\ntest \"a push away from the tail is a push of its own\" {\n    assert answer() == 8\n}\n",
+            call: "answer",
+            expect: 8,
+        },
         // A `where` the caller satisfies. The checker proves it where the
         // call is written, so the compiled form has nothing left to check
         // and still answers the same.

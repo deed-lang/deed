@@ -28,11 +28,21 @@ release notes.
 
 ### Tools
 
-- None yet.
+- Fixed: a compiled walk that pushed onto its accumulator twice in a turn, with
+  the second push away from the value the turn hands back, was read as the
+  shape that builds one list. It grew the list by two a turn into room reserved
+  for one, so it wrote past the end and answered with a list of a length the
+  interpreter never produced. The same gap admitted a branch that kept the
+  accumulator somewhere else in the body. Both are refused now, and neither
+  shape appears in the shipped library or the corpus, so nothing that used to
+  take the fast path stopped taking it.
 
 ### Measurements
 
-- None yet.
+- The counts in `design/decisions/2026-08-04-a-walk-that-only-pushes.md` said
+  forty-four walks of the shape against thirty-four of every other. The rule
+  that shipped answered forty and thirty-eight. The record now says what the
+  rule says, and a test holds it there.
 
 ## 0.2.4 (2026-08-04)
 
