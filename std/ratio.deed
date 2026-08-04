@@ -167,6 +167,7 @@ fn multiplied(left: Ratio, right: Ratio) -> Ratio {
 // A binding rather than a definition, so each function keeps its name and can
 // still be handed to something that takes one. Division is not here: it
 // answers with a `Result`, and an operator answers with the type it was given.
+// The order is bound further down, beside the function it means.
 operator + = added
 
 operator - = subtracted
@@ -188,11 +189,18 @@ fn divided(left: Ratio, right: Ratio) -> Result<Ratio, String> {
 // Whether `left` is below `right`.
 //
 // Cross multiplication, which is exact because both denominators are positive
-// by construction. This is the comparison the language cannot give a `Ratio`
-// for free: `<` is `Int` and `String` and nothing else.
+// by construction.
 fn is_below(left: Ratio, right: Ratio) -> Bool {
     left.top * right.bottom < right.top * left.bottom
 }
+
+// The order, spelled the way an order is spelled.
+//
+// One binding rather than four. `a > b` is `b < a` and `a <= b` is not
+// `b < a`, so the other three are answered by swapping the operands or
+// negating the answer; binding them separately would let them disagree about
+// the same two ratios and nothing would say so.
+operator < = is_below
 
 // Whether `left` is above `right`, which is the same question the other way.
 fn is_above(left: Ratio, right: Ratio) -> Bool {

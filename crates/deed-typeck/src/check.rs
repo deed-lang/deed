@@ -374,10 +374,23 @@ impl<'a> Checker<'a> {
 
             let left = &signature.params[0].ty;
             let right = &signature.params[1].ty;
-            if left != right || &signature.ret != left {
+            // An order answers whether, not with what. Everything else hands
+            // back the type it was given, so that `a + b + c` reads the way it
+            // is written.
+            let answer = if decl.op == BinaryOp::Lt {
+                Ty::Bool
+            } else {
+                left.clone()
+            };
+            if left != right || signature.ret != answer {
                 let described = self.types.describe(left);
                 let other = self.types.describe(right);
                 let result = self.types.describe(&signature.ret);
+                let wanted = if decl.op == BinaryOp::Lt {
+                    "an order takes two of one type and says whether"
+                } else {
+                    "an operator takes two of one type and gives back that type"
+                };
                 self.emit(
                     Diagnostic::error(
                         codes::OPERATOR_SHAPE,
@@ -385,13 +398,15 @@ impl<'a> Checker<'a> {
                         decl.span,
                         format!(
                             "`{name}` takes {described} and {other} and gives back {result}, \
-                             and an operator takes two of one type and gives back that type"
+                             and {wanted}"
                         ),
                     )
-                    .with_primary_label("not two of one type")
-                    .with_note(
-                        "an operator hands back what it was given, so that `a + b + c` reads the way it is written",
-                    ),
+                    .with_primary_label("not the shape this operator has")
+                    .with_note(if decl.op == BinaryOp::Lt {
+                        "`<` answers a question about two values rather than combining them, so a `Bool` is what it hands back"
+                    } else {
+                        "an operator hands back what it was given, so that `a + b + c` reads the way it is written"
+                    }),
                 );
                 continue;
             }
@@ -491,7 +506,12 @@ impl<'a> Checker<'a> {
                 if params.len() != 2 || !generics.is_empty() {
                     return None;
                 }
-                if params[0] != params[1] || ret != &params[0] {
+                let answer = if op == BinaryOp::Lt {
+                    &Ty::Bool
+                } else {
+                    &params[0]
+                };
+                if params[0] != params[1] || ret != answer {
                     return None;
                 }
                 if !matches!(row, FnRow::Declared(entries) if entries.is_empty()) {
@@ -5205,7 +5225,14 @@ impl<'a> Checker<'a> {
                     // types do not match and then that the type they do not
                     // have has no ordering is two diagnostics for one mistake.
                     if self.diagnostics.len() == before {
-                        self.require_order(left, span, op);
+                        // All four ask the one binding. An order is one thing,
+                        // so `a > b` is `b < a` rather than a second thing a
+                        // module could get to disagree with the first.
+                        if let Some((_, target)) = self.bound_operator(Lt, left, right) {
+                            self.types.record_operator(span, target);
+                        } else {
+                            self.require_order(left, span, op);
+                        }
                     }
                 }
                 Ty::Bool
@@ -5267,7 +5294,12 @@ impl<'a> Checker<'a> {
             _ => return None,
         };
         let target = self.operators.get(&key)?.clone();
-        Some((left.clone(), target))
+        let answer = if op == BinaryOp::Lt {
+            Ty::Bool
+        } else {
+            left.clone()
+        };
+        Some((answer, target))
     }
 
     /// Insists that `ty` is something `<` could mean anything about.

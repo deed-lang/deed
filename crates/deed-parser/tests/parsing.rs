@@ -260,8 +260,10 @@ fn an_operator_that_cannot_be_bound_is_named() {
         ("%", "does not always have such an answer"),
         ("==", "equality is structural"),
         ("!=", "equality is structural"),
-        ("<", "ordering is a separate question"),
-        ("&&", "ordering is a separate question"),
+        (">", "an order is one thing"),
+        ("<=", "an order is one thing"),
+        (">=", "an order is one thing"),
+        ("&&", "written between two values"),
     ] {
         let source =
             format!("module a\n\noperator {spelled} = f\n\nfn f(a: Int, b: Int) -> Int {{ a }}\n");

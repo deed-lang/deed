@@ -102,7 +102,7 @@ module can do is say that one of them means a function it already wrote.
 | `+ - * / %` | `Int`, and nothing else |
 | `+ - *` | also whatever a module bound them to, on the type it bound them for |
 | `+` | also joins two `String`s |
-| `< <= > >=` | `Int` and `String`, and nothing else |
+| `< <= > >=` | `Int` and `String`, and a type whose module bound `<` |
 | `== !=` | anything, structurally |
 | `&& \|\|` | `Bool`, and they short circuit |
 
@@ -129,13 +129,24 @@ is decided in one file. Nothing generic, because the operand types are what choo
 function. And an empty row, because a contract clause can reach an operator and a clause
 that performs something is not a question about values.
 
-Three operators and no more. `/` and `%` are partial, and this language spells a partial
-answer with a `Result`, which is not a shape an operator can have without `a / b + c`
-meaning something nobody expects. `==` is structural and total over every type already, so
-there is nothing for a module to decide. Ordering is left out because it does not stop at
-notation: `<` on a user type meets `sort`, which takes a comparison today, and that is the
-question traits would answer. `design/decisions/2026-08-03-operators-bound-to-functions.md`
-has the argument.
+`<` is the fourth, and it is the one whose shape is different: it answers with a `Bool`
+rather than with the type it was given, because an order is a question about two values
+rather than a way of combining them. One binding answers all four comparisons. `a > b` is
+`b < a`, and `a <= b` is not `b < a`, so the operands are swapped and the answer negated
+rather than a module getting to bind four functions that could disagree about the same two
+values.
+
+`/` and `%` are partial, and this language spells a partial answer with a `Result`, which is
+not a shape an operator can have without `a / b + c` meaning something nobody expects. `==`
+is structural and total over every type already, so there is nothing for a module to decide.
+`<=`, `>` and `>=` are answered by the binding for `<` rather than bound themselves.
+`design/decisions/2026-08-03-operators-bound-to-functions.md` has the arithmetic argument
+and `design/decisions/2026-08-04-one-binding-for-an-order.md` has the ordering one.
+
+What a bound `<` does not do is make `sort` work over a type parameter. `<` on a type
+parameter is still refused, because the binding is for a type the module names and a
+parameter is not one; `sort` still takes a comparison, and that is still where the trait
+threshold sits. Binding an order is notation, not dispatch.
 
 There are five operators that mean two things: `+`, `<`, `<=`, `>` and `>=`. Each of them
 takes an `Int` or a `String` and nothing else, and none of them is ambiguous, for the same

@@ -1551,8 +1551,20 @@ impl<'a> Interp<'a> {
         // the checker resolved. Read rather than worked out: the values here
         // carry their fields and not the name of their type.
         if let Some((module, function)) = self.operators().get(&span).cloned() {
-            let args = vec![(left, lhs.span()), (right, rhs.span())];
-            return self.call_named(&module, &function, args, span);
+            // A comparison asks the one binding for `<`. `a > b` is `b < a`
+            // and `a <= b` is not `b < a`, so the operands are swapped and the
+            // answer negated rather than a second function being looked up.
+            let (swap, negate) = op.from_less_than().unwrap_or((false, false));
+            let args = if swap {
+                vec![(right, rhs.span()), (left, lhs.span())]
+            } else {
+                vec![(left, lhs.span()), (right, rhs.span())]
+            };
+            let answer = self.call_named(&module, &function, args, span)?;
+            return Ok(match (negate, &answer) {
+                (true, Value::Bool(held)) => Value::Bool(!held),
+                _ => answer,
+            });
         }
 
         if matches!(op, Eq | Ne) {
