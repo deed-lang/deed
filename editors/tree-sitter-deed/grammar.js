@@ -36,6 +36,7 @@ const KEYWORDS = [
   "ok",
   "err",
   "operator",
+  "from",
 ];
 
 module.exports = grammar({

@@ -298,6 +298,10 @@ fn tables<'a>(
                     .iter()
                     .map(|operation| operation.name.name.to_string())
                     .collect(),
+                interface: effect
+                    .interface
+                    .as_ref()
+                    .map(|interface| interface.name.clone()),
             });
             effects.insert(effect.name.name.to_string(), id);
             signatures.insert(effect.name.name.to_string(), effect);

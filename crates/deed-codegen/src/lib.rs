@@ -21,7 +21,7 @@ mod runtime;
 pub mod validate;
 pub mod wasm;
 
-pub use compile::{Unsupported, compile};
+pub use compile::{Unsupported, compile, escaping_operations};
 pub use run::{Host, LinkError, Linked, Outcome, Trap, Value, call, call_measured, call_within};
 pub use validate::{Invalid, validate};
 pub use wasm::Module;

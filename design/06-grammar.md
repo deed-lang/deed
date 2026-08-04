@@ -76,7 +76,7 @@ The following words are contextual: they lex as ordinary identifiers and are rea
 parser in specific positions only. A variable may still be named any of them.
 
 ```
-soft-keyword  ::=  "at"  |  "err"  |  "finally"  |  "ok"  |  "operator"  |  "refuses"  |  "state"  |  "while"
+soft-keyword  ::=  "at"  |  "err"  |  "finally"  |  "from"  |  "ok"  |  "operator"  |  "refuses"  |  "state"  |  "while"
 ```
 
 ### Integer literals
@@ -198,8 +198,9 @@ Variant payloads are named, not positional. `Circle(Int)` is not a valid variant
 #### Effect
 
 ```
-effect-decl  ::=  "effect" ident row-params? "{" fn-sig* "}"
+effect-decl  ::=  "effect" ident row-params? interface? "{" fn-sig* "}"
 row-params   ::=  "<" "uses" ident ("," "uses" ident)* ","? ">"
+interface    ::=  "from" string
 ```
 
 An effect declares operation signatures only; it has no bodies. Its row

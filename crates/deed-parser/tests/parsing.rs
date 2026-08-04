@@ -283,6 +283,70 @@ fn an_operator_that_cannot_be_bound_is_named() {
     }
 }
 
+/// An effect may say where its operations come from, and the name goes into
+/// the world a compiled component asks its host for.
+#[test]
+fn an_effect_may_name_the_interface_it_comes_from() {
+    let (_, parsed) = parse_source(
+        "module a\n\neffect Random from \"wasi:random/random\" {\n  fn roll(sides: Int) -> Int\n}\n",
+    );
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{:?}",
+        codes_of(&parsed.diagnostics)
+    );
+    let named = parsed.module.items.iter().find_map(|item| match item {
+        Item::Effect(effect) => effect.interface.as_ref().map(|i| i.name.clone()),
+        _ => None,
+    });
+    assert_eq!(named.as_deref(), Some("wasi:random/random"));
+}
+
+/// Written and left blank is not the same as left off. One says "this effect
+/// is its own interface" and the other produces an import nothing can satisfy,
+/// so the second is refused rather than read as the first.
+#[test]
+fn an_interface_name_with_nothing_in_it_is_refused() {
+    for spelled in ["\"\"", "\"   \""] {
+        let source =
+            format!("module a\n\neffect Random from {spelled} {{\n  fn roll(s: Int) -> Int\n}}\n");
+        let (_, parsed) = parse_source(&source);
+        assert!(
+            codes_of(&parsed.diagnostics).contains(&codes::EMPTY_INTERFACE),
+            "{spelled} should be refused: {:?}",
+            codes_of(&parsed.diagnostics)
+        );
+    }
+}
+
+/// The name is quoted because it carries a colon and a slash, and a reader who
+/// writes it bare is told that rather than being told a brace was expected.
+#[test]
+fn an_interface_that_is_not_quoted_says_so() {
+    let (sources, parsed) =
+        parse_source("module a\n\neffect Random from wasi {\n  fn roll(sides: Int) -> Int\n}\n");
+    let rendered: String = parsed
+        .diagnostics
+        .iter()
+        .map(|d| render_human(&sources, d))
+        .collect();
+    assert!(rendered.contains("in quotes"), "{rendered}");
+}
+
+/// `from` is a word, not a keyword. Reserving one costs every program that
+/// wanted the name, and there is exactly one place this word means anything.
+#[test]
+fn from_is_still_an_ordinary_name() {
+    let (_, parsed) = parse_source(
+        "module a\n\nfn from(n: Int) -> Int { n }\n\nfn use_it(from: Int) -> Int { from }\n",
+    );
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{:?}",
+        codes_of(&parsed.diagnostics)
+    );
+}
+
 /// A declaration that starts with a name is not an operator binding.
 ///
 /// Both halves of the shape are load-bearing. An operator token after the

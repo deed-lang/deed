@@ -269,3 +269,151 @@ fn main() -> Int\n\
         "it should say why this run in particular could not answer: {text}"
     );
 }
+
+// -- an effect nobody handles is a foreign function -------------------------
+
+const FOREIGN: &str = "module a\n\n\
+effect Random from \"wasi:random/random\" {\n\
+  fn roll(sides: Int) -> Int\n\
+}\n\n\
+fn pick(sides: Int) -> Int\n\
+  uses Random.roll,\n\
+{\n\
+    Random.roll(sides)\n\
+}\n";
+
+/// An effect the program never handles is asked of the host by name.
+///
+/// This is the whole of what interop means here, and it is worth saying why
+/// it is not the ambient authority `design/04-capabilities.md` worries about:
+/// a module cannot reach an import nobody gave it, so a foreign call is a
+/// capability the host decided to hand over rather than a hole in the
+/// boundary. What used to happen is worse than either: the module declared no
+/// import at all and trapped when the export was called. See issue #912.
+#[test]
+fn an_effect_the_program_never_handles_is_asked_of_the_host() {
+    let module = module_for(FOREIGN);
+    let asked: Vec<String> = module
+        .imports
+        .iter()
+        .map(|import| format!("{}.{}", import.module, import.name))
+        .collect();
+    assert_eq!(asked, vec!["wasi:random/random.roll".to_string()]);
+}
+
+/// A host is handed the operation's own arguments and nothing else.
+///
+/// An installed handler is given its state cell first. There is no handler
+/// here, so there is no cell, and passing one would mean the host had to
+/// know about a thing the program does not have.
+#[test]
+fn the_host_is_handed_the_operations_own_arguments() {
+    let module = module_for(FOREIGN);
+    let roll = module
+        .imports
+        .iter()
+        .find(|import| import.name == "roll")
+        .expect("roll is imported");
+    let signature = &module.types[roll.type_index as usize];
+    assert_eq!(signature.params.len(), 1, "roll takes the number of sides");
+    assert_eq!(signature.results.len(), 1, "and answers with a number");
+}
+
+/// An effect the program does handle is not asked of anybody.
+///
+/// The other half of the rule, and the one that stops the world from turning
+/// into a list of every effect a module mentions. A `with` answers, so the
+/// operation never reaches the boundary and the host is not troubled for it.
+#[test]
+fn an_effect_the_program_handles_is_not_asked_of_the_host() {
+    let module = module_for(
+        "module a\n\n\
+         effect Log {\n\
+           fn note(m: String) -> Int\n\
+         }\n\n\
+         handler Quiet implements Log {\n\
+           state seen: Int\n\n\
+           fn note(m: String) -> Int {\n\
+             seen\n\
+           }\n\
+         }\n\n\
+         fn talks(n: Int) -> Int\n\
+           uses Log.note,\n\
+         {\n\
+           n + Log.note(\"hi\")\n\
+         }\n\n\
+         fn counted(n: Int) -> Int {\n\
+           with Quiet { seen: 0 } { talks(n) }\n\
+         }\n",
+    );
+    assert!(
+        !module.imports.iter().any(|import| import.name == "note"),
+        "a handled effect should not be a host import: {:?}",
+        module.imports
+    );
+}
+
+/// Which import a performed operation calls, when there is more than one.
+///
+/// Every test above this one leaves the module with a single import, and a
+/// lookup that picks the only entry is right however it is spelled. So the
+/// three comparisons that find the import were free to be wrong: matching on
+/// the interface alone, on the operation alone, or on either, all answer the
+/// same in a module with one. Getting it wrong is not a trap, it is a call to
+/// the wrong host function, which is a silently different answer.
+///
+/// So this program declares three, and two of them share an operation name
+/// across two interfaces.
+const TWO_INTERFACES: &str = "module a\n\n\
+effect Alpha from \"one:iface\" {\n\
+  fn ask(n: Int) -> Int\n\
+  fn tell(n: Int) -> Int\n\
+}\n\n\
+effect Beta from \"two:iface\" {\n\
+  fn ask(n: Int) -> Int\n\
+}\n\n\
+fn ask_one(n: Int) -> Int\n  uses Alpha.ask,\n{\n  Alpha.ask(n)\n}\n\n\
+fn tell_one(n: Int) -> Int\n  uses Alpha.tell,\n{\n  Alpha.tell(n)\n}\n\n\
+fn ask_two(n: Int) -> Int\n  uses Beta.ask,\n{\n  Beta.ask(n)\n}\n";
+
+#[test]
+fn a_performed_operation_calls_the_import_it_named_and_not_a_neighbour() {
+    let module = module_for(TWO_INTERFACES);
+
+    let mut host = Host::new();
+    host.offer("one:iface", "ask", |_| Some(Value::I64(100)))
+        .offer("one:iface", "tell", |_| Some(Value::I64(200)))
+        .offer("two:iface", "ask", |_| Some(Value::I64(300)));
+    let linked = host.link(&module).expect("the host offers all three");
+
+    for (function, expected) in [("ask_one", 100), ("tell_one", 200), ("ask_two", 300)] {
+        let answer = linked
+            .call(function, &[Value::I64(0)])
+            .unwrap_or_else(|trap| panic!("`{function}` should reach its host: {trap:?}"))
+            .expect("it answers with a number");
+        assert_eq!(
+            answer.as_i64(),
+            expected,
+            "`{function}` reached the wrong host function"
+        );
+    }
+}
+
+/// A host that does not offer one of them refuses the module before it runs.
+///
+/// The same property `deed:io` already has, on an interface the program named
+/// itself. Whoever runs a component decides what it may reach, and deciding
+/// happens at load rather than at the first call.
+#[test]
+fn a_host_missing_one_interface_refuses_the_module() {
+    let module = module_for(TWO_INTERFACES);
+
+    let mut host = Host::new();
+    host.offer("one:iface", "ask", |_| Some(Value::I64(100)))
+        .offer("one:iface", "tell", |_| Some(Value::I64(200)));
+    let refused = host
+        .link(&module)
+        .expect_err("the host offers nothing from `two:iface`");
+    assert_eq!(refused.module, "two:iface");
+    assert_eq!(refused.name, "ask");
+}

@@ -403,14 +403,25 @@ The list is longer than I would like, and this is the least settled document her
   Measured: the deepest capability chain in the corpus is two hops (`main` takes `System`,
   hands `Dir` or `Clock` straight to one helper); nothing here nests three or more levels
   deep. The ergonomics argument has nothing to point at yet.
-- **Interop.** The moment Deed calls C or WASM, ambient authority comes back with it. A
-  foreign function can do whatever the host process can. This is currently unsolved and it
-  is the most likely place the whole model leaks.
-  Design note, no FFI exists yet to decide against: a capability-respecting boundary would
-  have to keep the same invariant a Deed-to-Deed call already gets, that receiving no
-  capability argument means no authority, so a foreign signature would need to declare which
-  capabilities cross with it and the boundary would refuse a call that isn't given one
-  explicitly. This is the bar an FFI proposal has to clear, not a decision made here.
+- **Interop, and why it turned out not to be the leak this expected.** The worry was that
+  the moment Deed calls C or WASM, ambient authority comes back with it, and a foreign
+  function can do whatever the host process can. In the component model that does not
+  follow: a component cannot communicate except through its imports, so an import is the
+  opposite of ambient authority. It is a capability the host decided to hand over, named in
+  the world, and refusable by not offering it.
+  So a foreign function here is an effect operation the module does not handle. It appears
+  in the row, the row is in the signature, and the signature is what a reviewer reads.
+  `effect Random from "wasi:random/random"` names the interface, and
+  `deed build --component` writes the import into the world and into the module. Nothing
+  new had to be invented to keep the guarantee; what was missing was that the module never
+  asked. See
+  [`design/decisions/2026-08-04-a-component-asks-for-what-it-needs.md`](decisions/2026-08-04-a-component-asks-for-what-it-needs.md).
+  What is still open is the C half. There is no FFI to a process's own address space, and
+  the bar one would have to clear is unchanged: a capability-respecting boundary would have
+  to keep the invariant a Deed-to-Deed call already gets, that receiving no capability
+  argument means no authority, so a foreign signature would need to declare which
+  capabilities cross with it and the boundary would refuse a call that is not given one
+  explicitly. That is the bar, not a decision made here.
 - **Serialization.** A capability must not be forgeable, so it cannot be a plain value that
   round-trips through a byte stream. What that means for sending work between machines is
   not worked out.

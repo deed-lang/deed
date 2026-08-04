@@ -202,8 +202,31 @@ pub struct EffectDecl {
     /// them without naming, in the library, effects only the program knows
     /// about.
     pub rows: Vec<Ident>,
+    /// `from "wasi:random/random"`, when the effect names where its
+    /// operations come from.
+    ///
+    /// An effect nothing handles reaches the program's boundary, and at that
+    /// boundary it is an import: a compiled component asks its host for it.
+    /// Without this the import can only be named `deed:<effect>`, which is a
+    /// fine default for an interface this program invented and useless for one
+    /// that already exists somewhere else. Writing it down is what lets a
+    /// program ask for an interface it did not define.
+    ///
+    /// It says nothing about whether the effect is handled. A handler
+    /// discharges it and it leaves the row, and then there is no import,
+    /// which is the same rule every other effect follows.
+    pub interface: Option<Interface>,
     /// Operation signatures. An effect has no bodies; that is the point of it.
     pub operations: Vec<FnSig>,
+    pub span: Span,
+}
+
+/// A world-level name for an effect's operations.
+#[derive(Clone, Debug)]
+pub struct Interface {
+    /// The text between the quotes, unvalidated here. What counts as a WIT
+    /// interface name is the checker's question, not the parser's.
+    pub name: String,
     pub span: Span,
 }
 

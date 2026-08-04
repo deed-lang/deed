@@ -667,8 +667,14 @@ fn generate_wit(module_name: &str, program: &deed_mir::Program) -> String {
         let _ = writeln!(out);
     }
 
-    // World block with one export per function.
+    // World block, with what the component needs before what it offers. A
+    // reader deciding whether they can run this wants the first list, and a
+    // world that only had the second said the component was self-contained
+    // when it was not.
     let _ = writeln!(out, "world component {{");
+    for (namespace, operation, _, _) in deed_codegen::escaping_operations(program) {
+        let _ = writeln!(out, "    import {namespace}.{operation};");
+    }
     for function in &program.functions {
         // Synthetic parameter names: WIT requires names, but the MIR does not
         // preserve them. `p0`, `p1`, ... are unambiguous and stable.
@@ -1985,6 +1991,76 @@ mod component_tests {
                 "}\n",
             )
         );
+    }
+
+    /// A component says what it needs before it says what it offers.
+    ///
+    /// The failure this replaces was silent: a world listing only exports
+    /// cannot be wrong, because it never claims anything, and the module it
+    /// described had no import section at all and trapped when the export was
+    /// called. See issue #912.
+    #[test]
+    fn an_effect_nothing_handles_is_an_import_in_the_world() {
+        let mut program = Program::new();
+        let effect = program.add_effect(deed_mir::Effect {
+            name: "Random".to_string(),
+            operations: vec!["roll".to_string()],
+            interface: None,
+        });
+        let mut pick = Function::new("pick", vec![Ty::Int], Ty::Int);
+        pick.body = deed_mir::Block {
+            stmts: Vec::new(),
+            value: deed_mir::Expr::Perform {
+                effect,
+                operation: 0,
+                args: vec![deed_mir::Expr::Local(deed_mir::Local(0))],
+                ret: Box::new(Ty::Int),
+            },
+        };
+        program.add_function(pick);
+
+        assert_eq!(
+            generate_wit("guess", &program),
+            concat!(
+                "package deed:guess;\n",
+                "\n",
+                "world component {\n",
+                "    import deed:random.roll;\n",
+                "    export pick: func(p0: s64) -> s64;\n",
+                "}\n",
+            )
+        );
+    }
+
+    /// The name an effect gives is the name the host is asked for, which is
+    /// the whole reason to be able to write one: an interface somebody else
+    /// defined does not live under `deed:`.
+    #[test]
+    fn the_interface_an_effect_names_is_the_one_imported() {
+        let mut program = Program::new();
+        let effect = program.add_effect(deed_mir::Effect {
+            name: "Random".to_string(),
+            operations: vec!["roll".to_string()],
+            interface: Some("wasi:random/random".to_string()),
+        });
+        let mut pick = Function::new("pick", vec![Ty::Int], Ty::Int);
+        pick.body = deed_mir::Block {
+            stmts: Vec::new(),
+            value: deed_mir::Expr::Perform {
+                effect,
+                operation: 0,
+                args: vec![deed_mir::Expr::Local(deed_mir::Local(0))],
+                ret: Box::new(Ty::Int),
+            },
+        };
+        program.add_function(pick);
+
+        let wit = generate_wit("guess", &program);
+        assert!(
+            wit.contains("    import wasi:random/random.roll;\n"),
+            "{wit}"
+        );
+        assert!(!wit.contains("deed:random"), "{wit}");
     }
 }
 
