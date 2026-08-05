@@ -314,6 +314,12 @@ sixty-four. It is not a better table, it is the one that keeps working when a ta
 What made it writable was `hash`, which is in the prelude because taking a value of
 any shape apart is one of the few things this language cannot say about itself.
 
+A set is that map with the values hidden. `std/set` has `none`, `one`, `including`, `has`, `count`, `items`, `without`, `union`, `intersection`, `difference`, `within` and `entries_of`.
+Not `with`, because that is how a handler is installed and the grammar has the word already.
+There is no `Empty` either: every constructor takes a sample of the element type, since an
+empty list takes its element type from where it is used and there is nowhere here to take
+one from, which is the shape `std/hashmap`'s own `empty` already has.
+
 Exact fractions are there too, and they are a library rather than a number type on purpose.
 `std/ratio` has `euclid_steps`, `absolute`, `greatest_common_divisor`, `simplified`, `ratio`,
 `whole`, `zero`, `is_zero`, `is_negative`, `negated`, `added`, `subtracted`, `multiplied`,
@@ -362,8 +368,8 @@ were not anywhere. `trim` stays in the prelude because it cannot be written.
 The other thing that goes here is a library that was already written and had nowhere to be.
 `std/list` and `std/table` were both under `examples/`, which made their names paths into
 this repository, so a program elsewhere could not import them and had to copy the files
-instead. Eight modules ship today,
-`std/string`, `std/list`, `std/table`, `std/map`, `std/hashmap`, `std/ratio`, `std/date` and `std/task`, and `crates/deed-driver/src/shipped.rs` is the
+instead. Nine modules ship today,
+`std/string`, `std/list`, `std/table`, `std/map`, `std/hashmap`, `std/set`, `std/ratio`, `std/date` and `std/task`, and `crates/deed-driver/src/shipped.rs` is the
 table.
 
 ## Lists
