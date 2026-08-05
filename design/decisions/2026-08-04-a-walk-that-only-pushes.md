@@ -31,7 +31,7 @@ allocates nothing:
 
 ```
 walks that build a list and only ever push onto it    47
-walks that build a list some other way                13
+walks that build a list some other way                17
 ```
 
 Those are today's numbers rather than the ones this shipped with. It said forty-five and

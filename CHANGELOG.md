@@ -54,6 +54,19 @@ release notes.
 
 ### Standard library
 
+- `std/set` is a set, written as the hash map with the values hidden. `none`,
+  `one`, `including`, `has`, `count`, `items`, `without`, `union`,
+  `intersection`, `difference`, `within` and `entries_of`. Not `with`, because
+  that is how a handler is installed and the grammar has the word already, and
+  no `Empty`, because an empty list takes its element type from where it is
+  used and there is nowhere here to take one from, so every constructor takes a
+  sample the way `std/hashmap`'s `empty` does.
+- `std/date` answers for a clock set before 1970. The only thing in the way was
+  that `/` rounds toward zero, so the millisecond before the epoch landed on
+  day zero and read as the first of January 1970; `days_since_epoch` floors
+  now. `date_of` still refuses, but only before year zero, which is where the
+  shift `civil_from_days` applies runs out rather than where the calendar
+  starts.
 - `std/ratio` binds `<` to `is_below`, so two ratios compare the way two `Int`s
   do. `is_below` and `is_above` are unchanged and still exported, because a
   comparison is what `sort` takes.

@@ -616,7 +616,7 @@ One bucket with the key in it, replacing what was there or adding it.
 ### Signature
 
 ```deed
-fn written<K, V>(entries: List<Entry<K, V>>, key: K, value: V, had: Bool)
+fn written<K, V>(bucket: List<Entry<K, V>>, key: K, value: V, had: Bool)
     -> List<Entry<K, V>>
 ```
 
