@@ -622,9 +622,40 @@ fn programs() -> Vec<Agreed> {
         // length and lies about its contents.
         Agreed {
             name: "a walk that reads one field of the record it carries",
-            source: "module a\n\nrecord Parts {\n    kept: List<Int>,\n    rest: List<Int>,\n}\n\nfn total(xs: List<Int>) -> Int {\n    for n in xs with sum = 0 {\n        sum + n\n    }\n}\n\nfn answer() -> Int {\n    let split = for n in [1, 2, 3, 4, 5] with parts = Parts { kept: [], rest: [] } {\n        let so_far = length(parts.kept)\n        Parts { kept: push(parts.kept, so_far), rest: push(parts.rest, n) }\n    }\n    total(split.kept) * 100 + total(split.rest)\n}\n\ntest \"a field read along the way still holds what was put in it\" {\n    assert answer() == 1015\n}\n",
+            source: "module a\n\nrecord Parts {\n    kept: List<Int>,\n    rest: List<Int>,\n}\n\nfn total(xs: List<Int>) -> Int {\n    for n in xs with sum = 0 {\n        sum + n\n    }\n}\n\nfn answer() -> Int {\n    let split = for n in [1, 2, 3, 4, 5] with parts = Parts { kept: [], rest: [] } {\n        let so_far = total(parts.rest)\n        Parts { kept: push(parts.kept, so_far), rest: push(parts.rest, n) }\n    }\n    total(split.kept) * 100 + total(split.rest)\n}\n\ntest \"a field read along the way still holds what was put in it\" {\n    assert answer() == 2015\n}\n",
             call: "answer",
-            expect: 1015,
+            expect: 2015,
+        },
+        // Reading the accumulator's own length, which is what a walk needs to
+        // number what it builds. The list is one block for the whole walk and
+        // the length is written as it goes, so each turn reads the number a
+        // walk that copied would have read. See
+        // `design/decisions/2026-08-05-a-walk-may-read-its-own-length.md`.
+        Agreed {
+            name: "a walk that reads its own length",
+            source: "module a\n\nfn total(xs: List<Int>) -> Int {\n    for n in xs with sum = 0 {\n        sum + n\n    }\n}\n\nfn answer() -> Int {\n    let numbered = for n in [9, 9, 9, 9] with out = [] {\n        push(out, length(out))\n    }\n    total(numbered) * 10 + length(numbered)\n}\n\ntest \"a walk can number what it is building\" {\n    assert answer() == 64\n}\n",
+            call: "answer",
+            expect: 64,
+        },
+        // The same read in the `while` clause, which is where `std/list`'s
+        // `take` writes it.
+        Agreed {
+            name: "a walk that stops on its own length",
+            source: "module a\n\nfn total(xs: List<Int>) -> Int {\n    for n in xs with sum = 0 {\n        sum + n\n    }\n}\n\nfn answer() -> Int {\n    let taken = for n in [1, 2, 3, 4, 5, 6] with out = [] while length(out) < 3 {\n        push(out, n)\n    }\n    total(taken) * 10 + length(taken)\n}\n\ntest \"a walk can stop on how much it has built\" {\n    assert answer() == 63\n}\n",
+            call: "answer",
+            expect: 63,
+        },
+        // And the shape next door to that one: a `while` clause that hands
+        // the accumulator to something that keeps it. The handler holds the
+        // first list it is given, so the answer says how long that list was
+        // when it was handed over. Read as the fast shape, the walk goes on
+        // writing into the block the handler is holding and the answer
+        // becomes 404. The `while` clause used to be a place nothing looked.
+        Agreed {
+            name: "a walk whose condition keeps its accumulator",
+            source: "module a\n\neffect Slot {\n    fn put(xs: List<Int>) -> ()\n    fn seen() -> Int\n}\n\nhandler Memo implements Slot {\n    state held: List<Int>\n    state got: Bool\n\n    fn put(xs) -> () {\n        if got {\n        } else {\n            held = xs\n            got = true\n        }\n    }\n\n    fn seen() -> Int {\n        length(held)\n    }\n}\n\nfn watched(xs: List<Int>) -> Int uses Slot.put {\n    Slot.put(xs)\n    length(xs)\n}\n\nfn counted() -> Int uses Slot.put, Slot.seen {\n    let built = for n in [1, 2, 3, 4, 5, 6] with out = [] while watched(out) < 4 {\n        push(out, n)\n    }\n    Slot.seen() * 100 + length(built)\n}\n\nfn answer() -> Int {\n    with Memo { held: [], got: false } {\n        counted()\n    }\n}\n\ntest \"the list the condition handed over is the one it was handed\" {\n    assert answer() == 4\n}\n",
+            call: "answer",
+            expect: 4,
         },
         // A `where` the caller satisfies. The checker proves it where the
         // call is written, so the compiled form has nothing left to check

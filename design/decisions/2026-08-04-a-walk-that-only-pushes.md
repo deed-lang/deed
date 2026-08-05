@@ -25,18 +25,26 @@ accumulator is bound again each turn rather than assigned. So the intermediate l
 only as values of the accumulator, and whether any of them can be observed is a question
 about what the body does with that one name.
 
-Measured, in `crates/deed-driver/tests/walks.rs`, over the shipped library and the corpus:
+Measured, in `crates/deed-driver/tests/walks.rs`, over the shipped library and the corpus,
+counting only the walks whose accumulator is a list, because a walk carrying a number
+allocates nothing:
 
 ```
-walks whose accumulator is only ever pushed onto     45
-walks of every other shape                           44
+walks that build a list and only ever push onto it    39
+walks that build a list some other way                21
 ```
 
-The 45 are `map`, `map_at`, `filter`, `filter_at` and everything written like them. In each
-of them the accumulator appears once on each path through the body, as `push`'s first
-argument or as the value a branch hands on untouched, which is what `filter`'s `else` does.
-Nothing else holds one, so no intermediate list is reachable from anywhere, so there is no
-reason for them to be separate lists.
+Those are today's numbers rather than the ones this shipped with. It said forty-five and
+forty-four, and both were wrong: the denominator was every walk carrying an accumulator, and
+the rule the measurement asked was missing the condition that lived at the call site.
+`design/decisions/2026-08-05-a-walk-may-read-its-own-length.md` has the correction and what
+it moved.
+
+The ones the rule accepts are `map`, `map_at`, `filter`, `filter_at` and everything written
+like them. In each of them the accumulator appears once on each path through the body, as
+`push`'s first argument or as the value a branch hands on untouched, which is what `filter`'s
+`else` does. Nothing else holds one, so no intermediate list is reachable from anywhere, so
+there is no reason for them to be separate lists.
 
 ## Decision
 
@@ -126,13 +134,14 @@ conditions over the body rather than as one question about the value a turn hand
 ## Drawbacks (required)
 
 It is a rule about a shape rather than about values, so a walk one edit away from the shape
-gets none of it. Adding `length(out)` to a body would be such an edit under the rule as
-written, even though reading a length keeps nothing, and a reader who does not know the
-rule has no way to tell which of two walks allocates quadratically.
+gets none of it. A reader who does not know the rule has no way to tell which of two walks
+allocates quadratically. Adding `length(out)` to a body used to be such an edit, which
+`design/decisions/2026-08-05-a-walk-may-read-its-own-length.md` fixed; everything else still
+is.
 
 It answers the walk and not the general case. A program that builds a list by recursion,
-or that rebuilds a record in a loop, allocates exactly as it did. The 34 walks of every
-other shape are untouched.
+or that rebuilds a record in a loop, allocates exactly as it did. The walks of every other
+shape are untouched.
 
 The slack is never given back. A filter that keeps one element in a thousand reserves the
 thousand and holds it for as long as the answer lives.
@@ -185,8 +194,9 @@ which could keep it. This answers the walk, and that is a different shape.
 ## Open Questions (required)
 
 - Whether the rule should allow the accumulator in read-only positions such as
-  `length(out)`. It keeps nothing, so it is safe, and `std/list`'s `take` reads one in its
-  `while` clause rather than its body. Left out until a walk in the corpus wants it.
+  `length(out)`. Answered in
+  `design/decisions/2026-08-05-a-walk-may-read-its-own-length.md`: yes, and the `while`
+  clause the question mentioned turned out to be a place nothing had been looking at all.
 
 - Whether the same argument reaches a record rebuilt in a loop. Answered in
   `design/decisions/2026-08-04-a-walk-that-pushes-into-a-record.md`: it reaches the lists

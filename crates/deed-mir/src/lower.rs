@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use deed_ast::{self as ast, Item, Module};
 use deed_diagnostics::Span;
-use deed_resolve::{DefId, Resolutions};
+use deed_resolve::{DefId, DefKind, Resolutions};
 use deed_typeck::Tier;
 use deed_typeck::Types;
 use deed_typeck::ty::Ty as CheckedTy;
@@ -3516,20 +3516,37 @@ impl Lowering<'_> {
         let element = self.function.add_local((*element_ty).clone());
 
         // A walk whose accumulator is only ever pushed onto builds one list
-        // rather than one a turn. Decided from the body before any of it is
-        // lowered, because the rule is about what the source does with a name.
-        // See `design/decisions/2026-08-04-a-walk-that-only-pushes.md`.
-        let in_place = accumulator.is_some_and(|one| {
-            matches!(&*one.init, ast::Expr::List { elements, .. } if elements.is_empty())
-                && crate::shape::only_pushes(&one.name.name, body)
-        });
-
-        // The same argument one field at a time, for the accumulator that is
-        // a record of lists. A list accumulator answers none, because the two
-        // rules ask about different shapes of what a walk starts from. See
+        // rather than one a turn, and a record accumulator gets the same
+        // argument one field at a time. Both are decided from the source
+        // before any of it is lowered, because the rules are about what the
+        // source does with a name. See
+        // `design/decisions/2026-08-04-a-walk-that-only-pushes.md` and
         // `design/decisions/2026-08-04-a-walk-that-pushes-into-a-record.md`.
-        let built_fields = match accumulator {
-            Some(one) => crate::shape::pushed_fields(&one.name.name, &one.init, body),
+        //
+        // Whether `length` here is the one the language provides is the one
+        // thing the rules cannot see for themselves: shadowing a builtin is a
+        // warning rather than an error, and a `length` a program wrote could
+        // hand the accumulator to something that keeps it.
+        let resolutions = self.resolutions;
+        let provided = |span: Span| {
+            resolutions
+                .resolution(span)
+                .is_some_and(|def| resolutions.def(def).kind == DefKind::Builtin)
+        };
+        let shape = accumulator.map(|one| crate::shape::Walk {
+            name: &one.name.name,
+            init: &one.init,
+            keep,
+            body,
+        });
+        let in_place = shape
+            .as_ref()
+            .is_some_and(|walk| crate::shape::only_pushes(walk, &provided));
+
+        // A list accumulator answers no fields, because the two rules ask
+        // about different shapes of what a walk starts from.
+        let built_fields = match &shape {
+            Some(walk) => crate::shape::pushed_fields(walk, &provided),
             None => Vec::new(),
         };
 

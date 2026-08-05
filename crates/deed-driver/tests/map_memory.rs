@@ -1,9 +1,9 @@
 //! Where a compiled hash map's memory goes.
 //!
-//! `std/hashmap` stops around fifty keys compiled, and the module's own header
-//! says why in one sentence: nothing is given back and `set` allocates the
-//! whole bucket list every time. That sentence is a claim about which part of
-//! the work is the expensive one, and this is the measurement behind it.
+//! `std/hashmap` stops a few hundred keys in compiled, and the module's own
+//! header says why in one sentence: nothing is given back and `set` allocates
+//! the whole bucket list every time. That sentence is a claim about which part
+//! of the work is the expensive one, and this is the measurement behind it.
 //!
 //! Bytes rather than time, because bytes are what runs out. A compiled module
 //! never reclaims, so what a program allocates in total is what its memory
@@ -97,17 +97,26 @@ fn an_insert_costs_about_a_whole_map() {
 /// `std/hashmap`'s header says where it stops. This is what says so, and it
 /// fails if reclamation ever arrives and moves it, which is the point: the
 /// number is meant to change and to be noticed changing. It has already moved
-/// once, from fifty to two hundred, when `range` stopped reading its own
-/// accumulator.
+/// twice, from fifty to two hundred when `range` stopped reading its own
+/// accumulator, and from there to three hundred when the rule learned to read
+/// a length and `range` stopped carrying a record to work around it.
+///
+/// The upper end is read as "does not run" rather than as a particular trap.
+/// Four hundred keys is over the module's megabyte, and it is also more work
+/// than a test's budget of instructions, so which of the two arrives first is
+/// not something this is about.
 #[test]
-fn a_compiled_map_stops_between_two_and_three_hundred_keys() {
-    let fits = probe("for k in range(200) with m = empty(0, 0) { set(m, k, k) }");
-    assert!(fits.is_ok(), "two hundred keys should still fit: {fits:?}");
+fn a_compiled_map_stops_between_three_and_four_hundred_keys() {
+    let fits = probe("for k in range(300) with m = empty(0, 0) { set(m, k, k) }");
+    assert!(
+        fits.is_ok(),
+        "three hundred keys should still fit: {fits:?}"
+    );
 
-    let over = probe("for k in range(300) with m = empty(0, 0) { set(m, k, k) }");
+    let over = probe("for k in range(400) with m = empty(0, 0) { set(m, k, k) }");
     assert!(
         over.is_err(),
-        "three hundred keys fit now, so something started reclaiming and \
+        "four hundred keys fit now, so something started reclaiming and \
          `std/hashmap`'s header and `design/hash-map-requirements.md` should be reread"
     );
 }

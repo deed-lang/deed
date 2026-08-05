@@ -18,7 +18,7 @@ use deed_diagnostics::Span;
 pub use lower::{
     Alongside, Unlowered, lower, lower_alongside, lower_with_tests, lower_with_tests_alongside,
 };
-pub use shape::{only_pushes, pushed_fields};
+pub use shape::{Provided, Walk, only_pushes, pushed_fields};
 
 /// The diagnostic codes a compiled program can stop with.
 ///

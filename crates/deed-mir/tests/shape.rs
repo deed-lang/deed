@@ -11,10 +11,10 @@
 //! `design/decisions/2026-08-04-a-walk-that-pushes-into-a-record.md`.
 
 use deed_ast::{Accumulator, Block, Expr, Item};
-use deed_mir::{only_pushes, pushed_fields};
+use deed_mir::{Walk, only_pushes, pushed_fields};
 
 /// The one walk in a module written around a body.
-fn walk(source: &str) -> (Accumulator, Block) {
+fn walk(source: &str) -> (Accumulator, Option<Expr>, Block) {
     let mut sources = deed_diagnostics::SourceMap::new();
     let file = sources.add("shape.deed".to_string(), source.to_string());
     let lexed = deed_lexer::tokenize(file, sources.file(file).text());
@@ -27,35 +27,69 @@ fn walk(source: &str) -> (Accumulator, Block) {
     };
     let Some(Expr::For {
         accumulator: Some(accumulator),
+        keep,
         body,
         ..
     }) = decl.body.tail.as_deref()
     else {
         panic!("the function's value should be a walk carrying an accumulator");
     };
-    (accumulator.clone(), body.clone())
+    (accumulator.clone(), keep.as_deref().cloned(), body.clone())
+}
+
+/// Nothing in these modules shadows a builtin, so every name is the
+/// language's. The case that says what happens when one is not passes its
+/// own answer.
+fn provided(_: deed_diagnostics::Span) -> bool {
+    true
 }
 
 /// Whether the rule accepts a walk whose body is this.
 fn accepts(body: &str) -> bool {
+    accepts_stopping("", body)
+}
+
+/// The same, with a `while` clause in front of the body.
+fn accepts_stopping(keep: &str, body: &str) -> bool {
     let source = format!(
-        "module a\n\nfn f(items: List<Int>) -> List<Int> {{\n    for item in items with out = [] {{\n{body}\n    }}\n}}\n"
+        "module a\n\nfn f(items: List<Int>) -> List<Int> {{\n    for item in items with out = [] {keep} {{\n{body}\n    }}\n}}\n"
     );
-    let (accumulator, body) = walk(&source);
-    only_pushes(&accumulator.name.name, &body)
+    let (accumulator, stop, body) = walk(&source);
+    only_pushes(
+        &Walk {
+            name: &accumulator.name.name,
+            init: &accumulator.init,
+            keep: stop.as_ref(),
+            body: &body,
+        },
+        &provided,
+    )
 }
 
 /// Which fields of a record accumulator the rule builds in place.
 fn built(init: &str, body: &str) -> Vec<String> {
+    built_stopping(init, "", body)
+}
+
+/// The same, with a `while` clause in front of the body.
+fn built_stopping(init: &str, keep: &str, body: &str) -> Vec<String> {
     let source = format!(
         "module a\n\n\
          record Parts {{\n    kept: List<Int>,\n    rest: List<Int>,\n}}\n\n\
          fn keep(held: Parts) -> Int {{\n    length(held.kept)\n}}\n\n\
          fn seen(xs: List<Int>) -> Int {{\n    length(xs)\n}}\n\n\
-         fn f(items: List<Int>) -> Parts {{\n    for item in items with out = {init} {{\n{body}\n    }}\n}}\n"
+         fn f(items: List<Int>) -> Parts {{\n    for item in items with out = {init} {keep} {{\n{body}\n    }}\n}}\n"
     );
-    let (accumulator, body) = walk(&source);
-    pushed_fields(&accumulator.name.name, &accumulator.init, &body)
+    let (accumulator, stop, body) = walk(&source);
+    pushed_fields(
+        &Walk {
+            name: &accumulator.name.name,
+            init: &accumulator.init,
+            keep: stop.as_ref(),
+            body: &body,
+        },
+        &provided,
+    )
 }
 
 /// The record every case below starts from.
@@ -143,6 +177,101 @@ fn handing_back_a_different_list_is_refused() {
 #[test]
 fn never_mentioning_the_accumulator_is_refused() {
     assert!(!accepts("        items"));
+}
+
+// Reading the accumulator's own length. An `Int` is not a way to keep a list,
+// and the length a reserved block reports is written as the walk goes, so the
+// number is the one the walk would have got either way. See
+// `design/decisions/2026-08-05-a-walk-may-read-its-own-length.md`.
+
+/// The shape the allowance is for, which is `range` in `std/hashmap`.
+#[test]
+fn pushing_the_length_of_the_accumulator_onto_it_is_accepted() {
+    assert!(accepts("        push(out, length(out))"));
+}
+
+/// A branch on the length, which is `take` in `examples/generics.deed`.
+#[test]
+fn a_branch_on_the_length_of_the_accumulator_is_accepted() {
+    assert!(accepts(
+        "        if length(out) < 3 {\n            push(out, item)\n        } else {\n            out\n        }"
+    ));
+}
+
+/// The same read in a `while` clause, which is `take` in `std/list`.
+#[test]
+fn a_while_clause_reading_the_length_is_accepted() {
+    assert!(accepts_stopping(
+        "while length(out) < 3",
+        "        push(out, item)"
+    ));
+}
+
+/// A `while` clause is a place the accumulator can be kept like any other.
+///
+/// It used to be a place nothing looked: the rule read the body and the
+/// condition is not in it, so a walk that handed its accumulator to something
+/// there was compiled in place anyway.
+#[test]
+fn a_while_clause_that_keeps_the_accumulator_is_refused() {
+    assert!(!accepts_stopping(
+        "while keep(out) < 3",
+        "        push(out, item)"
+    ));
+}
+
+/// A second push in the `while` clause, which the body never sees.
+#[test]
+fn a_while_clause_that_pushes_is_refused() {
+    assert!(!accepts_stopping(
+        "while length(push(out, 0)) < 3",
+        "        push(out, item)"
+    ));
+}
+
+/// `length` of something else is not a read of the accumulator.
+#[test]
+fn the_accumulator_beside_a_length_of_something_else_is_refused() {
+    assert!(!accepts(
+        "        let held = out\n        let _ = length(items)\n        push(out, item)"
+    ));
+}
+
+/// A `length` the file declared is not the one the language provides.
+///
+/// Shadowing a builtin is a warning rather than an error, so a program can
+/// write a `length` of its own, and one of those could hand the accumulator to
+/// something that keeps it. The rule reads the shape and the caller answers
+/// which names are the language's; this is the answer being no.
+#[test]
+fn reading_the_length_through_a_shadowed_name_is_refused() {
+    let source = "module a\n\nfn f(items: List<Int>) -> List<Int> {\n    for item in items with out = [] {\n        push(out, length(out))\n    }\n}\n";
+    let (accumulator, keep, body) = walk(source);
+    assert!(!only_pushes(
+        &Walk {
+            name: &accumulator.name.name,
+            init: &accumulator.init,
+            keep: keep.as_ref(),
+            body: &body,
+        },
+        &|_| false,
+    ));
+}
+
+/// An accumulator that starts from something is not a reserved block.
+#[test]
+fn an_accumulator_that_starts_from_a_list_is_refused() {
+    let source = "module a\n\nfn f(items: List<Int>) -> List<Int> {\n    for item in items with out = items {\n        push(out, item)\n    }\n}\n";
+    let (accumulator, keep, body) = walk(source);
+    assert!(!only_pushes(
+        &Walk {
+            name: &accumulator.name.name,
+            init: &accumulator.init,
+            keep: keep.as_ref(),
+            body: &body,
+        },
+        &provided,
+    ));
 }
 
 /// A second push in a turn, away from the value the turn hands back.
@@ -449,4 +578,55 @@ fn passing_the_record_to_something_else_is_refused() {
 #[test]
 fn an_accumulator_that_is_not_a_record_has_no_fields() {
     assert!(built("items", "        out").is_empty());
+}
+
+/// A field's own length, read the same way a list accumulator's is.
+#[test]
+fn reading_the_length_of_a_field_is_accepted() {
+    assert_eq!(
+        built(
+            EMPTY,
+            "        Parts { kept: push(out.kept, length(out.kept)), rest: push(out.rest, item) }"
+        ),
+        ["kept", "rest"]
+    );
+}
+
+/// And in the `while` clause, where the record is in scope too.
+#[test]
+fn a_while_clause_reading_the_length_of_a_field_is_accepted() {
+    assert_eq!(
+        built_stopping(
+            EMPTY,
+            "while length(out.kept) < 3",
+            "        Parts { kept: push(out.kept, item), rest: push(out.rest, item) }"
+        ),
+        ["kept", "rest"]
+    );
+}
+
+/// A `while` clause that hands a field somewhere else.
+#[test]
+fn a_while_clause_that_keeps_a_field_is_left_alone() {
+    assert_eq!(
+        built_stopping(
+            EMPTY,
+            "while seen(out.kept) < 3",
+            "        Parts { kept: push(out.kept, item), rest: push(out.rest, item) }"
+        ),
+        ["rest"]
+    );
+}
+
+/// A `while` clause that hands the record itself somewhere else.
+#[test]
+fn a_while_clause_that_keeps_the_record_is_refused() {
+    assert!(
+        built_stopping(
+            EMPTY,
+            "while keep(out) < 3",
+            "        Parts { kept: push(out.kept, item), rest: push(out.rest, item) }"
+        )
+        .is_empty()
+    );
 }

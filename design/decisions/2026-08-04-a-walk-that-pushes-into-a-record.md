@@ -31,15 +31,20 @@ and every turn copies both lists. Measured, with the list being walked subtracte
 walk of this shape over 256 elements allocated 267304 bytes for an answer worth about two
 thousand, and 1024 did not run.
 
-The four walks in the shipped library that carry a record are `partition`, `unzip`, `std/hashmap`'s `range` and
+The three walks in the shipped library that carry a record are `partition`, `unzip` and
 `scan`, which is to say both sides of a filter, the inverse of `zip`, and every partial
 fold. None of them could be used on a keyed structure of a few hundred entries.
+
+`std/hashmap`'s `range` used to be a fourth. It carried a position beside the list only
+because the earlier rule refused a walk that read its own length, and
+`design/decisions/2026-08-05-a-walk-may-read-its-own-length.md` let it read one instead, so
+the record went away and the walk stopped building one a turn as well.
 
 Measured, in `crates/deed-driver/tests/walks.rs`:
 
 ```
-walks that carry a record with a field built in place    4
-fields those walks build in place                        6
+walks that carry a record with a field built in place    3
+fields those walks build in place                        5
 ```
 
 ## Decision
