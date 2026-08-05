@@ -85,6 +85,8 @@ pub(crate) enum Helper {
     ListFilled,
     /// An empty list with room already reserved for a number of elements.
     ListRoom,
+    /// A copy of a list with room reserved on the end of it.
+    ListRoomFrom,
     /// The same list, one longer, written where it stands.
     ListAppended,
     /// A string taken into a running hash.
@@ -110,6 +112,7 @@ impl Helper {
         Helper::ListExtended,
         Helper::ListFilled,
         Helper::ListRoom,
+        Helper::ListRoomFrom,
         Helper::ListAppended,
         Helper::HashedText,
     ];
@@ -132,6 +135,7 @@ impl Helper {
             runtime::LIST_PUSH => Helper::ListExtended,
             runtime::LIST_REPEAT => Helper::ListFilled,
             runtime::LIST_ROOM => Helper::ListRoom,
+            runtime::LIST_ROOM_FROM => Helper::ListRoomFrom,
             runtime::LIST_APPEND => Helper::ListAppended,
             _ => return None,
         })
@@ -157,6 +161,7 @@ impl Helper {
             Helper::ListExtended => runtime::LIST_PUSH,
             Helper::ListFilled => runtime::LIST_REPEAT,
             Helper::ListRoom => runtime::LIST_ROOM,
+            Helper::ListRoomFrom => runtime::LIST_ROOM_FROM,
             Helper::ListAppended => runtime::LIST_APPEND,
             Helper::HashedText => STR_HASH,
         }
@@ -176,6 +181,7 @@ impl Helper {
             | Helper::ListElement
             | Helper::ListExtended
             | Helper::ListFilled
+            | Helper::ListRoomFrom
             | Helper::ListAppended
             | Helper::HashedText => two(vec![ValType::I64]),
             Helper::TextSlice | Helper::TextSearch => FuncType {
@@ -224,6 +230,7 @@ impl Helper {
             Helper::ListExtended => list_extended(),
             Helper::ListFilled => list_filled(),
             Helper::ListRoom => list_with_room(),
+            Helper::ListRoomFrom => list_with_room_from(),
             Helper::ListAppended => list_appended(),
             Helper::HashedText => hashed_text(),
         }
@@ -1059,6 +1066,74 @@ fn list_with_room() -> (Vec<ValType>, Vec<Ins>) {
     ]);
 
     (vec![ValType::I32, ValType::I32], body)
+}
+
+/// A copy of `xs` with room for `extra` more elements after it.
+///
+/// The copy is the point. A walk that starts from a list it was handed cannot
+/// append to that list, because whoever handed it over is still holding it, so
+/// the first thing it does is take one of its own. After that it is the same
+/// reserved block [`list_with_room`] hands back, one that already has a length.
+fn list_with_room_from() -> (Vec<ValType>, Vec<Ins>) {
+    const XS: u32 = 0;
+    const EXTRA: u32 = 1;
+    const FROM: u32 = 2;
+    const N: u32 = 3;
+    const ROOM: u32 = 4;
+    const OUT: u32 = 5;
+    const I: u32 = 6;
+
+    let mut body = vec![
+        Ins::LocalGet(XS),
+        Ins::I32WrapI64,
+        Ins::LocalSet(FROM),
+        Ins::LocalGet(FROM),
+        Ins::I64Load(0),
+        Ins::I32WrapI64,
+        Ins::LocalSet(N),
+        Ins::LocalGet(EXTRA),
+        Ins::I32WrapI64,
+        Ins::LocalSet(ROOM),
+    ];
+    // A negative bound is no room rather than a refusal, the same answer
+    // `list_with_room` gives, and it cannot arise here either.
+    body.extend(when(
+        vec![Ins::LocalGet(EXTRA), Ins::I64Const(0), Ins::I64LtS],
+        vec![Ins::I32Const(0), Ins::LocalSet(ROOM)],
+    ));
+    body.extend([
+        Ins::LocalGet(ROOM),
+        Ins::LocalGet(N),
+        Ins::I32Add,
+        Ins::LocalSet(ROOM),
+    ]);
+    body.extend(allocate(OUT, |ins| ins.extend(list_room(ROOM))));
+
+    let mut step = element_at(OUT, I);
+    step.extend(element_at(FROM, I));
+    step.extend([Ins::I64Load(0), Ins::I64Store(0)]);
+    body.extend(count_to(I, N, step));
+
+    body.extend([
+        Ins::LocalGet(OUT),
+        Ins::LocalGet(N),
+        Ins::I64ExtendI32S,
+        Ins::I64Store(0),
+        Ins::LocalGet(OUT),
+        Ins::I64ExtendI32S,
+        Ins::Return,
+    ]);
+
+    (
+        vec![
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+        ],
+        body,
+    )
 }
 
 /// The same list, one longer, written where it stands.

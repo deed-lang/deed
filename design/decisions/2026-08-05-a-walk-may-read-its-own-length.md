@@ -146,8 +146,8 @@ noticed moving; this is the second time.
 Over the library and the corpus, of the walks whose accumulator is a list:
 
 ```
-walks that build a list and only ever push onto it    39
-walks that build a list some other way                21
+walks that build a list and only ever push onto it    47
+walks that build a list some other way                13
 ```
 
 ## Open Questions (required)

@@ -363,12 +363,13 @@ fn some_of_the_other_walks_build_a_list_inside_a_record() {
 fn the_decision_records_print_the_counts_this_measures() {
     const PUSHES: &str = "2026-08-04-a-walk-that-only-pushes.md";
     const LENGTH: &str = "2026-08-05-a-walk-may-read-its-own-length.md";
+    const START: &str = "2026-08-05-a-walk-may-start-from-a-list.md";
     const RECORD: &str = "2026-08-04-a-walk-that-pushes-into-a-record.md";
     const IN_PLACE: &str = "walks that build a list and only ever push onto it";
     const REST: &str = "walks that build a list some other way";
 
     let (appending, other) = counted();
-    for page in [PUSHES, LENGTH] {
+    for page in [PUSHES, LENGTH, START] {
         assert_eq!(
             (printed(page, IN_PLACE), printed(page, REST)),
             (appending, other),
