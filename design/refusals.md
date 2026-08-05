@@ -142,7 +142,7 @@ Looked at more than once, most recently for the shape of `ok`/`err`. `Ty::Result
 `Ty::List` are named in the type checker and in both crates the backend added, since a list
 has to be laid out in memory and compiled as well as checked. What actually names `Result`'s
 two variants, `?` and the outcome an `ensures` clause is keyed by, reaches into nine of the
-nineteen crates in this workspace. Declaring `Result` in a prelude module moves the first,
+twenty crates in this workspace. Declaring `Result` in a prelude module moves the first,
 small set of references and leaves the second, load-bearing set exactly where it was, with a
 module lookup added in front of a type the syntax already knows the shape of: not a smaller
 language, the same one with an indirection in it. `List` is the same shape: `[1, 2, 3]` has

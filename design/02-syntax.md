@@ -1685,6 +1685,7 @@ using an effect to get around not having a loop.
   about. That gap is specific to *ordering*: there is no structural order the way there is
   a structural equality, since order is a choice (numeric, lexicographic, or a domain's own)
   and equality is not, so an ordered tree keeps needing a comparator and keeps needing to be
-  trusted to use the same one. Deed has no structural hash implemented yet; this is the
-  decision that one, when written, needs no trait to carry it. #617 does not reopen #246.
+  trusted to use the same one. `hash` has since been written, structurally and with no
+  bound, and `std/hashmap` keys on any `K` without a comparator, which is this decision
+  holding rather than being revisited. #617 does not reopen #246.
 - Whether `uses sys.*` is a hole big enough to make `main` useless as a boundary.
