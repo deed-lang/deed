@@ -744,30 +744,29 @@ fn an_oversized_integer_names_the_limit() {
     );
 }
 
+/// The digits of the smallest `Int` are one past the largest, so the lexer
+/// hands them over and says nothing: whether a unary minus is in front of them
+/// is a question about the grammar, and the parser is what answers it.
 #[test]
-fn the_negative_boundary_is_a_minus_and_an_oversized_digit_run() {
+fn the_negative_boundary_is_a_minus_and_a_digit_run_at_the_limit() {
     let (_, lexed) = lex("-9223372036854775808");
-    assert_eq!(
-        codes_of(&lexed.diagnostics),
-        vec![codes::INTEGER_OUT_OF_RANGE]
-    );
+    assert_eq!(codes_of(&lexed.diagnostics), Vec::<&str>::new());
     assert_eq!(lexed.tokens[0].kind, TokenKind::Minus);
-    assert_eq!(lexed.tokens[1].kind, TokenKind::Int(i64::MAX));
+    assert_eq!(lexed.tokens[1].kind, TokenKind::IntAtLimit);
 }
 
-/// And it says what to write instead, which is a name rather than digits.
-///
-/// One past the largest is the digit run somebody reaches for when they want
-/// the smallest `Int`, and it is the only oversized literal with an answer.
-/// A number that is merely too big gets the limit and nothing else.
+/// And on its own it is still the digit run at the limit rather than an error
+/// here, because the lexer has no way to know what came before it.
 #[test]
-fn the_digit_run_one_past_the_largest_names_the_smallest_int() {
-    let text = message("9223372036854775808");
-    assert!(text.contains("one past the largest"), "{text}");
-    assert!(text.contains("`Int.min`"), "{text}");
+fn the_digit_run_one_past_the_largest_is_left_to_the_parser() {
+    let (_, lexed) = lex("9223372036854775808");
+    assert_eq!(codes_of(&lexed.diagnostics), Vec::<&str>::new());
+    assert_eq!(lexed.tokens[0].kind, TokenKind::IntAtLimit);
 
+    // A number that is merely too big has no reading at all, so it is the
+    // lexer's to report.
     let text = message("99999999999999999999");
-    assert!(!text.contains("`Int.min`"), "{text}");
+    assert!(text.contains("does not fit in `Int`"), "{text}");
 }
 
 /// One message per literal, which is what the stand-in tokens are for. An
@@ -775,7 +774,7 @@ fn the_digit_run_one_past_the_largest_names_the_smallest_int() {
 /// so in the same column the lexer has just written in.
 #[test]
 fn a_literal_the_lexer_cannot_read_still_stands_in_for_one() {
-    for source in ["9223372036854775808", "0x", "100u8", "0b12", "1.5"] {
+    for source in ["99999999999999999999", "0x", "100u8", "0b12", "1.5"] {
         let (_, lexed) = lex(source);
         assert_eq!(
             lexed.diagnostics.len(),

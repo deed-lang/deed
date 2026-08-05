@@ -57,6 +57,16 @@ pub enum TokenKind {
     /// An integer literal, already decoded. Radix and digit separators are a
     /// lexical concern and nothing downstream should have to care.
     Int(i64),
+    /// Digits that are exactly one past the largest `Int`.
+    ///
+    /// Not an error here, because those digits are what the smallest `Int` is
+    /// written with: negation is an operator rather than part of a literal, so
+    /// `-9223372036854775808` is a minus and this. Whether there is a minus in
+    /// front of it, and whether that minus is the unary one, is a question
+    /// about the grammar, so the lexer reports the digits and the parser
+    /// decides. Standing alone this is the literal that does not fit, and the
+    /// parser says so with [`crate::integer_out_of_range`].
+    IntAtLimit,
     /// A string literal with escapes already resolved.
     Str(String),
 
@@ -113,6 +123,7 @@ impl TokenKind {
             TokenKind::Keyword(kw) => format!("keyword `{}`", kw.as_str()),
             TokenKind::Ident(name) => format!("identifier `{name}`"),
             TokenKind::Int(_) => "integer literal".to_string(),
+            TokenKind::IntAtLimit => "integer literal".to_string(),
             TokenKind::Str(_) => "string literal".to_string(),
             TokenKind::Error => "invalid token".to_string(),
             TokenKind::Eof => "end of file".to_string(),

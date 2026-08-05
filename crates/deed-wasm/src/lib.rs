@@ -454,7 +454,7 @@ pub fn token_classes(source: &str) -> String {
             let class = match &token.kind {
                 TokenKind::Keyword(_) => "keyword",
                 TokenKind::Ident(_) => "name",
-                TokenKind::Int(_) => "number",
+                TokenKind::Int(_) | TokenKind::IntAtLimit => "number",
                 TokenKind::Str(_) => "string",
                 TokenKind::Error => "error",
                 TokenKind::Eof => return None,

@@ -21,6 +21,18 @@ use deed_lexer::{Keyword, Token, TokenKind};
 
 use crate::codes;
 
+/// What to say about digits nothing put a minus in front of.
+///
+/// The message is the lexer's, because those digits are its business
+/// everywhere except this one shape, and two copies of it would be two things
+/// to keep the same.
+fn at_the_limit(file: FileId, span: Span) -> Diagnostic {
+    deed_lexer::integer_out_of_range(file, span).with_note(
+        "this is one past the largest, and `-` is an operator rather than part of a literal, \
+         so it reads as a number only with a `-` in front of it or written `Int.max`",
+    )
+}
+
 /// The result of parsing one file.
 pub struct Parsed {
     pub module: Module,
@@ -2521,6 +2533,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary(&mut self) -> Expr {
+        // The smallest `Int` is written with the digits one past the largest,
+        // so this pair is one literal rather than a minus applied to a number
+        // that does not exist. Read as an operator it would be a negation of
+        // something unrepresentable, which is why the lexer leaves the digits
+        // alone and this is where the two are put together.
+        if self.at(&TokenKind::Minus) && matches!(self.nth_kind(1), TokenKind::IntAtLimit) {
+            let span = self.bump().span.to(self.bump().span);
+            return Expr::Int {
+                value: i64::MIN,
+                span,
+            };
+        }
+
         let op = match self.kind() {
             TokenKind::Minus => Some(UnaryOp::Neg),
             TokenKind::Bang => Some(UnaryOp::Not),
@@ -2729,6 +2754,16 @@ impl<'a> Parser<'a> {
             TokenKind::Int(value) => {
                 self.bump();
                 Expr::Int { value, span }
+            }
+            // Nothing put a minus in front of it, so the digits are what the
+            // lexer would have called them.
+            TokenKind::IntAtLimit => {
+                self.bump();
+                self.emit(at_the_limit(self.file, span));
+                Expr::Int {
+                    value: i64::MAX,
+                    span,
+                }
             }
             TokenKind::Str(value) => {
                 self.bump();
@@ -3186,6 +3221,17 @@ impl<'a> Parser<'a> {
             TokenKind::Int(value) => {
                 self.bump();
                 Pattern::Int { value, span }
+            }
+            // A pattern has no unary minus, so a negative literal cannot be
+            // matched on at all and these digits are the largest plus one
+            // wherever they appear here.
+            TokenKind::IntAtLimit => {
+                self.bump();
+                self.emit(at_the_limit(self.file, span));
+                Pattern::Int {
+                    value: i64::MAX,
+                    span,
+                }
             }
             TokenKind::Str(value) => {
                 self.bump();

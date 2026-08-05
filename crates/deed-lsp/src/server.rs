@@ -2397,7 +2397,7 @@ fn token_type(
     Some(match &token.kind {
         TokenKind::Keyword(_) => PAINT_KEYWORD,
         TokenKind::Str(_) => PAINT_STRING,
-        TokenKind::Int(_) => PAINT_NUMBER,
+        TokenKind::Int(_) | TokenKind::IntAtLimit => PAINT_NUMBER,
         TokenKind::Ident(name) => match resolutions
             .and_then(|found| found.resolution(token.span).map(|def| found.def(def).kind))
         {

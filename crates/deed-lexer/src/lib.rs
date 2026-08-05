@@ -16,5 +16,5 @@ pub mod codes;
 pub mod lexer;
 pub mod token;
 
-pub use lexer::{Lexed, Trivia, TriviaKind, tokenize};
+pub use lexer::{Lexed, Trivia, TriviaKind, integer_out_of_range, tokenize};
 pub use token::{Keyword, Token, TokenKind};

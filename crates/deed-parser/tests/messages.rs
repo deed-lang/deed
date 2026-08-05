@@ -547,7 +547,7 @@ fn a_binding_without_let_does_not_cascade() {
 /// the message this pass then wrote in the same column.
 #[test]
 fn a_literal_the_lexer_reported_is_not_reported_again() {
-    for literal in ["9223372036854775808", "0x", "100u8", "0b12", "1.5"] {
+    for literal in ["99999999999999999999", "0x", "100u8", "0b12", "1.5"] {
         let source = format!("module a\n\nfn f() -> Int {{\n  {literal}\n}}\n");
         let mut sources = SourceMap::new();
         let file = sources.add("test.deed", &source);
@@ -565,6 +565,41 @@ fn a_literal_the_lexer_reported_is_not_reported_again() {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+    }
+}
+
+/// The digits of the smallest `Int` are one literal with the minus in front.
+///
+/// The lexer says nothing about them, because whether the minus is the unary
+/// one is a question about the grammar. So this pass is the only one that
+/// reports them, and only when nothing put a minus there.
+#[test]
+fn the_smallest_int_is_a_literal_and_the_digits_alone_are_not() {
+    for (source, want) in [
+        (
+            "module a\n\nfn f() -> Int {\n  -9223372036854775808\n}\n",
+            None,
+        ),
+        (
+            "module a\n\nfn f() -> Int {\n  9223372036854775808\n}\n",
+            Some(deed_lexer::codes::INTEGER_OUT_OF_RANGE),
+        ),
+        (
+            "module a\n\nfn f(n: Int) -> Int {\n  n - 9223372036854775808\n}\n",
+            Some(deed_lexer::codes::INTEGER_OUT_OF_RANGE),
+        ),
+    ] {
+        let mut sources = SourceMap::new();
+        let file = sources.add("test.deed", source);
+        let lexed = tokenize(file, sources.file(file).text());
+        assert!(!lexed.has_errors(), "the lexer has nothing to say here");
+
+        let parsed = parse(file, &lexed.tokens);
+        let codes: Vec<&str> = parsed.diagnostics.iter().map(|d| d.code).collect();
+        match want {
+            Some(code) => assert_eq!(codes, vec![code], "{source}"),
+            None => assert!(codes.is_empty(), "{source} said {codes:?}"),
+        }
     }
 }
 

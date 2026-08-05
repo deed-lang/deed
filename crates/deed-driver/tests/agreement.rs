@@ -257,6 +257,16 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 20,
         },
+        // The smallest `Int` written as digits. The minus and the digit run
+        // are one literal rather than a negation, so both engines have to
+        // read the pair the same way and neither gets to negate a number
+        // that does not exist.
+        Agreed {
+            name: "the smallest number written as digits",
+            source: "module a\n\nfn floor() -> Int { -9223372036854775808 }\n\nfn answer() -> Int {\n    if floor() == Int.min && floor() + Int.max == 0 - 1 && to_string(floor()) == \"-9223372036854775808\" {\n        1\n    } else {\n        0\n    }\n}\n\ntest \"the digits one past the largest are a literal with a minus in front\" {\n    assert answer() == 1\n}\n",
+            call: "answer",
+            expect: 1,
+        },
         // The two ends, as numbers rather than as the digits a program used
         // to have to carry. Both engines fold them the same way or the sum
         // below comes out wrong.
@@ -657,8 +667,7 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 4,
         },
-        // A walk that starts from a list it was handed, which is `concat`.
-        // The list it started from is one the caller still holds, so the walk
+        // A walk that starts from a list it was handed, which is `concat`.        // The list it started from is one the caller still holds, so the walk
         // takes a copy on the way in; what this reads back is that copy being
         // a copy. Written as the list itself it would answer 1563 either way
         // and say nothing.
