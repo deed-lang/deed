@@ -62,8 +62,8 @@ reserves a thousand and two and holds them for as long as the answer lives.
     for every list in the language.
 
 - Option: leave it, since `concat` is not the common shape.
-  - Rejected because: it is eight of the thirteen walks that were left, and the two in
-    `std/list` are the ones every program that joins two lists goes through.
+  - Rejected because: it was eight of the twenty-one walks the earlier rule left behind, and
+    the two in `std/list` are the ones every program that joins two lists goes through.
 
 ## What it came to
 
@@ -83,7 +83,7 @@ Over the library and the corpus, of the walks whose accumulator is a list:
 
 ```
 walks that build a list and only ever push onto it    47
-walks that build a list some other way                13
+walks that build a list some other way                17
 ```
 
 `crates/deed-driver/tests/agreement.rs` carries the program that says the copy is a copy: a

@@ -314,6 +314,12 @@ sixty-four. It is not a better table, it is the one that keeps working when a ta
 What made it writable was `hash`, which is in the prelude because taking a value of
 any shape apart is one of the few things this language cannot say about itself.
 
+A set is that map with the values hidden. `std/set` has `none`, `one`, `including`, `has`, `count`, `items`, `without`, `union`, `intersection`, `difference`, `within` and `entries_of`.
+Not `with`, because that is how a handler is installed and the grammar has the word already.
+There is no `Empty` either: every constructor takes a sample of the element type, since an
+empty list takes its element type from where it is used and there is nowhere here to take
+one from, which is the shape `std/hashmap`'s own `empty` already has.
+
 Exact fractions are there too, and they are a library rather than a number type on purpose.
 `std/ratio` has `euclid_steps`, `absolute`, `greatest_common_divisor`, `simplified`, `ratio`,
 `whole`, `zero`, `is_zero`, `is_negative`, `negated`, `added`, `subtracted`, `multiplied`,
@@ -362,8 +368,8 @@ were not anywhere. `trim` stays in the prelude because it cannot be written.
 The other thing that goes here is a library that was already written and had nowhere to be.
 `std/list` and `std/table` were both under `examples/`, which made their names paths into
 this repository, so a program elsewhere could not import them and had to copy the files
-instead. Eight modules ship today,
-`std/string`, `std/list`, `std/table`, `std/map`, `std/hashmap`, `std/ratio`, `std/date` and `std/task`, and `crates/deed-driver/src/shipped.rs` is the
+instead. Nine modules ship today,
+`std/string`, `std/list`, `std/table`, `std/map`, `std/hashmap`, `std/set`, `std/ratio`, `std/date` and `std/task`, and `crates/deed-driver/src/shipped.rs` is the
 table.
 
 ## Lists
@@ -1533,8 +1539,20 @@ using an effect to get around not having a loop.
   itself. A module declaring exactly one handler per effect might be a defensible default.
   Measured: every handler in the corpus already is exactly one per effect per file (`Counted`
   for `Log`, `Collect`/`Discard` for `Sink` in separate tests, `InMemory`/`Frozen` for
-  `Counter` the same way), so the default costs nothing new to write down. Nobody has written
-  the property runner that would use it, which is the part still open.
+  `Counter` the same way), so the default costs nothing new to write down.
+  Built it, and the answer is no. Two things go wrong and neither is about the function
+  under test. A handler with state is a model with a starting point, and generated arguments
+  take it outside the world it models: `TwoAccounts` in `examples/transfer.deed` aliases
+  every account that is not one of its two onto the second one, so `transfer` fails
+  `Ledger.balance(from) == old(...) - amount.units` for a `from` the ledger does not hold.
+  That is true, and it is about the fixture. And a starting state generated the way an
+  argument is makes the handler's own arithmetic overflow, since `first_units + delta` on two
+  arbitrary `Int`s usually does, which reports a failure about the fixture again.
+  The variant that invents nothing, a handler declaring no state, applies to zero functions
+  in the library and the corpus, so it would be machinery with nothing to run.
+  What would change the answer: a way for a contract to say which handler it is relative to,
+  which is a larger question than this one and is the same question `unchanged(E)` is already
+  half of.
 - Refinements have no conversion form, and it turned out they do not need one to be usable.
   `try_positive(n)` returning a `Result` is the thing `Positive.try(n)` would have been, it is
   ordinary code, and the `ok` is Proven because the guard above it says what the predicate
