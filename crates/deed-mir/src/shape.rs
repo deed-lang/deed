@@ -44,10 +44,8 @@ pub type Provided<'a> = &'a dyn Fn(Span) -> bool;
 
 /// Whether a walk over a list can build one list rather than one a turn.
 ///
-/// Three things have to hold, and the middle one is about a single place: the
-/// value of a path through the body, which is what the next turn is handed.
-///
-/// The accumulator starts from the empty list, because a reserved block does.
+/// Two things have to hold, and the first is about a single place: the value
+/// of a path through the body, which is what the next turn is handed.
 ///
 /// Every path's value is either the bare name or one `push` straight onto it,
 /// so the block that comes out of a turn is the block that went in and a turn
@@ -67,11 +65,14 @@ pub type Provided<'a> = &'a dyn Fn(Span) -> bool;
 /// goes, so it answers what it would have answered, and an `Int` is not a way
 /// to keep a list. See
 /// `design/decisions/2026-08-05-a-walk-may-read-its-own-length.md`.
+///
+/// What the accumulator starts from is not asked about here. A walk that only
+/// pushes carries a list whatever it started from, and one that starts from a
+/// list it was handed takes a copy on the way in rather than appending to
+/// somebody else's, which is
+/// `design/decisions/2026-08-05-a-walk-may-start-from-a-list.md`. The caller
+/// is where the type is known, and the type is the only question left.
 pub fn only_pushes(walk: &Walk<'_>, provided: Provided<'_>) -> bool {
-    if !starts_empty(walk.init) {
-        return false;
-    }
-
     let body = Expr::Block(walk.body.clone());
     let Some(values) = path_values(&body) else {
         return false;
@@ -93,7 +94,7 @@ pub fn only_pushes(walk: &Walk<'_>, provided: Provided<'_>) -> bool {
 }
 
 /// Whether this is the empty list, which is what a reserved block starts as.
-fn starts_empty(init: &Expr) -> bool {
+pub fn starts_empty(init: &Expr) -> bool {
     matches!(init, Expr::List { elements, .. } if elements.is_empty())
 }
 
