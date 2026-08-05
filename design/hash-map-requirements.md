@@ -116,10 +116,13 @@ the layout; nothing needs adding.
 
 **Gap 2 is half closed.**
 `design/decisions/2026-08-04-a-walk-that-only-pushes.md` removed the quadratic
-from forty of the seventy-eight walks in the corpus, without reference counting
-and without reuse analysis, by finding a property of `for` that makes the
-sharing question unnecessary. What is left is `push` at a function boundary,
-where no bound is known.
+from most of the walks in the corpus that build a list, without reference
+counting and without reuse analysis, by finding a property of `for` that makes
+the sharing question unnecessary.
+`design/decisions/2026-08-05-a-walk-may-read-its-own-length.md` widened it to
+the walk that numbers what it is building, which is what `range` here is. Both
+records print the count and `crates/deed-driver/tests/walks.rs` holds them to
+it. What is left is `push` at a function boundary, where no bound is known.
 
 **Gap 3 is closed.** `hash` is a prelude function, structural, with no trait
 bound, as decided. See

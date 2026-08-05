@@ -59,7 +59,7 @@ list again. Growing means rehashing every key on the turn that crosses the
 threshold, and the honest reason not to write that yet is that nothing here
 has measured needing it.
 
-Compiled, this stops between two and three hundred keys. Nothing is given
+Compiled, this stops between three and four hundred keys. Nothing is given
 back there, so what a program allocates in total is what its memory reached,
 and `set` allocates the whole bucket list every time. The interpreter has no
 such ceiling and the table above was taken through it.
@@ -69,7 +69,10 @@ It used to stop at fifty, and finding out why is what
 kilobytes and seventeen of them were `range`, which read its own
 accumulator with `length(out)` and so could not be built in one list. The
 bucket list itself was five hundred bytes. Nothing about the language
-changed; one walk stopped mentioning its accumulator twice.
+changed; one walk stopped mentioning its accumulator twice. The rule has
+since learned to read a length, so `range` is written the obvious way again
+and stopped rebuilding a record a turn as well, which is the second time the
+ceiling moved.
 
 That is the same limit
 `design/decisions/2026-07-31-compiled-memory-reclamation.md` measured from
@@ -783,7 +786,17 @@ The numbers from zero up to `count`, which a walk needs before it can walk.
 
 `for` walks a list that already exists, and the buckets are indexed rather
 than held, so something has to turn a count into a list first. `repeat`
-gives the length and this gives the position.
+gives the length and the length of what has been built so far gives the
+position.
+
+This used to carry a record of a position and a list, because the rule in
+`design/decisions/2026-08-04-a-walk-that-only-pushes.md` counted every
+mention of the accumulator and `push(out, length(out))` mentions it twice.
+A range of sixty four cost sixteen kilobytes rather than half of one until
+the position moved into the record.
+`design/decisions/2026-08-05-a-walk-may-read-its-own-length.md` let the
+walk read its own length instead, so the record went away and the numbers
+did not move.
 
 ### Signature
 

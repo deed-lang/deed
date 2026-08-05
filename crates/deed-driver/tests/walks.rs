@@ -14,8 +14,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use deed_ast::{Accumulator, Block, Expr, Item, Stmt};
-use deed_driver::shipped_modules;
+use deed_diagnostics::{SourceMap, Span};
+use deed_driver::{Checked, check_all, shipped_modules, shipped_source};
 use deed_mir::{only_pushes, pushed_fields};
+use deed_resolve::{DefKind, Resolutions};
 
 /// Where the repository is, from this test binary.
 fn root() -> PathBuf {
@@ -26,17 +28,11 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Every `.deed` file the library and the corpus are made of.
-fn sources() -> Vec<String> {
-    let mut found = Vec::new();
-    for module in shipped_modules() {
-        let text = deed_driver::shipped_source(module).expect("a module that ships has a source");
-        found.push(text.to_string());
-    }
-
-    let examples = root().join("examples");
+/// Every `.deed` file the corpus is made of, by name.
+fn examples() -> Vec<(String, String)> {
+    let directory = root().join("examples");
     let mut names: BTreeSet<PathBuf> = BTreeSet::new();
-    for entry in std::fs::read_dir(&examples).expect("examples/ should be there") {
+    for entry in std::fs::read_dir(&directory).expect("examples/ should be there") {
         let path = entry.expect("a readable entry").path();
         if path
             .extension()
@@ -45,10 +41,47 @@ fn sources() -> Vec<String> {
             names.insert(path);
         }
     }
-    for path in names {
-        found.push(std::fs::read_to_string(&path).expect("a readable example"));
+    names
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .expect("a file has a name")
+                .to_string_lossy()
+                .to_string();
+            (
+                name,
+                std::fs::read_to_string(&path).expect("a readable example"),
+            )
+        })
+        .collect()
+}
+
+/// The library and the corpus, checked.
+///
+/// Checked rather than parsed, because the rules ask whether the `length` a
+/// walk reads is the one the language provides and only resolution knows
+/// that. All of it at once, the way the command line does it: an example may
+/// import another example as well as the library.
+fn subjects() -> Vec<Checked> {
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+    for (name, text) in examples() {
+        ids.push(sources.add(format!("examples/{name}"), text));
+    }
+    for module in shipped_modules() {
+        let text = shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
     }
 
+    let found = check_all(&sources, &ids);
+    for checked in &found {
+        assert!(
+            !checked.has_errors(),
+            "`{}` should check cleanly",
+            sources.file(checked.file).name()
+        );
+    }
     assert!(
         found.len() > 20,
         "the library and the corpus should be more than {} files",
@@ -57,30 +90,54 @@ fn sources() -> Vec<String> {
     found
 }
 
+/// Whether the name written at a span is one the language provides.
+fn provided(resolutions: &Resolutions) -> impl Fn(Span) -> bool + '_ {
+    move |span| {
+        resolutions
+            .resolution(span)
+            .is_some_and(|def| resolutions.def(def).kind == DefKind::Builtin)
+    }
+}
+
 /// One walk that carries an accumulator: what it is called, what it starts
-/// from, and what a turn does.
+/// from, what stops it, and what a turn does.
 struct Walk {
     name: String,
     init: Expr,
+    keep: Option<Expr>,
     body: Block,
+    /// Whether the accumulator is a list, which is what the checker says
+    /// rather than what the literal looks like: `concat` starts from a name.
+    builds_a_list: bool,
 }
 
-/// Every walk in one file that carries an accumulator.
-fn walks(text: &str) -> Vec<Walk> {
-    let mut sources = deed_diagnostics::SourceMap::new();
-    let file = sources.add("walk.deed".to_string(), text.to_string());
-    let lexed = deed_lexer::tokenize(file, sources.file(file).text());
-    let parsed = deed_parser::parse(file, &lexed.tokens);
-    assert!(!parsed.has_errors(), "every file here should parse");
+impl Walk {
+    fn shape(&self) -> deed_mir::Walk<'_> {
+        deed_mir::Walk {
+            name: &self.name,
+            init: &self.init,
+            keep: self.keep.as_ref(),
+            body: &self.body,
+        }
+    }
+}
 
+/// Every walk in one module that carries an accumulator.
+fn walks(checked: &Checked) -> Vec<Walk> {
     let mut found = Vec::new();
-    for item in &parsed.module.items {
+    for item in &checked.module.items {
         let body = match item {
             Item::Function(decl) => &decl.body,
             Item::Test(decl) => &decl.body,
             _ => continue,
         };
         collect(body, &mut found);
+    }
+    for walk in &mut found {
+        walk.builds_a_list = matches!(
+            checked.types.type_of(walk.init.span()),
+            Some(deed_typeck::ty::Ty::List(_))
+        );
     }
     found
 }
@@ -111,16 +168,22 @@ fn in_expr(expr: &Expr, found: &mut Vec<Walk>) {
         Expr::For {
             accumulator,
             iterable,
+            keep,
             body,
             ..
         } => {
             in_expr(iterable, found);
+            if let Some(more) = keep {
+                in_expr(more, found);
+            }
             if let Some(Accumulator { name, init, .. }) = accumulator {
                 in_expr(init, found);
                 found.push(Walk {
                     name: name.name.clone(),
                     init: (**init).clone(),
+                    keep: keep.as_deref().cloned(),
                     body: body.clone(),
+                    builds_a_list: false,
                 });
             }
             collect(body, found);
@@ -182,13 +245,23 @@ fn in_expr(expr: &Expr, found: &mut Vec<Walk>) {
     }
 }
 
-/// How many walks the rule accepts, and how many are every other shape.
+/// Of the walks that build a list, how many the rule accepts and how many it
+/// does not.
+///
+/// A walk carrying a number or a flag allocates nothing, so counting those in
+/// would be measuring how often this language folds rather than how much of
+/// the waste this answers. The denominator is the one the name of the test
+/// below always claimed.
 fn counted() -> (usize, usize) {
     let mut appending = 0usize;
     let mut other = 0usize;
-    for text in sources() {
-        for walk in walks(&text) {
-            if only_pushes(&walk.name, &walk.body) {
+    for checked in subjects() {
+        let provided = provided(&checked.resolutions);
+        for walk in walks(&checked) {
+            if !walk.builds_a_list {
+                continue;
+            }
+            if only_pushes(&walk.shape(), &provided) {
                 appending += 1;
             } else {
                 other += 1;
@@ -203,12 +276,13 @@ fn counted() -> (usize, usize) {
 fn into_records() -> (usize, usize) {
     let mut carrying = 0usize;
     let mut fields = 0usize;
-    for text in sources() {
-        for walk in walks(&text) {
-            if only_pushes(&walk.name, &walk.body) {
+    for checked in subjects() {
+        let provided = provided(&checked.resolutions);
+        for walk in walks(&checked) {
+            if only_pushes(&walk.shape(), &provided) {
                 continue;
             }
-            let built = pushed_fields(&walk.name, &walk.init, &walk.body);
+            let built = pushed_fields(&walk.shape(), &provided);
             if !built.is_empty() {
                 carrying += 1;
                 fields += built.len();
@@ -274,25 +348,33 @@ fn some_of_the_other_walks_build_a_list_inside_a_record() {
 /// The decision records print these numbers, so they have to be these numbers.
 ///
 /// The tests above are floors on purpose, and a floor is exactly what lets an
-/// exact number written down elsewhere go quietly wrong: the first record
-/// shipped saying forty-four and thirty-four against a rule that answered
-/// forty and thirty-eight, and nothing was in a position to notice. A record
+/// exact number written down elsewhere go quietly wrong. It has happened
+/// twice. The first record shipped saying forty-four and thirty-four against a
+/// rule that answered forty and thirty-eight, and nothing was in a position to
+/// notice. Then this test was written, and the counts it pinned were still
+/// wrong, because the rule it asked was missing a condition that lived at the
+/// call site and the denominator counted walks that build no list. A record
 /// whose measurement no longer holds is worse than one with no measurement,
 /// because the reasoning above it is read as resting on something.
+///
+/// Both pages print the counts now, and both are read off disk, so a number
+/// updated in one of them and not the other says so.
 #[test]
 fn the_decision_records_print_the_counts_this_measures() {
     const PUSHES: &str = "2026-08-04-a-walk-that-only-pushes.md";
+    const LENGTH: &str = "2026-08-05-a-walk-may-read-its-own-length.md";
     const RECORD: &str = "2026-08-04-a-walk-that-pushes-into-a-record.md";
+    const IN_PLACE: &str = "walks that build a list and only ever push onto it";
+    const REST: &str = "walks that build a list some other way";
 
     let (appending, other) = counted();
-    assert_eq!(
-        (
-            printed(PUSHES, "walks whose accumulator is only ever pushed onto"),
-            printed(PUSHES, "walks of every other shape"),
-        ),
-        (appending, other),
-        "the counts in {PUSHES} are not the ones the rule gives today"
-    );
+    for page in [PUSHES, LENGTH] {
+        assert_eq!(
+            (printed(page, IN_PLACE), printed(page, REST)),
+            (appending, other),
+            "the counts in {page} are not the ones the rule gives today"
+        );
+    }
 
     let (carrying, fields) = into_records();
     assert_eq!(

@@ -15,11 +15,39 @@
 //! copy of the same idea.
 
 use deed_ast::{Block, Expr, FieldInit, Stmt};
+use deed_diagnostics::Span;
+
+/// One walk that carries an accumulator, as the rules here read it.
+///
+/// The `while` clause is part of it because the accumulator is in scope there
+/// and read there. Leaving it out is how `std/list`'s `take` came to be
+/// compiled in place while nothing had looked at the condition it stops on.
+pub struct Walk<'a> {
+    /// What the accumulator is called.
+    pub name: &'a str,
+    /// What it starts from.
+    pub init: &'a Expr,
+    /// The `while` clause, read before each turn, or `None` without one.
+    pub keep: Option<&'a Expr>,
+    /// What a turn does.
+    pub body: &'a Block,
+}
+
+/// Whether the name written at a span is one the language provides.
+///
+/// The rules here let a walk read its accumulator's length, and they find
+/// that read by name. Shadowing a builtin is a warning rather than an error,
+/// so a file can declare or import a `length` of its own, and a function a
+/// program wrote could hand the accumulator to something that keeps it.
+/// Resolving names is the caller's job; this only knows the shape.
+pub type Provided<'a> = &'a dyn Fn(Span) -> bool;
 
 /// Whether a walk over a list can build one list rather than one a turn.
 ///
-/// Two things have to hold, and both are about the same one place: the value
-/// of a path through the body, which is what the next turn is handed.
+/// Three things have to hold, and the middle one is about a single place: the
+/// value of a path through the body, which is what the next turn is handed.
+///
+/// The accumulator starts from the empty list, because a reserved block does.
 ///
 /// Every path's value is either the bare name or one `push` straight onto it,
 /// so the block that comes out of a turn is the block that went in and a turn
@@ -29,19 +57,44 @@ use deed_ast::{Block, Expr, FieldInit, Stmt};
 /// one a turn, and the accumulator would come out of the turn as a copy that
 /// was never given room at all, so the next turn would write past the end.
 ///
-/// And those are the only places the name appears at all, which is what the
-/// count says. Anywhere else is a place that could keep the accumulator, or a
-/// second push in a turn the first condition never sees, and there is no
-/// attempt to work out whether it would matter.
-pub fn only_pushes(name: &str, body: &Block) -> bool {
-    let whole = Expr::Block(body.clone());
-    let Some(values) = path_values(&whole) else {
+/// And those, together with reading the accumulator's own length, are the only
+/// places the name appears at all, which is what the count says. Anywhere else
+/// is a place that could keep the accumulator, or a second push in a turn the
+/// condition above never sees, and there is no attempt to work out whether it
+/// would matter.
+///
+/// Reading the length is allowed because the length is written as the walk
+/// goes, so it answers what it would have answered, and an `Int` is not a way
+/// to keep a list. See
+/// `design/decisions/2026-08-05-a-walk-may-read-its-own-length.md`.
+pub fn only_pushes(walk: &Walk<'_>, provided: Provided<'_>) -> bool {
+    if !starts_empty(walk.init) {
+        return false;
+    }
+
+    let body = Expr::Block(walk.body.clone());
+    let Some(values) = path_values(&body) else {
         return false;
     };
-    values
+    if !values
         .iter()
-        .all(|value| is_name(name, value) || pushes_onto(name, value))
-        && mentions(name, &whole) == values.len()
+        .all(|value| is_name(walk.name, value) || pushes_onto(walk.name, value))
+    {
+        return false;
+    }
+
+    let mut seen = mentions(walk.name, &body);
+    let mut read = lengths_read(&body, provided, &|held| is_name(walk.name, held));
+    if let Some(keep) = walk.keep {
+        seen += mentions(walk.name, keep);
+        read += lengths_read(keep, provided, &|held| is_name(walk.name, held));
+    }
+    seen == values.len() + read
+}
+
+/// Whether this is the empty list, which is what a reserved block starts as.
+fn starts_empty(init: &Expr) -> bool {
+    matches!(init, Expr::List { elements, .. } if elements.is_empty())
 }
 
 /// Whether this expression is the bare name.
@@ -66,19 +119,21 @@ fn is_name(name: &str, expr: &Expr) -> bool {
 /// reserved block starts empty. Every path's value is a record literal of the
 /// same shape as the one the walk started from, whose entry for the field is
 /// either that field read off the accumulator or one `push` onto it, so the
-/// block that comes out of a turn is the block that went in. And those are the
-/// only places the field is read, so nothing else holds it. Fields that fail
-/// any of them are left alone: `scan` carries a `Pair` whose left is an
-/// ordinary value and whose right is built by pushing.
-pub fn pushed_fields(name: &str, init: &Expr, body: &Block) -> Vec<String> {
+/// block that comes out of a turn is the block that went in. And those, along
+/// with reading the field's own length, are the only places the field is read,
+/// so nothing else holds it. Fields that fail any of them are left alone:
+/// `scan` carries a `Pair` whose left is an ordinary value and whose right is
+/// built by pushing.
+pub fn pushed_fields(walk: &Walk<'_>, provided: Provided<'_>) -> Vec<String> {
     let Expr::StructLit {
         path,
         fields,
         span: _,
-    } = init
+    } = walk.init
     else {
         return Vec::new();
     };
+    let name = walk.name;
     let candidates: Vec<&str> = fields
         .iter()
         .filter(|field| {
@@ -90,14 +145,17 @@ pub fn pushed_fields(name: &str, init: &Expr, body: &Block) -> Vec<String> {
         return Vec::new();
     }
 
-    let whole = Expr::Block(body.clone());
+    let body = Expr::Block(walk.body.clone());
+    let places: Vec<&Expr> = std::iter::once(&body).chain(walk.keep).collect();
 
     // Nothing holds the record itself: every mention of it is a field read.
-    if mentions(name, &whole) != field_reads(name, &whole) {
+    let seen: usize = places.iter().map(|place| mentions(name, place)).sum();
+    let reads: usize = places.iter().map(|place| field_reads(name, place)).sum();
+    if seen != reads {
         return Vec::new();
     }
 
-    let Some(values) = path_values(&whole) else {
+    let Some(values) = path_values(&body) else {
         return Vec::new();
     };
     let mut rebuilt: Vec<&[FieldInit]> = Vec::new();
@@ -125,7 +183,7 @@ pub fn pushed_fields(name: &str, init: &Expr, body: &Block) -> Vec<String> {
 
     candidates
         .into_iter()
-        .filter(|field| pushed_field(name, field, &whole, &rebuilt))
+        .filter(|field| pushed_field(name, field, &places, provided, &rebuilt))
         .map(str::to_string)
         .collect()
 }
@@ -143,7 +201,13 @@ fn same_path(one: &Expr, other: &Expr) -> bool {
 }
 
 /// Whether one field of a record accumulator is only ever pushed onto.
-fn pushed_field(name: &str, field: &str, whole: &Expr, rebuilt: &[&[FieldInit]]) -> bool {
+fn pushed_field(
+    name: &str,
+    field: &str,
+    places: &[&Expr],
+    provided: Provided<'_>,
+    rebuilt: &[&[FieldInit]],
+) -> bool {
     let mut pushes = 0;
     let mut handed = 0;
     for fields in rebuilt {
@@ -167,8 +231,17 @@ fn pushed_field(name: &str, field: &str, whole: &Expr, rebuilt: &[&[FieldInit]])
         }
     }
 
+    let seen: usize = places
+        .iter()
+        .map(|place| reads_of_field(name, field, place))
+        .sum();
+    let read: usize = places
+        .iter()
+        .map(|place| lengths_read(place, provided, &|held| reads_field(name, field, held)))
+        .sum();
+
     // A field the walk never appends to would be reserved for nothing.
-    pushes > 0 && reads_of_field(name, field, whole) == pushes + handed
+    pushes > 0 && seen == pushes + handed + read
 }
 
 /// Whether this expression reads that field off the accumulator.
@@ -211,6 +284,29 @@ fn pushes_onto(name: &str, expr: &Expr) -> bool {
     };
     matches!(&**callee, Expr::Ident(callee) if callee.name == "push")
         && args.first().is_some_and(|first| is_name(name, first))
+}
+
+/// How many times something the walk is about is handed to `length`.
+///
+/// One argument and nothing else, so `length(out)` counts and a call that
+/// happens to be spelled the same with the accumulator somewhere in a longer
+/// argument list does not. The answer is an `Int`, so nothing the call hands
+/// back can be the list, and the length a reserved block reports is written as
+/// the walk goes, so the number is the one the walk would have got.
+fn lengths_read(expr: &Expr, provided: Provided<'_>, held: &dyn Fn(&Expr) -> bool) -> usize {
+    let mut count = 0;
+    each(expr, &mut |found| {
+        if let Expr::Call { callee, args, .. } = found
+            && let Expr::Ident(callee) = &**callee
+            && callee.name == "length"
+            && provided(callee.span)
+            && args.len() == 1
+            && held(&args[0])
+        {
+            count += 1;
+        }
+    });
+    count
 }
 
 /// The value of every path through `expr`, or `None` when some path has none.

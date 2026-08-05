@@ -96,6 +96,21 @@ release notes.
   accumulator somewhere else in the body. Both are refused now, and neither
   shape appears in the shipped library or the corpus, so nothing that used to
   take the fast path stopped taking it.
+- Fixed: the same rule never looked at a walk's `while` clause, which is read
+  before each turn with the accumulator in scope. A walk that handed its
+  accumulator to something that kept it there was still compiled as though
+  nothing could reach the list, and went on writing into a block the program
+  was holding. `crates/deed-driver/tests/agreement.rs` carries the program:
+  it answered 4 interpreted and 404 compiled.
+- A walk may read its accumulator's own length. `push(out, length(out))` builds
+  one list rather than one a turn now, so a walk can number what it is building
+  without carrying the position beside it. Reading a length keeps nothing, and
+  the length of a reserved block is written as the walk goes, so every read
+  answers what a walk that copied would have answered. `std/hashmap`'s `range`
+  is written the obvious way again and the record it carried to work around the
+  refusal is gone; a compiled map now stops between three and four hundred keys
+  rather than between two and three. Decision record:
+  `design/decisions/2026-08-05-a-walk-may-read-its-own-length.md`.
 
 ### Measurements
 
@@ -106,6 +121,15 @@ release notes.
   forty-four walks of the shape against thirty-four of every other. The rule
   that shipped answered forty and thirty-eight. The record now says what the
   rule says, and a test holds it there.
+- Those corrected counts were wrong too, in two ways that cancelled out about
+  half of each other. One condition of the rule lived at the call site rather
+  than with the other two, so the measurement counted eight walks the compiler
+  never built in one list, and the denominator counted walks whose accumulator
+  is a number and which allocate nothing. Of the walks that build a list,
+  thirty-nine are built in one and twenty-one are not. Both decision records
+  print the numbers and both are read off disk by the test.
+- A compiled `range` of 64 allocated 2080 bytes and now allocates 1040, which
+  is the record it used to build a turn going away.
 
 ## 0.2.4 (2026-08-04)
 
