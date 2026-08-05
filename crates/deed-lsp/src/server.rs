@@ -159,6 +159,7 @@ impl Server {
             "textDocument/codeAction" => result(id, self.code_action(message)),
             "textDocument/documentSymbol" => result(id, self.document_symbol(message)),
             "textDocument/foldingRange" => result(id, self.folding_range(message)),
+            "textDocument/semanticTokens/full" => result(id, self.semantic_tokens(message)),
             "textDocument/selectionRange" => result(id, self.selection_range(message)),
             "textDocument/documentLink" => result(id, self.document_link(message)),
             "textDocument/signatureHelp" => result(id, self.signature_help(message)),
@@ -1553,6 +1554,50 @@ impl Server {
         Json::Array(ranges)
     }
 
+    /// What each token means, for an editor that colours from meaning.
+    ///
+    /// A TextMate grammar guesses from spelling; this is the compiler's own
+    /// lexer, so the split between a keyword and a name cannot drift from the
+    /// one the parser uses. What the lexer alone cannot say is what a name
+    /// stands for, since `Console` and `console` are both an identifier to it,
+    /// and that is what the resolver is asked: a name that resolves to a
+    /// function is a function, one that resolves to a record is a type, and a
+    /// name nothing resolved is a variable, which is what an editor shows for
+    /// text somebody is still typing.
+    ///
+    /// A file that does not check still gets colour. The resolver's answers
+    /// are read when there are any and skipped when there are not, rather than
+    /// the whole request failing, because the moment a reader most wants
+    /// colour is while the file is half-written.
+    fn semantic_tokens(&self, message: &Json) -> Json {
+        let Some(uri) = text_document_uri(message) else {
+            return Json::Null;
+        };
+        let Some(document) = self.documents.get(&uri) else {
+            return Json::Null;
+        };
+
+        let mut sources = SourceMap::new();
+        let file = sources.add(uri.clone(), document.text.clone());
+        let lexed = deed_lexer::tokenize(file, &document.text);
+        let checked = self.check_one(&uri);
+        let resolutions = checked.as_ref().map(|one| &one.resolutions);
+
+        let mut spans: Vec<(u32, u32, u32)> = Vec::new();
+        for token in &lexed.tokens {
+            let Some(kind) = token_type(token, resolutions) else {
+                continue;
+            };
+            spans.push((token.span.start, token.span.end, kind));
+        }
+        for trivia in &lexed.trivia {
+            spans.push((trivia.span.start, trivia.span.end, PAINT_COMMENT));
+        }
+        spans.sort_by_key(|(start, _, _)| *start);
+
+        Json::object(vec![("data", Json::Array(encoded(document, &spans)))])
+    }
+
     /// Which spans to select when the user asks to widen a selection.
     ///
     /// Reads the same parse tree as folding range, so a file that does not
@@ -2312,6 +2357,124 @@ fn touches(span: Span, start: u32, end: u32) -> bool {
 ///
 /// Every item with a body folds. `TypeAlias` has none. Handler operations are
 /// nested one level and each fold independently.
+/// The legend an editor is handed, and what an index into it means.
+///
+/// Short on purpose. Every entry is something the compiler already tells apart
+/// on its own; a longer legend would be this server inventing distinctions to
+/// fill it.
+const TOKEN_TYPES: [&str; 9] = [
+    "keyword",
+    "comment",
+    "string",
+    "number",
+    "function",
+    "type",
+    "parameter",
+    "variable",
+    "enumMember",
+];
+
+const PAINT_KEYWORD: u32 = 0;
+const PAINT_COMMENT: u32 = 1;
+const PAINT_STRING: u32 = 2;
+const PAINT_NUMBER: u32 = 3;
+const PAINT_FUNCTION: u32 = 4;
+const PAINT_TYPE: u32 = 5;
+const PAINT_PARAMETER: u32 = 6;
+const PAINT_VARIABLE: u32 = 7;
+const PAINT_VARIANT: u32 = 8;
+
+/// Which legend entry a token is, or `None` for one that carries no colour.
+///
+/// Punctuation is `None`: an editor already draws brackets and commas, and a
+/// server sending a type for every one of them would be sending most of the
+/// file to say nothing.
+fn token_type(
+    token: &deed_lexer::Token,
+    resolutions: Option<&deed_resolve::Resolutions>,
+) -> Option<u32> {
+    use deed_lexer::TokenKind;
+    Some(match &token.kind {
+        TokenKind::Keyword(_) => PAINT_KEYWORD,
+        TokenKind::Str(_) => PAINT_STRING,
+        TokenKind::Int(_) => PAINT_NUMBER,
+        TokenKind::Ident(name) => match resolutions
+            .and_then(|found| found.resolution(token.span).map(|def| found.def(def).kind))
+        {
+            // `Int` and `length` are both builtins and one of them is a type.
+            // Which is not a guess from the spelling: every type in this
+            // language starts with a capital and no value does, which is the
+            // rule the parser already decides `Int n = 3` by.
+            Some(DefKind::Builtin) => {
+                if name.chars().next().is_some_and(char::is_uppercase) {
+                    PAINT_TYPE
+                } else {
+                    PAINT_FUNCTION
+                }
+            }
+            Some(DefKind::Function | DefKind::EffectOp) => PAINT_FUNCTION,
+            Some(
+                DefKind::Record
+                | DefKind::Choice
+                | DefKind::Type
+                | DefKind::Effect
+                | DefKind::Handler
+                | DefKind::TypeParam,
+            ) => PAINT_TYPE,
+            Some(DefKind::Variant) => PAINT_VARIANT,
+            Some(DefKind::Param) => PAINT_PARAMETER,
+            _ => PAINT_VARIABLE,
+        },
+        _ => return None,
+    })
+}
+
+/// The protocol's encoding: five numbers a token, each line and column
+/// relative to the token before it.
+///
+/// A token that spans lines is split at every newline, because the encoding
+/// has no way to say a token is two lines long and an editor that received one
+/// would colour to the end of the first line and stop. A block comment is the
+/// only thing here that does span lines.
+fn encoded(document: &Document, spans: &[(u32, u32, u32)]) -> Vec<Json> {
+    let text = &document.text;
+    let mut data = Vec::new();
+    let mut line = 0u32;
+    let mut character = 0u32;
+
+    for (start, end, kind) in spans {
+        let mut from = *start as usize;
+        for piece in text[*start as usize..*end as usize].split('\n') {
+            if !piece.is_empty() {
+                let at = document.lines.position(text, from as u32);
+                let width = document
+                    .lines
+                    .position(text, (from + piece.len()) as u32)
+                    .character
+                    - at.character;
+                let delta_line = at.line - line;
+                let delta_start = if delta_line == 0 {
+                    at.character - character
+                } else {
+                    at.character
+                };
+                data.extend([
+                    Json::number(delta_line as i64),
+                    Json::number(delta_start as i64),
+                    Json::number(width as i64),
+                    Json::number(*kind as i64),
+                    Json::number(0),
+                ]);
+                line = at.line;
+                character = at.character;
+            }
+            from += piece.len() + 1;
+        }
+    }
+
+    data
+}
+
 fn item_folds(document: &Document, item: &Item, ranges: &mut Vec<Json>) {
     match item {
         Item::Deprecate(_) | Item::Operator(_) => {}
@@ -2753,6 +2916,27 @@ fn initialize_result() -> Json {
             ("documentFormattingProvider", Json::Bool(true)),
             ("documentSymbolProvider", Json::Bool(true)),
             ("foldingRangeProvider", Json::Bool(true)),
+            // The whole file each time and no delta. A delta is a second
+            // encoding of the same answer, and the answer is a lex of one
+            // document.
+            (
+                "semanticTokensProvider",
+                Json::object(vec![
+                    (
+                        "legend",
+                        Json::object(vec![
+                            (
+                                "tokenTypes",
+                                Json::Array(
+                                    TOKEN_TYPES.iter().map(|name| Json::string(*name)).collect(),
+                                ),
+                            ),
+                            ("tokenModifiers", Json::Array(Vec::new())),
+                        ]),
+                    ),
+                    ("full", Json::Bool(true)),
+                ]),
+            ),
             ("selectionRangeProvider", Json::Bool(true)),
             ("documentLinkProvider", Json::Bool(true)),
             ("workspaceSymbolProvider", Json::Bool(true)),

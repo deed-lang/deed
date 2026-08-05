@@ -73,6 +73,14 @@ release notes.
 
 ### Tools
 
+- `deed lsp` answers `textDocument/semanticTokens/full`, so an editor can
+  colour from what the compiler concluded rather than from a grammar that
+  guesses at spelling. The split between a keyword and a name is the lexer's
+  own, and what a name stands for is the resolver's: a name that resolves to a
+  function is a function, one that resolves to a record is a type, a variant is
+  an enum member and a parameter is a parameter. Punctuation carries no colour,
+  because an editor already draws brackets. A file that does not check is still
+  painted, since that is when a reader most wants it.
 - `deed debug` speaks the Debug Adapter Protocol on stdin and stdout, so an
   editor can set breakpoints, step in, over and out, and read the stack and the
   bindings of every active call. The program is held still by a hook the
