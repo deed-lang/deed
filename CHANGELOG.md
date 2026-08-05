@@ -24,6 +24,21 @@ release notes.
   the minus in front is the unary one is a question about the grammar, and the
   parser reads the pair as one number. Anywhere else the digits are still the
   literal that does not fit, reported once, by the pass that knows.
+
+- The backend compiles two shapes the checker had always accepted: a pattern
+  inside a record pattern, `Box { size: Inner { depth } }`, and a `let` that
+  takes a value apart, `let Point { x, y } = point`. Both checked, both ran
+  under the interpreter, and neither could be lowered, so `deed build` and
+  `deed test --compiled` quietly had nothing to say about a file that used
+  one. Nothing had noticed because a program the backend cannot lower and a
+  program with no tests in it produce the same silence.
+
+  Every case in `conformance/` that the checker accepts is now held to being
+  lowerable. The suite that already said the backend refuses nothing was
+  measuring `examples/`, which is the shapes one author happened to write; the
+  conformance cases exist to cover the language, which is the question that
+  was actually being asked.
+
 ### Standard library
 
 - `std/ratio` writes contracts. `absolute` promises a number that is not

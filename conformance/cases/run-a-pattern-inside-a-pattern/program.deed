@@ -1,0 +1,28 @@
+module conformance/case_nested_pattern
+
+record Inner {
+    depth: Int,
+}
+
+choice Shape {
+    Dot,
+    Box { size: Inner },
+}
+
+// A pattern inside a pattern. The outer one chooses the arm and the inner one
+// only names what is already there, which is why it needs no condition of its
+// own: `Inner` has one shape, so reaching into it always applies.
+fn depth_of(shape: Shape) -> Int {
+    match shape {
+        Dot => 0,
+        Box { size: Inner { depth } } => depth,
+    }
+}
+
+fn main(sys: System) -> ()
+  uses
+    Io.write,
+{
+    Io.write(sys.console, to_string(depth_of(Box { size: Inner { depth: 7 } })))
+    Io.write(sys.console, to_string(depth_of(Dot)))
+}

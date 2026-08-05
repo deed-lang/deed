@@ -1995,17 +1995,54 @@ impl Lowering<'_> {
                 } => {
                     let value = self.expr(init)?;
                     let ty = self.ty_at(init.span())?;
-                    let local = self.function.add_local(ty);
+                    let local = self.function.add_local(ty.clone());
                     match pattern {
                         ast::Pattern::Path { segments, .. } if segments.len() == 1 => {
                             if let Some(def) = self.resolutions.resolution(segments[0].span) {
                                 self.slots.insert(def, local);
                             }
+                            stmts.push(Stmt::Assign { local, value });
                         }
-                        ast::Pattern::Wildcard(_) => {}
-                        _ => return Err(unlowered("a `let` that takes a value apart", *span)),
+                        ast::Pattern::Wildcard(_) => stmts.push(Stmt::Assign { local, value }),
+                        // A `let` has no second arm, so the pattern has to
+                        // always apply. The checker already refuses one that
+                        // does not, and this reads the same paths a match arm
+                        // reads rather than a second way of taking a value
+                        // apart.
+                        other => {
+                            let Ty::Aggregate(layout) = ty else {
+                                return Err(unlowered("a `let` that takes a value apart", *span));
+                            };
+                            let (named, bindings) = self.arm_pattern(other, layout)?;
+                            if named.len() != self.layout(layout).variants.len() {
+                                return Err(unlowered("a `let` that could fail", *span));
+                            }
+                            stmts.push(Stmt::Assign { local, value });
+                            for (path, name) in bindings {
+                                let mut read = Expr::Local(local);
+                                let mut field_ty = Ty::Unit;
+                                for (layout, variant, field) in path {
+                                    field_ty = self.layout(layout).variants[variant].fields[field]
+                                        .ty
+                                        .clone();
+                                    read = Expr::Field {
+                                        value: Box::new(read),
+                                        layout,
+                                        variant,
+                                        field,
+                                    };
+                                }
+                                let bound = self.function.add_local(field_ty);
+                                if let Some(def) = self.resolutions.resolution(name.span) {
+                                    self.slots.insert(def, bound);
+                                }
+                                stmts.push(Stmt::Assign {
+                                    local: bound,
+                                    value: read,
+                                });
+                            }
+                        }
                     }
-                    stmts.push(Stmt::Assign { local, value });
                 }
                 ast::Stmt::Expr(expr) => {
                     let value = self.expr(expr)?;
@@ -3341,8 +3378,29 @@ impl Lowering<'_> {
                             .last()
                             .ok_or_else(|| unlowered("an empty pattern", *span))?,
                         Some(ast::Pattern::Wildcard(_)) => continue,
+                        // One level further in, which is the same read twice
+                        // over. The inner pattern has to always apply, for
+                        // the reason the one inside `err(..)` does: an arm
+                        // has one condition and a pattern that could fail
+                        // would need a second.
                         Some(other) => {
-                            return Err(unlowered("a pattern inside a pattern", other.span()));
+                            let field_ty = held.variants[at].fields[index].ty.clone();
+                            let Ty::Aggregate(inner) = field_ty else {
+                                return Err(unlowered("a pattern inside a pattern", other.span()));
+                            };
+                            let (named, held_by) = self.arm_pattern(other, inner)?;
+                            if named.len() != self.layout(inner).variants.len() {
+                                return Err(unlowered(
+                                    "a pattern inside a pattern that has to be tested",
+                                    other.span(),
+                                ));
+                            }
+                            for (path, name) in held_by {
+                                let mut reached = vec![(layout, at, index)];
+                                reached.extend(path);
+                                bindings.push((reached, name));
+                            }
+                            continue;
                         }
                     };
                     bindings.push((vec![(layout, at, index)], bound));

@@ -1,0 +1,21 @@
+module conformance/case_destructuring_let
+
+record Point {
+    x: Int,
+    y: Int,
+}
+
+// A `let` that takes a value apart. It has no second arm, so the pattern has
+// to be one that always applies: a record has one shape, and a choice would
+// need a `match`.
+fn sum(point: Point) -> Int {
+    let Point { x, y } = point
+    x + y
+}
+
+fn main(sys: System) -> ()
+  uses
+    Io.write,
+{
+    Io.write(sys.console, to_string(sum(Point { x: 2, y: 3 })))
+}
