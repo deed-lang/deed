@@ -1066,8 +1066,14 @@ The other half of the same argument is being able to name the edge. `Int.max` an
 are numbers wherever they are written, and folded where they are written, so
 `where n <= Int.max - 100` is a bound the checker settles rather than one it guards. Before
 them a clause about the edge had to carry nineteen digits, and the smallest `Int` had to be
-spelled `0 - 9223372036854775807 - 1`, because negation is an operator rather than part of a
-literal and the digits it would apply to are one past the largest.
+spelled `0 - 9223372036854775807 - 1`.
+
+That last part is no longer true either. `-9223372036854775808` is one literal: negation is
+an operator everywhere else, and the digits of the smallest `Int` are one past the largest,
+so the lexer hands the digits over without judging them and the parser puts the pair
+together when the minus in front is the unary one. Anywhere else those digits are the
+literal that does not fit and the parser says so, once. The name is still the better thing
+to write, and it is what the message points at.
 
 A solver would decide most of these and would be a hard dependency at check time, which P9
 has a budget against. Whether that trade is right is an open question, not a settled one.

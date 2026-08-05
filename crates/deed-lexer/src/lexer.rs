@@ -54,6 +54,22 @@ impl Lexed {
     }
 }
 
+/// What to say about digits that do not fit in `Int`.
+///
+/// Here rather than at the two places that emit it, because one of them is the
+/// parser: `9223372036854775808` is only wrong once it is known that no unary
+/// minus is in front of it, and that is not a question the lexer answers.
+pub fn integer_out_of_range(file: FileId, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        codes::INTEGER_OUT_OF_RANGE,
+        file,
+        span,
+        "integer literal does not fit in `Int`",
+    )
+    .with_primary_label("too large")
+    .with_note(format!("`Int` holds values up to {}", i64::MAX))
+}
+
 /// Turns source text into tokens. Always succeeds, possibly with diagnostics.
 pub fn tokenize(file: FileId, src: &str) -> Lexed {
     Lexer {
@@ -451,26 +467,15 @@ impl<'a> Lexer<'a> {
 
         match i64::from_str_radix(&digits, radix) {
             Ok(value) => TokenKind::Int(value),
+            // The digits of the smallest `Int` are one past the largest, and
+            // negation is an operator rather than part of a literal, so these
+            // digits are not wrong until it is known what is in front of them.
+            // The parser answers that; see [`TokenKind::IntAtLimit`].
+            Err(_) if u128::from_str_radix(&digits, radix) == Ok(i64::MAX as u128 + 1) => {
+                TokenKind::IntAtLimit
+            }
             Err(_) => {
-                let mut diagnostic = Diagnostic::error(
-                    codes::INTEGER_OUT_OF_RANGE,
-                    self.file,
-                    literal_span,
-                    "integer literal does not fit in `Int`",
-                )
-                .with_primary_label("too large")
-                .with_note(format!("`Int` holds values up to {}", i64::MAX));
-                // The one number a reader is likely to have meant. Negation
-                // is an operator rather than part of a literal, so the digits
-                // of the smallest `Int` are one past the largest and there is
-                // nothing a literal alone could say.
-                if u128::from_str_radix(&digits, radix) == Ok(i64::MAX as u128 + 1) {
-                    diagnostic = diagnostic.with_note(
-                        "this is one past the largest, and `-` is an operator rather than part \
-                         of a literal, so the smallest `Int` is written `Int.min`",
-                    );
-                }
-                self.emit(diagnostic);
+                self.emit(integer_out_of_range(self.file, literal_span));
                 // The largest there is, which is the number the note names.
                 // Nothing runs a file that does not check, and a token the
                 // parser cannot read would only say so twice.

@@ -14,6 +14,17 @@ release notes.
 
 - None yet.
 
+### Language
+
+- The smallest `Int` can be written down: `-9223372036854775808` is one
+  literal. Negation is an operator everywhere else, and the digits of the
+  smallest `Int` are one past the largest, so a literal alone could never say
+  it and a clause about the edge had to spell it `0 - 9223372036854775807 - 1`.
+  The lexer now hands those digits over without judging them, because whether
+  the minus in front is the unary one is a question about the grammar, and the
+  parser reads the pair as one number. Anywhere else the digits are still the
+  literal that does not fit, reported once, by the pass that knows.
+
 ## 0.2.5 (2026-08-05)
 
 This release is about what a compiled program does with memory, and about the
