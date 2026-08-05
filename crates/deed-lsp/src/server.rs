@@ -2444,15 +2444,14 @@ fn encoded(document: &Document, spans: &[(u32, u32, u32)]) -> Vec<Json> {
 
     for (start, end, kind) in spans {
         let mut from = *start as usize;
-        while from < *end as usize {
-            let rest = &text[from..*end as usize];
-            let to = match rest.find('\n') {
-                Some(at) => from + at,
-                None => *end as usize,
-            };
-            if to > from {
+        for piece in text[*start as usize..*end as usize].split('\n') {
+            if !piece.is_empty() {
                 let at = document.lines.position(text, from as u32);
-                let width = document.lines.position(text, to as u32).character - at.character;
+                let width = document
+                    .lines
+                    .position(text, (from + piece.len()) as u32)
+                    .character
+                    - at.character;
                 let delta_line = at.line - line;
                 let delta_start = if delta_line == 0 {
                     at.character - character
@@ -2469,7 +2468,7 @@ fn encoded(document: &Document, spans: &[(u32, u32, u32)]) -> Vec<Json> {
                 line = at.line;
                 character = at.character;
             }
-            from = to + 1;
+            from += piece.len() + 1;
         }
     }
 

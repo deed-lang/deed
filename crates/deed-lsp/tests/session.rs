@@ -2748,6 +2748,40 @@ fn the_tokens_say_what_each_name_stands_for() {
 }
 
 #[test]
+fn every_token_lands_where_the_name_is() {
+    // The deltas are the whole encoding, and every one of them is relative to
+    // the token before it, so a single arithmetic slip moves everything after
+    // it. Reading the file back token by token is the only way to say that
+    // did not happen.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, "module a\n\nfn twice(n: Int) -> Int {\n    n + n\n}\n"),
+        semantic_tokens(2, URI),
+    ]);
+
+    let keyword = paint(&sent[0], "keyword");
+    let function = paint(&sent[0], "function");
+    let parameter = paint(&sent[0], "parameter");
+    let type_of = paint(&sent[0], "type");
+    let variable = paint(&sent[0], "variable");
+
+    assert_eq!(
+        placed(&sent[2]),
+        vec![
+            (0, 0, 6, keyword),   // module
+            (0, 7, 1, variable),  // a
+            (2, 0, 2, keyword),   // fn
+            (2, 3, 5, function),  // twice
+            (2, 9, 1, parameter), // n
+            (2, 12, 3, type_of),  // Int
+            (2, 20, 3, type_of),  // Int
+            (3, 4, 1, parameter), // n
+            (3, 8, 1, parameter), // n
+        ]
+    );
+}
+
+#[test]
 fn a_comment_over_several_lines_is_painted_a_line_at_a_time() {
     // The encoding has no way to say a token is two lines long, so a block
     // comment is split at every newline. Without the split an editor colours
