@@ -14,6 +14,39 @@ release notes.
 
 - None yet.
 
+## 0.2.5 (2026-08-05)
+
+This release is about what a compiled program does with memory, and about the
+last things a reader could not see.
+
+A walk that builds a list now builds one block rather than one a turn in three
+more shapes than it did: one that reads its own length, one that stops on a
+`while` clause, and one that starts from a list it was handed. That last one is
+`concat` and `prepend`, so joining two lists of 512 went from running out of
+memory to allocating twenty-four kilobytes. A compiled hash map reached two to
+three hundred keys and now reaches three to four hundred, which is the ceiling
+`design/hash-map-requirements.md` has been watching move.
+
+One of those changes closed a hole rather than opening a door. The rule read a
+walk's body and a `while` clause is not in the body, so a walk that handed its
+accumulator to something that kept it there was compiled as though nothing
+could reach the list. `crates/deed-driver/tests/agreement.rs` carries the
+program: it answered 4 interpreted and 404 compiled.
+
+Two questions that had been open were answered by building the thing and
+measuring it, and one of the answers is no. Property tests still do not cover
+effectful functions, and the reason is now written down rather than assumed: a
+handler with state is a model with a starting point, and generated arguments
+take it outside the world it models.
+
+The library gained a set, and the calendar gained the years before 1970. The
+language server answers semantic tokens, which is the last capability on its
+advertised list and the one an editor cannot work out for itself.
+
+### Programs that used to compile and no longer do
+
+- None.
+
 ### Language
 
 - `hash(value) -> Int` is a prelude function. Structural, with no trait bound,
