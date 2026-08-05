@@ -159,7 +159,7 @@ fn the_corpus_is_counted_by_tier_and_by_reason() {
             nothing_tries,
             no_reason_at_all,
         ),
-        (75, 8, 2, 1, 0, 0, 0, 9, 0),
+        (167, 11, 13, 1, 0, 0, 0, 9, 0),
         "the corpus's obligation counts changed; update this test and the table in \
          design/02-syntax.md together"
     );

@@ -54,8 +54,12 @@ asked anything, because no contract in the library says anything about a ratio. 
 that `1/2 + 1/3` had to be spelled `added(half, third)`, was an argument about operator
 overloading rather than about numbers, and that argument has since been made:
 [decisions/2026-08-03-operators-bound-to-functions.md](decisions/2026-08-03-operators-bound-to-functions.md)
-lets a module bind `+`, `-` and `*`, and `std/ratio` binds all three. What is left is a
-contract that has to say something about a fractional quantity. Binary floating point is
+lets a module bind `+`, `-` and `*`, and `std/ratio` binds all three. The third has been
+tested too: `std/ratio` now writes contracts, and a clause about a fractional quantity turned
+out to be a clause about integers, because a `Ratio` is two of them. The proof model needed
+nothing it did not have, and writing the clauses found an overflow nothing else had. What is
+left is a program that stores fractional quantities rather than computing with them and
+printing them. Binary floating point is
 still the wrong answer for money and decimal is still the leading candidate for stored base
 ten quantities, but neither has a program here that wants one.
 
@@ -242,8 +246,9 @@ when the decision should be reopened rather than when something regressed:
 
 - the trait threshold, by sorting and rendering `Ratio` and `Date` with passed functions, so
   that a passed function ceasing to be enough is what fails
-- the fractional threshold's second half, by counting the contract clauses in `std/ratio`,
-  which is zero and is why the proof model was never asked anything
+- the fractional threshold's second half, by keeping the contract clauses in `std/ratio`
+  written and a program that uses the library running, since the page now rests on what
+  asking the proof model about a fraction turned out to cost
 - the `Result`/`List` threshold's second half, by checking that `for` still walks a list and
   nothing else
 

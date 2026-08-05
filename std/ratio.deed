@@ -57,7 +57,18 @@ fn euclid_steps() -> Int {
 }
 
 // The size of a number, ignoring its sign.
-fn absolute(n: Int) -> Int {
+//
+// The smallest `Int` has no positive counterpart, so `0 - n` overflows for it
+// and there is no answer to give. That is a precondition rather than a
+// `Result`: every caller here reaches this through a constructor that has
+// already turned the number away, and a `Result` would make each of them
+// carry a failure none of them can have.
+fn absolute(n: Int) -> Int
+  where
+    n > Int.min,
+  ensures
+    ok  => result >= 0,
+{
     if n < 0 {
         0 - n
     } else {
@@ -70,7 +81,13 @@ fn absolute(n: Int) -> Int {
 // `gcd(0, 0)` is `0`, which is the usual convention and the only answer that
 // does not require refusing. Nothing here divides by it: `simplified` checks
 // for zero first.
-fn greatest_common_divisor(a: Int, b: Int) -> Int {
+fn greatest_common_divisor(a: Int, b: Int) -> Int
+  where
+    a > Int.min,
+    b > Int.min,
+  ensures
+    ok  => result >= 0,
+{
     let settled = for _step at _i in repeat(0, euclid_steps()) with pair = Pair { left: absolute(a), right: absolute(b) } while pair.right != 0 {
         Pair { left: pair.right, right: pair.left % pair.right }
     }
@@ -83,7 +100,14 @@ fn greatest_common_divisor(a: Int, b: Int) -> Int {
 // Called by every constructor. `bottom` of zero is not this function's problem
 // to refuse, because it has no way to say so; `ratio` refuses it before getting
 // here, and the two callers that skip `ratio` build their own denominators.
-fn simplified(top: Int, bottom: Int) -> Ratio {
+fn simplified(top: Int, bottom: Int) -> Ratio
+  where
+    top > Int.min,
+    bottom > Int.min,
+    bottom != 0,
+  ensures
+    ok  => result.bottom > 0,
+{
     if top == 0 {
         Ratio { top: 0, bottom: 1 }
     } else {
@@ -99,14 +123,29 @@ fn simplified(top: Int, bottom: Int) -> Ratio {
     }
 }
 
-// A ratio of two numbers, or a refusal when the second is zero.
+// A ratio of two numbers, or a refusal when the second is zero or either is
+// the smallest `Int`.
 //
-// A `Result` rather than a refinement on the parameter: a denominator is
+// A `Result` rather than a refinement on the parameters: a denominator is
 // usually a count that came from somewhere, and the caller is the one who knows
-// whether zero means "no data" or "a bug".
+// whether zero means "no data" or "a bug". The smallest `Int` is turned away
+// here for a different reason, and it is the door that does it: `simplified`
+// takes the size of both numbers and the smallest `Int` has no positive
+// counterpart, so this is where the check happens once and everything below
+// gets to be proven rather than guarded.
+// Written as `<=` rather than `==` on purpose. The two say the same thing
+// about an `Int`, since nothing is below the smallest one, but a comparison is
+// what narrows a range: after `top <= Int.min` fails, `top > Int.min` is a
+// fact, and after `top == Int.min` fails all the checker knows is that one
+// number is out. That is the difference between the call below being proven
+// and being checked again at run time.
 fn ratio(top: Int, bottom: Int) -> Result<Ratio, String> {
     if bottom == 0 {
         err("a ratio has no denominator of zero")
+    } else if top <= Int.min {
+        err("a ratio is not made of the smallest Int, which has no size")
+    } else if bottom <= Int.min {
+        err("a ratio is not made of the smallest Int, which has no size")
     } else {
         ok(simplified(top, bottom))
     }

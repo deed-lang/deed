@@ -24,6 +24,35 @@ release notes.
   the minus in front is the unary one is a question about the grammar, and the
   parser reads the pair as one number. Anywhere else the digits are still the
   literal that does not fit, reported once, by the pass that knows.
+### Standard library
+
+- `std/ratio` writes contracts. `absolute` promises a number that is not
+  negative and asks for one that is not the smallest `Int`, because that one
+  has no positive counterpart and `0 - n` overflowed for it; `ratio` turns it
+  away at the door so everything below is proven rather than checked again.
+  `simplified` promises a positive denominator. Ninety-two of that module's
+  obligations are proven, three are tested by generated inputs and eleven are
+  guarded, and every guarded one is a call whose arguments are arithmetic.
+  This is the threshold `design/fractional-values.md` was watching for: the
+  page has been reread and the answer did not change, because a clause about a
+  fraction made of two `Int`s is a clause about integers.
+- Fixed: `ratio(Int.min, 1)` stopped the program instead of answering. Nothing
+  had noticed, because nothing had been asked to say what `absolute` promises.
+
+### Measurements
+
+- The corpus and the shipped library carry 167 proven obligations, 11 tested
+  and 23 guarded, against 75, 8 and 12 before `std/ratio` had contracts. An
+  unattempted `ensures` clause is no longer the majority of what is guarded,
+  which was never what the page rested on; that nothing settles one ahead of
+  time is, and it still holds.
+- Of the twenty-nine calls to `at` in the library and the corpus, twelve pay
+  for a failure with a `match` or a `?`, and exactly one of those is a bound
+  the checker could discharge today. Every other one indexes a list that came
+  back from a call, and `length(f(x))` is not a term the prover holds, so the
+  caller could not prove the bound even if there were somewhere to spend it.
+  That moves the open question about a total indexing form rather than
+  answering it: what is in the way is not the prelude name.
 
 ## 0.2.5 (2026-08-05)
 
