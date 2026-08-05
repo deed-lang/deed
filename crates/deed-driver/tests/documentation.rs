@@ -959,6 +959,23 @@ fn what_holds_result_in_the_language_is_counted_where_it_is_claimed() {
         syntax.len(),
         all.len()
     );
+
+    // `design/refusals.md` makes the same argument in its own words and was
+    // the copy nothing read: it went on saying nineteen after a twentieth
+    // crate arrived. Whitespace is collapsed because the sentence wraps.
+    let refusals = read("design/refusals.md")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let same = format!(
+        "reaches into {} of the {} crates in this workspace",
+        spelled(syntax.len()),
+        spelled(all.len())
+    );
+    assert!(
+        refusals.contains(&same),
+        "design/refusals.md makes the same claim and should read {same:?}"
+    );
 }
 
 /// The number in the README's own transcript of `deed test examples/`.
