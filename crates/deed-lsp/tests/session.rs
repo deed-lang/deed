@@ -2660,16 +2660,33 @@ fn semantic_tokens(id: i64, uri: &str) -> String {
     ))
 }
 
-/// Every token's type, in file order, after undoing the delta encoding.
-fn painted(message: &Json) -> Vec<i64> {
+/// Every token as (line, character, length, type), after undoing the deltas.
+fn placed(message: &Json) -> Vec<(i64, i64, i64, i64)> {
     let data = message
         .at(&["result", "data"])
         .and_then(Json::as_array)
         .unwrap_or_else(|| panic!("semantic tokens should answer with data: {message:?}"));
     assert_eq!(data.len() % 5, 0, "five numbers a token: {message:?}");
-    data.chunks(5)
-        .map(|one| one[3].as_i64().expect("a token type"))
-        .collect()
+
+    let mut line = 0i64;
+    let mut character = 0i64;
+    let mut found = Vec::new();
+    for one in data.chunks(5) {
+        let numbers: Vec<i64> = one.iter().map(|n| n.as_i64().expect("a number")).collect();
+        line += numbers[0];
+        character = if numbers[0] == 0 {
+            character + numbers[1]
+        } else {
+            numbers[1]
+        };
+        found.push((line, character, numbers[2], numbers[3]));
+    }
+    found
+}
+
+/// Every token's type, in file order.
+fn painted(message: &Json) -> Vec<i64> {
+    placed(message).into_iter().map(|one| one.3).collect()
 }
 
 /// What the legend says each index means, read from the server's own reply.
@@ -2689,34 +2706,70 @@ fn legend(message: &Json) -> Vec<String> {
         .collect()
 }
 
+/// Where `what` sits in the legend the server advertised.
+fn paint(message: &Json, what: &str) -> i64 {
+    let names = legend(message);
+    names
+        .iter()
+        .position(|name| name == what)
+        .unwrap_or_else(|| panic!("the legend should carry {what}: {names:?}")) as i64
+}
+
 #[test]
 fn the_tokens_say_what_each_name_stands_for() {
     // The whole reason this exists rather than a grammar: a grammar guesses
-    // from spelling, and every name below spells the same way.
-    let source = "module a\n\n// note\nfn twice(n: Int) -> Int {\n    n + n\n}\n";
+    // from spelling, and every name below spells the same way. `Point` is a
+    // record and `Int` is a builtin type, so both halves of the type answer
+    // are here; `twice` is a function, `n` is a parameter and `held` is a
+    // binding nothing else knows about.
+    let source = "module a\n\n// note\nrecord Point {\n    x: Int,\n}\n\nfn twice(n: Int) -> Int {\n    let held = n\n    held + n\n}\n";
     let sent = session(&[
         request(1, "initialize"),
         did_open(URI, source),
         semantic_tokens(2, URI),
     ]);
 
-    let names = legend(&sent[0]);
-    let index = |what: &str| {
-        names
-            .iter()
-            .position(|name| name == what)
-            .unwrap_or_else(|| panic!("the legend should carry {what}: {names:?}")) as i64
-    };
     let kinds = painted(&sent[2]);
+    for what in ["comment", "keyword", "function", "type", "parameter"] {
+        let wanted = paint(&sent[0], what);
+        assert!(kinds.contains(&wanted), "no {what} in {kinds:?}");
+    }
 
-    assert!(kinds.contains(&index("comment")), "{kinds:?} {names:?}");
-    assert!(kinds.contains(&index("keyword")), "{kinds:?} {names:?}");
-    assert!(kinds.contains(&index("function")), "{kinds:?} {names:?}");
-    assert!(kinds.contains(&index("type")), "{kinds:?} {names:?}");
-    assert!(kinds.contains(&index("parameter")), "{kinds:?} {names:?}");
-    // Punctuation carries no colour, so the count is names and words rather
-    // than every byte of the file.
-    assert!(kinds.len() < 12, "{kinds:?}");
+    // The record's name is a type because the resolver says so, not because
+    // of its capital: `Point` is only ever a type here, and a rule reading
+    // the spelling would paint `held` the same way if it were spelled `Held`.
+    let places = placed(&sent[2]);
+    let point = places
+        .iter()
+        .find(|(line, character, _, _)| *line == 3 && *character == 7)
+        .unwrap_or_else(|| panic!("`Point` sits on line 3: {places:?}"));
+    assert_eq!(point.3, paint(&sent[0], "type"), "{places:?}");
+    assert_eq!(point.2, 5, "`Point` is five characters: {places:?}");
+}
+
+#[test]
+fn a_comment_over_several_lines_is_painted_a_line_at_a_time() {
+    // The encoding has no way to say a token is two lines long, so a block
+    // comment is split at every newline. Without the split an editor colours
+    // to the end of the first line and stops. The blank line in the middle is
+    // the other half of it: a line the comment covers none of produces no
+    // token at all rather than one of no width.
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(
+            URI,
+            "module a\n\n/* one\n\n   two */\nfn f() -> Int {\n    1\n}\n",
+        ),
+        semantic_tokens(2, URI),
+    ]);
+
+    let comment = paint(&sent[0], "comment");
+    let lines: Vec<i64> = placed(&sent[2])
+        .into_iter()
+        .filter(|one| one.3 == comment)
+        .map(|one| one.0)
+        .collect();
+    assert_eq!(lines, vec![2, 4], "{:?}", placed(&sent[2]));
 }
 
 #[test]
@@ -2726,7 +2779,8 @@ fn a_file_that_does_not_check_is_still_painted() {
         did_open(URI, "module a\n\nfn f() -> Int {\n    nonesuch\n}\n"),
         semantic_tokens(2, URI),
     ]);
-    assert!(!painted(&sent[2]).is_empty());
+    let kinds = painted(&sent[2]);
+    assert!(kinds.contains(&paint(&sent[0], "variable")), "{kinds:?}");
 }
 
 #[test]
