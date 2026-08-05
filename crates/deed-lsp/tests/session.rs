@@ -2651,6 +2651,90 @@ fn a_folding_range_request_for_a_document_nobody_opened_is_null() {
     assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
 }
 
+// -- semantic tokens ---------------------------------------------------------
+
+fn semantic_tokens(id: i64, uri: &str) -> String {
+    framed(&format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/semanticTokens/full\",\
+         \"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}}}}}}"
+    ))
+}
+
+/// Every token's type, in file order, after undoing the delta encoding.
+fn painted(message: &Json) -> Vec<i64> {
+    let data = message
+        .at(&["result", "data"])
+        .and_then(Json::as_array)
+        .unwrap_or_else(|| panic!("semantic tokens should answer with data: {message:?}"));
+    assert_eq!(data.len() % 5, 0, "five numbers a token: {message:?}");
+    data.chunks(5)
+        .map(|one| one[3].as_i64().expect("a token type"))
+        .collect()
+}
+
+/// What the legend says each index means, read from the server's own reply.
+fn legend(message: &Json) -> Vec<String> {
+    message
+        .at(&[
+            "result",
+            "capabilities",
+            "semanticTokensProvider",
+            "legend",
+            "tokenTypes",
+        ])
+        .and_then(Json::as_array)
+        .expect("the legend is advertised")
+        .iter()
+        .map(|name| name.as_str().expect("a name").to_string())
+        .collect()
+}
+
+#[test]
+fn the_tokens_say_what_each_name_stands_for() {
+    // The whole reason this exists rather than a grammar: a grammar guesses
+    // from spelling, and every name below spells the same way.
+    let source = "module a\n\n// note\nfn twice(n: Int) -> Int {\n    n + n\n}\n";
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, source),
+        semantic_tokens(2, URI),
+    ]);
+
+    let names = legend(&sent[0]);
+    let index = |what: &str| {
+        names
+            .iter()
+            .position(|name| name == what)
+            .unwrap_or_else(|| panic!("the legend should carry {what}: {names:?}")) as i64
+    };
+    let kinds = painted(&sent[2]);
+
+    assert!(kinds.contains(&index("comment")), "{kinds:?} {names:?}");
+    assert!(kinds.contains(&index("keyword")), "{kinds:?} {names:?}");
+    assert!(kinds.contains(&index("function")), "{kinds:?} {names:?}");
+    assert!(kinds.contains(&index("type")), "{kinds:?} {names:?}");
+    assert!(kinds.contains(&index("parameter")), "{kinds:?} {names:?}");
+    // Punctuation carries no colour, so the count is names and words rather
+    // than every byte of the file.
+    assert!(kinds.len() < 12, "{kinds:?}");
+}
+
+#[test]
+fn a_file_that_does_not_check_is_still_painted() {
+    let sent = session(&[
+        request(1, "initialize"),
+        did_open(URI, "module a\n\nfn f() -> Int {\n    nonesuch\n}\n"),
+        semantic_tokens(2, URI),
+    ]);
+    assert!(!painted(&sent[2]).is_empty());
+}
+
+#[test]
+fn a_semantic_tokens_request_for_a_document_nobody_opened_is_null() {
+    let sent = session(&[request(1, "initialize"), semantic_tokens(2, URI)]);
+    assert_eq!(sent[1].at(&["result"]), Some(&Json::Null));
+}
+
 // -- selection range ---------------------------------------------------------
 
 fn selection_range(id: i64, uri: &str, positions: &[(u32, u32)]) -> String {
