@@ -19,9 +19,10 @@ falls out of the same division and modulo every other line here uses, which
 is why `is_leap_year` below is written separately rather than being the
 thing `date_of` consults.
 
-Only forward from 1970. A negative day count, from a clock set before then,
-would need floor division where this uses the truncating `/` the language
-has, and nothing has needed that yet. `date_of` says so rather than
+Only forward from year zero. `civil_from_days` shifts the day count by
+719468 days before dividing, so the arithmetic holds for any date after
+0000-03-01 and stops holding before it. A clock set that far back is a
+broken machine rather than an early one, and `date_of` says so rather than
 answering wrongly.
 
 ## `days_since_epoch`
@@ -29,6 +30,11 @@ answering wrongly.
 ### Behavior and limits
 
 How many whole days a millisecond count covers.
+
+Floor rather than truncation, which is the one place the difference shows:
+`/` in this language rounds toward zero, so the millisecond before the epoch
+would land on day zero and be read as the first of January 1970 rather than
+the last of December 1969.
 
 ### Signature
 
@@ -52,11 +58,12 @@ pure
 
 ### Examples from `std/date.deed`
 
-#### `a clock set before 1970 is refused rather than answered wrongly`
+#### `a clock set before 1970 reads as the day it is`
 
 ```deed
 assert days_since_epoch(86400000) == 1
 assert days_since_epoch(86399999) == 0
+assert days_since_epoch(0 - 1) == 0 - 1
 ```
 
 ## `date_of`
@@ -64,10 +71,10 @@ assert days_since_epoch(86399999) == 0
 ### Behavior and limits
 
 The civil date a millisecond count lands on, or a refusal for a clock set
-before 1970.
+before the arithmetic holds.
 
 A `Result` rather than a refinement on the parameter: a caller holding a
-number out of `Io.epoch` has no way to have proved it is not negative, and
+number out of `Io.epoch` has no way to have proved anything about it, and
 making them prove it would push the check to every call site rather than
 removing it.
 
@@ -93,7 +100,7 @@ pure
 
 ### Examples from `std/date.deed`
 
-#### `a clock set before 1970 is refused rather than answered wrongly`
+#### `a clock set before 1970 reads as the day it is`
 
 ```deed
 match date_of(0) {
@@ -105,10 +112,10 @@ match date_of(0) {
 
 The civil date a day count lands on, counting from 1970-01-01.
 
-Total for days at or after the epoch. Split out from `date_of` because the
-arithmetic is about days and the refusal is about milliseconds, and keeping
-them apart is what lets `date_of` be the only place that knows the two are
-related by a constant.
+Total for days from 0000-03-01 on, which is where the shift below runs out.
+Split out from `date_of` because the arithmetic is about days and the
+refusal is about milliseconds, and keeping them apart is what lets `date_of`
+be the only place that knows the two are related by a constant.
 
 ### Signature
 
@@ -345,8 +352,16 @@ assert text_of(1709164800000) == "2024-02-29"
 assert text_of(1709251200000) == "2024-03-01"
 ```
 
-#### `a clock set before 1970 is refused rather than answered wrongly`
+#### `a clock set before 1970 reads as the day it is`
 
 ```deed
-assert text_of(0 - 1) == "this calendar starts at 1970"
+assert text_of(0 - 1) == "1969-12-31"
+assert text_of(0 - 86400000) == "1969-12-31"
+assert text_of(0 - 86400001) == "1969-12-30"
+```
+
+#### `a clock set before the arithmetic holds is refused rather than answered wrongly`
+
+```deed
+assert text_of(0 - 62167219200000 - 86400000) == "this calendar starts at year zero"
 ```

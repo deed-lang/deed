@@ -258,12 +258,16 @@ fn reading_the_length_through_a_shadowed_name_is_refused() {
     ));
 }
 
-/// An accumulator that starts from something is not a reserved block.
+/// An accumulator that starts from a list it was handed, which is `concat`.
+///
+/// The shape is the same and so is the answer. What it starts from decides how
+/// much room to reserve and whether the first thing the walk does is take a
+/// copy, which is the caller's question rather than this rule's.
 #[test]
-fn an_accumulator_that_starts_from_a_list_is_refused() {
+fn an_accumulator_that_starts_from_a_list_is_accepted() {
     let source = "module a\n\nfn f(items: List<Int>) -> List<Int> {\n    for item in items with out = items {\n        push(out, item)\n    }\n}\n";
     let (accumulator, keep, body) = walk(source);
-    assert!(!only_pushes(
+    assert!(only_pushes(
         &Walk {
             name: &accumulator.name.name,
             init: &accumulator.init,

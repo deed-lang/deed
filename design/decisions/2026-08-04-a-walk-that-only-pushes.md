@@ -30,15 +30,16 @@ counting only the walks whose accumulator is a list, because a walk carrying a n
 allocates nothing:
 
 ```
-walks that build a list and only ever push onto it    39
-walks that build a list some other way                21
+walks that build a list and only ever push onto it    47
+walks that build a list some other way                17
 ```
 
 Those are today's numbers rather than the ones this shipped with. It said forty-five and
 forty-four, and both were wrong: the denominator was every walk carrying an accumulator, and
 the rule the measurement asked was missing the condition that lived at the call site.
-`design/decisions/2026-08-05-a-walk-may-read-its-own-length.md` has the correction and what
-it moved.
+`design/decisions/2026-08-05-a-walk-may-read-its-own-length.md` has the correction, and
+`design/decisions/2026-08-05-a-walk-may-start-from-a-list.md` is why the first number moved
+again.
 
 The ones the rule accepts are `map`, `map_at`, `filter`, `filter_at` and everything written
 like them. In each of them the accumulator appears once on each path through the body, as

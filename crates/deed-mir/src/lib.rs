@@ -594,6 +594,13 @@ pub mod runtime {
     /// accumulator is only ever pushed onto has no intermediate list anything
     /// can reach, so it builds one and this is how big it starts.
     pub const LIST_ROOM: &str = "deed_rt_list_room";
+    /// A copy of a list with room for this many more after it.
+    ///
+    /// What [`LIST_ROOM`] is for a walk that starts from nothing. A walk that
+    /// starts from a list it was handed cannot append to that list, because
+    /// whoever handed it over still holds it, so it takes a copy once and
+    /// appends to that.
+    pub const LIST_ROOM_FROM: &str = "deed_rt_list_room_from";
     /// The same list, one longer, written where it stands.
     ///
     /// Safe only where [`LIST_ROOM`] reserved the room and nothing else holds
@@ -620,6 +627,7 @@ pub mod runtime {
         LIST_LEN,
         LIST_REPEAT,
         LIST_ROOM,
+        LIST_ROOM_FROM,
         LIST_APPEND,
         CONTRACT_FAILED,
     ];

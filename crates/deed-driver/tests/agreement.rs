@@ -657,6 +657,17 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 4,
         },
+        // A walk that starts from a list it was handed, which is `concat`.
+        // The list it started from is one the caller still holds, so the walk
+        // takes a copy on the way in; what this reads back is that copy being
+        // a copy. Written as the list itself it would answer 1563 either way
+        // and say nothing.
+        Agreed {
+            name: "a walk that starts from a list somebody else holds",
+            source: "module a\n\nfn total(xs: List<Int>) -> Int {\n    for n in xs with sum = 0 {\n        sum + n\n    }\n}\n\nfn answer() -> Int {\n    let left = [1, 2, 3]\n    let both = for n in [4, 5] with out = left {\n        push(out, n)\n    }\n    total(both) * 100 + total(left) * 10 + length(left)\n}\n\ntest \"the list a walk starts from is not the list it builds\" {\n    assert answer() == 1563\n}\n",
+            call: "answer",
+            expect: 1563,
+        },
         // A `where` the caller satisfies. The checker proves it where the
         // call is written, so the compiled form has nothing left to check
         // and still answers the same.

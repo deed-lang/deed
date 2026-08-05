@@ -3539,9 +3539,16 @@ impl Lowering<'_> {
             keep,
             body,
         });
-        let in_place = shape
-            .as_ref()
-            .is_some_and(|walk| crate::shape::only_pushes(walk, &provided));
+        // The rule is about the shape; that the accumulator is a list is a
+        // question about its type, and this is where the type is known.
+        let carries_a_list = match accumulator {
+            Some(one) => matches!(self.ty_at(one.init.span())?, Ty::List(_)),
+            None => false,
+        };
+        let in_place = carries_a_list
+            && shape
+                .as_ref()
+                .is_some_and(|walk| crate::shape::only_pushes(walk, &provided));
 
         // A list accumulator answers no fields, because the two rules ask
         // about different shapes of what a walk starts from.
@@ -3555,15 +3562,28 @@ impl Lowering<'_> {
             Some(one) => {
                 let ty = self.ty_at(one.init.span())?;
                 let value = if in_place {
-                    // As long as the list being walked, which bounds it.
-                    Expr::Runtime {
-                        name: crate::runtime::LIST_ROOM,
-                        args: vec![Expr::Runtime {
-                            name: crate::runtime::LIST_LEN,
-                            args: vec![Expr::Local(list)],
-                            ret: Box::new(Ty::Int),
-                        }],
-                        ret: Box::new(ty.clone()),
+                    // As long as the list being walked, which bounds how much
+                    // it can grow. A walk that starts from a list it was
+                    // handed copies that list in first, because whoever
+                    // handed it over is still holding it.
+                    let room = Expr::Runtime {
+                        name: crate::runtime::LIST_LEN,
+                        args: vec![Expr::Local(list)],
+                        ret: Box::new(Ty::Int),
+                    };
+                    if crate::shape::starts_empty(&one.init) {
+                        Expr::Runtime {
+                            name: crate::runtime::LIST_ROOM,
+                            args: vec![room],
+                            ret: Box::new(ty.clone()),
+                        }
+                    } else {
+                        let from = self.expr(&one.init)?;
+                        Expr::Runtime {
+                            name: crate::runtime::LIST_ROOM_FROM,
+                            args: vec![from, room],
+                            ret: Box::new(ty.clone()),
+                        }
                     }
                 } else {
                     let built = self.expr(&one.init)?;

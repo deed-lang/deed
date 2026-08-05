@@ -141,7 +141,7 @@ fn enumerated(text: &str) -> Vec<String> {
 /// that outgrows it should be read as a sign that whatever is being counted is
 /// no longer the kind of thing to state in a sentence.
 fn spelled(n: usize) -> &'static str {
-    const WORDS: [&str; 106] = [
+    const WORDS: [&str; 121] = [
         "zero",
         "one",
         "two",
@@ -248,6 +248,21 @@ fn spelled(n: usize) -> &'static str {
         "one hundred and three",
         "one hundred and four",
         "one hundred and five",
+        "one hundred and six",
+        "one hundred and seven",
+        "one hundred and eight",
+        "one hundred and nine",
+        "one hundred and ten",
+        "one hundred and eleven",
+        "one hundred and twelve",
+        "one hundred and thirteen",
+        "one hundred and fourteen",
+        "one hundred and fifteen",
+        "one hundred and sixteen",
+        "one hundred and seventeen",
+        "one hundred and eighteen",
+        "one hundred and nineteen",
+        "one hundred and twenty",
     ];
     WORDS
         .get(n)
@@ -958,6 +973,23 @@ fn what_holds_result_in_the_language_is_counted_where_it_is_claimed() {
         "{} crates name `?` or an outcome ({syntax:?}) out of {}, so the sentence should read {claim:?}",
         syntax.len(),
         all.len()
+    );
+
+    // `design/refusals.md` makes the same argument in its own words and was
+    // the copy nothing read: it went on saying nineteen after a twentieth
+    // crate arrived. Whitespace is collapsed because the sentence wraps.
+    let refusals = read("design/refusals.md")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let same = format!(
+        "reaches into {} of the {} crates in this workspace",
+        spelled(syntax.len()),
+        spelled(all.len())
+    );
+    assert!(
+        refusals.contains(&same),
+        "design/refusals.md makes the same claim and should read {same:?}"
     );
 }
 

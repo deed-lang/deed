@@ -202,11 +202,11 @@ fn set<K, V>(map: List<List<Entry<K, V>>>, key: K, value: V) -> List<List<Entry<
 }
 
 // One bucket with the key in it, replacing what was there or adding it.
-fn written<K, V>(entries: List<Entry<K, V>>, key: K, value: V, had: Bool)
+fn written<K, V>(bucket: List<Entry<K, V>>, key: K, value: V, had: Bool)
     -> List<Entry<K, V>>
 {
     if had {
-        for one in entries with out = [] {
+        for one in bucket with out = [] {
             if one.key == key {
                 push(out, Entry { key: key, value: value })
             } else {
@@ -214,7 +214,7 @@ fn written<K, V>(entries: List<Entry<K, V>>, key: K, value: V, had: Bool)
             }
         }
     } else {
-        push(entries, Entry { key: key, value: value })
+        push(bucket, Entry { key: key, value: value })
     }
 }
 

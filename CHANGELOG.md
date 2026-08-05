@@ -54,6 +54,19 @@ release notes.
 
 ### Standard library
 
+- `std/set` is a set, written as the hash map with the values hidden. `none`,
+  `one`, `including`, `has`, `count`, `items`, `without`, `union`,
+  `intersection`, `difference`, `within` and `entries_of`. Not `with`, because
+  that is how a handler is installed and the grammar has the word already, and
+  no `Empty`, because an empty list takes its element type from where it is
+  used and there is nowhere here to take one from, so every constructor takes a
+  sample the way `std/hashmap`'s `empty` does.
+- `std/date` answers for a clock set before 1970. The only thing in the way was
+  that `/` rounds toward zero, so the millisecond before the epoch landed on
+  day zero and read as the first of January 1970; `days_since_epoch` floors
+  now. `date_of` still refuses, but only before year zero, which is where the
+  shift `civil_from_days` applies runs out rather than where the calendar
+  starts.
 - `std/ratio` binds `<` to `is_below`, so two ratios compare the way two `Int`s
   do. `is_below` and `is_above` are unchanged and still exported, because a
   comparison is what `sort` takes.
@@ -102,6 +115,14 @@ release notes.
   nothing could reach the list, and went on writing into a block the program
   was holding. `crates/deed-driver/tests/agreement.rs` carries the program:
   it answered 4 interpreted and 404 compiled.
+- A walk may start from a list it was handed and still build one block.
+  `concat` and `prepend` in `std/list` are that shape, and they used to copy
+  the whole accumulator every turn. The block is reserved as long as what the
+  walk started from plus the list it walks, and the walk copies what it started
+  from into it once, because whoever handed that list over is still holding it.
+  Joining two lists of 128 allocated 202272 bytes and now allocates 6184; two
+  of 512 ran out of memory and now allocate 24616. Decision record:
+  `design/decisions/2026-08-05-a-walk-may-start-from-a-list.md`.
 - A walk may read its accumulator's own length. `push(out, length(out))` builds
   one list rather than one a turn now, so a walk can number what it is building
   without carrying the position beside it. Reading a length keeps nothing, and
@@ -130,6 +151,9 @@ release notes.
   print the numbers and both are read off disk by the test.
 - A compiled `range` of 64 allocated 2080 bytes and now allocates 1040, which
   is the record it used to build a turn going away.
+- Of the walks in the library and the corpus that build a list, thirty-nine
+  were built in one block and forty-seven are now, which is `concat`, `prepend`
+  and six more like them joining the set.
 
 ## 0.2.4 (2026-08-04)
 
