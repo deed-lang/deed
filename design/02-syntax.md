@@ -820,9 +820,9 @@ by reason.
 
 | Tier or reason | Count |
 | --- | --- |
-| Proven | 75 |
-| Tested | 8 |
-| Guarded, nothing narrowed this name | 2 |
+| Proven | 167 |
+| Tested | 11 |
+| Guarded, nothing narrowed this name | 13 |
 | Guarded, nothing established this length | 1 |
 | Guarded, nothing names this value | 0 |
 | Guarded, crossed a module boundary | 0 |
@@ -830,7 +830,7 @@ by reason.
 | Guarded, nothing tries to prove this one ahead of time (an `ensures` clause) | 9 |
 | Guarded, no reason at all | 0 |
 
-The last two rows used to be one row saying nothing. Nine of the twelve `Guarded`
+The last two rows used to be one row saying nothing. Nine of the twenty-three `Guarded`
 obligations are `ensures` clauses, which `check_all` never routes through `facts::holds`:
 nothing tries to settle one ahead of time, so the floor is `Guarded` whatever the body looks
 like. Reporting that as an absent reason made it read as the same answer the other three
@@ -838,6 +838,11 @@ give, and those three are the checker having looked and come back without one. A
 deciding whether they have a bug needs "nobody tried" and "I could not" to be different
 sentences. `crates/deed-driver/tests/obligations.rs` now refuses any `Guarded` obligation
 that carries no reason at all.
+
+The thirteen in the first `Guarded` row are almost all one thing: `std/ratio` writes
+preconditions saying its numbers are not the smallest `Int`, and the calls that cannot
+discharge them are the ones whose arguments are arithmetic. That is the honest answer for
+them, since `left.top * right.bottom` really can be anything.
 
 **What this decides.** Zero of the corpus's `Guarded` obligations are "not a shape the
 checker reasons about", and zero crossed a module boundary. The two that are categorised at
@@ -1660,6 +1665,17 @@ using an effect to get around not having a loop.
   precondition means building a `Requires` with no Deed source behind it for the checker to
   attach, which is a gap in how `Signature` is built rather than a design question. That is
   more mechanism than a single pass here, so it stays open rather than half-done.
+  Counted again, over a corpus that has since doubled: the library and the corpus call `at`
+  twenty-nine times, and twelve of those pay for a failure by writing a `match` or a `?`.
+  Of the twelve, exactly one is a bound the checker could discharge today, `std/string`'s
+  `at(before, 0)` under `if length(before) > 1`. Every other one indexes a list that came
+  back from a call, `drop(stack, ..)` or `fields(line)` or `split(text, ..)`, and
+  `length(f(x))` is not a term the prover holds, so the caller could not prove the bound
+  even if there were somewhere to spend it.
+  That moves the question rather than answering it. What is in the way is not whether the
+  prelude should carry a total indexing form; it is that a program cannot say anything about
+  the length of a list it just computed. A second name would be spendable at one call site
+  out of twenty-nine.
 - Position is not something a callback can be handed by a library that does not already have
   it. A `for` says where it is now, so `std/list` can write `map_at`, `filter_at` and
   `fold_at` and anything else it wants out of that. What is still unanswered is whether an

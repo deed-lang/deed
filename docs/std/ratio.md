@@ -77,6 +77,12 @@ assert euclid_steps() > 92
 
 The size of a number, ignoring its sign.
 
+The smallest `Int` has no positive counterpart, so `0 - n` overflows for it
+and there is no answer to give. That is a precondition rather than a
+`Result`: every caller here reaches this through a constructor that has
+already turned the number away, and a `Result` would make each of them
+carry a failure none of them can have.
+
 ### Signature
 
 ```deed
@@ -94,7 +100,10 @@ fn absolute(n: Int) -> Int
 ### Contract
 
 ```deed
-pure
+where
+    n > Int.min,
+  ensures
+    ok  => result >= 0,
 ```
 
 ### Examples from `std/ratio.deed`
@@ -134,7 +143,11 @@ fn greatest_common_divisor(a: Int, b: Int) -> Int
 ### Contract
 
 ```deed
-pure
+where
+    a > Int.min,
+    b > Int.min,
+  ensures
+    ok  => result >= 0,
 ```
 
 ### Examples from `std/ratio.deed`
@@ -175,7 +188,12 @@ fn simplified(top: Int, bottom: Int) -> Ratio
 ### Contract
 
 ```deed
-pure
+where
+    top > Int.min,
+    bottom > Int.min,
+    bottom != 0,
+  ensures
+    ok  => result.bottom > 0,
 ```
 
 ### Examples from `std/ratio.deed`
@@ -247,11 +265,22 @@ assert negated(negated(simplified(1, 2))) == simplified(1, 2)
 
 ### Behavior and limits
 
-A ratio of two numbers, or a refusal when the second is zero.
+A ratio of two numbers, or a refusal when the second is zero or either is
+the smallest `Int`.
 
-A `Result` rather than a refinement on the parameter: a denominator is
+A `Result` rather than a refinement on the parameters: a denominator is
 usually a count that came from somewhere, and the caller is the one who knows
-whether zero means "no data" or "a bug".
+whether zero means "no data" or "a bug". The smallest `Int` is turned away
+here for a different reason, and it is the door that does it: `simplified`
+takes the size of both numbers and the smallest `Int` has no positive
+counterpart, so this is where the check happens once and everything below
+gets to be proven rather than guarded.
+Written as `<=` rather than `==` on purpose. The two say the same thing
+about an `Int`, since nothing is below the smallest one, but a comparison is
+what narrows a range: after `top <= Int.min` fails, `top > Int.min` is a
+fact, and after `top == Int.min` fails all the checker knows is that one
+number is out. That is the difference between the call below being proven
+and being checked again at run time.
 
 ### Signature
 

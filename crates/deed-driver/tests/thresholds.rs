@@ -117,17 +117,23 @@ fn a_passed_function_still_does_what_a_trait_would_have() {
     }
 }
 
-/// No fractional numbers: the remaining cost is a contract that has to say
-/// something about a fractional quantity.
+/// No fractional numbers: the threshold was a contract that had to say
+/// something about a fractional quantity, and one has been written.
 ///
 /// The other half of that page's threshold was that `1/2 + 1/3` had to be
 /// spelled `added(half, third)`, which it called an argument about operator
 /// overloading rather than about numbers. That argument was made and
-/// `std/ratio` binds its three operators, so what is left is this half.
-/// Nothing in `std/ratio` writes a contract, which is why the proof model was
-/// never asked anything, and this counts it rather than asserting it.
+/// `std/ratio` binds its three operators. This half was reached when
+/// `std/ratio` grew contracts, the page was reread, and the answer did not
+/// change: a `Ratio` is two `Int`s, so a clause about one is a clause about
+/// integers and the proof model needed nothing it did not have.
+///
+/// So this no longer watches for the threshold, which has been crossed. It
+/// watches that the crossing is still there, because a page that says "the
+/// contracts hold up" over a module with none would be the same museum piece
+/// pointing the other way.
 #[test]
-fn nothing_yet_writes_a_contract_about_a_fractional_quantity() {
+fn the_contracts_over_a_fractional_quantity_are_still_written() {
     let text = shipped_source("std/ratio").expect("std/ratio ships");
     let clauses = text
         .lines()
@@ -137,12 +143,37 @@ fn nothing_yet_writes_a_contract_about_a_fractional_quantity() {
         })
         .count();
 
-    assert_eq!(
-        clauses, 0,
-        "`std/ratio` has grown {clauses} contract clauses, so the half of \
-         `design/fractional-values.md`'s threshold about contracts over fractional \
-         quantities has been reached and the decision should be reopened"
+    assert!(
+        clauses > 0,
+        "`std/ratio` writes no contract, so `design/fractional-values.md` is claiming \
+         something about clauses that are not there"
     );
+
+    // Written down and discharged are different things. A `where` nothing can
+    // satisfy would still be a clause.
+    let outcome = outcome(
+        "module probe\n\n\
+         use std/ratio.{ratio, added, text}\n\n\
+         fn third() -> String {\n\
+         \x20   match ratio(1, 3) {\n\
+         \x20       ok(one) => text(one, 3),\n\
+         \x20       err(why) => why,\n\
+         \x20   }\n\
+         }\n\n\
+         test \"a third is a third\" {\n\
+         \x20   assert third() == \"0.333\"\n\
+         }\n",
+    );
+    match outcome {
+        Ok(failed) => assert!(
+            failed.is_empty(),
+            "a program using the fractional library no longer runs: {failed:?}"
+        ),
+        Err(complaints) => panic!(
+            "a program using the fractional library no longer checks:\n{complaints}\n\
+             `design/fractional-values.md` rests on the library being usable."
+        ),
+    }
 }
 
 /// `Result` and `List` stay in the language: "a rule saying which variant of a
