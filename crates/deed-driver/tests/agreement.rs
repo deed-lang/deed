@@ -62,6 +62,18 @@ fn programs() -> Vec<Agreed> {
             expect: 12,
         },
         Agreed {
+            name: "a pattern inside a pattern",
+            source: "module a\n\nrecord Inner {\n    depth: Int,\n}\n\nchoice Shape {\n    Dot,\n    Box { size: Inner },\n}\n\nfn depth_of(shape: Shape) -> Int {\n    match shape {\n        Dot => 0,\n        Box { size: Inner { depth } } => depth,\n    }\n}\n\nfn answer() -> Int { depth_of(Box { size: Inner { depth: 7 } }) + depth_of(Dot) }\n\ntest \"the inner pattern names what the outer one reached\" {\n    assert answer() == 7\n}\n",
+            call: "answer",
+            expect: 7,
+        },
+        Agreed {
+            name: "a let that takes a value apart",
+            source: "module a\n\nrecord Point {\n    x: Int,\n    y: Int,\n}\n\nfn sum(point: Point) -> Int {\n    let Point { x, y } = point\n    x + y\n}\n\nfn answer() -> Int { sum(Point { x: 2, y: 3 }) }\n\ntest \"a let can name the fields\" {\n    assert answer() == 5\n}\n",
+            call: "answer",
+            expect: 5,
+        },
+        Agreed {
             name: "a return inside an if",
             source: "module a\n\nfn absolute(n: Int) -> Int {\n    if n >= 0 {\n        return n\n    }\n    0 - n\n}\n\nfn answer() -> Int { absolute(5) + absolute(2 - 7) }\n\ntest \"one branch can return early\" {\n    assert answer() == 10\n}\n",
             call: "answer",

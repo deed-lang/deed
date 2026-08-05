@@ -12,6 +12,12 @@
 //! backend compiles a subset of the language on purpose and the number below
 //! is a floor rather than a goal, so that a change which quietly stops
 //! compiling half the corpus is loud.
+//!
+//! What this does not say is that the backend compiles the language. A corpus
+//! is the shapes one author happened to write, and twice now a shape nobody
+//! had written checked, ran, and could not be lowered. The question about the
+//! language is asked in `conformance_backend.rs`, over the suite that exists
+//! to cover it.
 
 use std::path::{Path, PathBuf};
 
