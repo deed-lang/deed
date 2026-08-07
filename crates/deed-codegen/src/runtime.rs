@@ -351,7 +351,6 @@ pub(crate) fn grow_to_fit() -> Vec<Ins> {
 
 /// How many bytes a WebAssembly page is.
 const PAGE: u32 = 64 * 1024;
-
 /// Reserves as many bytes as `size` pushes, leaving the address in `out`.
 fn allocate(out: u32, size: impl FnOnce(&mut Vec<Ins>)) -> Vec<Ins> {
     let mut ins = vec![
@@ -2138,7 +2137,24 @@ fn text_number(at: &mut Where<'_>) -> (Vec<ValType>, Vec<Ins>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Helper, STR_FIND, STR_HASH, STR_SLICE};
+    use super::{Helper, PAGE, STR_FIND, STR_HASH, STR_SLICE};
+
+    /// A page is the size the format fixes it at, in both places that name it.
+    ///
+    /// The compiled growth loop divides the bump pointer by this and the
+    /// runner multiplies its page count by its own copy, and nothing makes
+    /// the two agree. Disagreeing is not a wrong answer, it is a loop that
+    /// asks for another page forever, which is how `cargo mutants` found the
+    /// gap: turning `64 * 1024` into `64 + 1024` produced a timeout rather
+    /// than a failure, and a timeout is a test that was never written.
+    ///
+    /// Both are held against 65536 as well, so agreeing on a wrong number is
+    /// not mistaken for agreement.
+    #[test]
+    fn a_page_is_the_size_the_format_fixes_in_both_places_that_say_so() {
+        assert_eq!(PAGE, 65_536);
+        assert_eq!(PAGE as usize, crate::run::PAGE);
+    }
 
     /// Every helper is found again by the name it carries.
     ///

@@ -138,7 +138,7 @@ impl std::fmt::Display for Trap {
 const BUDGET: u64 = 5_000_000;
 
 /// How many bytes a WebAssembly page is.
-const PAGE: usize = 64 * 1024;
+pub(crate) const PAGE: usize = 64 * 1024;
 
 /// How far this runner will let a module's memory grow.
 ///
