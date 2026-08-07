@@ -14,6 +14,39 @@ release notes.
 
 - None yet.
 
+### Diagnostics
+
+- `point.x = 1` is `DEED2027` rather than two messages about neither half of
+  it. The name form of assignment is one this language has, because a handler's
+  state can be written to, so the field form used to arrive as an expression
+  statement followed by a stray `=` and the reader was told "expected an
+  expression, found `=`". The measured shape is
+  `state.entries = state.entries + [entry]`, somebody reaching for a handler's
+  state through a receiver, and that one gets a second sentence saying where
+  the state is named. No repair either way: a record with one field changed is
+  another record literal, which is a rewrite of the line rather than an edit to
+  it, and taking `state.` off would be wrong for anybody who bound a record to
+  that name.
+
+- `export`, `pub` and `public` in front of a declaration offer to come out. The
+  word already carried the reason there is no visibility modifier here, and a
+  reason with no repair is something a reader agrees with and then writes
+  again: across three benchmark runs one task met that message twenty-four
+  times. Taking a word out is not substituting one, which is why this can be
+  machine-applicable, and it is offered only when a declaration really follows.
+
+- `perform`, `state`, `append`, `rest`, `update`, `mutate`, `change` and `put`
+  are answered rather than run through the edit-distance table. Each is a word
+  another language would have had, and a name that is not a typo used to come
+  back with whatever short name happened to be nearby, or with nothing at all.
+
+- `text.to_upper()` says there are no methods and names the module that has
+  the function. The type checker already said that for prelude names, because
+  it can ask whether a name is a builtin; it cannot ask about `std/string`,
+  which arrives through imports the file did not write. The sentence is
+  finished in the driver, off the same table that writes the `use` line. No
+  repair: adding the import leaves the call as broken as it was.
+
 ## 0.2.6 (2026-08-07)
 
 This release is about the edges of what the language can say and what the

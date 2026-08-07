@@ -656,17 +656,61 @@ fn the_other_renamings_are_answered_the_same_way() {
 }
 
 /// A word for a thing the language decided not to have gets the decision
-/// rather than a replacement, because there is nothing to replace it with.
+/// rather than a replacement, and the repair is to take the word out.
+///
+/// This used to offer nothing, on the grounds that there is no word to put in
+/// its place. Removal is not substitution: the declaration behind the modifier
+/// is the declaration that was meant, so taking the word out leaves the file
+/// somebody wrote. What made that worth changing is a measurement: across
+/// three benchmark runs one task met this message twenty-four times, because
+/// a message with a reason and no repair is a message a reader agrees with and
+/// then writes again.
 #[test]
-fn pub_is_answered_with_the_reason_there_is_no_such_word() {
+fn pub_is_answered_with_the_reason_and_the_word_comes_out() {
     let (sources, parsed) = parse_source("module a\n\npub fn f() -> Int { 0 }\n");
     let text = render_human(&sources, &parsed.diagnostics[0]);
     assert!(text.contains("every declaration is exported"), "{text}");
     assert!(text.contains("no wildcard imports"), "{text}");
-    assert!(
-        parsed.diagnostics[0].fix.is_none(),
-        "there is no word to put in its place, so offering one would be inventing a change"
+
+    let fix = parsed.diagnostics[0].fix.as_ref().expect("a fix");
+    assert_eq!(fix.edits[0].replacement, "");
+    assert_eq!(
+        fix.applicability,
+        deed_diagnostics::Applicability::MachineApplicable
     );
+
+    // The span covers the word and the space behind it, so what is left is the
+    // declaration with nothing in front of it.
+    let span = fix.edits[0].span;
+    let source = sources.file(parsed.diagnostics[0].file).text();
+    assert_eq!(&source[span.start as usize..span.end as usize], "pub ");
+}
+
+#[test]
+fn export_and_public_come_out_the_same_way() {
+    for word in ["export", "public"] {
+        let source = format!("module a\n\n{word} record Point {{\n    x: Int,\n}}\n");
+        let (_, parsed) = parse_source(&source);
+        let fix = parsed.diagnostics[0]
+            .fix
+            .as_ref()
+            .unwrap_or_else(|| panic!("`{word}` should offer to come out"));
+        assert_eq!(fix.message, format!("take `{word}` out"));
+    }
+}
+
+/// Nothing behind the word is nothing to keep, so there is no repair.
+///
+/// A machine-applicable fix gets applied without being asked, and applying
+/// this one would leave a file that is broken in a different way.
+#[test]
+fn a_modifier_with_no_declaration_behind_it_is_not_repaired() {
+    let (_, parsed) = parse_source("module a\n\nexport\n");
+    assert_eq!(
+        codes_of(&parsed.diagnostics)[0],
+        codes::EXPECTED_DECLARATION
+    );
+    assert!(parsed.diagnostics[0].fix.is_none());
 }
 
 /// Everything else still gets the list. A name that is nobody's keyword is

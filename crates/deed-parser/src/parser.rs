@@ -181,6 +181,10 @@ enum Elsewhere {
     SpelledHere(&'static str),
     /// A form this language decided not to have, and why.
     NotAThing(&'static str),
+    /// A modifier this language does not have, in front of a declaration that
+    /// is otherwise the one that was meant. The word comes out and what is
+    /// left is the file somebody wrote.
+    Unnecessary(&'static str),
 }
 
 fn spelled_elsewhere(word: &str) -> Option<Elsewhere> {
@@ -189,7 +193,7 @@ fn spelled_elsewhere(word: &str) -> Option<Elsewhere> {
         "enum" => Elsewhere::SpelledHere("choice"),
         "import" | "include" | "require" => Elsewhere::SpelledHere("use"),
         "func" | "function" | "def" | "fun" => Elsewhere::SpelledHere("fn"),
-        "pub" | "public" | "export" => Elsewhere::NotAThing(
+        "pub" | "public" | "export" => Elsewhere::Unnecessary(
             "every declaration is exported and there is no visibility modifier, because a \
              language with no wildcard imports already shows the reader every name a file \
              pulled in",
@@ -200,6 +204,25 @@ fn spelled_elsewhere(word: &str) -> Option<Elsewhere> {
         ),
         _ => return None,
     })
+}
+
+/// The keywords a declaration starts with.
+///
+/// The same list `parse_item` dispatches on, asked one token early so a
+/// modifier in front of one can be taken out without guessing that what
+/// follows is worth keeping.
+fn starts_declaration(kw: Keyword) -> bool {
+    matches!(
+        kw,
+        Keyword::Deprecated
+            | Keyword::Type
+            | Keyword::Record
+            | Keyword::Choice
+            | Keyword::Effect
+            | Keyword::Handler
+            | Keyword::Fn
+            | Keyword::Test
+    )
 }
 
 /// A word in front of a `let` name that another language would have accepted.
@@ -625,9 +648,9 @@ impl<'a> Parser<'a> {
         let TokenKind::Keyword(kw) = self.kind() else {
             let span = self.span();
             let found = self.kind().describe();
-            let elsewhere = match self.kind() {
-                TokenKind::Ident(name) => spelled_elsewhere(name),
-                _ => None,
+            let (word, elsewhere) = match self.kind() {
+                TokenKind::Ident(name) => (name.clone(), spelled_elsewhere(name)),
+                _ => (String::new(), None),
             };
 
             let mut diagnostic = Diagnostic::error(
@@ -654,6 +677,24 @@ impl<'a> Parser<'a> {
                         );
                 }
                 Some(Elsewhere::NotAThing(note)) => diagnostic = diagnostic.with_note(note),
+                // The word means nothing here, so the repair is to take it
+                // out, and it is machine-applicable only when a declaration
+                // really follows it. `export` on a line of its own has
+                // nothing behind it to keep, and a file that was going to be
+                // rewritten anyway should not be edited on a guess.
+                Some(Elsewhere::Unnecessary(note)) => {
+                    diagnostic = diagnostic.with_note(note);
+                    if let TokenKind::Keyword(next) = self.nth_kind(1)
+                        && starts_declaration(*next)
+                    {
+                        diagnostic = diagnostic.with_fix(
+                            format!("take `{word}` out"),
+                            Span::new(span.start, self.nth(1).span.start),
+                            "",
+                            Applicability::MachineApplicable,
+                        );
+                    }
+                }
                 None => {
                     diagnostic = diagnostic.with_note(
                         "a file contains `deprecated`, `operator`, `type`, `record`, `choice`, `effect`, `handler`, `fn` and `test` declarations",
@@ -2193,7 +2234,58 @@ impl<'a> Parser<'a> {
             return self.no_such_detached_spawn();
         }
 
-        Stmt::Expr(self.parse_expr())
+        let expr = self.parse_expr();
+
+        // `point.x = 1`. The name form above is an assignment this language
+        // has, so the one left over is the field form, and it arrived as an
+        // expression followed by a stray `=`.
+        if let Expr::Field { receiver, name, .. } = &expr
+            && self.kind() == &TokenKind::Eq
+        {
+            return self.no_field_assignment(&expr, receiver, name.clone());
+        }
+
+        Stmt::Expr(expr)
+    }
+
+    /// `point.x = 1`, and the handler state written the same way.
+    ///
+    /// Reads the right hand side before returning, so the value goes with the
+    /// message rather than becoming a second one about the same line.
+    fn no_field_assignment(&mut self, target: &Expr, receiver: &Expr, field: Ident) -> Stmt {
+        let span = target.span();
+        let mut diagnostic = Diagnostic::error(
+            codes::FIELD_ASSIGNMENT,
+            self.file,
+            span,
+            format!(
+                "there is no assignment to a field, so `{}` cannot be written to",
+                field.name
+            ),
+        )
+        .with_primary_label("a field is read here, not written")
+        .with_note(
+            "a record is built by a literal and a record with one field changed is another \
+             literal, `Point { x: 1, y: point.y }`",
+        );
+
+        // A handler's state is the one name in the language that can be
+        // assigned, and it is named directly rather than through a receiver.
+        // A note rather than a repair: `state` is an ordinary name, so a
+        // record somebody bound to it would have the word taken off a line
+        // that meant it.
+        if matches!(receiver, Expr::Ident(ident) if ident.name == "state") {
+            diagnostic = diagnostic.with_note(format!(
+                "a handler's state is named on its own inside an operation, `{0} = ...`, \
+                 because the handler the name belongs to is the one being run",
+                field.name
+            ));
+        }
+
+        self.emit(diagnostic);
+        self.bump();
+        let value = self.parse_expr();
+        Stmt::Expr(Expr::Error(span.to(value.span())))
     }
 
     // -- expressions -------------------------------------------------------

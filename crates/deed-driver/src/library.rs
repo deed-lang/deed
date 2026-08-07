@@ -29,6 +29,7 @@ use deed_ast::Module;
 use deed_diagnostics::{Applicability, Diagnostic, SourceMap, Span};
 use deed_lexer::Trivia;
 use deed_resolve::codes;
+use deed_typeck::codes as typeck_codes;
 
 use crate::imports::{line_end, line_start};
 use crate::shipped::{shipped_modules, shipped_source};
@@ -90,13 +91,14 @@ pub(crate) fn attach(
     // happens once for the process, but a file with nothing unresolved in it
     // is the common case and should not pay for the answer to a question it
     // did not ask.
-    if !diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == codes::UNKNOWN_NAME)
-    {
+    if !diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == codes::UNKNOWN_NAME || diagnostic.code == typeck_codes::NO_SUCH_FIELD
+    }) {
         return;
     }
     let table = declared_by();
+
+    named_as_a_method(diagnostics, source, table);
 
     // Names to import, by module, and the diagnostics that asked for them.
     let mut wanted: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
@@ -151,6 +153,48 @@ pub(crate) fn attach(
         replacement,
         Applicability::MachineApplicable,
     );
+}
+
+/// `table.set(key, value)`, where `set` is a name the library has.
+///
+/// The type checker already answers this for the prelude, because it can ask
+/// whether the name is a builtin. It cannot ask about `std/table`, which is a
+/// module the driver resolves and the checker only ever sees through imports
+/// this file did not write. So the sentence is finished here, on the same
+/// shelf and off the same table as the `use` line above.
+///
+/// A note and no repair. Adding the import leaves `x.set(k, v)` exactly as
+/// broken as it was, and rewriting the call is a change to the shape of the
+/// line rather than an edit to a name, so a fix here would either do nothing
+/// or guess.
+fn named_as_a_method(
+    diagnostics: &mut [Diagnostic],
+    source: &str,
+    table: &BTreeMap<String, Vec<&'static str>>,
+) {
+    for diagnostic in diagnostics.iter_mut() {
+        if diagnostic.code != typeck_codes::NO_SUCH_FIELD {
+            continue;
+        }
+        let span = diagnostic.primary.span;
+        let Some(name) = source.get(span.start as usize..span.end as usize) else {
+            continue;
+        };
+        let Some(homes) = table.get(name) else {
+            continue;
+        };
+        let named: Vec<String> = homes.iter().map(|home| format!("`{home}`")).collect();
+        *diagnostic = diagnostic.clone().with_note(format!(
+            "there are no methods, and {} {} `{name}`, which takes the value as its first \
+             argument: `{name}(x, ..)` rather than `x.{name}(..)`",
+            named.join(" and "),
+            if homes.len() == 1 {
+                "declares"
+            } else {
+                "each declare"
+            },
+        ));
+    }
 }
 
 /// The `use` block this file should have, and the span it replaces.

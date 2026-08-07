@@ -475,6 +475,42 @@ fn reaching_for_a_receiver_is_told_there_are_no_methods() {
     }
 }
 
+/// The words three benchmark runs reached for and got a typo's answer.
+///
+/// Each of these had nothing in `name_from_elsewhere`, so an unresolved name
+/// went to the edit-distance table and came back with whatever was nearby, or
+/// with nothing at all. They are not typos: somebody wrote the word another
+/// language would have had.
+#[test]
+fn the_words_a_program_from_elsewhere_reaches_for_are_answered() {
+    for (word, expected) in [
+        ("perform", "called like any other function"),
+        ("state", "declared `state count: Int`"),
+        ("append", "`push(list, element)`"),
+        ("rest", "`drop(list, 1)`"),
+        ("update", "nothing is changed in place"),
+        ("mutate", "nothing is changed in place"),
+        ("change", "nothing is changed in place"),
+        ("put", "nothing is changed in place"),
+    ] {
+        let source = format!("module a\n\nfn f(n: Int) -> Int {{ {word} }}\n");
+        let (sources, _, resolved) = resolve_source(&source);
+        let named = resolved
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains(&format!("cannot find `{word}`")))
+            .unwrap_or_else(|| panic!("`{word}` should not resolve"));
+
+        let text = render_human(&sources, named);
+        assert!(text.contains(expected), "`{word}` should say so: {text}");
+        assert!(
+            named.fix.is_none(),
+            "`{word}` has no single replacement, so offering one would be inventing a change: \
+             {text}"
+        );
+    }
+}
+
 /// `not` still arrives here, and `and` and `or` arrive only when they are not
 /// between two values. The parser reads those two as the operator they stand
 /// for (DEED2020), which is where the reader actually writes them; what is

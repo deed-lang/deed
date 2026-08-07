@@ -184,6 +184,26 @@ fn a_deprecated_name_is_rewritten_to_its_replacement() {
     );
 }
 
+/// A modifier this language does not have comes out, and what is left checks.
+///
+/// The word had a note and no repair, and a note is something a reader agrees
+/// with and then writes again: across three benchmark runs one task met this
+/// message twenty-four times. Removal is not substitution, so the fix is
+/// certain in a way `struct` -> `record` is: the declaration behind the word
+/// is the one that was meant.
+#[test]
+fn a_visibility_modifier_is_taken_out_and_the_file_checks() {
+    let source = "module a\n\nexport fn f() -> Int { 0 }\n";
+    let result = fix(source, diagnose);
+    assert_eq!(result.applied, 1);
+    assert_eq!(result.source, "module a\n\nfn f() -> Int { 0 }\n");
+    assert!(
+        diagnose(&result.source).is_empty(),
+        "it should check clean now: {:?}",
+        diagnose(&result.source)
+    );
+}
+
 // -- rows ------------------------------------------------------------------
 //
 // The row diagnostics say what to type and, for a long time, did not type it.
@@ -620,6 +640,52 @@ fn a_name_two_shipped_modules_declare_is_described_and_not_repaired() {
 fn a_comment_among_the_imports_stops_the_import_being_written_too() {
     let source = "module a\n\nuse std/list.{reversed}\n// why\nuse std/list.{sort}\n\n\
                   fn f(ns: List<Int>) -> List<Int> {\n    reversed(sort(take(ns, 1)))\n}\n";
+    assert_eq!(fixed(source), source);
+}
+
+/// `x.set(k, v)`, where `set` is a name the library has.
+///
+/// The type checker says this for the prelude, because it can ask whether a
+/// name is a builtin. It cannot ask about `std/table`: that module reaches it
+/// through imports this file did not write. So the reader got "no such field"
+/// about a call whose only problem was being spelled the other way round.
+#[test]
+fn a_library_name_written_as_a_method_says_so() {
+    let source = "module a\n\nfn f(text: String) -> String {\n    text.to_upper()\n}\n";
+    let notes: Vec<String> = diagnose(source)
+        .iter()
+        .flat_map(|diagnostic| diagnostic.notes.clone())
+        .collect();
+    let text = notes.join("\n");
+    assert!(text.contains("there are no methods"), "{text}");
+    assert!(text.contains("`std/string` declares `to_upper`"), "{text}");
+    assert!(
+        text.contains("`to_upper(x, ..)` rather than `x.to_upper(..)`"),
+        "{text}"
+    );
+}
+
+/// A name two modules declare says both, for the reason the import half does:
+/// which one was meant is a question only the reader can answer.
+#[test]
+fn a_method_name_two_shipped_modules_declare_names_both() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    n.set(1)\n}\n";
+    let notes: Vec<String> = diagnose(source)
+        .iter()
+        .flat_map(|diagnostic| diagnostic.notes.clone())
+        .collect();
+    let text = notes.join("\n");
+    assert!(
+        text.contains("`std/table` and `std/hashmap` each declare `set`"),
+        "{text}"
+    );
+}
+
+/// And nothing is written, because adding the import would leave the call as
+/// broken as it was.
+#[test]
+fn a_library_name_written_as_a_method_is_not_repaired() {
+    let source = "module a\n\nfn f(n: Int) -> Int {\n    n.set(1)\n}\n";
     assert_eq!(fixed(source), source);
 }
 

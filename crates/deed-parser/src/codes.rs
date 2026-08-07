@@ -255,3 +255,22 @@ pub const UNBINDABLE_OPERATOR: &str = "DEED2025";
 /// interface", and it is a different thing from writing one and leaving it
 /// blank, which is why this is refused rather than treated as absent.
 pub const EMPTY_INTERFACE: &str = "DEED2026";
+
+/// `point.x = 1`, an assignment to a field.
+///
+/// `name = value` is an assignment this language has, because a handler's
+/// state is the one thing that can be written to. The field form is not, and
+/// it used to arrive as two messages about neither: the receiver was read as
+/// an expression statement and the `=` after it as the start of the next one,
+/// so the reader got "expected an expression, found `=`" about a line whose
+/// real problem was the shape in front of it.
+///
+/// The measured case is `state.entries = state.entries + [entry]`, written by
+/// somebody reaching for the handler state through a receiver the way another
+/// language would. That one gets a second sentence: the state is named on its
+/// own, and the handler it belongs to is the one being run.
+///
+/// No repair. Changing one field of a record is another record literal, which
+/// is a rewrite of the line rather than an edit to it, and taking `state.` off
+/// would be wrong for anybody who bound a record to that name.
+pub const FIELD_ASSIGNMENT: &str = "DEED2027";

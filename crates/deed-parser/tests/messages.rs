@@ -479,6 +479,53 @@ fn a_detached_spawn_names_the_decision() {
         .says("tied to the block that started it");
 }
 
+// -- DEED2027, an assignment to a field --------------------------------------
+
+/// `point.x = 1`. The name form is an assignment this language has, so the
+/// field form used to arrive as an expression statement and then a stray `=`,
+/// and the reader was told "expected an expression, found `=`" about a line
+/// whose problem was the shape in front of it.
+///
+/// Sentence: "there is no assignment to a field, so `x` cannot be written to"
+#[test]
+fn an_assignment_to_a_field_names_the_field() {
+    only_error(
+        "module a\n\nrecord Point { x: Int }\n\nfn f(point: Point) -> Int {\n    point.x = 1\n    point.x\n}\n",
+    )
+    .under(codes::FIELD_ASSIGNMENT)
+    .says("there is no assignment to a field, so `x` cannot be written to")
+    .says("a field is read here, not written")
+    .says("Point { x: 1, y: point.y }");
+}
+
+/// Reaching for a handler's state through a receiver is the measured shape:
+/// `state.entries = state.entries + [entry]` in three benchmark runs, which
+/// cost two messages about neither half of it.
+///
+/// The extra sentence is a note rather than a repair, because `state` is an
+/// ordinary name and a record bound to it would have the word taken off a line
+/// that meant it.
+#[test]
+fn reaching_for_handler_state_through_a_receiver_says_where_it_lives() {
+    let reported = message(
+        "module a\n\neffect Audit {\n    fn note(entry: String) -> ()\n}\n\nhandler Collected implements Audit {\n    state entries: List<String>\n\n    fn note(entry: String) -> () {\n        state.entries = push(state.entries, entry)\n    }\n}\n",
+    );
+    reported
+        .under(codes::FIELD_ASSIGNMENT)
+        .says("`entries` cannot be written to")
+        .says("a handler's state is named on its own inside an operation, `entries = ...`");
+}
+
+/// One mistake, one message: the value is read as part of it rather than
+/// becoming a second complaint about the line.
+#[test]
+fn a_field_assignment_does_not_cost_a_second_message() {
+    only_error(
+        "module a\n\nrecord Point { x: Int }\n\nfn f(point: Point) -> Int {\n    point.x = 1 + 2\n    point.x\n}\n",
+    )
+    .under(codes::FIELD_ASSIGNMENT);
+}
+
 // -- recovery ----------------------------------------------------------------
 //
 // P7: a single root cause produces a single diagnostic. The tests below verify

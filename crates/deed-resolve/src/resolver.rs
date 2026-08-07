@@ -1535,6 +1535,31 @@ fn name_from_elsewhere(name: &str) -> Option<Elsewhere> {
             "there are no methods, so a function takes the thing it works on as an argument \
              like anything else",
         ),
+        // Measured rather than guessed: these are the words three benchmark
+        // runs reached for and got nothing back but "cannot find" and a
+        // suggestion from the edit-distance table, which is the answer to a
+        // typo and these are not typos.
+        "perform" => Elsewhere::Absent(
+            "an effect operation is called like any other function, `Log.note(text)`, and the \
+             `uses` clause in the signature is what says the call performs it",
+        ),
+        "state" => Elsewhere::Absent(
+            "a handler's state is named on its own, `count`, declared `state count: Int` \
+             inside the handler and given its value where the handler is installed, \
+             `with H { count: 0 } { .. }`",
+        ),
+        "append" => Elsewhere::Absent(
+            "one element onto the end of a list is `push(list, element)`, and two lists \
+             joined is `concat` from `std/list`",
+        ),
+        "rest" => Elsewhere::Absent(
+            "everything but the first element is `drop(list, 1)` from `std/list`, and the \
+             first on its own is `first`",
+        ),
+        "update" | "mutate" | "change" | "put" => Elsewhere::Absent(
+            "nothing is changed in place: a value is built and bound once, and the only name \
+             that can be assigned is a handler's `state`, inside one of its operations",
+        ),
         // `sum` used to be here too, saying to write the walk out. `std/list`
         // has it now, so the answer is an import and the driver writes it.
         "max" | "min" => Elsewhere::Absent(
