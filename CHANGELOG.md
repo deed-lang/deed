@@ -28,6 +28,35 @@ release notes.
 
 ### Tools
 
+- Nothing yet.
+
+### Measurements
+
+- Nothing yet.
+
+## 0.2.8 (2026-08-07)
+
+0.2.7 said a compiled Deed program can act. That was true of the host inside
+`deed` and not of anybody else's, and this is the difference.
+
+### Programs that used to compile and no longer do
+
+- None.
+
+### Language
+
+- Nothing.
+
+### Diagnostics
+
+- Nothing.
+
+### Standard library
+
+- Nothing.
+
+### Tools
+
 - `deed build` exports the module's memory, so a host that is not this one can
   read what a compiled program hands it.
 
@@ -49,7 +78,7 @@ release notes.
 
 ### Measurements
 
-- Nothing yet.
+- Nothing.
 
 ## 0.2.7 (2026-08-07)
 
