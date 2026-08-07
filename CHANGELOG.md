@@ -109,6 +109,33 @@ release notes.
 
 ### Tools
 
+- `deed run --compiled` writes lines and reads a clock, because there is a
+  host now. A compiled `examples/hello.deed` used to stop with ``
+  `deed:sys.console` is the host's to answer, and this is not one``: the
+  interpreted program printed "hello, world" and the compiled one could not
+  say anything at all.
+
+  What was missing was not the wiring. A host implementation was handed the
+  call's arguments and nothing else, and `Io.write(console, text)` passes the
+  text as an address into the module's own memory, so no host could be
+  written for any operation carrying something other than a number. A host is
+  handed the call now — its arguments and the module's memory — and can read
+  a string out of it or allocate one back into it.
+
+  A capability crosses the boundary as an index into a table the host keeps,
+  and the table records what each handle is. So a number the host never gave
+  out is not a capability, and a console passed where a clock belongs is
+  refused. Neither is reachable from a checked Deed program; the check is
+  there because a host is handed modules rather than programs.
+
+  Each grant offers exactly the imports it can answer, so a program asking
+  for one that was not granted is turned down at link time by name — ``the
+  host does not offer `deed:io.save` `` — rather than at the first call. The
+  filesystem, the network, arguments, the environment and standard input are
+  not granted yet, and say so before they run rather than partway through.
+  See
+  [design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md](design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md).
+
 - Fixed: `deed build --component` panicked on a signature holding a capability
   or a function value one field down. `record Holder { dir: Dir }` walked past
   the refusal and reached an `unreachable!` while the WIT world was being

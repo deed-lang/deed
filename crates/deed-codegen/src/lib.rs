@@ -15,6 +15,7 @@
 pub mod abi;
 pub mod compile;
 mod equality;
+pub mod grant;
 mod hashing;
 pub mod layout;
 pub mod run;
@@ -23,6 +24,9 @@ pub mod validate;
 pub mod wasm;
 
 pub use compile::{Unsupported, compile, escaping_operations};
-pub use run::{Host, LinkError, Linked, Outcome, Trap, Value, call, call_measured, call_within};
+pub use grant::{Granted, Grants};
+pub use run::{
+    Host, HostCall, LinkError, Linked, Outcome, Trap, Value, call, call_measured, call_within,
+};
 pub use validate::{Invalid, validate};
 pub use wasm::Module;

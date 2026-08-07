@@ -77,6 +77,17 @@ pub enum Trap {
     /// most useful thing it could say about a module that is going to be
     /// handed to a real embedder.
     NeedsAHost(String),
+    /// The host was asked for something and turned the call down, with the
+    /// reason it gave.
+    ///
+    /// The case this exists for is a module handing a host a number where a
+    /// capability was wanted. A checked Deed program cannot do that -- a
+    /// capability is a value with a type and nothing in the language makes
+    /// one out of an integer -- but a host is handed modules, not programs,
+    /// so it looks its arguments up in the table it kept rather than
+    /// trusting what it was passed. See
+    /// `design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md`.
+    Refused(String),
     /// Something this small runner does not implement, named rather than
     /// silently skipped.
     Unimplemented(String),
@@ -112,6 +123,7 @@ impl std::fmt::Display for Trap {
             Trap::NeedsAHost(what) => {
                 write!(f, "`{what}` is the host's to answer, and this is not one")
             }
+            Trap::Refused(why) => write!(f, "the host refused the call: {why}"),
             Trap::Unimplemented(what) => write!(f, "`{what}` is not implemented here"),
             Trap::Invalid(reason) => write!(f, "the module does not validate: {reason}"),
         }
@@ -126,7 +138,87 @@ impl std::fmt::Display for Trap {
 const BUDGET: u64 = 5_000_000;
 
 /// The type of a host-provided import implementation.
-type HostFn = Box<dyn Fn(&[Value]) -> Option<Value>>;
+type HostFn = Box<dyn Fn(HostCall<'_>) -> Result<Option<Value>, Trap>>;
+
+/// What a host implementation is handed when the module calls it.
+///
+/// The arguments, and the module's memory. Memory is the half that makes a
+/// real operation possible at all: `Io.write(console, text)` hands the text
+/// over as an address into the module's own memory, so a host that cannot
+/// read memory cannot write a line, and a host that cannot write memory
+/// cannot answer with one. Passing the arguments alone left every import
+/// that carries anything but a number unimplementable.
+///
+/// Only the module's memory, and only for the length of the call. There is
+/// no way from here to the module's functions, its table or its other
+/// instances, which is the same boundary the import section already draws:
+/// a host answers questions, it does not run inside the program.
+pub struct HostCall<'a> {
+    args: &'a [Value],
+    memory: &'a mut [u8],
+}
+
+impl<'a> HostCall<'a> {
+    /// A call, for a host that is not this runner.
+    pub fn new(args: &'a [Value], memory: &'a mut [u8]) -> Self {
+        Self { args, memory }
+    }
+
+    /// The argument at this position, or nothing when the call was shorter.
+    pub fn arg(&self, at: usize) -> Option<Value> {
+        self.args.get(at).copied()
+    }
+
+    /// The string the argument at this position points at.
+    ///
+    /// Read the way [`crate::layout`] writes one: a character count, a byte
+    /// count, then the bytes.
+    pub fn text(&self, at: usize) -> Option<String> {
+        let address = self.arg(at)?.as_i64();
+        if address <= 0 {
+            return None;
+        }
+        let address = address as usize;
+        let length = u64::from_le_bytes(
+            self.memory
+                .get(address + 8..address + 16)?
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let bytes = self.memory.get(address + 16..address + 16 + length)?;
+        String::from_utf8(bytes.to_vec()).ok()
+    }
+
+    /// Put a string into the module's memory and answer with its address.
+    ///
+    /// Allocated from the module's own bump pointer, so what comes back is
+    /// an ordinary value of the program's: nothing here keeps a second heap
+    /// the program would have no way to name.
+    ///
+    /// Nothing when the module has no room left. A host that quietly wrote
+    /// past the end would be corrupting the program it is answering.
+    pub fn write_text(&mut self, text: &str) -> Option<Value> {
+        let bytes = text.as_bytes();
+        let at = self.allocate(crate::layout::string_size(bytes.len()) as usize)?;
+        let characters = text.chars().count() as u64;
+        self.memory[at..at + 8].copy_from_slice(&characters.to_le_bytes());
+        self.memory[at + 8..at + 16].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
+        self.memory[at + 16..at + 16 + bytes.len()].copy_from_slice(bytes);
+        Some(Value::I64(at as i64))
+    }
+
+    /// Move the module's bump pointer along and answer with what it was.
+    fn allocate(&mut self, size: usize) -> Option<usize> {
+        let bump = crate::layout::BUMP as usize;
+        let at = u64::from_le_bytes(self.memory.get(bump..bump + 8)?.try_into().ok()?) as usize;
+        let end = at.checked_add(size)?;
+        if at == 0 || end > self.memory.len() {
+            return None;
+        }
+        self.memory[bump..bump + 8].copy_from_slice(&(end as u64).to_le_bytes());
+        Some(at)
+    }
+}
 
 /// A host that provides implementations for a specific, named set of imports.
 ///
@@ -216,7 +308,7 @@ impl Host {
         &mut self,
         module: &str,
         name: &str,
-        func: impl Fn(&[Value]) -> Option<Value> + 'static,
+        func: impl Fn(HostCall<'_>) -> Result<Option<Value>, Trap> + 'static,
     ) -> &mut Self {
         self.offers.push(HostOffer {
             module: module.to_string(),
@@ -226,7 +318,16 @@ impl Host {
         self
     }
 
-    fn implementation_for(&self, module: &str, name: &str) -> Option<&HostFn> {
+    /// Whether this host answers for that import.
+    ///
+    /// What a host offers is the whole of what a module linked to it can
+    /// reach, so it is worth being able to ask without having to link a
+    /// module to find out.
+    pub fn offers(&self, module: &str, name: &str) -> bool {
+        self.implementation_for(module, name).is_some()
+    }
+
+    pub(crate) fn implementation_for(&self, module: &str, name: &str) -> Option<&HostFn> {
         self.offers
             .iter()
             .find(|o| o.module == module && o.name == name)
@@ -442,10 +543,13 @@ impl Run<'_> {
     fn call(&mut self, index: u32, args: &[Value]) -> Result<Option<Value>, Trap> {
         let Some(at) = (index as usize).checked_sub(self.module.imports.len()) else {
             let import = &self.module.imports[index as usize];
-            if let Some(host) = self.host {
-                if let Some(func) = host.implementation_for(&import.module, &import.name) {
-                    return Ok(func(args));
-                }
+            if let Some(host) = self.host
+                && let Some(func) = host.implementation_for(&import.module, &import.name)
+            {
+                return func(HostCall {
+                    args,
+                    memory: &mut self.memory,
+                });
             }
             return Err(Trap::NeedsAHost(format!(
                 "{}.{}",
@@ -799,16 +903,105 @@ mod tests {
     #[test]
     fn a_host_offer_matches_module_and_name_as_one_pair() {
         let mut host = Host::new();
-        host.offer("deed:io", "read", |_| Some(Value::I64(1)));
-        host.offer("deed:clock", "write", |_| Some(Value::I64(2)));
+        host.offer("deed:io", "read", |_| Ok(Some(Value::I64(1))));
+        host.offer("deed:clock", "write", |_| Ok(Some(Value::I64(2))));
 
         assert!(host.implementation_for("deed:io", "write").is_none());
 
-        host.offer("deed:io", "write", |_| Some(Value::I64(3)));
+        host.offer("deed:io", "write", |_| Ok(Some(Value::I64(3))));
         let implementation = host
             .implementation_for("deed:io", "write")
             .expect("the exact offer should match");
-        assert_eq!(implementation(&[]), Some(Value::I64(3)));
+        let mut memory = Vec::new();
+        let nothing: [Value; 0] = [];
+        assert_eq!(
+            implementation(HostCall::new(&nothing, &mut memory)),
+            Ok(Some(Value::I64(3)))
+        );
+    }
+
+    /// The seam that makes a real host possible: a string argument is an
+    /// address, and reading it is the difference between answering
+    /// `Io.write` and only being able to count that it happened.
+    #[test]
+    fn a_host_reads_the_string_a_module_hands_it() {
+        let mut memory = vec![0u8; 128];
+        // A string at address 32: two characters, three bytes.
+        memory[32..40].copy_from_slice(&2u64.to_le_bytes());
+        memory[40..48].copy_from_slice(&3u64.to_le_bytes());
+        memory[48..51].copy_from_slice("hé".as_bytes());
+
+        let call = HostCall::new(&[Value::I64(32)], &mut memory);
+        assert_eq!(call.text(0).as_deref(), Some("hé"));
+        assert_eq!(call.text(1), None, "there is no second argument");
+    }
+    /// And the way back: what a host answers with has to be a value of the
+    /// program's, allocated where the program allocates.
+    ///
+    /// A string carries two counts, and they answer different questions:
+    /// `length` in the language counts characters, and reading the bytes back
+    /// needs the byte count. A word that spells one of them out of the other
+    /// is a word that is right until somebody writes an accent.
+    #[test]
+    fn a_host_writes_a_string_the_module_can_read_back() {
+        let mut memory = vec![0u8; 128];
+        memory[..8].copy_from_slice(&64u64.to_le_bytes());
+
+        let nothing: [Value; 0] = [];
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let answer = call.write_text("née").expect("there is room");
+        assert_eq!(answer, Value::I64(64));
+
+        let handed = [answer];
+        let read = HostCall::new(&handed, &mut memory);
+        assert_eq!(read.text(0).as_deref(), Some("née"));
+        assert_eq!(
+            u64::from_le_bytes(memory[64..72].try_into().unwrap()),
+            3,
+            "three characters"
+        );
+        assert_eq!(
+            u64::from_le_bytes(memory[72..80].try_into().unwrap()),
+            4,
+            "four bytes, and the two counts are not the same question"
+        );
+        assert_eq!(
+            u64::from_le_bytes(memory[..8].try_into().unwrap()),
+            64 + crate::layout::string_size(4) as u64,
+            "the bump pointer moves past what was written"
+        );
+    }
+
+    /// A host that ran out of room says so rather than writing over the
+    /// program it is answering.
+    #[test]
+    fn a_host_that_cannot_fit_an_answer_does_not_write_one() {
+        let mut memory = vec![0u8; 24];
+        memory[..8].copy_from_slice(&16u64.to_le_bytes());
+        let nothing: [Value; 0] = [];
+        let mut call = HostCall::new(&nothing, &mut memory);
+        assert_eq!(call.write_text("more than fits"), None);
+    }
+
+    /// And one that exactly fits still fits.
+    ///
+    /// The half that makes the test above worth having: a host that refused
+    /// every answer would pass it, and the boundary is where an off-by-one
+    /// lives.
+    #[test]
+    fn a_host_answer_that_exactly_fills_what_is_left_is_written() {
+        let room = crate::layout::string_size(2) as usize;
+        let mut memory = vec![0u8; 64 + room];
+        memory[..8].copy_from_slice(&64u64.to_le_bytes());
+        let nothing: [Value; 0] = [];
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let answer = call.write_text("hi").expect("it fits to the byte");
+
+        let handed = [answer];
+        assert_eq!(
+            HostCall::new(&handed, &mut memory).text(0).as_deref(),
+            Some("hi")
+        );
     }
 
     #[test]

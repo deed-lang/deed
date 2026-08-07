@@ -982,7 +982,29 @@ fn run_compiled_main(
     }
 
     let (file, _, module, args) = runs.remove(0);
-    match deed_codegen::call(&module, "main", &args) {
+
+    // What this run grants. A compiled program reaches its host and nothing
+    // else, so this is the whole of what it can do: a console that prints,
+    // and a clock. Anything else in the program's row is an import nobody
+    // here answers, and the module is turned down before it runs rather than
+    // at the first call.
+    let granted = deed_codegen::Grants::none()
+        .console(|line| println!("{line}"))
+        .clock()
+        .into_host();
+
+    // Every parameter of `main` is the root capability, the same as the
+    // interpreter hands it.
+    let args: Vec<deed_codegen::Value> = args.iter().map(|_| granted.system).collect();
+
+    let linked = match granted.host.link(&module) {
+        Ok(linked) => linked,
+        Err(refused) => {
+            writeln!(out, "{refused}")?;
+            return Ok(Some(false));
+        }
+    };
+    match linked.call("main", &args) {
         Ok(_) => Ok(Some(true)),
         Err(trap) => {
             if let Some(diagnostic) = compiled_diagnostic(file, &trap) {
