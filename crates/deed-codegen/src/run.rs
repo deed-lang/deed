@@ -909,6 +909,150 @@ mod tests {
         module
     }
 
+    /// A module that asks for more memory gets it, and the answer is the
+    /// size it had before, which is what the growth loop compares against.
+    #[test]
+    fn growing_the_memory_answers_with_the_size_it_had() {
+        let mut module = module_with(
+            vec![
+                Ins::I32Const(2),
+                Ins::MemoryGrow,
+                Ins::I64ExtendI32S,
+                Ins::MemorySize,
+                Ins::I64ExtendI32S,
+                Ins::I64Add,
+            ],
+            vec![],
+            vec![ValType::I64],
+        );
+        module.memory_pages = Some(3);
+
+        // Three before, five after: the answer is the three, and the size it
+        // is asked for afterwards is the five.
+        assert_eq!(call(&module, "f", &[]), Ok(Some(Value::I64(8))));
+    }
+
+    /// A host that will not grow it answers -1, and the module is written to
+    /// stop rather than carry on writing somewhere it does not have.
+    ///
+    /// Both halves matter and only together: a runner that always grew would
+    /// pass a test for the first, and a module that ignored the answer would
+    /// reach the end of memory somewhere else and blame the wrong
+    /// instruction.
+    #[test]
+    fn a_growth_the_host_refuses_answers_with_minus_one() {
+        let mut module = module_with(
+            vec![Ins::I32Const(i32::MAX), Ins::MemoryGrow, Ins::I64ExtendI32S],
+            vec![],
+            vec![ValType::I64],
+        );
+        module.memory_pages = Some(1);
+
+        assert_eq!(call(&module, "f", &[]), Ok(Some(Value::I64(-1))));
+    }
+
+    /// And asking for fewer pages than none is refused the same way rather
+    /// than shrinking the memory under whatever is already in it.
+    #[test]
+    fn a_growth_of_less_than_nothing_is_refused() {
+        let mut module = module_with(
+            vec![Ins::I32Const(-1), Ins::MemoryGrow, Ins::I64ExtendI32S],
+            vec![],
+            vec![ValType::I64],
+        );
+        module.memory_pages = Some(2);
+
+        assert_eq!(call(&module, "f", &[]), Ok(Some(Value::I64(-1))));
+    }
+
+    /// Asking for no more pages is not a refusal. A module that read it as
+    /// one would stop the first time an allocation already fitted.
+    #[test]
+    fn a_growth_of_nothing_answers_the_size_it_already_had() {
+        let mut module = module_with(
+            vec![Ins::I32Const(0), Ins::MemoryGrow, Ins::I64ExtendI32S],
+            vec![],
+            vec![ValType::I64],
+        );
+        module.memory_pages = Some(4);
+
+        assert_eq!(call(&module, "f", &[]), Ok(Some(Value::I64(4))));
+    }
+
+    /// The far edge of what this runner will hand out, on both sides of it.
+    ///
+    /// One page either way, because a limit that is only tested from a long
+    /// way off is a limit whose comparison could be any of four.
+    #[test]
+    fn the_last_page_this_runner_will_give_is_the_last_one() {
+        let grow_by = |pages: i32, start: u32| {
+            let mut module = module_with(
+                vec![Ins::I32Const(pages), Ins::MemoryGrow, Ins::I64ExtendI32S],
+                vec![],
+                vec![ValType::I64],
+            );
+            module.memory_pages = Some(start);
+            call(&module, "f", &[])
+        };
+
+        let ceiling = MEMORY_PAGES_CEILING as i32;
+        assert_eq!(
+            grow_by(ceiling - 1, 1),
+            Ok(Some(Value::I64(1))),
+            "growing to exactly the ceiling is allowed"
+        );
+        assert_eq!(
+            grow_by(ceiling, 1),
+            Ok(Some(Value::I64(-1))),
+            "and one page past it is not"
+        );
+    }
+
+    /// The loop every allocation runs, on a memory small enough that the
+    /// first growth answers with one page.
+    ///
+    /// A one is what a refusal is not, and the module tells them apart by the
+    /// sign. Reading the sentinel as `1` stops a program the first time it
+    /// grows a one-page memory, which every other test here is too big to
+    /// notice.
+    #[test]
+    fn the_growth_loop_reads_a_size_of_one_as_a_size_and_not_a_refusal() {
+        let mut body = vec![
+            Ins::I32Const(crate::layout::BUMP as i32),
+            Ins::I64Const(100 * 1024),
+            Ins::I64Store(0),
+        ];
+        body.extend(crate::runtime::grow_to_fit());
+        body.push(Ins::I64Const(7));
+
+        let mut module = module_with(body, vec![], vec![ValType::I64]);
+        module.memory_pages = Some(1);
+
+        assert_eq!(call(&module, "f", &[]), Ok(Some(Value::I64(7))));
+    }
+
+    /// The loop every allocation runs, against a size nothing will grow to.
+    ///
+    /// It has to stop. Reading the refusal wrongly does not answer wrongly,
+    /// it asks again forever, so what this pins is that the module stops at
+    /// the instruction that could not be satisfied rather than somewhere
+    /// later or never.
+    #[test]
+    fn the_growth_loop_stops_when_the_host_will_not_grow_it() {
+        let mut body = vec![
+            Ins::I32Const(crate::layout::BUMP as i32),
+            Ins::I64Const(i64::from(i32::MAX) * 64 * 1024),
+            Ins::I64Store(0),
+        ];
+        body.extend(crate::runtime::grow_to_fit());
+        body.push(Ins::I64Const(0));
+
+        let mut module = module_with(body, vec![], vec![ValType::I64]);
+        module.memory_pages = Some(1);
+
+        assert_eq!(call(&module, "f", &[]), Err(Trap::Unreachable));
+    }
+
     #[test]
     fn arithmetic_comes_back_with_an_answer() {
         let module = module_with(
