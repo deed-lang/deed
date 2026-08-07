@@ -14,9 +14,11 @@
 //! refuses anything not on it. A module without an import has no index in its
 //! own index space to call it through, so a host that offers it cannot help.
 
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 
-use deed_codegen::{Host, Trap, Value, call, compile};
+use deed_codegen::{Grants, Host, Trap, Value, call, compile};
 use deed_diagnostics::{SourceMap, render_human};
 use deed_driver::check_all;
 use deed_interp::{Program, run_main};
@@ -381,9 +383,9 @@ fn a_performed_operation_calls_the_import_it_named_and_not_a_neighbour() {
     let module = module_for(TWO_INTERFACES);
 
     let mut host = Host::new();
-    host.offer("one:iface", "ask", |_| Some(Value::I64(100)))
-        .offer("one:iface", "tell", |_| Some(Value::I64(200)))
-        .offer("two:iface", "ask", |_| Some(Value::I64(300)));
+    host.offer("one:iface", "ask", |_| Ok(Some(Value::I64(100))))
+        .offer("one:iface", "tell", |_| Ok(Some(Value::I64(200))))
+        .offer("two:iface", "ask", |_| Ok(Some(Value::I64(300))));
     let linked = host.link(&module).expect("the host offers all three");
 
     for (function, expected) in [("ask_one", 100), ("tell_one", 200), ("ask_two", 300)] {
@@ -409,11 +411,102 @@ fn a_host_missing_one_interface_refuses_the_module() {
     let module = module_for(TWO_INTERFACES);
 
     let mut host = Host::new();
-    host.offer("one:iface", "ask", |_| Some(Value::I64(100)))
-        .offer("one:iface", "tell", |_| Some(Value::I64(200)));
+    host.offer("one:iface", "ask", |_| Ok(Some(Value::I64(100))))
+        .offer("one:iface", "tell", |_| Ok(Some(Value::I64(200))));
     let refused = host
         .link(&module)
         .expect_err("the host offers nothing from `two:iface`");
     assert_eq!(refused.module, "two:iface");
     assert_eq!(refused.name, "ask");
+}
+
+// -- a host that actually answers -------------------------------------------
+
+/// A compiled program writes a line, and the line arrives.
+///
+/// Every test above this one is about the shape of the boundary: which
+/// imports a module declares, and which of them a host will answer. None of
+/// them crosses it. This one does, and until it passed, `deed run --compiled`
+/// on the corpus's `hello.deed` stopped with "`deed:sys.console` is the
+/// host's to answer, and this is not one": a compiled Deed program could not
+/// write "hello, world", and the interpreted one could.
+///
+/// What was missing was not the wiring. A host implementation used to be
+/// handed the call's arguments and nothing else, and a string argument is an
+/// address into the module's memory, so there was no host that could be
+/// written for any operation carrying anything but a number.
+#[test]
+fn a_program_writes_a_line_to_the_console_its_host_granted() {
+    let module = module_for(WRITING);
+
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&written);
+    let granted = Grants::none()
+        .console(move |line| sink.borrow_mut().push(line.to_string()))
+        .into_host();
+
+    let linked = granted
+        .host
+        .link(&module)
+        .expect("a host with a console answers everything this program asks for");
+    linked
+        .call("main", &[granted.system])
+        .expect("it runs under a host that grants what it asked for");
+
+    assert_eq!(*written.borrow(), vec!["hi".to_string()]);
+}
+
+/// The same program, and a host that grants no console, is refused before it
+/// runs.
+///
+/// The half that makes the test above mean anything. A host that answered
+/// whatever it was asked would pass the first test too, and the row would be
+/// a comment. Here the module is turned down at link time, naming the import
+/// nobody answered, which is what a real engine does with a component whose
+/// world the host cannot satisfy.
+#[test]
+fn the_same_program_is_refused_by_a_host_that_grants_no_console() {
+    let module = module_for(WRITING);
+
+    let granted = Grants::none().clock().into_host();
+    let refused = granted
+        .host
+        .link(&module)
+        .expect_err("a clock is not a console");
+
+    // Whichever of the two the import section lists first. Both of them are
+    // the console: one narrows `System` down to it, the other writes to it.
+    assert_eq!(refused.module, "deed:io");
+    assert_eq!(refused.name, "write");
+    assert_eq!(
+        refused.to_string(),
+        "the host does not offer `deed:io.write`"
+    );
+}
+
+/// What the host is handed is the handle it gave out, not a number the
+/// program chose.
+///
+/// A compiled capability is an opaque number, and the module's memory is
+/// full of numbers. Nothing in a checked Deed program can pass one where a
+/// capability belongs, so this reaches past the source language and asks the
+/// host directly: a number it never handed out is refused rather than
+/// treated as the console.
+#[test]
+fn a_capability_the_host_never_handed_out_is_not_one() {
+    let module = module_for(WRITING);
+
+    let granted = Grants::none().console(|_| {}).into_host();
+    let linked = granted.host.link(&module).expect("the console is granted");
+
+    let stopped = linked
+        .call("main", &[Value::I64(4242)])
+        .expect_err("4242 is not the root this host granted");
+    let Trap::Refused(why) = stopped else {
+        panic!("it should be refused rather than answered: {stopped:?}");
+    };
+    assert!(
+        why.contains("`System`"),
+        "it should say what it wanted: {why}"
+    );
 }

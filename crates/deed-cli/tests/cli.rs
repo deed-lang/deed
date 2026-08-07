@@ -878,6 +878,69 @@ fn main() -> Int {\n\
     assert_eq!(compiled_caret, interpreted_caret, "{compiled}");
 }
 
+/// A compiled program writes the same lines the interpreted one does.
+///
+/// Until the host was written, this was the sentence `deed run --compiled
+/// examples/hello.deed` printed: "`deed:sys.console` is the host's to answer,
+/// and this is not one". The two engines agreed about arithmetic and
+/// disagreed about whether the program could say anything at all.
+#[test]
+fn a_compiled_program_writes_the_lines_the_interpreted_one_writes() {
+    let scratch = Scratch::new("compiled-console");
+    let file = scratch.write(
+        "greet.deed",
+        "module a\n\n\
+fn main(sys: System) -> Int\n\
+  uses Io.write,\n\
+{\n\
+    Io.write(sys.console, \"hello, world\")\n\
+    0\n\
+}\n",
+    );
+
+    let interpreted = run(&["run", file.to_str().unwrap()]);
+    let compiled = run(&["run", "--compiled", file.to_str().unwrap()]);
+    assert_eq!(code(&interpreted), 0, "{}", stderr(&interpreted));
+    assert_eq!(code(&compiled), 0, "{}", stderr(&compiled));
+    assert_eq!(stdout(&compiled), stdout(&interpreted));
+    assert!(
+        stdout(&compiled).contains("hello, world"),
+        "{}",
+        stdout(&compiled)
+    );
+}
+
+/// And what this run does not grant, it says so about before running.
+///
+/// The row is the list of what a program asks its host for, so a host that
+/// cannot answer one of the entries turns the module down at load rather
+/// than at the first call. Reading a file is not something `deed run
+/// --compiled` hands over yet, and the message names the operation.
+#[test]
+fn a_compiled_program_asking_for_what_this_run_does_not_grant_is_refused_before_it_runs() {
+    let scratch = Scratch::new("compiled-ungranted");
+    let file = scratch.write(
+        "reads.deed",
+        "module a\n\n\
+fn main(sys: System) -> Int\n\
+  uses Io.read,\n\
+{\n\
+    match Io.read(sys.files, \"x.txt\") {\n\
+        ok(text) => 0,\n\
+        err(why) => 1,\n\
+    }\n\
+}\n",
+    );
+
+    let output = run(&["run", "--compiled", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("the host does not offer `deed:io.read`"),
+        "{}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn running_something_with_no_main_is_a_usage_error() {
     let scratch = Scratch::new("no-main");
