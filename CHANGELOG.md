@@ -14,6 +14,32 @@ release notes.
 
 - None yet.
 
+## 0.2.6 (2026-08-07)
+
+This release is about the edges of what the language can say and what the
+backend can compile, and both were found by asking a question the corpus could
+not answer.
+
+The smallest `Int` has a literal now. It never had one, because negation is an
+operator and the digits of that number are one past the largest, so a clause
+about the edge had to be spelled `0 - 9223372036854775807 - 1`.
+
+The backend compiles two shapes it had always been handed and never lowered.
+Nothing had noticed, because a program the backend cannot lower and a program
+with no tests in it produce the same silence. The suite that said the backend
+refuses nothing was measuring `examples/`, which is the shapes one author
+happened to write; every case in `conformance/` is now held to being lowerable,
+because those exist to cover the language, which is the question that was
+actually being asked.
+
+`std/ratio` writes contracts, which is the threshold
+`design/fractional-values.md` had been watching for. Writing them found an
+overflow nothing else had.
+
+### Programs that used to compile and no longer do
+
+- None.
+
 ### Language
 
 - The smallest `Int` can be written down: `-9223372036854775808` is one
