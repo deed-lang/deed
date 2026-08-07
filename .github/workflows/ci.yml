@@ -192,3 +192,29 @@ jobs:
       - name: a real client holds a session
         run: python3 crates/deed-mcp/smoke.py target/release/deed
 
+  foreign-engine:
+    name: a foreign engine runs it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build -p deed-cli
+        run: cargo build --release -p deed-cli --locked
+
+      # The runner in `deed-codegen` is this repository's own, and it hands a
+      # host implementation the module's memory directly because it shares an
+      # address space with it. No embedder can. So a module only that runner
+      # accepts is a module every other engine rejects, which is exactly what
+      # #776 cost: a released artifact that trapped on every input, because CI
+      # built it and weighed it and never ran it.
+      #
+      # This is measured rather than argued: before the memory was exported,
+      # a real engine ran the pure functions and could not reach any operation
+      # carrying text.
+      - name: node's engine loads and runs what `deed build` wrote
+        run: node crates/deed-codegen/smoke.mjs target/release/deed "$RUNNER_TEMP/foreign"
+
