@@ -68,10 +68,48 @@ fn allocation_in_a_loop_grows_with_the_number_of_turns() {
     );
 }
 
+/// What used to stop this program was the sixteen pages a module starts
+/// with. It grows now, so the same loop runs and allocates past them, and
+/// what is left to stop a program is the host rather than the module.
+///
+/// The half worth keeping from the test this replaces: the growth is real
+/// and monotonic, so a program allocating a hundred times more still reaches
+/// a hundred times further. Nothing is given back, which is the shape
+/// `design/decisions/2026-07-31-compiled-memory-reclamation.md` is about and
+/// which growing did not change.
 #[test]
-fn the_allocator_eventually_runs_out_of_linear_memory() {
-    let trap = measured(&allocating_loop(10_000)).expect_err("this should run out of memory");
-    assert_eq!(trap, Trap::OutOfBounds);
+fn the_memory_grows_past_the_pages_a_module_starts_with() {
+    let pages = 16 * 64 * 1024;
+    let far = measured(&allocating_loop(10_000)).expect("this runs now that the memory grows");
+
+    assert_eq!(far.value, Some(Value::I64(10_000)));
+    assert!(
+        far.allocated > pages,
+        "this should be past the {pages} bytes a module starts with, and it allocated {}",
+        far.allocated
+    );
+}
+
+/// And a host that will not grow it any further stops the program rather
+/// than letting it write somewhere else.
+///
+/// The source is small and the allocation is not: a list written out with
+/// ten million entries in it would be a test of the parser.
+#[test]
+fn a_host_that_stops_growing_the_memory_stops_the_program() {
+    let source = "module bench\n\n\
+         fn answer() -> Int {\n\
+         \x20   let built = for n at i in repeat(0, 100000000) with out = [] {\n\
+         \x20       push(out, i)\n\
+         \x20   }\n\
+         \x20   length(built)\n\
+         }\n";
+
+    let trap = measured(source).expect_err("nothing has this much room");
+    assert!(
+        matches!(trap, Trap::Unreachable | Trap::OutOfBounds | Trap::TooLong),
+        "it should stop rather than answer: {trap:?}"
+    );
 }
 
 /// A `with` block inside a walk, which used to leak a handler frame a turn.

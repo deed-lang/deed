@@ -28,7 +28,32 @@ release notes.
 
 ### Tools
 
-- Nothing yet.
+- Fixed: a compiled program called its host with the wrong arguments when one
+  of them was computed. `Io.write(sys.console, to_string(n))` declared an
+  import taking *one* argument, because the signature was built from a
+  function that recognised literals and capabilities and answered nothing for
+  anything else, and "nothing" was dropped from the parameter list rather than
+  refused. The host was then handed the text where the console belonged.
+
+  Nothing could see it before there was a host: the runner reached the import
+  and stopped without reading what it had been passed. The check that a
+  capability is one the host handed out is what found it.
+
+  The signature is the argument types the program actually produces now.
+
+- A module's memory grows. The sixteen pages it starts with were a starting
+  point and never a decision, and until now they were a ceiling: a compiled
+  walk building a list stopped at about sixty-five thousand elements with
+  "reached past the end of memory", which says nothing about the program.
+  It runs to two million now, and what stops it there is the host.
+
+  This changes only where the ceiling is. Nothing is given back, so total
+  allocation is still peak memory: `examples/logs.deed` over one file
+  finishes and over two does not, and raising the runner's limit to four
+  gigabytes — the whole of a thirty-two bit address space — does not change
+  that. Reclamation is still the question, and
+  `design/decisions/2026-07-31-compiled-memory-reclamation.md` is still where
+  it is asked.
 
 ### Measurements
 

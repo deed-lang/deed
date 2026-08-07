@@ -47,6 +47,9 @@ const STR_FIND: &str = "deed_rt_str_find";
 /// A string taken into a running hash, which every shape holding one calls.
 const STR_HASH: &str = "deed_rt_str_hash";
 
+/// The name a reader sees for the function that grows the memory.
+const MEMORY_FIT: &str = "deed_rt_memory_fit";
+
 /// One of the functions this module writes.
 ///
 /// The order is the order they are emitted in, and it is fixed so that two
@@ -91,6 +94,13 @@ pub(crate) enum Helper {
     ListAppended,
     /// A string taken into a running hash.
     HashedText,
+    /// The memory, grown until the bump pointer is inside it.
+    ///
+    /// A function rather than instructions in line, because the line is
+    /// every allocation in the program and this is twenty instructions. It
+    /// cost fifty-four bytes a call site inlined, which
+    /// `crates/deed-driver/tests/growth.rs` noticed.
+    GrownMemory,
 }
 
 impl Helper {
@@ -115,6 +125,7 @@ impl Helper {
         Helper::ListRoomFrom,
         Helper::ListAppended,
         Helper::HashedText,
+        Helper::GrownMemory,
     ];
 
     /// Which helper answers for a runtime name the IR asked for.
@@ -164,6 +175,7 @@ impl Helper {
             Helper::ListRoomFrom => runtime::LIST_ROOM_FROM,
             Helper::ListAppended => runtime::LIST_APPEND,
             Helper::HashedText => STR_HASH,
+            Helper::GrownMemory => MEMORY_FIT,
         }
     }
 
@@ -196,6 +208,10 @@ impl Helper {
             | Helper::LoweredText => FuncType {
                 params: vec![ValType::I64],
                 results: vec![ValType::I64],
+            },
+            Helper::GrownMemory => FuncType {
+                params: Vec::new(),
+                results: Vec::new(),
             },
         }
     }
@@ -233,6 +249,7 @@ impl Helper {
             Helper::ListRoomFrom => list_with_room_from(),
             Helper::ListAppended => list_appended(),
             Helper::HashedText => hashed_text(),
+            Helper::GrownMemory => (Vec::new(), grow_to_fit()),
         }
     }
 }
@@ -275,6 +292,66 @@ fn byte_length(slot: u32) -> Vec<Ins> {
     ]
 }
 
+/// Grows the memory until the bump pointer is inside it.
+///
+/// Emitted after every allocation, and there are three of them: the one in
+/// [`crate::compile`] for a value whose size is known while compiling, and
+/// the two here for a value whose size is not. A module starts with sixteen
+/// pages, which was a starting point and never a decision; before this, a
+/// program that needed the seventeenth stopped with "reached past the end of
+/// memory", which says nothing about the program and is not what a caller
+/// asked for.
+///
+/// Nothing is given back, so this is still a bump pointer and total
+/// allocation is still peak memory. What changed is only where the ceiling
+/// is, and `design/decisions/2026-07-31-compiled-memory-reclamation.md` is
+/// still the answer to the other half.
+///
+/// A loop asking for one page at a time rather than one growth of the right
+/// size: the arithmetic for "how many pages short am I" is more code than
+/// this, and a program that never fills a page never enters the loop.
+pub(crate) fn grow_to_fit() -> Vec<Ins> {
+    let past_the_end = || {
+        vec![
+            Ins::I32Const(layout::BUMP as i32),
+            Ins::I64Load(0),
+            Ins::MemorySize,
+            Ins::I64ExtendI32S,
+            Ins::I64Const(PAGE as i64),
+            Ins::I64Mul,
+            Ins::I64GtS,
+        ]
+    };
+
+    let mut body = past_the_end();
+    body.push(Ins::I32Eqz);
+    body.push(Ins::BrIf(1));
+    body.push(Ins::I32Const(1));
+    body.push(Ins::MemoryGrow);
+    // The engine answers with the size before the growth, or -1 when it
+    // would rather not. There is nothing useful left to do with a refusal:
+    // the value being built has nowhere to go.
+    body.push(Ins::I32Const(-1));
+    body.push(Ins::I32Eq);
+    body.push(Ins::If {
+        result: None,
+        then: vec![Ins::Unreachable],
+        otherwise: Vec::new(),
+    });
+    body.push(Ins::Br(0));
+
+    let mut out = past_the_end();
+    out.push(Ins::If {
+        result: None,
+        then: vec![Ins::Loop { result: None, body }],
+        otherwise: Vec::new(),
+    });
+    out
+}
+
+/// How many bytes a WebAssembly page is.
+const PAGE: u32 = 64 * 1024;
+
 /// Reserves as many bytes as `size` pushes, leaving the address in `out`.
 fn allocate(out: u32, size: impl FnOnce(&mut Vec<Ins>)) -> Vec<Ins> {
     let mut ins = vec![
@@ -289,6 +366,7 @@ fn allocate(out: u32, size: impl FnOnce(&mut Vec<Ins>)) -> Vec<Ins> {
     size(&mut ins);
     ins.push(Ins::I64Add);
     ins.push(Ins::I64Store(0));
+    ins.extend(grow_to_fit());
     ins
 }
 
@@ -2072,13 +2150,19 @@ mod tests {
     fn every_helper_is_found_again_by_the_name_it_carries() {
         for &helper in Helper::ALL {
             let name = helper.name();
-            if name == STR_SLICE || name == STR_FIND || name == STR_HASH {
-                // Three the backend only ever calls itself. No prelude
+            if name == STR_SLICE
+                || name == STR_FIND
+                || name == STR_HASH
+                || name == super::MEMORY_FIT
+            {
+                // Four the backend only ever calls itself. No prelude
                 // function lowers to any of them, so there is no name to look
                 // up and `named` saying so is the answer. `hash` is a prelude
                 // function and still does not lower to a runtime name: which
                 // code answers it depends on the shape, so it arrives as
-                // `Expr::Hashed` and the shape picks the fold.
+                // `Expr::Hashed` and the shape picks the fold. Growing the
+                // memory is not a prelude function at all: nothing in a
+                // program asks for it, every allocation does.
                 assert_eq!(
                     Helper::named(name),
                     None,

@@ -137,6 +137,17 @@ impl std::fmt::Display for Trap {
 /// already applies to the scaling test.
 const BUDGET: u64 = 5_000_000;
 
+/// How many bytes a WebAssembly page is.
+const PAGE: usize = 64 * 1024;
+
+/// How far this runner will let a module's memory grow.
+///
+/// A test oracle inside a test binary, so the limit is about this process
+/// rather than about the language: a program whose growth is unbounded should
+/// stop here instead of taking the suite down with it. A real engine has its
+/// own limit and refuses the same way, with -1.
+const MEMORY_PAGES_CEILING: usize = 4096;
+
 /// The type of a host-provided import implementation.
 type HostFn = Box<dyn Fn(HostCall<'_>) -> Result<Option<Value>, Trap>>;
 
@@ -765,6 +776,25 @@ impl Run<'_> {
                     let at = pop(stack)?.as_i64() as usize + *offset as usize;
                     let place = self.memory.get_mut(at).ok_or(Trap::OutOfBounds)?;
                     *place = value as u8;
+                }
+                Ins::MemorySize => {
+                    stack.push(Value::I32((self.memory.len() / PAGE) as i32));
+                }
+                Ins::MemoryGrow => {
+                    let pages = pop(stack)?.as_i64();
+                    let was = (self.memory.len() / PAGE) as i32;
+                    // A ceiling, so a program whose growth is unbounded stops
+                    // here rather than taking the machine down with it. The
+                    // engine's answer for "I would rather not" is -1, and the
+                    // module already handles it, so this is the same refusal
+                    // a real engine under memory pressure gives.
+                    let wanted = was as i64 + pages;
+                    if pages < 0 || wanted > MEMORY_PAGES_CEILING as i64 {
+                        stack.push(Value::I32(-1));
+                    } else {
+                        self.memory.resize(wanted as usize * PAGE, 0);
+                        stack.push(Value::I32(was));
+                    }
                 }
                 other => self.arithmetic(other, stack)?,
             }

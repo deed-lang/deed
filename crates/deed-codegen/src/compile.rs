@@ -351,6 +351,14 @@ fn walk_expr(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
 /// Collected up front rather than as bodies are compiled, because imports
 /// are numbered before defined functions and a body cannot add one without
 /// moving every function already placed.
+///
+/// The argument types are the ones the program actually produces. They used
+/// to come from a smaller function that recognised literals and capabilities
+/// and answered nothing for the rest, and "nothing" was dropped from the
+/// signature rather than refused: `Io.write(sys.console, to_string(n))`
+/// declared an import taking one argument, so the host was handed the text
+/// where the console belonged. Nothing could see it until there was a host,
+/// because the runner reached the import and stopped before reading anything.
 fn host_calls(program: &Program) -> Vec<(String, FuncType)> {
     let mut found: Vec<(String, FuncType)> = Vec::new();
     for function in &program.functions {
@@ -363,7 +371,7 @@ fn host_calls(program: &Program) -> Vec<(String, FuncType)> {
                     FuncType {
                         params: args
                             .iter()
-                            .filter_map(|arg| static_ty(arg).and_then(|ty| val_type(&ty)))
+                            .filter_map(|arg| val_type(&ty_in(program, function, arg)))
                             .collect(),
                         results: val_type(ret).into_iter().collect(),
                     },
@@ -507,7 +515,12 @@ fn hashed(program: &Program) -> Vec<Ty> {
 /// arrangement, and the two places agreeing is what the emitted helper being
 /// the one that gets called depends on.
 fn helpers_used(program: &Program, shapes: &[Ty], folded: &[Ty]) -> Vec<Helper> {
-    let mut found: Vec<Helper> = Vec::new();
+    // Always. Every allocation calls it, allocation is reached from more
+    // shapes than are worth enumerating -- hashing a list allocates without
+    // the body naming a list -- and getting the enumeration wrong is a
+    // module that does not compile rather than one that is slightly larger.
+    // It is part of a module's fixed furniture, the way the bump pointer is.
+    let mut found: Vec<Helper> = vec![Helper::GrownMemory];
     // A shape holding text is compared with the text helper, and nothing in
     // the program need write `==` on two strings for that to happen.
     if crate::equality::needs_text(program, shapes) {
@@ -625,24 +638,6 @@ fn ty_in(program: &Program, function: &Function, expr: &Expr) -> Ty {
         Expr::Perform { ret, .. } => (**ret).clone(),
         Expr::Host { ret, .. } => (**ret).clone(),
     }
-}
-
-/// What an expression produces, for the cases an import's signature needs,
-/// which are the ones that do not depend on the function being compiled.
-///
-/// A host call takes capabilities and literals. Anything else would be a
-/// program handing the host something out of its own memory, which nothing
-/// in the language can express.
-fn static_ty(expr: &Expr) -> Option<Ty> {
-    Some(match expr {
-        Expr::Unit => Ty::Unit,
-        Expr::Bool(_) => Ty::Bool,
-        Expr::Int(_) => Ty::Int,
-        Expr::Str(_) => Ty::Str,
-        Expr::Host { ret, .. } => (**ret).clone(),
-        Expr::Call { .. } | Expr::Local(_) | Expr::Field { .. } => Ty::Capability,
-        _ => return None,
-    })
 }
 
 fn index_of_signature(module: &mut Module, function: &Function) -> u32 {
@@ -1226,7 +1221,7 @@ impl<'a> Builder<'a> {
 
     /// Reserves `size` bytes, leaving the address in `into` and nothing on
     /// the stack.
-    fn allocate(&mut self, size: u32, into: u32) {
+    fn allocate(&mut self, size: u32, into: u32) -> Result<(), Unsupported> {
         self.instructions.push(Ins::I32Const(layout::BUMP as i32));
         self.instructions.push(Ins::I64Load(0));
         self.instructions.push(Ins::LocalSet(into));
@@ -1236,6 +1231,10 @@ impl<'a> Builder<'a> {
         self.instructions.push(Ins::I64Const(size as i64));
         self.instructions.push(Ins::I64Add);
         self.instructions.push(Ins::I64Store(0));
+
+        let grow = self.helper(Helper::GrownMemory)?;
+        self.instructions.push(Ins::Call(grow));
+        Ok(())
     }
 
     /// Reserves `size` bytes of frame stack, leaving the address in `into`.
@@ -1307,7 +1306,7 @@ impl<'a> Builder<'a> {
         fields: &[(u32, &Expr)],
     ) -> Result<(), Unsupported> {
         let address = self.temporary(ValType::I64);
-        self.allocate(size, address);
+        self.allocate(size, address)?;
 
         if let Some(value) = header {
             self.instructions.push(Ins::LocalGet(address));
@@ -2001,6 +2000,11 @@ mod tests {
     /// The name is the only thing a person reading a trap in a compiled
     /// module has to go on, and nothing else in the compiler reads it, so
     /// without this it can be anything at all.
+    ///
+    /// The one exception is the function that grows the memory, which every
+    /// module carries because every module can allocate. Counted here rather
+    /// than filtered out, so that a second always-emitted helper has to be
+    /// argued for at this line instead of arriving quietly.
     #[test]
     fn a_helper_is_emitted_under_its_own_name_and_only_when_it_is_reached() {
         let mut program = Program::new();
@@ -2015,8 +2019,8 @@ mod tests {
         let module = compile(&program).expect("this compiles");
         assert_eq!(
             module.funcs.len(),
-            2,
-            "the program's function and one helper"
+            3,
+            "the program's function, the one that grows the memory, and one helper"
         );
         assert!(
             module
@@ -2030,8 +2034,8 @@ mod tests {
         let plain = compile(&adding()).expect("this compiles");
         assert_eq!(
             plain.funcs.len(),
-            1,
-            "a program that joins nothing carries no helper: {:?}",
+            2,
+            "a program that joins nothing carries no text helper: {:?}",
             plain.names
         );
     }
@@ -2206,7 +2210,9 @@ mod tests {
     #[test]
     fn a_function_of_two_numbers_compiles_and_is_exported() {
         let module = compile(&adding()).expect("this compiles");
-        assert_eq!(module.funcs.len(), 1);
+        // The program's one function, and the one every module carries to
+        // grow its memory.
+        assert_eq!(module.funcs.len(), 2);
         assert_eq!(module.exports, vec![("add".to_string(), 0)]);
         assert_eq!(
             module.types[0],

@@ -121,11 +121,20 @@ being acceptable still applies to everything else, and
 `design/decisions/2026-07-31-compiled-memory-reclamation.md` has the numbers.
 
 There is now a size where this is what stops a program rather than a note about later. A
-module gets sixteen pages, and building a thousand-key `std/table` copies the list once per
-key, so it reaches the end of memory before the first lookup;
+module starts with sixteen pages and grows when the bump pointer would pass the end, so the
+sixteen are a starting point rather than a ceiling: a walk building a list stopped at about
+sixty-five thousand elements and now runs to two million, and what stops it there is the
+host rather than the module.
+
+Growing moved the ceiling and changed nothing else. Nothing is given back, so total
+allocation is still peak memory, and the program that outruns any ceiling is the one that
+copies. Building a thousand-key `std/table` copies the list once per key;
 `design/decisions/2026-07-31-tree-vs-table-decision.md` measured both keyed modules and
-neither of them survives a thousand keys. Below a few hundred the question that measurement
-set out to answer is the algorithm; above it, the question is this paragraph.
+neither survives a thousand keys. Measured after the growth landed:
+`examples/logs.deed` over one file finishes and over two does not, and raising the runner's
+limit to four gigabytes -- the whole of a thirty-two bit address space -- does not change
+that. So the remaining question is reclamation and not the number of pages, which is what
+`design/decisions/2026-07-31-compiled-memory-reclamation.md` is about.
 
 ## A capability is a handle, and everything it reaches is an import
 A WebAssembly module cannot open a file, write a line or read a clock. It says what it wants
@@ -193,7 +202,6 @@ with the name of what it wanted, which is the most useful thing this could say a
 module on its way to a real embedder.
 
 ### The module exports its memory, and that is what makes the host real
-
 A capability crosses the boundary as a number, but a string does not: `Io.write(console,
 text)` hands the text over as an address into the module's own memory. The host inside
 `deed` shares an address space with the module and is handed that memory directly, so

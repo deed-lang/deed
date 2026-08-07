@@ -15,11 +15,10 @@ use std::path::PathBuf;
 use deed_codegen::layout;
 
 fn page() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../how-to/embed-a-compiled-program.md");
-    std::fs::read_to_string(&path).unwrap_or_else(|why| {
-        panic!("the embedding guide should be at {}: {why}", path.display())
-    })
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../how-to/embed-a-compiled-program.md");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|why| panic!("the embedding guide should be at {}: {why}", path.display()))
 }
 
 /// The three columns of one row of the layout table, by its first column.
@@ -143,8 +142,7 @@ fn the_name_the_guide_reads_the_memory_under_is_the_one_that_is_exported() {
     );
     let mut all = deed_driver::check_all(&sources, &[id]);
     let one = all.pop().expect("one file in, one result out");
-    let lowered =
-        deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
+    let lowered = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
     let module = deed_codegen::compile(&lowered).expect("this compiles");
 
     assert_eq!(module.exported_memory.as_deref(), Some("memory"));

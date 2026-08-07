@@ -12,7 +12,7 @@
 //!
 //! See `design/decisions/2026-07-31-compiled-memory-reclamation.md`.
 
-use deed_codegen::{Trap, call_measured, compile};
+use deed_codegen::{Trap, call_measured, call_within, compile};
 use deed_diagnostics::SourceMap;
 use deed_driver::check_all;
 
@@ -22,6 +22,11 @@ const LENGTH: usize = 256;
 
 /// Bytes the compiled program allocates running its one test.
 fn allocated(source: &str) -> Result<u64, Trap> {
+    allocated_within(source, None)
+}
+
+/// The same, for a program that runs longer than a test's default budget.
+fn allocated_within(source: &str, budget: Option<u64>) -> Result<u64, Trap> {
     let mut sources = SourceMap::new();
     let id = sources.add("bench.deed".to_string(), source.to_string());
     let mut all = check_all(&sources, &[id]);
@@ -36,7 +41,12 @@ fn allocated(source: &str) -> Result<u64, Trap> {
         deed_mir::lower_with_tests(&one.module, &one.resolutions, &one.types).expect("this lowers");
     let module = compile(&lowered).expect("this compiles");
     let test = lowered.tests.first().expect("the program declares a test");
-    call_measured(&module, &test.body, &[]).map(|outcome| outcome.allocated)
+    match budget {
+        None => call_measured(&module, &test.body, &[]).map(|outcome| outcome.allocated),
+        Some(budget) => {
+            call_within(&module, &test.body, &[], budget).map(|outcome| outcome.allocated)
+        }
+    }
 }
 
 /// The list both rows walk, so it can be taken off both of them.
@@ -222,4 +232,46 @@ test \"walked\" {{
         "four times the length allocated {far} bytes against {near}, which is more \
          than a constant a turn, so the record's lists are being copied again"
     );
+}
+
+/// A program that wants more than the pages it started with gets them.
+///
+/// The sixteen pages a module declares were a starting point and never a
+/// decision, and until the memory grew they were a ceiling: a walk building
+/// a list of a hundred thousand stopped with "reached past the end of
+/// memory", which says nothing about the program and is not an answer to
+/// what the caller asked.
+///
+/// The number is one nothing could reach before. Sixteen pages is a little
+/// over a million bytes, the walk holds two lists of eight-byte elements at
+/// once, so a hundred thousand is comfortably past it and two hundred
+/// thousand is past it twice.
+#[test]
+fn a_program_that_outgrows_its_first_pages_keeps_going() {
+    let past_the_start = |size: usize| {
+        format!(
+            "module bench
+
+test \"grown\" {{
+    let built = for n at i in repeat(0, {size}) with out = [] {{
+        push(out, i)
+    }}
+    assert length(built) == {size}
+}}
+"
+        )
+    };
+
+    let pages = 16 * 64 * 1024;
+    // More than a test's default budget, because a hundred thousand turns is
+    // more work than any test should do by accident and this one means to.
+    let budget = Some(200_000_000);
+    let grown = allocated_within(&past_the_start(100_000), budget)
+        .expect("a walk past the first pages runs");
+    assert!(
+        grown > pages,
+        "this should be past the {pages} bytes a module starts with, and it allocated {grown}"
+    );
+
+    allocated_within(&past_the_start(200_000), budget).expect("and one twice as far still runs");
 }

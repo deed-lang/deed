@@ -357,6 +357,15 @@ impl<'m> Checker<'m> {
                 self.pop_expect(ValType::I32)?;
                 self.pop_expect(ValType::I32)?;
             }
+            Ins::MemorySize => {
+                self.require_memory()?;
+                self.push(ValType::I32);
+            }
+            Ins::MemoryGrow => {
+                self.require_memory()?;
+                self.pop_expect(ValType::I32)?;
+                self.push(ValType::I32);
+            }
         }
         Ok(())
     }
