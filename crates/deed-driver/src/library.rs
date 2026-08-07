@@ -116,6 +116,15 @@ pub(crate) fn attach(
             continue;
         };
 
+        // A name the resolver could point at somewhere in this file is a
+        // question about scope rather than a missing import, and writing the
+        // `use` line would answer a different question confidently. The
+        // measured case is a walk's accumulator read after its walk: `sum` is
+        // in `std/list`, and importing it there is worse than saying nothing.
+        if !diagnostic.secondary.is_empty() {
+            continue;
+        }
+
         match homes.as_slice() {
             [home] => {
                 *diagnostic = diagnostic.clone().with_note(format!(

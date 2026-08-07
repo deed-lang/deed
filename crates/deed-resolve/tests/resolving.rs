@@ -475,6 +475,57 @@ fn reaching_for_a_receiver_is_told_there_are_no_methods() {
     }
 }
 
+/// A walk's accumulator, read underneath the walk.
+///
+/// Spelled right, declared a statement ago, and not in scope. The suggester
+/// has nothing useful to say about it and `std/list` has a `sum` to offer that
+/// is a different function entirely, so this used to be a confident wrong
+/// answer twice over.
+///
+/// Measured: a model wrote the walk with an assignment in it and the
+/// accumulator underneath, and got four diagnostics for one misunderstanding.
+#[test]
+fn an_accumulator_read_after_its_walk_is_told_where_the_value_is() {
+    let (sources, _, resolved) = resolve_source(
+        "module a\n\nfn total(numbers: List<Int>) -> Int {\n    \
+         for n in numbers with sum = 0 {\n        sum + n\n    }\n    sum\n}\n",
+    );
+    let named = resolved
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("cannot find `sum`"))
+        .expect("`sum` should not resolve underneath the walk");
+
+    let text = render_human(&sources, named);
+    assert!(text.contains("the accumulator of a walk"), "{text}");
+    assert!(
+        text.contains("`let sum = for ... { ... }`"),
+        "it should say what reads it: {text}"
+    );
+    assert!(
+        named.fix.is_none(),
+        "the name is spelled right, so there is nothing to correct: {text}"
+    );
+}
+
+/// One function's walk says nothing about the next one's names.
+#[test]
+fn an_accumulator_does_not_travel_to_the_declaration_below_it() {
+    let (sources, _, resolved) = resolve_source(
+        "module a\n\nfn total(numbers: List<Int>) -> Int {\n    \
+         for n in numbers with sum = 0 {\n        sum + n\n    }\n}\n\n\
+         fn other() -> Int {\n    sum\n}\n",
+    );
+    let named = resolved
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("cannot find `sum`"))
+        .expect("`sum` should not resolve in the other function");
+
+    let text = render_human(&sources, named);
+    assert!(!text.contains("the accumulator of a walk"), "{text}");
+}
+
 /// The words three benchmark runs reached for and got a typo's answer.
 ///
 /// Each of these had nothing in `name_from_elsewhere`, so an unresolved name

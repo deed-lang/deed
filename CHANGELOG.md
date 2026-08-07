@@ -16,6 +16,17 @@ release notes.
 
 ### Diagnostics
 
+- A walk's accumulator read underneath its walk is told where the value is,
+  rather than offered an import. `for n in ns with sum = 0 { .. }` followed by
+  `sum` is a name spelled exactly right, declared a statement ago and out of
+  scope, and `sum` is also a function in `std/list`, so the answer was a
+  machine-applicable fix writing an import for a different function entirely,
+  which `deed fix` applied. The diagnostic now names where the accumulator was
+  declared, what the walk ended up as, and that what reads it is
+  `let sum = for ... { ... }`. The general rule behind it: a name this file
+  declares somewhere is a question about scope, so the shipped library stops
+  offering to import it.
+
 - `point.x = 1` is `DEED2027` rather than two messages about neither half of
   it. The name form of assignment is one this language has, because a handler's
   state can be written to, so the field form used to arrive as an expression
