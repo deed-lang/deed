@@ -1749,11 +1749,20 @@ fn narrow_side(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: 
         // answer rather than the arm, so the behaviour is held either way.
         //
         // Not solved, and worth writing down rather than leaving for whoever
-        // touches this next: `Ge` measures exactly the same way. Deleting it
-        // leaves the same 2266 tests passing, and a guard written against a
-        // bounded name is still proved without it. The other three comparisons
-        // were not in that diff and have not been measured, so finishing the
-        // job is its own change, on its own evidence.
+        // touches this next. Disabling each remaining arm in turn and running
+        // the whole suite: `Lt`, `Le` and `Ge` change nothing, all 2266 still
+        // pass, and `Gt` fails 18. So four of the six comparisons here are
+        // answered somewhere else and one is load-bearing.
+        //
+        // Where they are answered is `narrow_scaled`, which turns the whole
+        // comparison into a linear form and reads the bound out of
+        // `bound_from`; a bare name is that form with a count of one, which is
+        // exactly the shape this function is for. Two functions overlapping on
+        // the same question is the thing this repository keeps finding, and
+        // which of them should keep it is a measurement rather than a tidy-up:
+        // the asymmetry above is as likely to be the shape of the corpus,
+        // where `> 0` is everywhere and `>= 1` is nowhere, as it is a real
+        // difference. Left alone here on purpose.
         //
         // `!=` says something exactly when the other side is a single value
         // sitting at an edge of what is already known: everything the term
