@@ -16,7 +16,18 @@ release notes.
 
 ### Language
 
-- Nothing yet.
+- Fixed: a contract that mentions `result` or `old(...)` inside a closure now
+  runs. `deed check` accepted it and running it answered `DEED6006`, whose own
+  note says either the file was not checked or the check has a hole; it was the
+  hole. The interpreter decides whether an obligation needs `result` bound, and
+  whether it needs an entry snapshot, by walking the clause, and neither walk
+  went into a closure body.
+
+  So `ensures ok => any(numbers, |n: Int| n == result)` — the natural way to
+  say the answer came out of the list — was the one shape a contract could not
+  be written in. The two walks are now one, matched without a wildcard, so a
+  new kind of expression is a build error rather than a contract that quietly
+  stops being checked.
 
 ### Diagnostics
 

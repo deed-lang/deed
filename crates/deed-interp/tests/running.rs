@@ -804,6 +804,73 @@ fn unchanged_outside_a_contract_is_refused() {
 // checked is what the type checker gave up on, so a test for it has to run the
 // checker, and these tests deliberately do not.
 
+// -- contracts, through a closure ------------------------------------------
+
+/// `result` inside a closure inside a contract.
+///
+/// The interpreter finds out whether an obligation mentions `result` by
+/// walking it, and that walk did not go into a closure body. `deed check`
+/// accepted this and running it then said `DEED6006`, whose own note says
+/// either the file was not checked or the check has a hole. It was the hole.
+///
+/// Found by writing the contract the benchmark's `largest` answer was missing:
+/// `any(numbers, |n: Int| n == result)` is the natural way to say "the answer
+/// came out of the list", and it was the one shape that could not run.
+#[test]
+fn result_inside_a_closure_in_a_contract_runs() {
+    expect_pass(
+        "module a\n\n\
+         fn holds(f: Fn(Int) -> Bool, n: Int) -> Bool { f(n) }\n\n\
+         fn same(n: Int) -> Int\n\
+         \x20 ensures ok => holds(|x: Int| x == result, n),\n\
+         { n }\n\n\
+         test \"through a closure\" {\n\
+         \x20 assert same(3) == 3\n\
+         }\n",
+    );
+}
+
+/// And it is enforced rather than merely runnable. A contract that runs and
+/// always says yes is worse than one that refuses to run, because nothing
+/// announces it.
+#[test]
+fn result_inside_a_closure_still_catches_a_broken_promise() {
+    let (sources, failure) = expect_failure(
+        "module a\n\n\
+         fn holds(f: Fn(Int) -> Bool, n: Int) -> Bool { f(n) }\n\n\
+         fn off_by_one(n: Int) -> Int\n\
+         \x20 ensures ok => holds(|x: Int| x == result, n),\n\
+         { n + 1 }\n\n\
+         test \"the promise is broken\" {\n\
+         \x20 assert off_by_one(3) == 4\n\
+         }\n",
+    );
+    assert_eq!(failure.code, codes::POSTCONDITION_FAILED);
+    assert!(render_human(&sources, &failure).contains("`off_by_one` did not keep this promise"));
+}
+
+/// The same gap, in the same walk, for `old`. Both walkers stopped at a
+/// closure body and neither knew about the other, so they are one walk now.
+#[test]
+fn old_inside_a_closure_in_a_contract_runs() {
+    expect_pass(&counter(
+        "fn holds(f: Fn(Int) -> Bool, n: Int) -> Bool { f(n) }\n\n\
+         fn bump_twice(by: Positive) -> Int\n\
+         \x20 uses Counter.bump, Counter.value,\n\
+         \x20 ensures ok => holds(|v: Int| v == old(Counter.value()) + by + by, Counter.value()),\n\
+         {\n\
+         \x20 Counter.bump(by)\n\
+         \x20 Counter.bump(by)\n\
+         \x20 Counter.value()\n\
+         }\n\n\
+         test \"old through a closure\" {\n\
+         \x20 with InMemory { count: 100 } {\n\
+         \x20   assert bump_twice(5) == 110\n\
+         \x20 }\n\
+         }\n",
+    ));
+}
+
 // -- assertions ------------------------------------------------------------
 
 #[test]
