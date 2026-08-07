@@ -2614,36 +2614,11 @@ impl<'a> Interp<'a> {
 
     /// One request, and the answer as a `Result`.
     ///
-    /// A status outside the two hundreds becomes an `err`, for the reason a
-    /// missing file does: the caller asked for something and did not get it,
-    /// and a program that cannot tell "here is your answer" from "the host
-    /// said no" has a bug waiting. The body comes along in the message when
-    /// there is one, because the body of a refusal is usually the explanation.
-    ///
-    /// What this cannot do, written down rather than worked around: hand back
-    /// the status as a number. A `Result` carries one value and this language
-    /// has no tuple, so the shapes available are "the body" and "a string with
-    /// the status in it", and parsing a number back out of a message is worse
-    /// than not having it. The fix is a record the prelude declares, and the
-    /// prelude declaring a record is a larger decision than one operation gets
-    /// to make. `design/04-capabilities.md` carries it as an open question.
+    /// The rule itself is `deed_rt::http::over_the_network`, where both
+    /// engines read it. This is the part that is about `Value`.
     fn over_the_network(reach: &Reach, url: &str, method: &str, body: Option<&str>) -> Value {
-        let target = match reach::resolve(reach, url) {
-            Ok(target) => target,
-            Err(refused) => return Value::err(Value::str(refused.message(url))),
-        };
-
-        match deed_rt::http::request(&target, method, body) {
-            Ok(answer) if (200..300).contains(&answer.status) => Value::ok(Value::str(answer.body)),
-            Ok(answer) => {
-                let status = answer.status;
-                let explanation = answer.body.trim();
-                Value::err(Value::str(if explanation.is_empty() {
-                    format!("`{url}` answered {status}")
-                } else {
-                    format!("`{url}` answered {status}: {explanation}")
-                }))
-            }
+        match deed_rt::http::over_the_network(reach, url, method, body) {
+            Ok(text) => Value::ok(Value::str(text)),
             Err(why) => Value::err(Value::str(why)),
         }
     }

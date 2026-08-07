@@ -39,6 +39,6 @@ pub mod reach;
 pub mod sandbox;
 
 pub use hashing::Hash;
-pub use http::{Response, request};
+pub use http::{Response, over_the_network, request};
 pub use reach::{Reach, Target};
 pub use sandbox::{Refused, resolve, resolve_new, root};

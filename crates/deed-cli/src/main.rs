@@ -984,8 +984,9 @@ fn run_compiled_main(
     // What this run grants, and the whole of what the program can do: a
     // compiled module reaches its host and nothing else. These are the same
     // grants `deed run` hands the interpreter, decided the same way -- the
-    // directory `--dir` named, the variables `--env` named, and standard
-    // input only when `main`'s row says the program reads it.
+    // directory `--dir` named, the hosts `--allow` named, the variables
+    // `--env` named, and standard input only when `main`'s row says the
+    // program reads it.
     //
     // What is not here is not answered, and a program whose row asks for it
     // is turned down before it runs rather than at the first call.
@@ -1003,6 +1004,7 @@ fn run_compiled_main(
         .input(input)
         .clock()
         .files(root)
+        .network(deed_rt::Reach::granting(grants.allow))
         .arguments(grants.arguments.to_vec())
         .environment(granted_environment(grants.env))
         .into_host();
