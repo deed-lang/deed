@@ -494,6 +494,40 @@ mod tests {
         assert!(parse(args(&["run", "a.deed", "--allow"])).is_err());
     }
 
+    #[test]
+    fn a_run_that_names_no_variable_grants_none() {
+        let Ok(Command::Check(check)) = parse(args(&["run", "a.deed"])) else {
+            panic!("should parse");
+        };
+        assert!(check.env.is_empty());
+    }
+
+    #[test]
+    fn env_is_repeatable_and_takes_either_spelling() {
+        let Ok(Command::Check(check)) =
+            parse(args(&["run", "a.deed", "--env", "HOME", "--env=PATH"]))
+        else {
+            panic!("should parse");
+        };
+        assert_eq!(check.env, vec!["HOME", "PATH"]);
+    }
+
+    #[test]
+    fn env_needs_a_name() {
+        assert!(parse(args(&["run", "a.deed", "--env"])).is_err());
+    }
+
+    /// The same sentence `--allow` gets, about the same mistake.
+    #[test]
+    fn env_is_refused_where_nothing_would_read_it() {
+        for mode in ["check", "test", "build", "fmt"] {
+            assert!(
+                parse(args(&[mode, "a.deed", "--env", "HOME"])).is_err(),
+                "`deed {mode} --env` should be refused"
+            );
+        }
+    }
+
     /// A grant nothing will read is a grant somebody believes they made.
     #[test]
     fn allow_is_refused_where_nothing_would_read_it() {
