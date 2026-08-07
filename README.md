@@ -28,9 +28,9 @@ language server are all in that one file.
 Start with the [tutorial](TUTORIAL.md) if you want one program built up one step at a time.
 
 ```
-$ tar xzf deed-v0.2.6-x86_64-unknown-linux-gnu.tar.gz
-$ ./deed-v0.2.6-x86_64-unknown-linux-gnu/deed --version
-deed 0.2.6
+$ tar xzf deed-v0.2.7-x86_64-unknown-linux-gnu.tar.gz
+$ ./deed-v0.2.7-x86_64-unknown-linux-gnu/deed --version
+deed 0.2.7
 ```
 
 From source instead, which needs Rust 1.85 or newer:

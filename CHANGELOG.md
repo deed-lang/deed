@@ -16,6 +16,58 @@ release notes.
 
 ### Language
 
+- Nothing yet.
+
+### Diagnostics
+
+- Nothing yet.
+
+### Standard library
+
+- Nothing yet.
+
+### Tools
+
+- Nothing yet.
+
+### Measurements
+
+- Nothing yet.
+
+## 0.2.7 (2026-08-07)
+
+A compiled Deed program can act now.
+
+The backend has said for months that a program's import section is its
+capability requirements, and the tests have held that claim from both sides:
+a module that does not name an operation has no index to call it through, and
+a module that names one the host cannot answer is refused before it runs.
+Nothing crossed the boundary. A compiled `examples/hello.deed` stopped with
+``` `deed:sys.console` is the host's to answer, and this is not one ``` while
+the interpreted one printed "hello, world".
+
+The obstacle was one line of a type. A host implementation was handed the
+call's arguments and nothing else, and a string argument is an address into
+the module's own memory, so no host was writable for any operation carrying
+something other than a number.
+
+`deed run --compiled` now grants what `deed run` grants, and six of the seven
+corpus programs with a `main` print exactly what the interpreted ones print.
+The seventh runs out of the module's memory, which is a question about value
+reclamation rather than about hosts and is the clearest thing this release
+leaves open.
+
+Two smaller things came out of measuring the model against a real transcript:
+`deed fix` was writing an import that made a file worse, and
+`deed build --component` crashed on the one shape `design/04-capabilities.md`
+rests on being impossible.
+
+### Programs that used to compile and no longer do
+
+- None.
+
+### Language
+
 - `Io.env(sys, name)` reads one environment variable, and only the ones the
   run was told to hand over. `deed run --env NAME` grants a name, repeatably,
   and everything else reads as absent.
