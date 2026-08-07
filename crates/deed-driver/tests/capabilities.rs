@@ -83,6 +83,24 @@ fn run_reaching(src: &str, hosts: &[&str]) -> (SourceMap, Run) {
     (sources, run)
 }
 
+/// Runs a program that was handed lines on standard input.
+fn run_reading(src: &str, input: &[&str]) -> (SourceMap, Run) {
+    let (sources, checked) = check_ok(src);
+    let lines: Vec<String> = input.iter().map(|line| (*line).to_string()).collect();
+    let run = deed_interp::run_main_given(
+        &program_of(&checked),
+        checked.file,
+        nowhere(),
+        &deed_interp::Given {
+            input: &lines,
+            ..deed_interp::Given::default()
+        },
+        false,
+    )
+    .expect("there should be a main");
+    (sources, run)
+}
+
 fn codes_of(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics.iter().map(|d| d.code).collect()
 }
@@ -1335,6 +1353,121 @@ fn reading_the_arguments_takes_the_root_capability() {
         "{text}"
     );
     assert!(text.contains("expected `System`, found `Dir`"), "{text}");
+}
+
+// -- reading what somebody typed ---------------------------------------------
+//
+// The `read`/`save` split applied to the console. The capability says which
+// terminal; the row says which direction, and holding a `Console` is not
+// permission to read from it.
+
+#[test]
+fn a_program_reads_the_lines_it_was_handed() {
+    let (_, run) = run_reading(
+        &report(
+            &["write", "line"],
+            "  match Io.line(sys.console) {\n    \
+             ok(first) => Io.write(sys.console, first),\n    \
+             err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        &["ada", "lin"],
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["ada".to_string()]);
+}
+
+#[test]
+fn each_call_hands_back_the_next_line() {
+    let (_, run) = run_reading(
+        &report(
+            &["write", "line"],
+            "  let first = match Io.line(sys.console) {\n    ok(text) => text,\n    \
+             err(_) => \"-\",\n  }\n  \
+             let second = match Io.line(sys.console) {\n    ok(text) => text,\n    \
+             err(_) => \"-\",\n  }\n  \
+             Io.write(sys.console, join([first, second], \" then \"))",
+        ),
+        &["ada", "lin"],
+    );
+
+    assert_eq!(run.output, vec!["ada then lin".to_string()]);
+}
+
+/// Running out is `err`, and an empty line is not.
+///
+/// The two have to be told apart or a program that loops until the input ends
+/// either never stops or stops early, and both of those are silent. An empty
+/// line is something somebody typed.
+#[test]
+fn running_out_of_input_is_not_the_same_as_an_empty_line() {
+    let empty = run_reading(
+        &report(
+            &["write", "line"],
+            "  match Io.line(sys.console) {\n    \
+             ok(text) => Io.write(sys.console, join([\"read [\", text, \"]\"], \"\")),\n    \
+             err(_) => Io.write(sys.console, \"nothing left\"),\n  }",
+        ),
+        &[""],
+    );
+    assert_eq!(empty.1.output, vec!["read []".to_string()]);
+
+    let exhausted = run_reading(
+        &report(
+            &["write", "line"],
+            "  match Io.line(sys.console) {\n    \
+             ok(text) => Io.write(sys.console, join([\"read [\", text, \"]\"], \"\")),\n    \
+             err(_) => Io.write(sys.console, \"nothing left\"),\n  }",
+        ),
+        &[],
+    );
+    assert_eq!(exhausted.1.output, vec!["nothing left".to_string()]);
+}
+
+/// The half that makes the row worth reading.
+///
+/// A function handed a `Console` to write to still cannot find out what
+/// somebody typed, which is the same sentence `list` earns about a `Dir`.
+#[test]
+fn writing_to_a_console_is_not_permission_to_read_from_it() {
+    let (sources, checked) = check(
+        "module a\n\nfn ask(console: Console) -> Result<String, String>\n  uses Io.write,\n{\n  \
+         Io.line(console)\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&deed_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+/// And the other way round, so neither entry stands for both.
+#[test]
+fn reading_from_a_console_is_not_permission_to_write_to_it() {
+    let (sources, checked) = check(
+        "module a\n\nfn shout(console: Console) -> ()\n  uses Io.line,\n{\n  \
+         Io.write(console, \"hello\")\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&deed_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn a_run_that_was_handed_nothing_reads_nothing() {
+    // The default, and the one every caller but `deed run` takes: a test
+    // whose answer depended on what somebody typed would be a test of the
+    // typing.
+    let (_, run) = run(&report(
+        &["write", "line"],
+        "  match Io.line(sys.console) {\n    \
+         ok(_) => Io.write(sys.console, \"something\"),\n    \
+         err(_) => Io.write(sys.console, \"nothing left\"),\n  }",
+    ));
+
+    assert_eq!(run.output, vec!["nothing left".to_string()]);
 }
 
 // -- the examples ----------------------------------------------------------

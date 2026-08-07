@@ -5,7 +5,7 @@ mod lock;
 
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -1150,6 +1150,51 @@ struct Grants<'a> {
     arguments: &'a [String],
 }
 
+/// Whether this program's `main` says it reads what somebody typed.
+///
+/// Standard input is read only when the answer is yes, and that is the whole
+/// rule: no guessing about whether a terminal is attached, no flag to
+/// remember. The row is already the list of what a program does with the
+/// outside, so it is the thing that decides what the outside hands over, and a
+/// program that never says `Io.line` cannot be left waiting for input nobody
+/// was going to type.
+fn reads_input(checked: &Checked) -> bool {
+    checked.module.items.iter().any(|item| match item {
+        deed_ast::Item::Function(function) if function.sig.name.name == "main" => {
+            function.contract.uses.iter().any(|entry| {
+                entry.effect.name == "Io"
+                    && match &entry.operation {
+                        Some(operation) => operation.name == "line",
+                        // `uses Io.*` is every operation, this one included.
+                        None => true,
+                    }
+            })
+        }
+        _ => false,
+    })
+}
+
+/// Every line on standard input, without its terminator.
+///
+/// Read in full before the program starts rather than a line at a time,
+/// because a run here is already a batch: what a program prints is collected
+/// and written when it finishes, so there was never a conversation to have.
+/// A carriage return in front of the newline goes with it, since which one a
+/// line ends with is a fact about the machine the input was typed on.
+fn read_standard_input() -> io::Result<Vec<String>> {
+    let mut text = String::new();
+    io::stdin().read_to_string(&mut text)?;
+    // A trailing newline ends the last line rather than starting an empty one.
+    let text = text.strip_suffix('\n').unwrap_or(&text);
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect())
+}
+
 /// Calls `main`, handing it the one `System` there is.
 ///
 /// Exactly one is required. Two entry points in one invocation is not a
@@ -1179,17 +1224,18 @@ fn run_main(
     // Only the files that were named. A library pulled in because an import
     // needed it is not an answer to "which program did you mean".
     for checked in &checks[..subject.min(checks.len())] {
-        let run = if runtime_profile {
-            deed_interp::run_main_profiled_reaching(
-                &program,
-                checked.file,
-                &root,
-                arguments,
-                &reach,
-            )
+        let input = if reads_input(checked) {
+            read_standard_input()?
         } else {
-            deed_interp::run_main_reaching(&program, checked.file, &root, arguments, &reach)
+            Vec::new()
         };
+        let given = deed_interp::Given {
+            arguments,
+            reach: Some(&reach),
+            input: &input,
+        };
+        let run =
+            deed_interp::run_main_given(&program, checked.file, &root, &given, runtime_profile);
         if let Some(run) = run {
             runs.push((sources.file(checked.file).name().to_string(), run));
         }

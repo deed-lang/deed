@@ -114,6 +114,12 @@ pub const PRELUDE: &[&str] = &[
 /// a signature here is one list of types per name and there is no overloading,
 /// so the limitation shows through the design rather than the other way round.
 ///
+/// `write` and `line` are the `read`/`save` split applied to the console. The
+/// capability says which terminal; the row says which direction, and a
+/// function handed a `Console` still cannot read what somebody typed unless it
+/// says so. That is the same sentence `list` earns below, and it is the reason
+/// there is no second capability for input.
+///
 /// `args` is the odd one. It hands back data rather than doing anything, and
 /// it takes the whole `System` rather than a narrower capability, so it reads
 /// like it does not belong. It goes in the row anyway, because how a program
@@ -147,8 +153,8 @@ pub const PRELUDE: &[&str] = &[
 /// differ between two runs, and more so: the other end is a machine nobody
 /// here controls.
 pub const IO_OPERATIONS: &[&str] = &[
-    "write", "now", "epoch", "open", "read", "save", "remove", "make", "list", "args", "reach",
-    "fetch", "send",
+    "write", "line", "now", "epoch", "open", "read", "save", "remove", "make", "list", "args",
+    "reach", "fetch", "send",
 ];
 
 /// The effects the language provides, available in every module without an

@@ -5442,7 +5442,12 @@ pub fn io_signatures() -> Vec<(&'static str, Vec<Ty>, Ty)> {
     let io_error = |ok: Ty| Ty::Result(Box::new(ok), Box::new(Ty::Str));
 
     vec![
-        ("write", vec![console, Ty::Str], Ty::Unit),
+        ("write", vec![console.clone(), Ty::Str], Ty::Unit),
+        // Reading what somebody typed, on the capability that writes to them.
+        // A line at a time, without its terminator, and `err` once there are
+        // no more: an empty line is a real answer and has to stay one, so
+        // running out cannot be spelled the same way.
+        ("line", vec![console], io_error(Ty::Str)),
         ("now", vec![clock.clone()], Ty::Int),
         // The machine's clock, in milliseconds since 1970. A separate
         // entry in the row for the same reason `save` is separate from

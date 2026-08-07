@@ -16,6 +16,26 @@ release notes.
 
 ### Language
 
+- `Io.line(console)` reads what somebody typed, one line at a time. It is the
+  `read`/`save` split applied to the console: the same capability, a separate
+  entry in the row, so a function handed a `Console` to write to still cannot
+  find out what was typed unless its signature says so. The line comes back
+  without its terminator and without a carriage return in front of it, because
+  which of those a line ends with is a fact about the machine it was typed on.
+
+  Running out of input is `err` rather than an empty string. A program that
+  cannot tell "somebody typed nothing" from "there is nothing left" either
+  loops forever or stops early, and both of those are silent.
+
+  `deed run` reads standard input when, and only when, `main`'s row says
+  `Io.line`. There is no flag and no guess about whether a terminal is
+  attached: the row is already the list of what a program does with the
+  outside, so it is what decides what the outside hands over, and a program
+  that never mentions input cannot be left waiting for it. Everywhere else —
+  `deed test`, the playground, the agent server — hands over nothing, for the
+  reason they hand over no arguments and no directory: a test whose answer
+  depended on what somebody typed would be a test of the typing.
+
 - Ruling a value out at the edge of what is known narrows the other branch.
   `if n == Int.min { .. } else { .. }` and `if n <= Int.min { .. } else { .. }`
   say the same thing about the else branch, and only the second one used to

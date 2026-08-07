@@ -120,6 +120,68 @@ impl Drop for Scratch {
     }
 }
 
+// -- standard input ---------------------------------------------------------
+//
+// Read only when `main`'s row says the program reads it. That rule is the
+// reason there is no flag and no guess about whether a terminal is attached:
+// the signature already lists what a program does with the outside.
+
+/// A `main` that echoes every line it is given, back to front.
+const ECHO: &str = "module echo\n\n\
+     fn main(sys: System) -> Int\n  \
+     uses\n    Io.line,\n    Io.write,\n\
+     {\n    \
+     let seen = for _step at i in repeat(0, 8) with lines = [] {\n        \
+     match Io.line(sys.console) {\n            \
+     err(_) => lines,\n            \
+     ok(text) => push(lines, text),\n        \
+     }\n    }\n    \
+     Io.write(sys.console, join(seen, \", \"))\n    0\n}\n";
+
+#[test]
+fn a_program_that_reads_input_is_given_what_was_piped_in() {
+    let scratch = Scratch::new("stdin");
+    let source = scratch.write("echo.deed", ECHO);
+
+    let mut child = Command::new(DEED)
+        .args(["run", source.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the deed binary should run");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(b"ada\nlin\ngrace\n")
+        .unwrap();
+
+    let output = child.wait_with_output().expect("it should finish");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "ada, lin, grace");
+}
+
+/// The half that would hang if the rule were "read it and see".
+///
+/// `run` gives the child no pipe, so standard input is whatever the test
+/// harness has, and a program that read it unconditionally would wait for an
+/// end that is not coming. This one never says `Io.line`, so nothing is read.
+#[test]
+fn a_program_that_does_not_read_input_does_not_wait_for_any() {
+    let scratch = Scratch::new("no-stdin");
+    let source = scratch.write(
+        "quiet.deed",
+        "module quiet\n\nfn main(sys: System) -> Int\n  uses\n    Io.write,\n{\n    \
+         Io.write(sys.console, \"nothing to read\")\n    0\n}\n",
+    );
+
+    let output = run(&["run", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "nothing to read");
+}
+
 /// Two problems found by two different passes, the type error written first.
 const MIXED: &str = "\
 module a

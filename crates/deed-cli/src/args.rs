@@ -57,6 +57,9 @@ Paths may be files or directories. A directory is searched for `.deed` files.
   ran has to match what the interpreter ran.
 `deed run` calls `main`, handing it the one `System` capability there is.
 Everything after `--` goes to the program, which reads it with `Io.args`.
+Standard input is read when, and only when, `main`'s row says `Io.line`. A
+program that never mentions it is never left waiting for input, and there is
+no flag to remember because the signature already says which programs read.
 `deed build` compiles to a WebAssembly module beside the file it was given. It
 says what it could not compile rather than guessing, which as of #877 is a
 function value compared with another one and nothing else in the corpus.

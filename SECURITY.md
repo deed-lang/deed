@@ -18,7 +18,8 @@ of those two boundaries.
 
 The runtime boundary here is capability passing plus host-enforced operations:
 
-- The interpreter and backend expose one built-in effect, `Io`, with `write`, `now`, `epoch`,
+- The interpreter and backend expose one built-in effect, `Io`, with `write`, `line`, `now`,
+  `epoch`,
   `open`, `read`, `save`, `remove`, `make`, `list`, `args`, `reach`, `fetch` and `send`.
 - Every `Io` operation takes the capability it acts on as its first argument. The row says
   what kind of operation may happen, and the capability value says which resource it may
