@@ -5487,6 +5487,16 @@ pub fn io_signatures() -> Vec<(&'static str, Vec<Ty>, Ty)> {
             vec![capability("System")],
             Ty::List(Box::new(Ty::Str)),
         ),
+        // One variable of the environment, and `err` for every name the
+        // runner was not told to hand over. The arguments were typed on the
+        // line that started the program; the environment is whatever the
+        // machine was carrying, so it is granted by name rather than read
+        // whole.
+        (
+            "env",
+            vec![capability("System"), Ty::Str],
+            io_error(Ty::Str),
+        ),
         // `open` for the network. What comes back reaches one host out of the
         // ones that went in, so the only direction is narrower, and asking for
         // a host this `Net` did not already reach is refused rather than

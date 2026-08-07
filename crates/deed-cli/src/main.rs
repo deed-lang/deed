@@ -331,6 +331,7 @@ fn run_check(args: CheckArgs) -> ExitCode {
                 &Grants {
                     dir: args.dir.as_deref(),
                     allow: &args.allow,
+                    env: &args.env,
                     arguments: &args.arguments,
                 },
                 args.runtime_profile,
@@ -1146,6 +1147,8 @@ struct Grants<'a> {
     dir: Option<&'a Path>,
     /// The hosts `sys.net` may reach. Empty means none.
     allow: &'a [String],
+    /// The environment variables `Io.env` may read. Empty means none.
+    env: &'a [String],
     /// What `Io.args` answers with.
     arguments: &'a [String],
 }
@@ -1172,6 +1175,18 @@ fn reads_input(checked: &Checked) -> bool {
         }
         _ => false,
     })
+}
+
+/// The granted variables that the machine actually has, with their values.
+///
+/// A name that was granted and is not set is left out rather than handed over
+/// empty, so the program cannot tell the two apart and does not have to: both
+/// mean there is nothing to read.
+fn granted_environment(names: &[String]) -> Vec<(String, String)> {
+    names
+        .iter()
+        .filter_map(|name| std::env::var(name).ok().map(|value| (name.clone(), value)))
+        .collect()
 }
 
 /// Every line on standard input, without its terminator.
@@ -1214,6 +1229,7 @@ fn run_main(
     };
     let reach = deed_rt::Reach::granting(grants.allow);
     let arguments = grants.arguments;
+    let environment = granted_environment(grants.env);
 
     // Every checked module, so a call that goes through an import has a body
     // to walk into. The interpreter used to be handed one module and stopped
@@ -1233,6 +1249,7 @@ fn run_main(
             arguments,
             reach: Some(&reach),
             input: &input,
+            environment: &environment,
         };
         let run =
             deed_interp::run_main_given(&program, checked.file, &root, &given, runtime_profile);

@@ -101,6 +101,27 @@ fn run_reading(src: &str, input: &[&str]) -> (SourceMap, Run) {
     (sources, run)
 }
 
+/// Runs a program that was granted some environment variables.
+fn run_with_environment(src: &str, environment: &[(&str, &str)]) -> (SourceMap, Run) {
+    let (sources, checked) = check_ok(src);
+    let granted: Vec<(String, String)> = environment
+        .iter()
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+    let run = deed_interp::run_main_given(
+        &program_of(&checked),
+        checked.file,
+        nowhere(),
+        &deed_interp::Given {
+            environment: &granted,
+            ..deed_interp::Given::default()
+        },
+        false,
+    )
+    .expect("there should be a main");
+    (sources, run)
+}
+
 fn codes_of(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics.iter().map(|d| d.code).collect()
 }
@@ -1468,6 +1489,94 @@ fn a_run_that_was_handed_nothing_reads_nothing() {
     ));
 
     assert_eq!(run.output, vec!["nothing left".to_string()]);
+}
+
+// -- the environment ---------------------------------------------------------
+//
+// `Io.args` with one difference: the arguments were typed on the line that
+// started the program, and the environment is whatever the machine happened to
+// be carrying. So it is granted by name rather than read whole, and a variable
+// nobody granted reads as absent.
+
+#[test]
+fn a_program_reads_a_variable_it_was_granted() {
+    let (_, run) = run_with_environment(
+        &report(
+            &["write", "env"],
+            "  match Io.env(sys, \"GREETING\") {\n    \
+             ok(text) => Io.write(sys.console, text),\n    \
+             err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        &[("GREETING", "hello")],
+    );
+
+    assert!(run.result.is_ok());
+    assert_eq!(run.output, vec!["hello".to_string()]);
+}
+
+/// The half the design rests on.
+///
+/// An environment routinely carries credentials, so a program sees the names
+/// it was granted and nothing else. A name nobody granted is not reported as
+/// unset, it is reported as not granted, because those are different facts and
+/// only one of them is about the machine.
+#[test]
+fn a_variable_nobody_granted_is_not_there() {
+    let (_, run) = run_with_environment(
+        &report(
+            &["write", "env"],
+            "  match Io.env(sys, \"SECRET_TOKEN\") {\n    \
+             ok(text) => Io.write(sys.console, text),\n    \
+             err(why) => Io.write(sys.console, why),\n  }",
+        ),
+        &[("GREETING", "hello")],
+    );
+
+    assert_eq!(
+        run.output,
+        vec!["`SECRET_TOKEN` was not granted to this program".to_string()]
+    );
+}
+
+#[test]
+fn a_run_that_was_granted_nothing_reads_no_variables() {
+    // The default, and the one every caller but `deed run --env` takes.
+    let (_, run) = run(&report(
+        &["write", "env"],
+        "  match Io.env(sys, \"PATH\") {\n    \
+         ok(_) => Io.write(sys.console, \"visible\"),\n    \
+         err(_) => Io.write(sys.console, \"not granted\"),\n  }",
+    ));
+
+    assert_eq!(run.output, vec!["not granted".to_string()]);
+}
+
+#[test]
+fn reading_the_environment_without_declaring_it_is_an_effect_error() {
+    let (sources, checked) = check(
+        "module a\n\nfn peek(sys: System) -> Result<String, String> {\n  Io.env(sys, \"HOME\")\n}\n",
+    );
+    assert!(
+        codes_of(&checked.diagnostics).contains(&deed_effects::codes::UNDECLARED_EFFECT),
+        "{}",
+        rendered(&sources, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn reading_the_environment_takes_the_root_capability() {
+    // Near `main`, with everything below it handed the value rather than the
+    // means to read it again. The same argument `Io.args` makes.
+    let (sources, checked) = check(
+        "module a\n\nfn peek(files: Dir) -> Result<String, String>\n  uses Io.env,\n{\n  \
+         Io.env(files, \"HOME\")\n}\n",
+    );
+    let text = rendered(&sources, &checked.diagnostics);
+    assert!(
+        codes_of(&checked.diagnostics).contains(&deed_typeck::codes::TYPE_MISMATCH),
+        "{text}"
+    );
+    assert!(text.contains("expected `System`, found `Dir`"), "{text}");
 }
 
 // -- the examples ----------------------------------------------------------

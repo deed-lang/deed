@@ -34,6 +34,11 @@ Options:
                           Default: none, so a program reaches nothing. A host
                           may carry a port (`example.com:8080`), and one
                           without a port grants every port on that host.
+  --env <name>            An environment variable `Io.env` may read when
+                          running. Repeatable. Default: none, so every name
+                          reads as absent. An environment routinely carries
+                          credentials, so what a program sees is a list rather
+                          than all of it.
   --check                 With `fmt` or `fix`, change nothing and report what
                           would have changed.
   --compiled              With `test`, run test blocks through the compiled
@@ -144,6 +149,8 @@ pub struct CheckArgs {
     /// a place anyone is standing. So a program that was not told which hosts
     /// it may reach reaches none, and says so rather than failing to connect.
     pub allow: Vec<String>,
+    /// The environment variables `Io.env` may read. Empty means none.
+    pub env: Vec<String>,
     /// With `fmt`, report rather than rewrite.
     pub check_only: bool,
     /// With `build`, produce a component instead of a standalone module.
@@ -255,6 +262,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut runtime_profile = false;
     let mut dir = None;
     let mut allow: Vec<String> = Vec::new();
+    let mut env: Vec<String> = Vec::new();
     let mut check_only = false;
     let mut component = false;
     let mut arguments = Vec::new();
@@ -306,6 +314,18 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             }
             other if other.starts_with("--allow=") => {
                 allow.push(other["--allow=".len()..].to_string());
+            }
+            // Repeatable, and a name rather than a name and a value. What is
+            // being granted is a look at what the machine is already carrying,
+            // the way `--allow` grants a look at a host that already exists.
+            "--env" => {
+                let value = args.next().ok_or_else(|| {
+                    "`--env` needs a variable name, e.g. `--env HOME`".to_string()
+                })?;
+                env.push(value);
+            }
+            other if other.starts_with("--env=") => {
+                env.push(other["--env=".len()..].to_string());
             }
             "--lock" => {
                 let value = args
@@ -363,6 +383,17 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         );
     }
 
+    // The same sentence about the same mistake: a test whose answer depended
+    // on what the machine running it was carrying would be a test of that
+    // machine.
+    if !env.is_empty() && !matches!(mode, Mode::Run) {
+        return Err(
+            "`--env` is only valid with `deed run`; a test that reads the environment is a \
+                    test of that environment"
+                .to_string(),
+        );
+    }
+
     Ok(Command::Check(CheckArgs {
         mode,
         paths,
@@ -372,6 +403,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         runtime_profile,
         dir,
         allow,
+        env,
         check_only,
         component,
         arguments,
