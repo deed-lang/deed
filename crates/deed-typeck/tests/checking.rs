@@ -1193,6 +1193,57 @@ fn ruling_out_the_smallest_int_narrows_the_other_branch() {
     assert_eq!(types.obligations_at(Tier::Guarded), 0);
 }
 
+/// Both ends, because they are two arms and one of them could be wrong on its
+/// own. A mutant that reads the low end when it should read the high one keeps
+/// the test above passing.
+#[test]
+fn ruling_out_the_largest_int_narrows_the_other_branch_too() {
+    let types = check_ok(
+        "module a\n\n\
+         type Smaller = Int where value < Int.max\n\n\
+         fn f(n: Int) -> Int {\n    \
+         if n == Int.max {\n        1\n    } else {\n        let held: Smaller = n\n        held\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// A single value is what this needs, and a name that could be a range is not
+/// one. The two are written so that reading the range's low end as if it were
+/// the value would prove the obligation: both sides start at zero, so a
+/// narrowing that fired here would move `n` to one and settle `Positive`.
+#[test]
+fn ruling_out_a_range_rather_than_a_value_settles_nothing() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type NonNegative = Int where value >= 0\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f(n: NonNegative, m: NonNegative) -> Int {\n    \
+         if n == m {\n        1\n    } else {\n        let held: Positive = n\n        held\n    }\n}\n",
+    );
+    assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
+    assert_eq!(checked.types.obligations_at(Tier::Proven), 0);
+}
+
+/// A value the guard settled narrows the branch it settled, and this pins the
+/// answer rather than the code that gives it.
+///
+/// `narrow_side` had an equality arm and nothing could tell: `narrow_relation`
+/// settles a pair of names first, so the arm answered a question that had
+/// already been answered. It is gone, and this is what says the answer did not
+/// go with it.
+#[test]
+fn settling_a_value_exactly_narrows_the_branch_it_settled() {
+    let types = check_ok(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f(n: Int, m: Positive) -> Int {\n    \
+         if n == m {\n        let held: Positive = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
 #[test]
 fn a_refinement_widens_to_its_base_without_an_obligation() {
     let types = check_ok(

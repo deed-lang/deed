@@ -1740,12 +1740,19 @@ fn narrow_side(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: 
             None => Range::Empty,
         },
         BinaryOp::Ge => Range::between(low, i64::MAX),
-        BinaryOp::Eq => Range::between(low, high),
+        // Equality is not here. It was, and nothing could tell: settling one
+        // name to what another is worth is what `narrow_relation` does with
+        // the pair, and it runs first, so this arm answered a question that
+        // had already been answered. `cargo mutants` said so on the day this
+        // match was next touched, and the whole suite agrees: with the arm
+        // returning early, 2266 tests still pass. The test below it pins the
+        // answer rather than the arm, so the behaviour is held either way.
+        //
         // `!=` says something exactly when the other side is a single value
         // sitting at an edge of what is already known: everything the term
         // could have been, minus one end, is still a range.
         //
-        // This was skipped as rare until #929 measured it. `if n == Int.min`
+        // That was skipped as rare until #929 measured it. `if n == Int.min`
         // and `if n <= Int.min` say the same thing about the else branch, and
         // only the second one narrowed, so one of them proved an obligation
         // and the other left it guarded. Two spellings of one claim answering
