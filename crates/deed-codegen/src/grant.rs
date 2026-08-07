@@ -574,6 +574,22 @@ fn millis_since_epoch() -> i64 {
 mod tests {
     use super::*;
 
+    /// Read a Deed string out of a `Result` the host wrote.
+    fn said(memory: &mut [u8], answer: Option<Value>) -> String {
+        let at = answer.expect("it answers with something").as_i64() as usize;
+        let field = i64::from_le_bytes(memory[at + 8..at + 16].try_into().expect("a word"));
+        let held = [Value::I64(field)];
+        HostCall::new(&held, memory)
+            .text(0)
+            .expect("the field is a string")
+    }
+
+    /// Which variant a `Result` the host wrote carries.
+    fn outcome(memory: &[u8], answer: Option<Value>) -> i64 {
+        let at = answer.expect("it answers with something").as_i64() as usize;
+        i64::from_le_bytes(memory[at..at + 8].try_into().expect("a word"))
+    }
+
     /// The grants decide the offers, so what nobody granted is not offered
     /// and a module that wants it is refused at link.
     #[test]
@@ -771,6 +787,99 @@ mod tests {
         assert!(
             answer > 1_750_000_000_000,
             "the wall clock should read the machine, not count: {answer}"
+        );
+    }
+
+    /// Reading the console hands over one line at a time, and says when
+    /// there are no more.
+    ///
+    /// Running out is `err` rather than an empty line, because a program
+    /// that cannot tell "somebody typed nothing" from "there is nothing
+    /// left" either loops forever or stops early.
+    #[test]
+    fn reading_the_console_hands_over_one_line_at_a_time() {
+        let granted = Grants::none()
+            .console(|_| {})
+            .input(vec!["first".to_string(), String::new()])
+            .into_host();
+        let mut memory = vec![0u8; 512];
+        memory[..8].copy_from_slice(&64u64.to_le_bytes());
+
+        let console = granted
+            .host
+            .implementation_for("deed:sys", "console")
+            .expect("a console was granted")(HostCall::new(
+            &[granted.system],
+            &mut memory,
+        ))
+        .expect("narrowing the root is allowed")
+        .expect("it answers with a handle");
+
+        let line = granted
+            .host
+            .implementation_for("deed:io", "line")
+            .expect("input was granted");
+
+        let first = line(HostCall::new(&[console], &mut memory)).expect("granted");
+        assert_eq!(outcome(&memory, first), 0, "an ok");
+        assert_eq!(said(&mut memory, first), "first");
+
+        let second = line(HostCall::new(&[console], &mut memory)).expect("granted");
+        assert_eq!(outcome(&memory, second), 0, "an empty line is an answer");
+        assert_eq!(said(&mut memory, second), "");
+
+        let third = line(HostCall::new(&[console], &mut memory)).expect("granted");
+        assert_eq!(outcome(&memory, third), 1, "an err");
+        assert_eq!(said(&mut memory, third), "there is no more input");
+    }
+
+    /// A console that prints does not thereby find out what was typed.
+    #[test]
+    fn granting_a_console_does_not_grant_reading_it() {
+        let granted = Grants::none().console(|_| {}).into_host();
+        assert!(granted.host.offers("deed:io", "write"));
+        assert!(!granted.host.offers("deed:io", "line"));
+    }
+
+    /// One variable, and only the ones this run was told to hand over.
+    ///
+    /// A name nobody granted reads as not granted rather than as unset,
+    /// because those are different facts and only one of them is about the
+    /// machine.
+    #[test]
+    fn only_the_granted_environment_variables_are_there() {
+        let granted = Grants::none()
+            .environment(vec![("GRANTED".to_string(), "yes".to_string())])
+            .into_host();
+        let mut memory = vec![0u8; 512];
+        memory[..8].copy_from_slice(&64u64.to_le_bytes());
+
+        let env = granted
+            .host
+            .implementation_for("deed:io", "env")
+            .expect("the environment was granted");
+
+        let wanted = {
+            let nothing: [Value; 0] = [];
+            HostCall::new(&nothing, &mut memory)
+                .write_text("GRANTED")
+                .expect("there is room")
+        };
+        let found = env(HostCall::new(&[granted.system, wanted], &mut memory)).expect("granted");
+        assert_eq!(outcome(&memory, found), 0, "an ok");
+        assert_eq!(said(&mut memory, found), "yes");
+
+        let other = {
+            let nothing: [Value; 0] = [];
+            HostCall::new(&nothing, &mut memory)
+                .write_text("SECRET")
+                .expect("there is room")
+        };
+        let missing = env(HostCall::new(&[granted.system, other], &mut memory)).expect("granted");
+        assert_eq!(outcome(&memory, missing), 1, "an err");
+        assert_eq!(
+            said(&mut memory, missing),
+            "`SECRET` was not granted to this program"
         );
     }
 }

@@ -1019,6 +1019,61 @@ mod tests {
         );
     }
 
+    /// A list, which is how `Io.list` and `Io.args` answer.
+    ///
+    /// The length goes first and the elements follow it, which is the whole
+    /// of the layout and also three chances to write a word one slot out.
+    #[test]
+    fn a_host_writes_a_list_the_module_can_read_back() {
+        let mut memory = vec![0u8; 128];
+        memory[..8].copy_from_slice(&48u64.to_le_bytes());
+
+        let nothing: [Value; 0] = [];
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let list = call
+            .write_list(&[Value::I64(7), Value::I64(9), Value::I64(11)])
+            .expect("there is room");
+        assert_eq!(list, Value::I64(48));
+
+        let word = |at: usize| i64::from_le_bytes(memory[at..at + 8].try_into().unwrap());
+        assert_eq!(word(48), 3, "the length comes first");
+        assert_eq!(word(56), 7);
+        assert_eq!(word(64), 9);
+        assert_eq!(word(72), 11);
+        assert_eq!(
+            word(0),
+            48 + crate::layout::list_size(3) as i64,
+            "the bump pointer moves past the whole list"
+        );
+    }
+
+    /// An aggregate, which is how every `Result` a host answers with is
+    /// built. The tag goes first and the fields follow it.
+    #[test]
+    fn a_host_writes_an_aggregate_with_its_tag_first() {
+        let mut memory = vec![0u8; 128];
+        memory[..8].copy_from_slice(&32u64.to_le_bytes());
+
+        let nothing: [Value; 0] = [];
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let tagged = call
+            .write_aggregate(Some(1), &[Value::I64(5)])
+            .expect("there is room");
+        assert_eq!(tagged, Value::I64(32));
+
+        // A record has nothing to tell apart, so it has no tag and its first
+        // field sits where the tag would have been.
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let bare = call
+            .write_aggregate(None, &[Value::I64(6)])
+            .expect("there is room");
+
+        let word = |at: usize| i64::from_le_bytes(memory[at..at + 8].try_into().unwrap());
+        assert_eq!(word(32), 1, "the tag");
+        assert_eq!(word(40), 5, "and the field after it");
+        assert_eq!(word(bare.as_i64() as usize), 6);
+    }
+
     /// A host that ran out of room says so rather than writing over the
     /// program it is answering.
     #[test]

@@ -654,6 +654,19 @@ pub mod runtime {
 mod tests {
     use super::*;
 
+    /// The order a `Result` is laid out in, read by name.
+    ///
+    /// Anything outside the compiler that builds one -- a host answering
+    /// `Io.read` -- asks this rather than writing the numbers down, so an
+    /// inverted answer is a thing that cannot happen rather than a thing
+    /// nobody noticed.
+    #[test]
+    fn a_result_is_an_ok_and_then_an_err() {
+        assert_eq!(result_variant("ok"), Some(0));
+        assert_eq!(result_variant("err"), Some(1));
+        assert_eq!(result_variant("neither"), None);
+    }
+
     fn effect(name: &str) -> Effect {
         Effect {
             name: name.to_string(),

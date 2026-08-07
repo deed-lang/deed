@@ -628,3 +628,86 @@ fn the_reading_program_is_refused_by_a_host_that_grants_no_directory() {
     assert_eq!(refused.module, "deed:io");
     assert_eq!(refused.name, "read");
 }
+
+const OPENING: &str = "module a\n\n\
+fn main(sys: System) -> Int\n\
+  uses\n\
+    Io.open,\n\
+    Io.read,\n\
+    Io.write,\n\
+{\n\
+    match Io.open(sys.files, \"inner\") {\n\
+        ok(inner) => {\n\
+            match Io.read(inner, \"note.txt\") {\n\
+                ok(text) => { Io.write(sys.console, text) },\n\
+                err(why) => { Io.write(sys.console, why) },\n\
+            }\n\
+        },\n\
+        err(why) => { Io.write(sys.console, why) },\n\
+    }\n\
+    0\n\
+}\n";
+
+/// `Io.open` hands back a directory, and the program reads through it.
+///
+/// The one operation whose answer is another capability, so it is where a
+/// host has to put something into its table while a program is running. What
+/// comes back reaches strictly less than what went in, and there is nothing
+/// that goes the other way.
+#[test]
+fn opening_a_directory_hands_back_one_that_reaches_less() {
+    let scratch = Scratch::new("open");
+    scratch.write("note.txt", "the one above");
+    std::fs::create_dir_all(scratch.0.join("inner")).expect("a directory inside");
+    std::fs::write(scratch.0.join("inner").join("note.txt"), "the one inside")
+        .expect("a file inside it");
+
+    let module = module_for(OPENING);
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&written);
+    let granted = Grants::none()
+        .console(move |line| sink.borrow_mut().push(line.to_string()))
+        .files(scratch.0.clone())
+        .into_host();
+
+    granted
+        .host
+        .link(&module)
+        .expect("the host grants all three")
+        .call("main", &[granted.system])
+        .expect("it runs");
+
+    assert_eq!(*written.borrow(), vec!["the one inside".to_string()]);
+}
+
+/// And opening something that is not a directory says so.
+///
+/// The guard that tells the two apart is one comparison, and without this it
+/// could answer either way and nothing would notice.
+#[test]
+fn opening_something_that_is_not_a_directory_is_an_err() {
+    let scratch = Scratch::new("open-file");
+    scratch.write("note.txt", "the one above");
+    // A file where the program will look for a directory.
+    scratch.write("inner", "not a directory");
+
+    let module = module_for(OPENING);
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&written);
+    let granted = Grants::none()
+        .console(move |line| sink.borrow_mut().push(line.to_string()))
+        .files(scratch.0.clone())
+        .into_host();
+
+    granted
+        .host
+        .link(&module)
+        .expect("the host grants all three")
+        .call("main", &[granted.system])
+        .expect("it runs, and answers with an err");
+
+    assert_eq!(
+        *written.borrow(),
+        vec!["`inner` is not a directory".to_string()]
+    );
+}
