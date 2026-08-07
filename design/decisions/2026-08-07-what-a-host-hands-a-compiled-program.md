@@ -63,10 +63,10 @@ handed modules rather than programs, and a host whose safety rests on the last c
 that touched the module is not enforcing anything.
 
 Nothing is granted by default. `deed run --compiled` grants what `deed run` grants: a
-console, a clock, the directory `--dir` named, the variables `--env` named, the arguments,
-and standard input when and only when `main`'s row says the program reads it. So
-`examples/hello.deed` prints what the interpreted one prints, and a program that reaches
-the network is turned down before it runs:
+console, a clock, the directory `--dir` named, the hosts `--allow` named, the variables
+`--env` named, the arguments, and standard input when and only when `main`'s row says the
+program reads it. So `examples/hello.deed` prints what the interpreted one prints, and a
+program that asks for an interface nobody here can answer is turned down before it runs:
 
 ```
 $ deed run --compiled examples/todo.deed --dir examples
@@ -75,8 +75,8 @@ nothing asked for
 5 of 6 done
 still open: 6. work out what a trait is
 
-$ deed run --compiled reaches.deed
-the host does not offer `deed:io.fetch`
+$ deed run --compiled rolls.deed
+the host does not offer `wasi:random/random.roll`
 ```
 
 A `Dir` handle is interned by resolved path rather than one entry per `Io.open`, so a
@@ -93,14 +93,17 @@ right for one program in one process and is not a claim about anything else.
 `Io.now`, `Io.epoch` and the six filesystem operations duplicate what the interpreter
 already does, sentence for sentence, because the answers have to match and there is no
 shared place to put them: the interpreter's version works on `Value`, this one on a handle
-table and the module's memory. The rules about what a `Dir` reaches are not duplicated --
-both ask `deed_rt::sandbox` -- but the messages around them are, and
-`crates/deed-cli/tests/cli.rs` holds the two engines to saying the same thing rather than
-trusting that they will.
+table and the module's memory. What a `Dir` reaches, what a `Net` reaches, and what a
+status outside the two hundreds means are not duplicated -- all three are `deed_rt`'s, and
+`over_the_network` moved there out of the interpreter in the same change that gave the
+host a network -- but the messages around the filesystem are, and
+`crates/deed-driver/tests/capabilities.rs` and `crates/deed-cli/tests/cli.rs` hold the two
+engines to saying the same thing rather than trusting that they will.
 
-The network is still an unanswered import. `deed_rt::reach` and `deed_rt::http` are the
-host half and `--allow` is the grant, so this is wiring rather than a decision, but it is
-not wired.
+What is left unanswered is an interface a program declared for itself with `effect ...
+from`. Nothing here can know what `wasi:random/random` means, and guessing would be the
+runner deciding something only an embedder can, so the module is turned down with the name
+of what it wanted.
 
 Giving a host implementation the module's memory means giving it the ability to corrupt
 the program it is answering. That is the same authority any embedder has and the reason
@@ -153,12 +156,22 @@ and which value reclamation is the answer to.
     `examples/logs.deed` part way through and called it running too long. Whoever runs a
     program says how far they are willing to count.
 
+- Option: refuse a program that asks for the network when no `--allow` was given, the way
+  a program is refused for asking for an interface nobody answers.
+  - Rejected because: "reaches nothing" is a `Net` and "there is no network here" is not.
+    A run that named no host grants a capability that refuses every URL by name, which is
+    what the interpreter already does and what makes `--allow` a grant rather than a
+    switch.
+
 ## Open Questions (required)
 
-- Where the shared answer to the `Io` operations should live. There are two of them now,
-  one per engine, held together by a test rather than by construction.
-- Whether the network should be granted the same way, given that `--allow` already names
-  hosts and `deed_rt::reach` already decides what a `Net` reaches.
+- Where the shared answer to the filesystem operations should live. There are two of them,
+  one per engine, held together by a test rather than by construction. The network no
+  longer has this problem: `deed_rt::over_the_network` is the one answer and both engines
+  call it.
+- What an embedder should be handed so it can answer an interface a program declared for
+  itself with `effect ... from`. `Host::offer` is already the shape, and what is missing
+  is a way to say it from outside `deed-codegen` without also being handed the module.
 - What a host should do when a module hands it a string the layout says is there and the
   bytes say is not valid UTF-8. Today that is a refusal, which is right for a module that
   does not match its own signature and may be wrong for one that read bytes off a disk.
@@ -166,7 +179,9 @@ and which value reclamation is the answer to.
 ## References
 
 - `crates/deed-codegen/src/grant.rs`, `crates/deed-codegen/src/run.rs`
-- `crates/deed-driver/tests/host.rs`, `crates/deed-cli/tests/cli.rs`
+- `crates/deed-rt/src/http.rs`, `crates/deed-rt/src/reach.rs`, `crates/deed-rt/src/sandbox.rs`
+- `crates/deed-driver/tests/host.rs`, `crates/deed-driver/tests/capabilities.rs`,
+  `crates/deed-cli/tests/cli.rs`
 - `design/05-backend.md`, "A capability is a handle, and everything it reaches is an import"
 - `design/04-capabilities.md`
 - `design/decisions/2026-07-31-row-to-wit-world-mapping.md`

@@ -130,15 +130,20 @@ release notes.
 
   Each grant offers exactly the imports it can answer, so a program asking
   for one that was not granted is turned down at link time by name — ``the
-  host does not offer `deed:io.fetch` `` — rather than at the first call.
-  `deed run --compiled` grants what `deed run` grants: a console, a clock,
-  the directory `--dir` named, the variables `--env` named, the arguments,
-  and standard input when and only when `main`'s row says the program reads
-  it. Six of the seven corpus programs with a `main` now print exactly what
-  the interpreted ones print; the seventh runs out of the module's memory,
-  which is the reclamation question `design/05-backend.md` already names.
+  host does not offer `wasi:random/random.roll` `` — rather than at the first
+  call. `deed run --compiled` grants what `deed run` grants: a console, a
+  clock, the directory `--dir` named, the hosts `--allow` named, the
+  variables `--env` named, the arguments, and standard input when and only
+  when `main`'s row says the program reads it. Six of the seven corpus
+  programs with a `main` now print exactly what the interpreted ones print;
+  the seventh runs out of the module's memory, which is the reclamation
+  question `design/05-backend.md` already names.
 
-  The network is not granted yet. See
+  What a `Dir` reaches, what a `Net` reaches, and what an HTTP status outside
+  the two hundreds means are `deed-rt`'s in both engines rather than written
+  twice. What is left unanswered is an interface a program declared for
+  itself with `effect ... from`, because nothing here can know what one
+  means. See
   [design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md](design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md).
 
 - `deed run --compiled` hands the program its arguments, and no longer

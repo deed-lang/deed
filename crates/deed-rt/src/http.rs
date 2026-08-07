@@ -28,7 +28,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use crate::reach::Target;
+use crate::reach::{Reach, Target};
 
 /// How long a request may spend connecting, writing or waiting.
 ///
@@ -89,6 +89,50 @@ pub fn request(target: &Target, method: &str, body: Option<&str>) -> Result<Resp
 
     let raw = read_all(&mut stream, &address, LIMIT)?;
     parse(&raw, &address)
+}
+
+/// One question asked over a `Net`, and the one answer every engine gives.
+///
+/// Resolving the URL against what the capability reaches, making the request,
+/// and turning what came back into the `Result` a Deed program sees. All
+/// three of those are the same for an interpreter and for a host answering
+/// `deed:io.fetch`, and a rule that lives inside one of two runtimes is a
+/// rule about one of them.
+///
+/// A status outside the two hundreds becomes an `err`, for the reason a
+/// missing file does: the caller asked for something and did not get it, and
+/// a program that cannot tell "here is your answer" from "the host said no"
+/// has a bug waiting. The body comes along in the message when there is one,
+/// because the body of a refusal is usually the explanation.
+///
+/// What this cannot do, written down rather than worked around: hand back the
+/// status as a number. A `Result` carries one value and this language has no
+/// tuple, so the shapes available are "the body" and "a string with the
+/// status in it", and parsing a number back out of a message is worse than
+/// not having it. The fix is a record the prelude declares, and the prelude
+/// declaring a record is a larger decision than one operation gets to make.
+/// `design/04-capabilities.md` carries it as an open question.
+pub fn over_the_network(
+    reach: &Reach,
+    url: &str,
+    method: &str,
+    body: Option<&str>,
+) -> Result<String, String> {
+    let target = crate::reach::resolve(reach, url).map_err(|refused| refused.message(url))?;
+
+    match request(&target, method, body) {
+        Ok(answer) if (200..300).contains(&answer.status) => Ok(answer.body),
+        Ok(answer) => {
+            let status = answer.status;
+            let explanation = answer.body.trim();
+            Err(if explanation.is_empty() {
+                format!("`{url}` answered {status}")
+            } else {
+                format!("`{url}` answered {status}: {explanation}")
+            })
+        }
+        Err(why) => Err(why),
+    }
 }
 
 /// Opens a connection with both timeouts already set.

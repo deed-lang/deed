@@ -914,28 +914,29 @@ fn main(sys: System) -> Int\n\
 ///
 /// The row is the list of what a program asks its host for, so a host that
 /// cannot answer one of the entries turns the module down at load rather
-/// than at the first call. The network is not something `deed run
-/// --compiled` hands over yet, and the message names the operation.
+/// than at the first call. Every `Io` operation is granted now, so the thing
+/// left over is an effect the program declared for itself: `deed run` is not
+/// the host that interface belongs to, and it says which one it wanted.
 #[test]
 fn a_compiled_program_asking_for_what_this_run_does_not_grant_is_refused_before_it_runs() {
     let scratch = Scratch::new("compiled-ungranted");
     let file = scratch.write(
-        "reaches.deed",
+        "rolls.deed",
         "module a\n\n\
+effect Random from \"wasi:random/random\" {\n\
+  fn roll(sides: Int) -> Int\n\
+}\n\n\
 fn main(sys: System) -> Int\n\
-  uses Io.fetch,\n\
+  uses Random.roll,\n\
 {\n\
-    match Io.fetch(sys.net, \"https://example.com\") {\n\
-        ok(text) => 0,\n\
-        err(why) => 1,\n\
-    }\n\
+    Random.roll(6)\n\
 }\n",
     );
 
     let output = run(&["run", "--compiled", file.to_str().unwrap()]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
-        stdout(&output).contains("the host does not offer `deed:io.fetch`"),
+        stdout(&output).contains("the host does not offer `wasi:random/random.roll`"),
         "{}",
         stdout(&output)
     );

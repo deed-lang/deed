@@ -83,6 +83,33 @@ fn run_reaching(src: &str, hosts: &[&str]) -> (SourceMap, Run) {
     (sources, run)
 }
 
+/// The same program through the compiled backend, against a host granting
+/// the same hosts.
+///
+/// The lines it wrote, so the two engines can be held to the same answer.
+fn compiled_reaching(src: &str, hosts: &[&str]) -> Vec<String> {
+    let (_, checked) = check_ok(src);
+    let lowered = deed_mir::lower(&checked.module, &checked.resolutions, &checked.types)
+        .expect("this lowers");
+    let module = deed_codegen::compile(&lowered).expect("this compiles");
+
+    let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = std::rc::Rc::clone(&written);
+    let granted = deed_codegen::Grants::none()
+        .console(move |line| sink.borrow_mut().push(line.to_string()))
+        .network(Reach::granting(hosts.iter().copied()))
+        .into_host();
+    granted
+        .host
+        .link(&module)
+        .expect("the host grants what this program asks for")
+        .call("main", &[granted.system])
+        .expect("it runs");
+
+    let written = written.borrow();
+    written.clone()
+}
+
 /// Runs a program that was handed lines on standard input.
 fn run_reading(src: &str, input: &[&str]) -> (SourceMap, Run) {
     let (sources, checked) = check_ok(src);
@@ -754,6 +781,76 @@ fn a_program_granted_no_hosts_reaches_nothing() {
         run.output[0].contains("is not one of the hosts this `Net` reaches"),
         "{:?}",
         run.output
+    );
+}
+
+/// A compiled program reaches the same host and gets the same answer.
+///
+/// The network is the last of the capabilities a compiled program had no way
+/// to use, and the one where a second implementation would be easiest to
+/// justify and worst to have: what a `Net` reaches and what a status outside
+/// the two hundreds means are decided in `deed-rt`, and both engines read it
+/// there. This is what says so, against one server, in one test.
+#[test]
+fn both_engines_fetch_from_the_same_host_and_say_the_same_thing() {
+    let server = Answering::with(&[
+        "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nthe body",
+        "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nthe body",
+    ]);
+    let source = report(
+        &["write", "fetch"],
+        &format!(
+            "  match Io.fetch(sys.net, \"{}\") {{\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }}",
+            server.url("/thing")
+        ),
+    );
+
+    let (_, interpreted) = run_reaching(&source, &[&server.host()]);
+    let compiled = compiled_reaching(&source, &[&server.host()]);
+
+    assert_eq!(interpreted.output, vec!["the body".to_string()]);
+    assert_eq!(compiled, interpreted.output);
+}
+
+/// And a compiled program granted no hosts reaches nothing, in the same
+/// words.
+#[test]
+fn both_engines_refuse_a_host_that_was_not_granted_in_the_same_words() {
+    let source = report(
+        &["write", "fetch"],
+        "  match Io.fetch(sys.net, \"http://example.com/x\") {\n    ok(text) => Io.write(sys.console, \"REACHED IT\"),\n    err(why) => Io.write(sys.console, why),\n  }",
+    );
+
+    let (_, interpreted) = run_reaching(&source, &[]);
+    let compiled = compiled_reaching(&source, &[]);
+
+    assert_eq!(compiled, interpreted.output);
+    assert!(
+        compiled[0].contains("is not one of the hosts this `Net` reaches"),
+        "{compiled:?}"
+    );
+}
+
+/// A host that grants no network at all turns the module down before it
+/// runs, which is a different thing from granting one that reaches nothing.
+#[test]
+fn a_host_granting_no_network_refuses_a_program_that_asks_for_one() {
+    let (_, checked) = check_ok(&report(
+        &["write", "fetch"],
+        "  match Io.fetch(sys.net, \"http://example.com/x\") {\n    ok(text) => Io.write(sys.console, text),\n    err(why) => Io.write(sys.console, why),\n  }",
+    ));
+    let lowered = deed_mir::lower(&checked.module, &checked.resolutions, &checked.types)
+        .expect("this lowers");
+    let module = deed_codegen::compile(&lowered).expect("this compiles");
+
+    let granted = deed_codegen::Grants::none().console(|_| {}).into_host();
+    let refused = granted
+        .host
+        .link(&module)
+        .expect_err("a console is not a network");
+    assert_eq!(
+        refused.to_string(),
+        "the host does not offer `deed:io.fetch`"
     );
 }
 

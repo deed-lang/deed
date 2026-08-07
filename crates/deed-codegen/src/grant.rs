@@ -59,6 +59,12 @@ enum Held {
     /// and no way to turn it into a path, which is what stops `Io.open`
     /// being a way to name somewhere else.
     Dir(PathBuf),
+    /// The hosts a program may reach.
+    ///
+    /// The set is on this side of the boundary, for the reason the path is:
+    /// a program that could read what its `Net` reaches could compare two of
+    /// them, and one that could write it could widen one.
+    Net(deed_rt::Reach),
 }
 
 impl Held {
@@ -69,6 +75,7 @@ impl Held {
             Held::Console => "Console",
             Held::Clock => "Clock",
             Held::Dir(_) => "Dir",
+            Held::Net(_) => "Net",
         }
     }
 
@@ -92,6 +99,7 @@ pub struct Grants {
     input: Option<Vec<String>>,
     clock: bool,
     files: Option<PathBuf>,
+    network: Option<deed_rt::Reach>,
     arguments: Option<Vec<String>>,
     environment: Option<Vec<(String, String)>>,
 }
@@ -114,6 +122,7 @@ impl Grants {
             input: None,
             clock: false,
             files: None,
+            network: None,
             arguments: None,
             environment: None,
         }
@@ -154,6 +163,20 @@ impl Grants {
     /// down at link time by name rather than told every file is missing.
     pub fn files(mut self, root: PathBuf) -> Self {
         self.files = deed_rt::sandbox::root(&root).ok();
+        self
+    }
+
+    /// Grant the network, and say which hosts.
+    ///
+    /// The set is `deed_rt::Reach`, which is where the interpreter asks too.
+    /// A `Net` is worth what a `Dir` is worth only if the hosts it reaches
+    /// can shrink and never grow, and that rule has to be one rule.
+    ///
+    /// A `Reach` that grants nothing is still a grant: the program gets the
+    /// import and every URL is refused by name, which is a different thing
+    /// from the module being turned down at link time for asking.
+    pub fn network(mut self, reach: deed_rt::Reach) -> Self {
+        self.network = Some(reach);
         self
     }
 
@@ -202,6 +225,10 @@ impl Grants {
         let files = self.files;
         if let Some(root) = &files {
             held.push(Held::Dir(root.clone()));
+        }
+        let network = self.network;
+        if let Some(reach) = &network {
+            held.push(Held::Net(reach.clone()));
         }
 
         let table = Rc::new(RefCell::new(Table {
@@ -437,6 +464,49 @@ impl Grants {
             });
         }
 
+        if let Some(reach) = network {
+            let narrow = Rc::clone(&table);
+            host.offer("deed:sys", "net", move |call| {
+                let table = narrow.borrow();
+                table.require(&call, Held::System, "sys.net")?;
+                Ok(table.handle(&Held::Net(reach.clone())))
+            });
+
+            let widen = Rc::clone(&table);
+            host.offer("deed:io", "reach", move |mut call| {
+                let reach = widen.borrow().net(&call, "Io.reach")?;
+                let host = text_of(&call, 1, "Io.reach")?;
+                match deed_rt::reach::narrow(&reach, &host) {
+                    Ok(narrowed) => {
+                        let handle = widen.borrow_mut().hand_out(Held::Net(narrowed));
+                        answer(&mut call, true, handle)
+                    }
+                    Err(refused) => failed(&mut call, &refused.message(&host)),
+                }
+            });
+
+            let fetch = Rc::clone(&table);
+            host.offer("deed:io", "fetch", move |mut call| {
+                let reach = fetch.borrow().net(&call, "Io.fetch")?;
+                let url = text_of(&call, 1, "Io.fetch")?;
+                asked(
+                    &mut call,
+                    deed_rt::over_the_network(&reach, &url, "GET", None),
+                )
+            });
+
+            let send = Rc::clone(&table);
+            host.offer("deed:io", "send", move |mut call| {
+                let reach = send.borrow().net(&call, "Io.send")?;
+                let url = text_of(&call, 1, "Io.send")?;
+                let body = text_of(&call, 2, "Io.send")?;
+                asked(
+                    &mut call,
+                    deed_rt::over_the_network(&reach, &url, "POST", Some(&body)),
+                )
+            });
+        }
+
         Granted { host, system }
     }
 }
@@ -487,6 +557,17 @@ fn answer(call: &mut HostCall<'_>, ok: bool, value: Value) -> Result<Option<Valu
 fn failed(call: &mut HostCall<'_>, why: &str) -> Result<Option<Value>, Trap> {
     let text = string(call, why)?;
     answer(call, false, text)
+}
+
+/// A `Result<String, String>` some other part of the runtime already decided.
+fn asked(call: &mut HostCall<'_>, what: Result<String, String>) -> Result<Option<Value>, Trap> {
+    match what {
+        Ok(text) => {
+            let written = string(call, &text)?;
+            answer(call, true, written)
+        }
+        Err(why) => failed(call, &why),
+    }
 }
 
 /// The handles this host has handed out, and what they stand for.
@@ -546,6 +627,14 @@ impl Table {
         match self.stands_for(call.arg(0)) {
             Some(Held::Dir(path)) => Ok(path.clone()),
             _ => Err(self.refusal(&Held::Dir(PathBuf::new()), operation)),
+        }
+    }
+
+    /// The hosts the capability argument reaches.
+    fn net(&self, call: &HostCall<'_>, operation: &str) -> Result<deed_rt::Reach, Trap> {
+        match self.stands_for(call.arg(0)) {
+            Some(Held::Net(reach)) => Ok(reach.clone()),
+            _ => Err(self.refusal(&Held::Net(deed_rt::Reach::none()), operation)),
         }
     }
 

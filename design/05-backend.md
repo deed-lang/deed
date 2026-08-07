@@ -174,20 +174,23 @@ This repo does have a host now: `crates/deed-codegen/src/grant.rs`, wired into
 `deed run --compiled`. Until it existed, a compiled `examples/hello.deed` could not write
 "hello, world" and the interpreted one could, which made every claim on this page about
 capabilities a claim about an import section rather than about a program. It grants what
-`deed run` grants -- a console, a clock, the directory `--dir` named, the variables
-`--env` named, the arguments, and standard input when `main`'s row says so -- and each
-grant offers exactly the imports it can answer, so a program asking for one nobody granted
-is refused at link time by name: ``the host does not offer `deed:io.fetch` ``. See
+`deed run` grants -- a console, a clock, the directory `--dir` named, the hosts `--allow`
+named, the variables `--env` named, the arguments, and standard input when `main`'s row
+says so -- and each grant offers exactly the imports it can answer, so a program asking
+for one nobody granted is refused at link time by name: ``the host does not offer
+`deed:io.save` ``. See
 `design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md` for how a handle
 stays unforgeable across the boundary.
 
-The rules about what a `Dir` reaches are `deed-rt`'s in both engines, and
-`crates/deed-cli/tests/cli.rs` holds the two to saying the same thing about the same
+What a `Dir` reaches, what a `Net` reaches, and what a status outside the two hundreds
+means are `deed-rt`'s in both engines, and `crates/deed-driver/tests/capabilities.rs` and
+`crates/deed-cli/tests/cli.rs` hold the two to saying the same thing about the same
 program rather than trusting that they will.
 
-The network is still an unanswered import, and so is anything a program declares itself
-through `effect ... from`. Those stop with the name of what was wanted, which is the most
-useful thing they could say about a module on its way to a real embedder.
+What is still unanswered is an interface a program declared for itself with `effect ...
+from`. Nothing here can know what `wasi:random/random` means, so the module is turned down
+with the name of what it wanted, which is the most useful thing this could say about a
+module on its way to a real embedder.
 
 **What would change this:** adopting the component/import declarations sketched in
 `design/04-capabilities.md` would let modules name additional host imports in source, but only if
