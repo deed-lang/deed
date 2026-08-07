@@ -1384,7 +1384,7 @@ they name has no other way to be written down.
 `to_int`, `System`,
 `Console`, `Clock`, `Dir`, `Net`, and the effects `Io`, with its `write`, `line`, `now`,
 `epoch`, `open`,
-`read`, `save`, `remove`, `make`, `list`, `args`, `reach`, `fetch` and `send` operations, and `Diverge`. Everything else
+`read`, `save`, `remove`, `make`, `list`, `args`, `env`, `reach`, `fetch` and `send` operations, and `Diverge`. Everything else
 is imported. Each prelude entry is a name that
 cannot be looked up in any file, which is the kind of thing P2 is a budget for, so the list
 is short on purpose. The five capability types are there because a capability that could be

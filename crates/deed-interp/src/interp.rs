@@ -283,6 +283,13 @@ pub struct Given<'a> {
     /// because the interpreter collects output rather than writing it, so a
     /// run here is already a batch rather than a conversation.
     pub input: &'a [String],
+    /// The environment variables `Io.env` can answer about, by name.
+    ///
+    /// A list of what may be seen rather than a place to look, which is the
+    /// `--allow` shape rather than the `--dir` one. An environment routinely
+    /// carries credentials, so handing over the whole of it is handing over
+    /// more than anybody meant to.
+    pub environment: &'a [(String, String)],
 }
 
 /// Runs `main`, handing it the one `System` capability that exists.
@@ -455,6 +462,11 @@ fn run_main_inner(
         .map(|argument| Rc::from(&**argument))
         .collect();
     interp.input = given.input.iter().map(|line| Rc::from(&**line)).collect();
+    interp.environment = given
+        .environment
+        .iter()
+        .map(|(name, value)| (Rc::from(&**name), Rc::from(&**value)))
+        .collect();
 
     let span = main.sig.name.span;
     let args = main
@@ -859,6 +871,11 @@ pub(crate) struct Interp<'a> {
     /// nothing here that could ever arrive later.
     input: Vec<Rc<str>>,
     read_lines: usize,
+    /// The environment variables this run was told to hand over.
+    ///
+    /// Empty everywhere but `deed run --env NAME`, so a test cannot depend on
+    /// what the machine running it happens to be carrying.
+    environment: Vec<(Rc<str>, Rc<str>)>,
     profile: Option<ProfileState>,
     /// Who is watching, if anybody is.
     ///
@@ -953,6 +970,7 @@ impl<'a> Interp<'a> {
             arguments: Vec::new(),
             input: Vec::new(),
             read_lines: 0,
+            environment: Vec::new(),
             profile: None,
             watcher: None,
             calls: Vec::new(),
@@ -2380,6 +2398,29 @@ impl<'a> Interp<'a> {
                     .map(|argument| Value::Str(Rc::clone(argument)))
                     .collect(),
             )),
+            // One variable, and only the ones this run was told to hand over.
+            // An environment is whatever the machine was carrying and it
+            // routinely carries credentials, so the runner grants names rather
+            // than the whole of it, and a name nobody granted reads as absent.
+            //
+            // Absent and empty are told apart the way they are for a line:
+            // a variable set to nothing is something somebody set.
+            ("env", Capability::System) => {
+                let wanted = self.io_name(args.get(1), span)?;
+                Ok(
+                    match self
+                        .environment
+                        .iter()
+                        .find(|(name, _)| **name == *wanted)
+                        .map(|(_, value)| Rc::clone(value))
+                    {
+                        Some(value) => Value::ok(Value::Str(value)),
+                        None => Value::err(Value::str(format!(
+                            "`{wanted}` was not granted to this program"
+                        ))),
+                    },
+                )
+            }
             // Enumerating rather than naming. A `Dir` plus `read` lets a
             // program read the file somebody told it about; a `Dir` plus
             // `list` lets it find out what is there, which is strictly more

@@ -120,6 +120,64 @@ impl Drop for Scratch {
     }
 }
 
+// -- the environment --------------------------------------------------------
+
+/// A `main` that reports one variable, granted or not.
+const PEEK: &str = "module peek\n\n\
+     fn main(sys: System) -> Int\n  \
+     uses\n    Io.env,\n    Io.write,\n\
+     {\n    \
+     match Io.env(sys, \"DEED_TEST_GREETING\") {\n        \
+     ok(text) => Io.write(sys.console, text),\n        \
+     err(why) => Io.write(sys.console, why),\n    \
+     }\n    0\n}\n";
+
+#[test]
+fn a_granted_variable_is_read_and_an_ungranted_one_is_not() {
+    let scratch = Scratch::new("env");
+    let source = scratch.write("peek.deed", PEEK);
+
+    let granted = Command::new(DEED)
+        .args([
+            "run",
+            "--env",
+            "DEED_TEST_GREETING",
+            source.to_str().unwrap(),
+        ])
+        .env("DEED_TEST_GREETING", "hello from the machine")
+        .output()
+        .expect("the deed binary should run");
+    assert_eq!(code(&granted), 0, "{}", stderr(&granted));
+    assert_eq!(stdout(&granted).trim(), "hello from the machine");
+
+    // Same variable, same value on the machine, and no `--env`. The program
+    // cannot see it, which is the whole point: an environment carries
+    // credentials and a program gets the names somebody decided to hand over.
+    let ungranted = Command::new(DEED)
+        .args(["run", source.to_str().unwrap()])
+        .env("DEED_TEST_GREETING", "hello from the machine")
+        .output()
+        .expect("the deed binary should run");
+    assert_eq!(code(&ungranted), 0, "{}", stderr(&ungranted));
+    assert!(
+        stdout(&ungranted).contains("was not granted"),
+        "{}",
+        stdout(&ungranted)
+    );
+}
+
+/// A grant nothing will read is a grant somebody believes they made.
+#[test]
+fn granting_a_variable_to_anything_but_run_is_refused() {
+    let output = run(&["test", "--env", "HOME", EXAMPLE]);
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("only valid with `deed run`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 // -- standard input ---------------------------------------------------------
 //
 // Read only when `main`'s row says the program reads it. That rule is the

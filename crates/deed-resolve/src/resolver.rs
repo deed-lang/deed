@@ -127,6 +127,14 @@ pub const PRELUDE: &[&str] = &[
 /// outside says so in a signature. A program that reads its arguments behaves
 /// differently depending on them, and that is worth writing down.
 ///
+/// `env` is `args` with one difference that matters: the arguments were typed
+/// on the line that started the program, and the environment is whatever the
+/// machine happens to be carrying, which routinely includes credentials nobody
+/// meant to hand over. So it is granted by name at the call site rather than
+/// read wholesale, and a variable the runner was not told about is not there
+/// as far as the program is concerned. That is the `--allow` shape rather than
+/// the `--dir` one: a list of what may be seen, not a place to see inside of.
+///
 /// `list` is the one that tests the whole model. Holding a `Dir` and declaring
 /// `read` means you may read the file somebody told you about; declaring
 /// `list` means you may find out what is there, which is strictly more. The
@@ -154,7 +162,7 @@ pub const PRELUDE: &[&str] = &[
 /// here controls.
 pub const IO_OPERATIONS: &[&str] = &[
     "write", "line", "now", "epoch", "open", "read", "save", "remove", "make", "list", "args",
-    "reach", "fetch", "send",
+    "env", "reach", "fetch", "send",
 ];
 
 /// The effects the language provides, available in every module without an

@@ -16,6 +16,24 @@ release notes.
 
 ### Language
 
+- `Io.env(sys, name)` reads one environment variable, and only the ones the
+  run was told to hand over. `deed run --env NAME` grants a name, repeatably,
+  and everything else reads as absent.
+
+  That is the `--allow` shape rather than the `--dir` one, and the difference
+  is the point. The arguments were typed on the line that started the program;
+  the environment is whatever the machine happened to be carrying, which
+  routinely includes credentials nobody meant to pass on. So a program sees a
+  list of names somebody decided on rather than all of it, and a name that was
+  not granted is reported as not granted rather than as unset, because those
+  are different facts and only one of them is about the machine.
+
+  It takes the whole `System`, for the reason `Io.args` does: reading the
+  outside belongs near `main`, and everything below is handed the value rather
+  than the means to read it again. `--env` is refused anywhere but `deed run`,
+  because a test whose answer depended on what the machine was carrying would
+  be a test of that machine.
+
 - `Io.line(console)` reads what somebody typed, one line at a time. It is the
   `read`/`save` split applied to the console: the same capability, a separate
   entry in the row, so a function handed a `Console` to write to still cannot

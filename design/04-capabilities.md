@@ -9,7 +9,7 @@ capability is the value that answers that, and it can only be obtained by being 
 The `Fs` illustration further down is the shape of the argument rather than the state of the
 compiler. What exists is one built-in
 effect, `Io`, with `write`, `line`, `now`, `epoch`, `open`, `read`, `save`, `remove`, `make`,
-`list`, `args`, `reach`, `fetch` and `send`, and a `System` carrying `console`,
+`list`, `args`, `env`, `reach`, `fetch` and `send`, and a `System` carrying `console`,
 `clock`, `files` and `net`. The next section is the part that runs.
 
 ## What actually exists
@@ -336,7 +336,7 @@ and nothing else does, so the runtime never reads its own invocation on the prog
 
 ### Arguments are input, not authority
 
-`Io.args(sys)` hands back a `List<String>`. It is the odd operation of the fourteen: it does
+`Io.args(sys)` hands back a `List<String>`. It is the odd operation of the fifteen: it does
 nothing, it returns data rather than something opaque, and it takes the whole `System` rather
 than a narrower capability. It reads like it does not belong.
 
