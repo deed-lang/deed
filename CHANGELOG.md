@@ -40,6 +40,13 @@ release notes.
   another language would have had, and a name that is not a typo used to come
   back with whatever short name happened to be nearby, or with nothing at all.
 
+- `text.to_upper()` says there are no methods and names the module that has
+  the function. The type checker already said that for prelude names, because
+  it can ask whether a name is a builtin; it cannot ask about `std/string`,
+  which arrives through imports the file did not write. The sentence is
+  finished in the driver, off the same table that writes the `use` line. No
+  repair: adding the import leaves the call as broken as it was.
+
 ## 0.2.6 (2026-08-07)
 
 This release is about the edges of what the language can say and what the
