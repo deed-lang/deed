@@ -168,6 +168,70 @@ fn a_string_written_on_the_spot_says_its_own_length() {
     );
 }
 
+// -- a value ruled out at the edge of what is known -------------------------
+//
+// The same shape as the section above, found the same way. `!=` narrowed
+// nothing, on the grounds that a range cannot say "not this one", which is
+// true in the middle and false at either end. #929 wrote a contract asking
+// for a number other than the smallest `Int` and found that
+// `if n == Int.min` and `if n <= Int.min` say the same thing about the else
+// branch while only the second one proved it.
+
+/// Wants a number the smallest `Int` is not, which is what `absolute` needs:
+/// the smallest `Int` has no positive counterpart, so `0 - n` overflows for
+/// it and nothing below can be proved about the result.
+const ABSOLUTE: &str = "fn absolute(n: Int) -> Int\n\
+     \x20 where\n\
+     \x20   n > Int.min,\n\
+     {\n\
+     \x20   if n < 0 { 0 - n } else { n }\n\
+     }\n\n";
+
+#[test]
+fn ruling_out_the_smallest_int_proves_the_call_below_it() {
+    expect_each(
+        &[("absolute requires", Tier::Proven)],
+        &format!(
+            "{ABSOLUTE}fn size_of(top: Int) -> Int {{\n\
+             \x20   if top == Int.min {{\n\
+             \x20       0\n\
+             \x20   }} else {{\n\
+             \x20       absolute(top)\n\
+             \x20   }}\n\
+             }}\n"
+        ),
+    );
+}
+
+/// The spelling that already worked, held next to the one that did not, so
+/// that the two agreeing is something this file says rather than a
+/// coincidence.
+#[test]
+fn the_comparison_spelling_of_the_same_claim_proves_it_too() {
+    expect_each(
+        &[("absolute requires", Tier::Proven)],
+        &format!(
+            "{ABSOLUTE}fn size_of(top: Int) -> Int {{\n\
+             \x20   if top <= Int.min {{\n\
+             \x20       0\n\
+             \x20   }} else {{\n\
+             \x20       absolute(top)\n\
+             \x20   }}\n\
+             }}\n"
+        ),
+    );
+}
+
+/// And the branch that was ruled out is still the branch that was ruled out:
+/// calling it where the value could be the smallest `Int` is guarded.
+#[test]
+fn a_call_with_nothing_ruled_out_is_still_guarded() {
+    expect_each(
+        &[("absolute requires", Tier::Guarded)],
+        &format!("{ABSOLUTE}fn size_of(top: Int) -> Int {{\n    absolute(top)\n}}\n"),
+    );
+}
+
 #[test]
 fn a_string_written_on_the_spot_that_cannot_satisfy_it_is_refused() {
     // Not guarded. The checker can see this one fail, and a runtime check for
