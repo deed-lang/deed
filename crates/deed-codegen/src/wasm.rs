@@ -646,6 +646,102 @@ fn write_section(out: &mut Vec<u8>, id: u8, body: &[u8]) {
 mod tests {
     use super::*;
 
+    /// The export section as the bytes say it is, rather than as the struct
+    /// does.
+    ///
+    /// Nothing else in this crate reads back what `encode` wrote, and the
+    /// export section is where a host looks to find out whether it can read
+    /// a string at all. Each entry is its name and its kind byte.
+    fn exported(bytes: &[u8]) -> Vec<(String, u8)> {
+        let mut at = 8;
+        while at < bytes.len() {
+            let id = bytes[at];
+            at += 1;
+            let (size, used) = read_u32(&bytes[at..]);
+            at += used;
+            let body = &bytes[at..at + size as usize];
+            at += size as usize;
+            if id != 7 {
+                continue;
+            }
+
+            let (count, mut read) = read_u32(body);
+            let mut found = Vec::new();
+            for _ in 0..count {
+                let (length, used) = read_u32(&body[read..]);
+                read += used;
+                let name = String::from_utf8(body[read..read + length as usize].to_vec())
+                    .expect("a name is UTF-8");
+                read += length as usize;
+                let kind = body[read];
+                read += 1;
+                let (_, used) = read_u32(&body[read..]);
+                read += used;
+                found.push((name, kind));
+            }
+            return found;
+        }
+        Vec::new()
+    }
+
+    fn read_u32(bytes: &[u8]) -> (u32, usize) {
+        let mut value = 0;
+        let mut shift = 0;
+        let mut used = 0;
+        loop {
+            let byte = bytes[used];
+            used += 1;
+            value |= u32::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return (value, used);
+            }
+            shift += 7;
+        }
+    }
+
+    /// A host that cannot see the memory cannot read a string it is handed,
+    /// so the export is the difference between a module this workspace can
+    /// answer for and one anybody can.
+    #[test]
+    fn an_exported_memory_is_in_the_section_beside_the_functions() {
+        let mut module = Module::new();
+        module.memory_pages = Some(1);
+        module.exported_memory = Some("memory".to_string());
+        module.export("answer", 0);
+
+        assert_eq!(
+            exported(&module.encode()),
+            vec![("answer".to_string(), 0x00), ("memory".to_string(), 0x02)]
+        );
+    }
+
+    /// And a module that does not export one says nothing about it, rather
+    /// than writing an entry that points at a memory nobody asked for.
+    #[test]
+    fn a_module_that_exports_no_memory_writes_no_entry_for_one() {
+        let mut module = Module::new();
+        module.memory_pages = Some(1);
+        module.export("answer", 0);
+
+        assert_eq!(
+            exported(&module.encode()),
+            vec![("answer".to_string(), 0x00)]
+        );
+    }
+
+    /// A memory and nothing else is still an export section.
+    #[test]
+    fn a_module_that_exports_only_its_memory_still_has_a_section() {
+        let mut module = Module::new();
+        module.memory_pages = Some(1);
+        module.exported_memory = Some("memory".to_string());
+
+        assert_eq!(
+            exported(&module.encode()),
+            vec![("memory".to_string(), 0x02)]
+        );
+    }
+
     #[test]
     fn a_module_starts_with_the_magic_number_and_a_version() {
         let bytes = Module::new().encode();
