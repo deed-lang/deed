@@ -643,6 +643,26 @@ fn a_comment_among_the_imports_stops_the_import_being_written_too() {
     assert_eq!(fixed(source), source);
 }
 
+/// A name this file declares somewhere is a question about scope, and writing
+/// an import would answer a different question confidently.
+///
+/// The measured case: a walk's accumulator read underneath its walk. `sum` is
+/// in `std/list`, the fix is machine-applicable, so `deed fix` used to write
+/// an import for a function that has nothing to do with the program.
+#[test]
+fn a_name_the_file_declares_elsewhere_gets_no_import() {
+    let source = "module a\n\nfn total(numbers: List<Int>) -> Int {\n    \
+                  for n in numbers with sum = 0 {\n        sum + n\n    }\n    sum\n}\n";
+    assert_eq!(fixed(source), source, "it should not have written a `use`");
+
+    let notes: Vec<String> = diagnose(source)
+        .iter()
+        .flat_map(|diagnostic| diagnostic.notes.clone())
+        .collect();
+    let text = notes.join("\n");
+    assert!(!text.contains("`std/list` declares `sum`"), "{text}");
+}
+
 /// `x.set(k, v)`, where `set` is a name the library has.
 ///
 /// The type checker says this for the prelude, because it can ask whether a

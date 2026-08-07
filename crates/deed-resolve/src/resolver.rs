@@ -200,6 +200,7 @@ pub fn resolve(file: FileId, module: &Module, universe: &Universe) -> Resolved {
         named: Vec::new(),
         suggestions: SUGGESTION_BUDGET,
         turn_names: Vec::new(),
+        walked: Vec::new(),
     };
 
     resolver.push_scope(ScopeKind::Prelude);
@@ -299,6 +300,14 @@ struct Resolver<'a> {
     /// misspelling, and telling somebody a correctly spelled word cannot be
     /// found sends them looking for a mistake that is not there.
     turn_names: Vec<String>,
+    /// Accumulators of walks already left behind, by name, where the name was
+    /// written, and where the walk was.
+    ///
+    /// A walk's accumulator is in scope in its body and nowhere else, and the
+    /// value of the walk is what it ended up as. Somebody who read it as a
+    /// variable writes the walk and then names the accumulator underneath,
+    /// which is an unresolved name that is spelled exactly right.
+    walked: Vec<(String, Span, Span)>,
 }
 
 impl Resolver<'_> {
@@ -502,6 +511,36 @@ impl Resolver<'_> {
                          out in the body and put it in the accumulator, which `while` reads \
                          on the turn after",
                     ),
+            );
+            return None;
+        }
+
+        // The accumulator of a walk that has already finished. It is spelled
+        // right and it was declared, one scope up and one statement ago, so
+        // the suggester has nothing useful to say and the shipped library has
+        // an import to offer that would be about a different function
+        // entirely: `sum` is in `std/list`.
+        //
+        // Measured. A model wrote `for n in ns with sum = 0 { sum = sum + n }`
+        // and then `sum` underneath, and got four diagnostics for one
+        // misunderstanding, two of them carrying repairs that make the program
+        // worse.
+        if let Some((_, declared, walk)) = self
+            .walked
+            .iter()
+            .rev()
+            .find(|(name, _, _)| *name == ident.name)
+        {
+            self.diagnostics.push(
+                diagnostic
+                    .with_primary_label("not in scope here")
+                    .with_secondary(*declared, "the accumulator of a walk, in scope in its body")
+                    .with_secondary(*walk, "and this is what it ended up as")
+                    .with_note(format!(
+                        "a walk is an expression whose value is the accumulator it finished \
+                         with, so what reads it is `let {} = for ... {{ ... }}`",
+                        ident.name
+                    )),
             );
             return None;
         }
@@ -1089,6 +1128,10 @@ impl Resolver<'_> {
     fn resolve_fn(&mut self, function: &FnDecl) {
         self.push_scope(ScopeKind::Local);
 
+        // A walk's accumulator is a fact about this declaration, so what one
+        // function walked says nothing about the next one.
+        self.walked.clear();
+
         // Before anything else, because a parameter's type, the return type
         // and the body can all name one and none of them can be resolved
         // without it.
@@ -1300,8 +1343,10 @@ impl Resolver<'_> {
                 accumulator,
                 keep,
                 body,
+                span: span_of_for,
                 ..
             } => {
+                let span_of_for = *span_of_for;
                 self.resolve_expr(iterable);
                 // What the accumulator starts as is worked out before the loop
                 // exists, so the accumulator is not in scope in it. `with sum =
@@ -1314,6 +1359,11 @@ impl Resolver<'_> {
                 self.push_scope(ScopeKind::Local);
                 if let Some(accumulator) = accumulator {
                     self.declare_local(&accumulator.name, DefKind::Local);
+                    self.walked.push((
+                        accumulator.name.name.clone(),
+                        accumulator.name.span,
+                        span_of_for,
+                    ));
                 }
                 // Before the element and the index, because the condition
                 // decides whether to take the turn those belong to. `while
