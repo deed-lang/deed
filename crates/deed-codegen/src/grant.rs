@@ -34,6 +34,7 @@
 //! See `design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md`.
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::run::{Host, HostCall, Trap, Value};
@@ -44,7 +45,7 @@ use crate::run::{Host, HostCall, Trap, Value};
 /// module that passes the console where a clock was wanted is refused, so
 /// the type the source language checked is checked again at the boundary
 /// where the source language stops being in charge.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Held {
     /// The root a program's `main` is handed.
     System,
@@ -52,16 +53,28 @@ enum Held {
     Console,
     /// The clock time is read from.
     Clock,
+    /// A directory, and everything under it.
+    ///
+    /// The path is on this side of the boundary. The program has the number
+    /// and no way to turn it into a path, which is what stops `Io.open`
+    /// being a way to name somewhere else.
+    Dir(PathBuf),
 }
 
 impl Held {
     /// What to call this in a refusal.
-    fn name(self) -> &'static str {
+    fn name(&self) -> &'static str {
         match self {
             Held::System => "System",
             Held::Console => "Console",
             Held::Clock => "Clock",
+            Held::Dir(_) => "Dir",
         }
+    }
+
+    /// Whether this is the kind of thing that one is, ignoring which one.
+    fn is(&self, kind: &Held) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(kind)
     }
 }
 
@@ -76,7 +89,11 @@ type Sink = Box<dyn FnMut(&str)>;
 /// the same thing here is worth saying out loud at every call site.
 pub struct Grants {
     console: Option<Sink>,
+    input: Option<Vec<String>>,
     clock: bool,
+    files: Option<PathBuf>,
+    arguments: Option<Vec<String>>,
+    environment: Option<Vec<(String, String)>>,
 }
 
 /// A host built from a set of grants, with the handle `main` is handed.
@@ -94,7 +111,11 @@ impl Grants {
     pub fn none() -> Self {
         Self {
             console: None,
+            input: None,
             clock: false,
+            files: None,
+            arguments: None,
+            environment: None,
         }
     }
 
@@ -119,25 +140,80 @@ impl Grants {
         self
     }
 
+    /// Grant a directory, and everything under it.
+    ///
+    /// What `sys.files` narrows to. The rules about what is under it are
+    /// `deed_rt::sandbox`'s, which is where the interpreter asks too: a rule
+    /// about what a `Dir` reaches that lives inside one of two hosts is a
+    /// rule about one of them.
+    ///
+    /// The path is resolved here, because "under this directory" is a
+    /// question about where the directory actually is and a relative path
+    /// answers it differently depending on who is asking. A path that does
+    /// not resolve grants nothing, so a program that wanted files is turned
+    /// down at link time by name rather than told every file is missing.
+    pub fn files(mut self, root: PathBuf) -> Self {
+        self.files = deed_rt::sandbox::root(&root).ok();
+        self
+    }
+
+    /// Grant what somebody typed, a line at a time.
+    ///
+    /// Reading the console rather than writing to it, which is a separate
+    /// entry in the row on the same capability. Running out is `err`, because
+    /// an empty line is a real answer and has to stay one.
+    pub fn input(mut self, lines: Vec<String>) -> Self {
+        self.input = Some(lines);
+        self
+    }
+
+    /// Grant the arguments the program was invoked with.
+    ///
+    /// Data rather than authority, which is why it hands back a list. It
+    /// still takes the root, so a function that wants them has to have been
+    /// handed everything.
+    pub fn arguments(mut self, arguments: Vec<String>) -> Self {
+        self.arguments = Some(arguments);
+        self
+    }
+
+    /// Grant these environment variables, and no others.
+    ///
+    /// By name rather than whole. An environment is whatever the machine
+    /// happened to be carrying and it routinely carries credentials, so a
+    /// name nobody granted reads as not granted, which is a different fact
+    /// from unset and only one of them is about the machine.
+    pub fn environment(mut self, variables: Vec<(String, String)>) -> Self {
+        self.environment = Some(variables);
+        self
+    }
+
     /// Build the host that answers for these grants.
     pub fn into_host(self) -> Granted {
         let mut held = vec![Held::System];
         let has_console = self.console.is_some();
+        let has_input = self.input.is_some();
         if has_console {
             held.push(Held::Console);
         }
         if self.clock {
             held.push(Held::Clock);
         }
+        let files = self.files;
+        if let Some(root) = &files {
+            held.push(Held::Dir(root.clone()));
+        }
 
         let table = Rc::new(RefCell::new(Table {
             held,
             console: self.console,
+            input: self.input.unwrap_or_default(),
+            read_lines: 0,
             ticks: 0,
         }));
         let system = table
             .borrow()
-            .handle(Held::System)
+            .handle(&Held::System)
             .expect("the root is always in the table");
 
         let mut host = Host::new();
@@ -146,22 +222,78 @@ impl Grants {
             host.offer("deed:sys", "console", move |call| {
                 let table = narrow.borrow();
                 table.require(&call, Held::System, "sys.console")?;
-                Ok(table.handle(Held::Console))
+                Ok(table.handle(&Held::Console))
             });
 
             let write = Rc::clone(&table);
             host.offer("deed:io", "write", move |call| {
                 let mut table = write.borrow_mut();
                 table.require(&call, Held::Console, "Io.write")?;
-                let line = call.text(1).ok_or_else(|| {
-                    Trap::Refused(
-                        "`Io.write` was handed something that is not a string".to_string(),
-                    )
-                })?;
+                let line = text_of(&call, 1, "Io.write")?;
                 if let Some(console) = table.console.as_mut() {
                     console(&line);
                 }
                 Ok(None)
+            });
+        }
+
+        // Reading the console is a grant of its own on the same capability,
+        // so a host that prints does not thereby find out what was typed.
+        if has_input {
+            let line = Rc::clone(&table);
+            host.offer("deed:io", "line", move |mut call| {
+                let next = {
+                    let mut table = line.borrow_mut();
+                    table.require(&call, Held::Console, "Io.line")?;
+                    let next = table.input.get(table.read_lines).cloned();
+                    if next.is_some() {
+                        table.read_lines += 1;
+                    }
+                    next
+                };
+                match next {
+                    Some(text) => {
+                        let written = string(&mut call, &text)?;
+                        answer(&mut call, true, written)
+                    }
+                    None => failed(&mut call, "there is no more input"),
+                }
+            });
+        }
+
+        if let Some(arguments) = self.arguments {
+            let table = Rc::clone(&table);
+            host.offer("deed:io", "args", move |mut call| {
+                table.borrow().require(&call, Held::System, "Io.args")?;
+                let mut written = Vec::with_capacity(arguments.len());
+                for argument in &arguments {
+                    written.push(string(&mut call, argument)?);
+                }
+                call.write_list(&written)
+                    .map(Some)
+                    .ok_or_else(|| Trap::Refused(NO_ROOM.to_string()))
+            });
+        }
+
+        if let Some(variables) = self.environment {
+            let table = Rc::clone(&table);
+            host.offer("deed:io", "env", move |mut call| {
+                table.borrow().require(&call, Held::System, "Io.env")?;
+                let wanted = text_of(&call, 1, "Io.env")?;
+                match variables
+                    .iter()
+                    .find(|(name, _)| *name == wanted)
+                    .map(|(_, value)| value.clone())
+                {
+                    Some(value) => {
+                        let written = string(&mut call, &value)?;
+                        answer(&mut call, true, written)
+                    }
+                    None => failed(
+                        &mut call,
+                        &format!("`{wanted}` was not granted to this program"),
+                    ),
+                }
             });
         }
 
@@ -170,7 +302,7 @@ impl Grants {
             host.offer("deed:sys", "clock", move |call| {
                 let table = narrow.borrow();
                 table.require(&call, Held::System, "sys.clock")?;
-                Ok(table.handle(Held::Clock))
+                Ok(table.handle(&Held::Clock))
             });
 
             let now = Rc::clone(&table);
@@ -188,14 +320,181 @@ impl Grants {
             });
         }
 
+        if let Some(root) = files {
+            let narrow = Rc::clone(&table);
+            host.offer("deed:sys", "files", move |call| {
+                let table = narrow.borrow();
+                table.require(&call, Held::System, "sys.files")?;
+                Ok(table.handle(&Held::Dir(root.clone())))
+            });
+
+            let read = Rc::clone(&table);
+            host.offer("deed:io", "read", move |mut call| {
+                let dir = read.borrow().dir(&call, "Io.read")?;
+                let name = text_of(&call, 1, "Io.read")?;
+                match deed_rt::sandbox::resolve(&dir, &name) {
+                    Ok(path) => match std::fs::read_to_string(&path) {
+                        Ok(contents) => {
+                            let text = string(&mut call, &contents)?;
+                            answer(&mut call, true, text)
+                        }
+                        Err(error) => failed(&mut call, &format!("`{name}`: {error}")),
+                    },
+                    Err(refused) => failed(&mut call, &refused.message(&name)),
+                }
+            });
+
+            let save = Rc::clone(&table);
+            host.offer("deed:io", "save", move |mut call| {
+                let dir = save.borrow().dir(&call, "Io.save")?;
+                let name = text_of(&call, 1, "Io.save")?;
+                let contents = text_of(&call, 2, "Io.save")?;
+                match deed_rt::sandbox::resolve_new(&dir, &name) {
+                    Ok(path) => match std::fs::write(&path, contents) {
+                        Ok(()) => answer(&mut call, true, NOTHING),
+                        Err(error) => failed(&mut call, &format!("`{name}`: {error}")),
+                    },
+                    Err(refused) => failed(&mut call, &refused.message(&name)),
+                }
+            });
+
+            let remove = Rc::clone(&table);
+            host.offer("deed:io", "remove", move |mut call| {
+                let dir = remove.borrow().dir(&call, "Io.remove")?;
+                let name = text_of(&call, 1, "Io.remove")?;
+                match deed_rt::sandbox::resolve(&dir, &name) {
+                    Ok(path) if path.is_dir() => {
+                        failed(&mut call, &format!("`{name}` is a directory"))
+                    }
+                    Ok(path) => match std::fs::remove_file(&path) {
+                        Ok(()) => answer(&mut call, true, NOTHING),
+                        Err(error) => failed(&mut call, &format!("`{name}`: {error}")),
+                    },
+                    Err(refused) => failed(&mut call, &refused.message(&name)),
+                }
+            });
+
+            let list = Rc::clone(&table);
+            host.offer("deed:io", "list", move |mut call| {
+                let dir = list.borrow().dir(&call, "Io.list")?;
+                match std::fs::read_dir(&dir) {
+                    Ok(entries) => {
+                        let mut names: Vec<String> = entries
+                            .filter_map(|entry| {
+                                let entry = entry.ok()?;
+                                entry.file_type().ok()?.is_file().then_some(())?;
+                                entry.file_name().into_string().ok()
+                            })
+                            .collect();
+                        names.sort();
+                        let mut written = Vec::with_capacity(names.len());
+                        for name in &names {
+                            written.push(string(&mut call, name)?);
+                        }
+                        let items = call
+                            .write_list(&written)
+                            .ok_or_else(|| Trap::Refused(NO_ROOM.to_string()))?;
+                        answer(&mut call, true, items)
+                    }
+                    Err(error) => failed(&mut call, &format!("{error}")),
+                }
+            });
+
+            let open = Rc::clone(&table);
+            host.offer("deed:io", "open", move |mut call| {
+                let dir = open.borrow().dir(&call, "Io.open")?;
+                let name = text_of(&call, 1, "Io.open")?;
+                match deed_rt::sandbox::resolve(&dir, &name) {
+                    Ok(path) if path.is_dir() => {
+                        let handle = open.borrow_mut().hand_out(Held::Dir(path));
+                        answer(&mut call, true, handle)
+                    }
+                    Ok(_) => failed(&mut call, &format!("`{name}` is not a directory")),
+                    Err(refused) => failed(&mut call, &refused.message(&name)),
+                }
+            });
+
+            let make = Rc::clone(&table);
+            host.offer("deed:io", "make", move |mut call| {
+                let dir = make.borrow().dir(&call, "Io.make")?;
+                let name = text_of(&call, 1, "Io.make")?;
+                match deed_rt::sandbox::resolve_new(&dir, &name) {
+                    Ok(path) if path.exists() => {
+                        failed(&mut call, &format!("`{name}` is already there"))
+                    }
+                    Ok(path) => match std::fs::create_dir(&path) {
+                        Ok(()) => match deed_rt::sandbox::root(&path) {
+                            Ok(made) => {
+                                let handle = make.borrow_mut().hand_out(Held::Dir(made));
+                                answer(&mut call, true, handle)
+                            }
+                            Err(refused) => failed(&mut call, &refused.message(&name)),
+                        },
+                        Err(error) => failed(&mut call, &format!("`{name}`: {error}")),
+                    },
+                    Err(refused) => failed(&mut call, &refused.message(&name)),
+                }
+            });
+        }
+
         Granted { host, system }
     }
+}
+
+/// What a `Result<(), String>` carries in its `ok`.
+///
+/// A word, because every field is one. Nothing reads it: a field with no
+/// representation is dropped where it is read, which is what `ok(nothing)`
+/// binds.
+const NOTHING: Value = Value::I64(0);
+
+/// What a host says when the module has nowhere to put the answer.
+const NO_ROOM: &str = "the module has no memory left for the answer";
+
+/// The string argument at this position.
+///
+/// A refusal rather than an `err`, because a module that passes something
+/// that is not a string where the import declares one is not a program
+/// having a bad day, it is a module that does not match its own signature.
+fn text_of(call: &HostCall<'_>, at: usize, operation: &str) -> Result<String, Trap> {
+    call.text(at).ok_or_else(|| {
+        Trap::Refused(format!(
+            "`{operation}` was handed something that is not a string"
+        ))
+    })
+}
+
+/// A string written into the module's memory.
+fn string(call: &mut HostCall<'_>, text: &str) -> Result<Value, Trap> {
+    call.write_text(text)
+        .ok_or_else(|| Trap::Refused(NO_ROOM.to_string()))
+}
+
+/// A `Result` written into the module's memory.
+///
+/// Which tag is which comes from `deed_mir`, which is where the layout is
+/// synthesized. A second copy of that order here would be an answer that is
+/// inverted rather than wrong, which is the kind nobody notices.
+fn answer(call: &mut HostCall<'_>, ok: bool, value: Value) -> Result<Option<Value>, Trap> {
+    let tag = deed_mir::result_variant(if ok { "ok" } else { "err" })
+        .expect("`ok` and `err` are what a Result is made of");
+    call.write_aggregate(Some(tag), &[value])
+        .map(Some)
+        .ok_or_else(|| Trap::Refused(NO_ROOM.to_string()))
+}
+
+/// An `err` carrying a sentence.
+fn failed(call: &mut HostCall<'_>, why: &str) -> Result<Option<Value>, Trap> {
+    let text = string(call, why)?;
+    answer(call, false, text)
 }
 
 /// The handles this host has handed out, and what they stand for.
 struct Table {
     held: Vec<Held>,
     console: Option<Sink>,
+    input: Vec<String>,
+    read_lines: usize,
     ticks: i64,
 }
 
@@ -204,28 +503,58 @@ impl Table {
     ///
     /// One past the index, so that zero is never a handle. A module that
     /// passes an uninitialised word gets a refusal rather than the console.
-    fn handle(&self, what: Held) -> Option<Value> {
+    fn handle(&self, what: &Held) -> Option<Value> {
         self.held
             .iter()
-            .position(|one| *one == what)
+            .position(|one| one == what)
             .map(|at| Value::I64(at as i64 + 1))
     }
 
+    /// The handle for a directory, adding it to the table the first time.
+    ///
+    /// Interned by resolved path rather than one entry per `Io.open`, so a
+    /// program that opens the same place in a loop does not grow the table
+    /// for as long as it runs. Two handles to one directory would reach the
+    /// same things anyway, so there is nothing to tell apart.
+    fn hand_out(&mut self, what: Held) -> Value {
+        if let Some(already) = self.handle(&what) {
+            return already;
+        }
+        self.held.push(what);
+        Value::I64(self.held.len() as i64)
+    }
+
     /// What a handle the module passed back stands for, if anything.
-    fn stands_for(&self, value: Option<Value>) -> Option<Held> {
+    fn stands_for(&self, value: Option<Value>) -> Option<&Held> {
         let index = usize::try_from(value?.as_i64().checked_sub(1)?).ok()?;
-        self.held.get(index).copied()
+        self.held.get(index)
     }
 
     /// Check that the capability argument is the one this operation acts on.
     fn require(&self, call: &HostCall<'_>, what: Held, operation: &str) -> Result<(), Trap> {
-        if self.stands_for(call.arg(0)) == Some(what) {
+        if self
+            .stands_for(call.arg(0))
+            .is_some_and(|held| held.is(&what))
+        {
             return Ok(());
         }
-        Err(Trap::Refused(format!(
+        Err(self.refusal(&what, operation))
+    }
+
+    /// The directory the capability argument stands for.
+    fn dir(&self, call: &HostCall<'_>, operation: &str) -> Result<PathBuf, Trap> {
+        match self.stands_for(call.arg(0)) {
+            Some(Held::Dir(path)) => Ok(path.clone()),
+            _ => Err(self.refusal(&Held::Dir(PathBuf::new()), operation)),
+        }
+    }
+
+    /// What this host says when it was handed something it did not grant.
+    fn refusal(&self, want: &Held, operation: &str) -> Trap {
+        Trap::Refused(format!(
             "`{operation}` was handed something that is not a `{}` this host granted",
-            what.name()
-        )))
+            want.name()
+        ))
     }
 }
 

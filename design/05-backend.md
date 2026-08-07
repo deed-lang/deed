@@ -170,19 +170,24 @@ compiled call keeps it, so holding the row is not a permission bit. That rule co
 `Dir` enforces have to be the same whether an interpreter or an embedder is enforcing them,
 and a rule living inside one of two hosts is a rule about one of them.
 
-This repo does have a host now, and it grants a console and a clock:
-`crates/deed-codegen/src/grant.rs`, wired into `deed run --compiled`. Until it existed, a
-compiled `examples/hello.deed` could not write "hello, world" and the interpreted one could,
-which made every claim on this page about capabilities a claim about an import section
-rather than about a program. What each grant offers is exactly the imports it can answer, so
-a program asking for one nobody granted is refused at link time by name -- ``the host does
-not offer `deed:io.save` `` -- rather than at the first call. See
-`design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md` for how a handle stays
-unforgeable across the boundary.
+This repo does have a host now: `crates/deed-codegen/src/grant.rs`, wired into
+`deed run --compiled`. Until it existed, a compiled `examples/hello.deed` could not write
+"hello, world" and the interpreted one could, which made every claim on this page about
+capabilities a claim about an import section rather than about a program. It grants what
+`deed run` grants -- a console, a clock, the directory `--dir` named, the variables
+`--env` named, the arguments, and standard input when `main`'s row says so -- and each
+grant offers exactly the imports it can answer, so a program asking for one nobody granted
+is refused at link time by name: ``the host does not offer `deed:io.fetch` ``. See
+`design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md` for how a handle
+stays unforgeable across the boundary.
 
-The runner that host links against is still a test oracle, and the operations that are not
-granted yet still stop with the name of what was wanted, which is the most useful thing they
-could say about a module on its way to a real embedder.
+The rules about what a `Dir` reaches are `deed-rt`'s in both engines, and
+`crates/deed-cli/tests/cli.rs` holds the two to saying the same thing about the same
+program rather than trusting that they will.
+
+The network is still an unanswered import, and so is anything a program declares itself
+through `effect ... from`. Those stop with the name of what was wanted, which is the most
+useful thing they could say about a module on its way to a real embedder.
 
 **What would change this:** adopting the component/import declarations sketched in
 `design/04-capabilities.md` would let modules name additional host imports in source, but only if

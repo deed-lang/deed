@@ -778,9 +778,10 @@ fn result_layout(shapes: &mut Vec<crate::Layout>, ok: Ty, err: Ty) -> crate::Lay
             ty,
         }],
     };
+    let [good, bad] = crate::RESULT_VARIANTS;
     shapes.push(crate::Layout {
         name,
-        variants: vec![variant("ok", ok), variant("err", err)],
+        variants: vec![variant(good, ok), variant(bad, err)],
         choice: true,
     });
     crate::LayoutId(shapes.len() - 1)

@@ -207,6 +207,38 @@ impl<'a> HostCall<'a> {
         Some(Value::I64(at as i64))
     }
 
+    /// Put a list into the module's memory and answer with its address.
+    ///
+    /// The elements are whatever a value of that type is: a word each, an
+    /// address for the boxed ones.
+    pub fn write_list(&mut self, items: &[Value]) -> Option<Value> {
+        let at = self.allocate(crate::layout::list_size(items.len()) as usize)?;
+        self.memory[at..at + 8].copy_from_slice(&(items.len() as u64).to_le_bytes());
+        for (index, item) in items.iter().enumerate() {
+            let offset = at + crate::layout::element_offset(index) as usize;
+            self.memory[offset..offset + 8].copy_from_slice(&item.as_i64().to_le_bytes());
+        }
+        Some(Value::I64(at as i64))
+    }
+
+    /// Put an aggregate into the module's memory and answer with its address.
+    ///
+    /// `tag` is the variant for a shape with more than one, and nothing for
+    /// a record. Which tag is which is the layout's question rather than
+    /// this one's.
+    pub fn write_aggregate(&mut self, tag: Option<i64>, fields: &[Value]) -> Option<Value> {
+        let tagged = tag.is_some();
+        let at = self.allocate(crate::layout::aggregate_size(tagged, fields.len()) as usize)?;
+        if let Some(tag) = tag {
+            self.memory[at..at + 8].copy_from_slice(&tag.to_le_bytes());
+        }
+        for (index, field) in fields.iter().enumerate() {
+            let offset = at + crate::layout::field_offset(tagged, index) as usize;
+            self.memory[offset..offset + 8].copy_from_slice(&field.as_i64().to_le_bytes());
+        }
+        Some(Value::I64(at as i64))
+    }
+
     /// Move the module's bump pointer along and answer with what it was.
     fn allocate(&mut self, size: usize) -> Option<usize> {
         let bump = crate::layout::BUMP as usize;
@@ -358,6 +390,21 @@ impl Host {
 impl Linked<'_> {
     /// Call an exported function, dispatching host imports to the offer list.
     pub fn call(&self, name: &str, args: &[Value]) -> Result<Option<Value>, Trap> {
+        self.call_within(name, args, BUDGET)
+    }
+
+    /// The same, counting up to a budget the caller names.
+    ///
+    /// [`BUDGET`] is the size of a test. Running somebody's program is not a
+    /// test: a fixed instruction count there stops a real program part way
+    /// through and reports it as running too long, so whoever runs one says
+    /// how far they are willing to count.
+    pub fn call_within(
+        &self,
+        name: &str,
+        args: &[Value],
+        budget: u64,
+    ) -> Result<Option<Value>, Trap> {
         if let Err(crate::validate::Invalid(reason)) = crate::validate::validate(self.module) {
             return Err(Trap::Invalid(reason));
         }
@@ -370,7 +417,7 @@ impl Linked<'_> {
             .ok_or_else(|| Trap::Unimplemented(format!("no export named {name}")))?;
         let mut run = Run {
             module: self.module,
-            fuel: BUDGET,
+            fuel: budget,
             memory: memory_of(self.module),
             host: Some(self.host),
         };

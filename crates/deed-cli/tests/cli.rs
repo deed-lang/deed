@@ -914,18 +914,18 @@ fn main(sys: System) -> Int\n\
 ///
 /// The row is the list of what a program asks its host for, so a host that
 /// cannot answer one of the entries turns the module down at load rather
-/// than at the first call. Reading a file is not something `deed run
+/// than at the first call. The network is not something `deed run
 /// --compiled` hands over yet, and the message names the operation.
 #[test]
 fn a_compiled_program_asking_for_what_this_run_does_not_grant_is_refused_before_it_runs() {
     let scratch = Scratch::new("compiled-ungranted");
     let file = scratch.write(
-        "reads.deed",
+        "reaches.deed",
         "module a\n\n\
 fn main(sys: System) -> Int\n\
-  uses Io.read,\n\
+  uses Io.fetch,\n\
 {\n\
-    match Io.read(sys.files, \"x.txt\") {\n\
+    match Io.fetch(sys.net, \"https://example.com\") {\n\
         ok(text) => 0,\n\
         err(why) => 1,\n\
     }\n\
@@ -935,9 +935,77 @@ fn main(sys: System) -> Int\n\
     let output = run(&["run", "--compiled", file.to_str().unwrap()]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
-        stdout(&output).contains("the host does not offer `deed:io.read`"),
+        stdout(&output).contains("the host does not offer `deed:io.fetch`"),
         "{}",
         stdout(&output)
+    );
+}
+
+/// The two engines say the same thing about the same program.
+///
+/// Reading a file is where a compiled program and an interpreted one had the
+/// most room to disagree: the answer is a `Result<String, String>`, a layout
+/// nobody writes down, and the rules about what a `Dir` reaches are enforced
+/// on the host's side of a handle. Both of those are one implementation
+/// asked twice rather than two implementations, and this is what says so.
+#[test]
+fn both_engines_read_the_same_file_and_say_the_same_thing() {
+    let scratch = Scratch::new("compiled-files");
+    scratch.write("note.txt", "what the file said");
+    let file = scratch.write(
+        "reads.deed",
+        "module a\n\n\
+fn main(sys: System) -> Int\n\
+  uses Io.read, Io.write,\n\
+{\n\
+    match Io.read(sys.files, \"note.txt\") {\n\
+        ok(text) => { Io.write(sys.console, text) },\n\
+        err(why) => { Io.write(sys.console, why) },\n\
+    }\n\
+    0\n\
+}\n",
+    );
+
+    let dir = scratch.path().to_str().unwrap().to_string();
+    let path = file.to_str().unwrap().to_string();
+    let interpreted = run(&["run", &path, "--dir", &dir]);
+    let compiled = run(&["run", "--compiled", &path, "--dir", &dir]);
+
+    assert_eq!(code(&interpreted), 0, "{}", stderr(&interpreted));
+    assert_eq!(code(&compiled), 0, "{}", stderr(&compiled));
+    assert_eq!(stdout(&compiled), stdout(&interpreted));
+    assert!(stdout(&compiled).contains("what the file said"));
+}
+
+/// And the same about a file that is not there, which is the answer with the
+/// other tag in it.
+#[test]
+fn both_engines_are_refused_the_same_file_and_say_the_same_thing() {
+    let scratch = Scratch::new("compiled-files-escape");
+    let file = scratch.write(
+        "escapes.deed",
+        "module a\n\n\
+fn main(sys: System) -> Int\n\
+  uses Io.read, Io.write,\n\
+{\n\
+    match Io.read(sys.files, \"../secrets.txt\") {\n\
+        ok(text) => { Io.write(sys.console, text) },\n\
+        err(why) => { Io.write(sys.console, why) },\n\
+    }\n\
+    0\n\
+}\n",
+    );
+
+    let dir = scratch.path().to_str().unwrap().to_string();
+    let path = file.to_str().unwrap().to_string();
+    let interpreted = run(&["run", &path, "--dir", &dir]);
+    let compiled = run(&["run", "--compiled", &path, "--dir", &dir]);
+
+    assert_eq!(stdout(&compiled), stdout(&interpreted));
+    assert!(
+        stdout(&compiled).contains("a `Dir` only takes one at a time"),
+        "{}",
+        stdout(&compiled)
     );
 }
 

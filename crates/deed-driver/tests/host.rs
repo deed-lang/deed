@@ -510,3 +510,121 @@ fn a_capability_the_host_never_handed_out_is_not_one() {
         "it should say what it wanted: {why}"
     );
 }
+
+// -- the directory a host grants --------------------------------------------
+
+const READING: &str = "module a\n\n\
+fn main(sys: System) -> Int\n\
+  uses\n\
+    Io.read,\n\
+    Io.write,\n\
+{\n\
+    match Io.read(sys.files, \"note.txt\") {\n\
+        ok(text) => { Io.write(sys.console, text) },\n\
+        err(why) => { Io.write(sys.console, why) },\n\
+    }\n\
+    0\n\
+}\n";
+
+/// A scratch directory that cleans up after itself.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        let at = std::env::temp_dir().join(format!("deed-host-{name}"));
+        std::fs::remove_dir_all(&at).ok();
+        std::fs::create_dir_all(&at).expect("a scratch directory");
+        Self(at)
+    }
+
+    fn write(&self, name: &str, contents: &str) {
+        std::fs::write(self.0.join(name), contents).expect("writing the fixture");
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+/// A compiled program reads a file out of the directory it was granted.
+///
+/// The answer is a `Result<String, String>`, which is a shape nobody writes
+/// down: the compiler synthesizes the layout, so a host answering one has to
+/// build the same thing in the module's own memory. Getting the two variants
+/// the wrong way round would be an answer that is inverted rather than
+/// missing, which is why `deed_mir` owns the order and this asks it.
+#[test]
+fn a_program_reads_a_file_out_of_the_directory_its_host_granted() {
+    let scratch = Scratch::new("read");
+    scratch.write("note.txt", "what the file said");
+
+    let module = module_for(READING);
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&written);
+    let granted = Grants::none()
+        .console(move |line| sink.borrow_mut().push(line.to_string()))
+        .files(scratch.0.clone())
+        .into_host();
+
+    granted
+        .host
+        .link(&module)
+        .expect("the host grants both of the things this asks for")
+        .call("main", &[granted.system])
+        .expect("it runs");
+
+    assert_eq!(*written.borrow(), vec!["what the file said".to_string()]);
+}
+
+/// And it cannot read one outside that directory.
+///
+/// The rule is `deed_rt::sandbox`'s, which is the one the interpreter asks
+/// too. A second copy of it inside this host would be a second answer to
+/// "what does a `Dir` reach", and the two would drift.
+#[test]
+fn a_program_cannot_read_past_the_directory_it_was_granted() {
+    let scratch = Scratch::new("escape");
+    scratch.write("note.txt", "the one it may read");
+    std::fs::create_dir_all(scratch.0.join("inner")).expect("a directory inside");
+
+    let module = module_for(READING);
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&written);
+    let granted = Grants::none()
+        .console(move |line| sink.borrow_mut().push(line.to_string()))
+        .files(scratch.0.join("inner"))
+        .into_host();
+
+    granted
+        .host
+        .link(&module)
+        .expect("the host grants both of the things this asks for")
+        .call("main", &[granted.system])
+        .expect("it runs, and answers with an err");
+
+    let said = written.borrow().join("");
+    assert!(
+        !said.contains("the one it may read"),
+        "the file above the granted directory should be out of reach: {said}"
+    );
+    assert!(
+        said.contains("note.txt"),
+        "and the answer should name what was asked for: {said}"
+    );
+}
+
+/// The same program, and a host that grants no directory, is refused before
+/// it runs.
+#[test]
+fn the_reading_program_is_refused_by_a_host_that_grants_no_directory() {
+    let module = module_for(READING);
+    let granted = Grants::none().console(|_| {}).into_host();
+    let refused = granted
+        .host
+        .link(&module)
+        .expect_err("a console is not a filesystem");
+    assert_eq!(refused.module, "deed:io");
+    assert_eq!(refused.name, "read");
+}

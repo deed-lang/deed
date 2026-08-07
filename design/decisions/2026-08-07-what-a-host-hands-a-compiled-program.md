@@ -62,14 +62,27 @@ nothing in the language turns an integer into one. The check is there because a 
 handed modules rather than programs, and a host whose safety rests on the last compiler
 that touched the module is not enforcing anything.
 
-Nothing is granted by default. `deed run --compiled` grants a console and a clock, so
-`examples/hello.deed` now prints what the interpreted one prints, and a program that reads
-a file is turned down before it runs:
+Nothing is granted by default. `deed run --compiled` grants what `deed run` grants: a
+console, a clock, the directory `--dir` named, the variables `--env` named, the arguments,
+and standard input when and only when `main`'s row says the program reads it. So
+`examples/hello.deed` prints what the interpreted one prints, and a program that reaches
+the network is turned down before it runs:
 
 ```
-$ deed run --compiled examples/todo.deed
-the host does not offer `deed:io.read`
+$ deed run --compiled examples/todo.deed --dir examples
+examples
+nothing asked for
+5 of 6 done
+still open: 6. work out what a trait is
+
+$ deed run --compiled reaches.deed
+the host does not offer `deed:io.fetch`
 ```
+
+A `Dir` handle is interned by resolved path rather than one entry per `Io.open`, so a
+program that opens the same place in a loop does not grow the table for as long as it
+runs. Two handles to one directory reach the same things, so there is nothing to tell
+apart.
 
 ## Drawbacks (required)
 
@@ -77,19 +90,26 @@ The thing on the host's side of a handle is reachable by anything holding the ta
 the table is the security boundary and it is a `Vec` behind an `Rc<RefCell<_>>`. That is
 right for one program in one process and is not a claim about anything else.
 
-`Io.now` counts and `Io.epoch` reads the machine, which duplicates two lines the
-interpreter already has. Two engines answering the same operation two ways is exactly the
-drift this repository keeps finding, and there is no shared place to put them today: the
-interpreter's version works on `Value`, this one on a handle table.
+`Io.now`, `Io.epoch` and the six filesystem operations duplicate what the interpreter
+already does, sentence for sentence, because the answers have to match and there is no
+shared place to put them: the interpreter's version works on `Value`, this one on a handle
+table and the module's memory. The rules about what a `Dir` reaches are not duplicated --
+both ask `deed_rt::sandbox` -- but the messages around them are, and
+`crates/deed-cli/tests/cli.rs` holds the two engines to saying the same thing rather than
+trusting that they will.
 
-Only the console and the clock are granted. The filesystem, the network, arguments,
-environment variables and standard input are still unanswered imports, and each of them
-needs something this decision does not provide: a `Result` written into the module's
-memory, and a `Dir` handle that narrows the way `Io.open` narrows.
+The network is still an unanswered import. `deed_rt::reach` and `deed_rt::http` are the
+host half and `--allow` is the grant, so this is wiring rather than a decision, but it is
+not wired.
 
 Giving a host implementation the module's memory means giving it the ability to corrupt
 the program it is answering. That is the same authority any embedder has and the reason
 `write_text` refuses rather than truncates, but it is a wider surface than passing values.
+
+A compiled `examples/logs.deed` still stops with "reached past the end of memory" where
+the interpreted one finishes. That is not the host: a module gets sixteen pages and
+nothing but handler frames is ever reclaimed, which `design/05-backend.md` already says
+and which value reclamation is the answer to.
 
 ## Rejected Ideas (required)
 
@@ -119,22 +139,29 @@ the program it is answering. That is the same authority any embedder has and the
   - Rejected because: a host links modules, not programs. Trusting the module makes the
     compiler part of the trusted computing base of everything that ever runs its output.
 
-- Option: grant everything `deed run` grants, so the two engines match today.
-  - Rejected because: the filesystem operations answer with `Result`, and writing an
-    aggregate into the module's memory is a second piece of work with its own decisions.
-    Shipping it half-done would have meant a host that answers `Io.read` with something
-    the program misreads, which is worse than a host that says it does not offer it.
+- Option: write the `ok` and `err` tags into the host, since they are 0 and 1.
+  - Rejected because: nobody writes a `Result` down, so the order is the compiler's and
+    a copy of it here is an answer that is inverted rather than wrong. `deed_mir` owns
+    `RESULT_VARIANTS` and both sides read it.
+
+- Option: hand out a new `Dir` handle per `Io.open`.
+  - Rejected because: a program that opens the same directory in a loop grows the host's
+    table for as long as it runs, and two handles to one directory are not two things.
+
+- Option: keep the runner's instruction budget for `deed run --compiled`.
+  - Rejected because: the budget is the size of a test, and it stopped
+    `examples/logs.deed` part way through and called it running too long. Whoever runs a
+    program says how far they are willing to count.
 
 ## Open Questions (required)
 
-- Where the shared answer to `Io.now` and `Io.epoch` should live, once the filesystem
-  operations make the duplication between this host and the interpreter three times the
-  size.
-- Whether `deed run --compiled` should take the same `--dir`, `--allow`, `--env` and stdin
-  grants `deed run` takes, or whether the compiled path should require them to be spelled
-  out because a component's world is meant to be read before it runs.
-- Whether a `Dir` handle should be handed out per `Io.open` call, which grows the table for
-  as long as the program runs, or interned by resolved path.
+- Where the shared answer to the `Io` operations should live. There are two of them now,
+  one per engine, held together by a test rather than by construction.
+- Whether the network should be granted the same way, given that `--allow` already names
+  hosts and `deed_rt::reach` already decides what a `Net` reaches.
+- What a host should do when a module hands it a string the layout says is there and the
+  bytes say is not valid UTF-8. Today that is a refusal, which is right for a module that
+  does not match its own signature and may be wrong for one that read bytes off a disk.
 
 ## References
 
