@@ -184,6 +184,26 @@ fn a_deprecated_name_is_rewritten_to_its_replacement() {
     );
 }
 
+/// A modifier this language does not have comes out, and what is left checks.
+///
+/// The word had a note and no repair, and a note is something a reader agrees
+/// with and then writes again: across three benchmark runs one task met this
+/// message twenty-four times. Removal is not substitution, so the fix is
+/// certain in a way `struct` -> `record` is: the declaration behind the word
+/// is the one that was meant.
+#[test]
+fn a_visibility_modifier_is_taken_out_and_the_file_checks() {
+    let source = "module a\n\nexport fn f() -> Int { 0 }\n";
+    let result = fix(source, diagnose);
+    assert_eq!(result.applied, 1);
+    assert_eq!(result.source, "module a\n\nfn f() -> Int { 0 }\n");
+    assert!(
+        diagnose(&result.source).is_empty(),
+        "it should check clean now: {:?}",
+        diagnose(&result.source)
+    );
+}
+
 // -- rows ------------------------------------------------------------------
 //
 // The row diagnostics say what to type and, for a long time, did not type it.
