@@ -55,6 +55,26 @@ release notes.
   `design/decisions/2026-07-31-compiled-memory-reclamation.md` is still where
   it is asked.
 
+- `deed build --component` says what it writes. It produces a core module and
+  the `.wit` world its exports describe, and the help text used to say it
+  "produces a component". Handing that core module to `wasm-tools component
+  new` produces a component whose world is empty, because the exports cross
+  the boundary in this backend's own layout rather than the canonical ABI and
+  nothing writes the component-type section.
+
+  Measured on every commit now rather than assumed, with the Bytecode
+  Alliance's own tooling. The day the component stops being empty is the day
+  that job fails and somebody says why. See
+  [design/decisions/2026-08-07-a-wit-world-is-not-a-component.md](design/decisions/2026-08-07-a-wit-world-is-not-a-component.md)
+  for the three things that are missing.
+
+- New guide: [how-to/embed-a-compiled-program.md](how-to/embed-a-compiled-program.md),
+  which is what a host has to know. The memory layout it reads and writes
+  lived in `layout.rs`'s doc comments, so somebody embedding a compiled
+  program had to open the compiler's source to find out where a string keeps
+  its byte count. `crates/deed-driver/tests/embedding.rs` reads the numbers
+  off the page and asks `layout.rs` for the same ones.
+
 ### Measurements
 
 - Nothing yet.

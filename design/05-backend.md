@@ -219,6 +219,20 @@ Exporting it grants the program nothing. A module could always read and write it
 memory; the export is about what the *host* may look at, and the host is the party
 deciding in the first place.
 
+### What `--component` writes, and what it does not
+
+`deed build --component` writes a core module and the `.wit` world its exports describe.
+The derivation is the claim -- nobody else derives a world from code -- and it is checked
+against the rows by `crates/deed-driver/tests/wit_world.rs`.
+
+It is not a component binary, and that is measured rather than assumed. Handing the core
+module to `wasm-tools component new` produces a component whose world is empty, because
+the exports cross the boundary in this backend's own layout rather than the canonical ABI
+and nothing writes the component-type section that carries the world.
+`crates/deed-codegen/component.mjs` runs that transcript on every commit and fails when
+either half of it stops being true. What is missing is written up in
+`design/decisions/2026-08-07-a-wit-world-is-not-a-component.md`.
+
 **What would change this:** adopting the component/import declarations sketched in
 `design/04-capabilities.md` would let modules name additional host imports in source, but only if
 those imports are still capability-row entries with explicit capability arguments and host refusal
