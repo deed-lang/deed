@@ -14,6 +14,17 @@ release notes.
 
 - None yet.
 
+### Language
+
+- Ruling a value out at the edge of what is known narrows the other branch.
+  `if n == Int.min { .. } else { .. }` and `if n <= Int.min { .. } else { .. }`
+  say the same thing about the else branch, and only the second one used to
+  prove an obligation below it: `!=` narrowed nothing, on the grounds that a
+  range cannot say "not this one". That is true in the middle and false at
+  either end, and the end is where the case turned out to be, found by writing
+  contracts for `std/ratio` in 0.2.6. A value ruled out in the middle still
+  settles nothing, because what is left of the range is two of them.
+
 ### Diagnostics
 
 - `point.x = 1` is `DEED2027` rather than two messages about neither half of

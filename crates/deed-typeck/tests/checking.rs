@@ -1152,6 +1152,47 @@ fn three_names_added_together_are_still_out_of_reach() {
     assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
 }
 
+// -- a value ruled out at the edge of what is known -------------------------
+//
+// `!=` used to narrow nothing, on the grounds that a range cannot say "not
+// this one" in general. That is true in the middle and false at either end,
+// and the end is where the case turned out to be: #929 wrote a contract that
+// asks for a number other than the smallest `Int`, and found that
+// `if n == Int.min` and `if n <= Int.min` say the same thing about the else
+// branch while only the second one proved it.
+//
+// The two spellings are held against each other in
+// `crates/deed-driver/tests/proving.rs`, which is where a precondition raised
+// at a call site is measured.
+
+/// A value ruled out in the middle leaves two ranges, and a range is what this
+/// holds. Guarded is the honest answer rather than a wrong one.
+#[test]
+fn ruling_out_a_value_in_the_middle_settles_nothing() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f(n: Int) -> Int {\n    \
+         if n == 5 {\n        1\n    } else {\n        let held: Positive = n\n        held\n    }\n}\n",
+    );
+    assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
+    assert_eq!(checked.types.obligations_at(Tier::Proven), 0);
+}
+
+/// And ruling one out at the edge does narrow, on the refinement route as well
+/// as the precondition one.
+#[test]
+fn ruling_out_the_smallest_int_narrows_the_other_branch() {
+    let types = check_ok(
+        "module a\n\n\
+         type Bigger = Int where value > Int.min\n\n\
+         fn f(n: Int) -> Int {\n    \
+         if n == Int.min {\n        1\n    } else {\n        let held: Bigger = n\n        held\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
 #[test]
 fn a_refinement_widens_to_its_base_without_an_obligation() {
     let types = check_ok(

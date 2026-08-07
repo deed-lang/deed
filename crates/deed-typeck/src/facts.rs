@@ -1626,8 +1626,9 @@ fn bound_from(op: BinaryOp, offset: Range) -> Option<Range> {
         },
         BinaryOp::Ge => Range::between(least, i64::MAX),
         BinaryOp::Eq => Range::between(least, most),
-        // `!=` only says something when the other side is a single value at
-        // the edge of what is known, and that is rare enough to skip.
+        // `!=` is answered in `narrow_side`, where the term whose range would
+        // be trimmed is in hand. Here the value has an offset on it, so the
+        // edge to compare against is not the one this function was given.
         _ => return None,
     })
 }
@@ -1740,8 +1741,35 @@ fn narrow_side(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: 
         },
         BinaryOp::Ge => Range::between(low, i64::MAX),
         BinaryOp::Eq => Range::between(low, high),
-        // `!=` only says something when the other side is a single value at
-        // the edge of what is known, and that is rare enough to skip.
+        // `!=` says something exactly when the other side is a single value
+        // sitting at an edge of what is already known: everything the term
+        // could have been, minus one end, is still a range.
+        //
+        // This was skipped as rare until #929 measured it. `if n == Int.min`
+        // and `if n <= Int.min` say the same thing about the else branch, and
+        // only the second one narrowed, so one of them proved an obligation
+        // and the other left it guarded. Two spellings of one claim answering
+        // differently is worse than either answer.
+        BinaryOp::Ne if low == high => {
+            let Some((known_low, known_high)) = facts.get(term).bounds() else {
+                return;
+            };
+            if low == known_low {
+                match known_low.checked_add(1) {
+                    Some(bound) => Range::between(bound, known_high),
+                    None => Range::Empty,
+                }
+            } else if high == known_high {
+                match known_high.checked_sub(1) {
+                    Some(bound) => Range::between(known_low, bound),
+                    None => Range::Empty,
+                }
+            } else {
+                // Somewhere in the middle. What is left is two ranges, and a
+                // range is what this holds.
+                return;
+            }
+        }
         _ => return,
     };
 
