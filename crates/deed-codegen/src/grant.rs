@@ -71,8 +71,9 @@ type Sink = Box<dyn FnMut(&str)>;
 /// What an embedder decided a compiled program may reach.
 ///
 /// Built up a grant at a time and turned into a [`Host`] by
-/// [`Grants::into_host`].
-#[derive(Default)]
+/// [`Grants::into_host`]. There is one way to make an empty one and it is
+/// called [`Grants::none`], because "the default" and "nothing at all" being
+/// the same thing here is worth saying out loud at every call site.
 pub struct Grants {
     console: Option<Sink>,
     clock: bool,
@@ -91,7 +92,10 @@ pub struct Granted {
 impl Grants {
     /// A host that grants nothing.
     pub fn none() -> Self {
-        Self::default()
+        Self {
+            console: None,
+            clock: false,
+        }
     }
 
     /// Grant a console, and say where a written line goes.
@@ -348,7 +352,13 @@ mod tests {
             &mut memory,
         ))
         .expect_err("99 is not a handle this host gave out");
-        assert!(matches!(stopped, Trap::Refused(_)), "{stopped}");
+        let Trap::Refused(why) = stopped else {
+            panic!("it should be refused rather than answered");
+        };
+        assert!(
+            why.contains("`Console`"),
+            "it should say what it wanted: {why}"
+        );
     }
 
     /// And one it did hand out, for something else.
@@ -401,5 +411,37 @@ mod tests {
         let second = now(HostCall::new(&[clock], &mut memory)).expect("granted");
         assert_eq!(first, Some(Value::I64(1)));
         assert_eq!(second, Some(Value::I64(2)));
+    }
+
+    /// And `Io.epoch` reads the machine, which is the whole difference
+    /// between the two: one of them can give the same answer twice.
+    #[test]
+    fn the_wall_clock_reads_the_machine() {
+        let granted = Grants::none().clock().into_host();
+        let mut memory = vec![0u8; 64];
+        let clock = granted
+            .host
+            .implementation_for("deed:sys", "clock")
+            .expect("a clock was granted")(HostCall::new(
+            &[granted.system],
+            &mut memory,
+        ))
+        .expect("narrowing the root is allowed")
+        .expect("it answers with a handle");
+
+        let answer =
+            granted
+                .host
+                .implementation_for("deed:io", "epoch")
+                .expect("a clock was granted")(HostCall::new(&[clock], &mut memory))
+            .expect("granted")
+            .expect("it answers with a number")
+            .as_i64();
+
+        // Some time after this was written, and not a tick count.
+        assert!(
+            answer > 1_750_000_000_000,
+            "the wall clock should read the machine, not count: {answer}"
+        );
     }
 }

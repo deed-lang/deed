@@ -164,11 +164,6 @@ impl<'a> HostCall<'a> {
         Self { args, memory }
     }
 
-    /// The arguments the module pushed, in the order the import declares.
-    pub fn args(&self) -> &[Value] {
-        self.args
-    }
-
     /// The argument at this position, or nothing when the call was shorter.
     pub fn arg(&self, at: usize) -> Option<Value> {
         self.args.get(at).copied()
@@ -942,6 +937,11 @@ mod tests {
     }
     /// And the way back: what a host answers with has to be a value of the
     /// program's, allocated where the program allocates.
+    ///
+    /// A string carries two counts, and they answer different questions:
+    /// `length` in the language counts characters, and reading the bytes back
+    /// needs the byte count. A word that spells one of them out of the other
+    /// is a word that is right until somebody writes an accent.
     #[test]
     fn a_host_writes_a_string_the_module_can_read_back() {
         let mut memory = vec![0u8; 128];
@@ -949,15 +949,25 @@ mod tests {
 
         let nothing: [Value; 0] = [];
         let mut call = HostCall::new(&nothing, &mut memory);
-        let answer = call.write_text("hi").expect("there is room");
+        let answer = call.write_text("née").expect("there is room");
         assert_eq!(answer, Value::I64(64));
 
         let handed = [answer];
         let read = HostCall::new(&handed, &mut memory);
-        assert_eq!(read.text(0).as_deref(), Some("hi"));
+        assert_eq!(read.text(0).as_deref(), Some("née"));
+        assert_eq!(
+            u64::from_le_bytes(memory[64..72].try_into().unwrap()),
+            3,
+            "three characters"
+        );
+        assert_eq!(
+            u64::from_le_bytes(memory[72..80].try_into().unwrap()),
+            4,
+            "four bytes, and the two counts are not the same question"
+        );
         assert_eq!(
             u64::from_le_bytes(memory[..8].try_into().unwrap()),
-            64 + crate::layout::string_size(2) as u64,
+            64 + crate::layout::string_size(4) as u64,
             "the bump pointer moves past what was written"
         );
     }
@@ -971,6 +981,27 @@ mod tests {
         let nothing: [Value; 0] = [];
         let mut call = HostCall::new(&nothing, &mut memory);
         assert_eq!(call.write_text("more than fits"), None);
+    }
+
+    /// And one that exactly fits still fits.
+    ///
+    /// The half that makes the test above worth having: a host that refused
+    /// every answer would pass it, and the boundary is where an off-by-one
+    /// lives.
+    #[test]
+    fn a_host_answer_that_exactly_fills_what_is_left_is_written() {
+        let room = crate::layout::string_size(2) as usize;
+        let mut memory = vec![0u8; 64 + room];
+        memory[..8].copy_from_slice(&64u64.to_le_bytes());
+        let nothing: [Value; 0] = [];
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let answer = call.write_text("hi").expect("it fits to the byte");
+
+        let handed = [answer];
+        assert_eq!(
+            HostCall::new(&handed, &mut memory).text(0).as_deref(),
+            Some("hi")
+        );
     }
 
     #[test]
