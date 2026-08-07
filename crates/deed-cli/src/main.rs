@@ -507,10 +507,10 @@ fn build_component(
         let mut refused = false;
         for function in &lowered.functions {
             for (i, param_ty) in function.params.iter().enumerate() {
-                if let Some(why) = wit_incompatible(param_ty) {
+                if let Some(why) = wit_incompatible(param_ty, &lowered) {
                     writeln!(
                         out,
-                        "{}: `{}` parameter {} is {why}, which has no world-level type in WIT",
+                        "{}: `{}` parameter {} is refused because {why}",
                         path.display(),
                         function.name,
                         i,
@@ -518,10 +518,10 @@ fn build_component(
                     refused = true;
                 }
             }
-            if let Some(why) = wit_incompatible(&function.ret) {
+            if let Some(why) = wit_incompatible(&function.ret, &lowered) {
                 writeln!(
                     out,
-                    "{}: `{}` returns {why}, which has no world-level type in WIT",
+                    "{}: `{}` returns a value that is refused because {why}",
                     path.display(),
                     function.name,
                 )?;
@@ -564,12 +564,19 @@ fn build_component(
 
 /// Returns a human-readable description of why this type has no WIT
 /// world-level counterpart, or `None` if it maps cleanly.
-fn wit_incompatible(ty: &deed_mir::Ty) -> Option<&'static str> {
-    match ty {
-        deed_mir::Ty::Capability => Some("a capability"),
-        deed_mir::Ty::Closure => Some("a function value"),
-        deed_mir::Ty::List(elem) => wit_incompatible(elem),
-        _ => None,
+///
+/// Asked of the canonical ABI rather than answered here. This used to be a
+/// hand-written list, `Capability`, `Closure`, and a list of either, and it
+/// did not look inside a record or a choice: a `record Holder { dir: Dir }`
+/// went past it and then hit the `unreachable!` in [`to_wit_type`], so the
+/// compiler crashed on the one shape `design/04-capabilities.md` rests on not
+/// being able to happen. `deed-codegen`'s `abi` module is the transcription of
+/// the component model's own canonical ABI and it walks fields and variants,
+/// so the answer comes from there and there is one rule rather than two.
+fn wit_incompatible(ty: &deed_mir::Ty, program: &deed_mir::Program) -> Option<String> {
+    match deed_codegen::abi::flatten(ty, &program.layouts) {
+        Ok(_) => None,
+        Err(why) => Some(why.to_string()),
     }
 }
 
@@ -2030,15 +2037,48 @@ mod component_tests {
         }
     }
 
+    /// What a component refuses to take across the boundary, and why.
+    ///
+    /// This used to be a list written here, and it did not look inside a
+    /// record: `record Holder { dir: Dir }` went past it and reached the
+    /// `unreachable!` in `to_wit_type`, so the compiler panicked on the one
+    /// shape `design/04-capabilities.md` rests on being impossible. The
+    /// answer comes from the canonical ABI now, which walks fields and
+    /// variants because a host has to know how to read them.
     #[test]
-    fn wit_incompatibility_walks_nested_lists() {
-        assert_eq!(wit_incompatible(&Ty::Closure), Some("a function value"));
-        assert_eq!(wit_incompatible(&Ty::Capability), Some("a capability"));
+    fn what_cannot_cross_the_boundary_is_refused_however_deep_it_is() {
+        let mut program = Program::new();
+        let holder = program.add_layout(record("Holder", vec![("dir", Ty::Capability)]));
+        let boxed = program.add_layout(record("Boxed", vec![("inner", Ty::Aggregate(holder))]));
+
         assert_eq!(
-            wit_incompatible(&Ty::List(Box::new(Ty::List(Box::new(Ty::Closure))))),
-            Some("a function value")
+            wit_incompatible(&Ty::Closure, &program).as_deref(),
+            Some("closures cannot cross a component boundary")
         );
-        assert_eq!(wit_incompatible(&Ty::List(Box::new(Ty::Int))), None);
+        assert!(wit_incompatible(&Ty::Capability, &program).is_some());
+
+        // A list of them, and a list of a list of them.
+        assert!(wit_incompatible(&Ty::List(Box::new(Ty::Closure)), &program).is_some());
+        assert!(
+            wit_incompatible(
+                &Ty::List(Box::new(Ty::List(Box::new(Ty::Closure)))),
+                &program
+            )
+            .is_some()
+        );
+
+        // A record holding one, and a record holding a record holding one.
+        // Neither of these was refused before, and the second is the one a
+        // hand-written list is least likely to remember.
+        assert!(wit_incompatible(&Ty::Aggregate(holder), &program).is_some());
+        assert!(wit_incompatible(&Ty::Aggregate(boxed), &program).is_some());
+
+        // And what does cross still crosses.
+        assert_eq!(
+            wit_incompatible(&Ty::List(Box::new(Ty::Int)), &program),
+            None
+        );
+        assert_eq!(wit_incompatible(&Ty::Str, &program), None);
     }
 
     #[test]

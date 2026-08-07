@@ -1937,12 +1937,42 @@ fn component_build_refuses_capability_in_signature() {
 
     let text = stdout(&output);
     assert!(text.contains("write_it"), "{text}");
-    assert!(text.contains("capability"), "{text}");
-    assert!(text.contains("no world-level type"), "{text}");
+    assert!(
+        text.contains("capabilities are scoped to their issuer"),
+        "{text}"
+    );
 
     // Nothing is written when the module is refused.
     assert!(!scratch.path().join("sneaky.wasm").exists());
     assert!(!scratch.path().join("sneaky.wit").exists());
+}
+
+/// The same refusal when the capability is one field down.
+///
+/// This used to panic. The refusal was a list written beside the WIT printer
+/// and it did not look inside a record, so `record Holder { dir: Dir }` walked
+/// past it and reached an `unreachable!` while the world was being written.
+/// A compiler crash is the worst possible answer to the one shape
+/// `design/04-capabilities.md` rests on being impossible.
+#[test]
+fn component_build_refuses_a_capability_inside_a_record() {
+    let scratch = Scratch::new("component-cap-record");
+    let source = scratch.write(
+        "holder.deed",
+        "module holder\n\nrecord Holder {\n    dir: Dir,\n    label: String,\n}\n\nfn label_of(holder: Holder) -> String { holder.label }\n",
+    );
+
+    let output = run(&["build", "--component", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("label_of"), "{text}");
+    assert!(
+        text.contains("capabilities are scoped to their issuer"),
+        "{text}"
+    );
+    assert!(!scratch.path().join("holder.wasm").exists());
+    assert!(!scratch.path().join("holder.wit").exists());
 }
 
 /// `deed build --component` tests are not part of the interface.

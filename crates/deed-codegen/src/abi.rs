@@ -93,7 +93,14 @@ pub fn flatten(ty: &Ty, layouts: &[Layout]) -> Result<Vec<FlatType>, Unsupported
         Ty::Bool => vec![FlatType::I32],
         Ty::Int => vec![FlatType::I64],
         Ty::Str => vec![FlatType::I32, FlatType::I32],
-        Ty::List(_) => vec![FlatType::I32, FlatType::I32],
+        // A pointer and a count, whatever the element is, but only when there
+        // is an element that can be there at all: `list<T>` in a world is a
+        // type whose `T` is one, so a list of closures is refused for the
+        // reason a closure is, one level further in.
+        Ty::List(element) => {
+            flatten(element, layouts)?;
+            vec![FlatType::I32, FlatType::I32]
+        }
         Ty::Aggregate(id) => flatten_aggregate(*id, layouts)?,
         Ty::Closure => return Err(Unsupported::Closure),
         Ty::Capability => return Err(Unsupported::Capability),
@@ -162,7 +169,11 @@ pub fn size_of(ty: &Ty, layouts: &[Layout]) -> Result<usize, Unsupported> {
         Ty::Unit => 0,
         Ty::Bool => 1,
         Ty::Int => 8,
-        Ty::Str | Ty::List(_) => 8, // (i32 ptr, i32 len/count)
+        Ty::Str => 8, // (i32 ptr, i32 len)
+        Ty::List(element) => {
+            flatten(element, layouts)?;
+            8 // (i32 ptr, i32 count)
+        }
         Ty::Aggregate(id) => size_aggregate(*id, layouts)?,
         Ty::Closure => return Err(Unsupported::Closure),
         Ty::Capability => return Err(Unsupported::Capability),
@@ -175,7 +186,11 @@ pub fn align_of(ty: &Ty, layouts: &[Layout]) -> Result<usize, Unsupported> {
         Ty::Unit => 1,
         Ty::Bool => 1,
         Ty::Int => 8,
-        Ty::Str | Ty::List(_) => 4, // pointer and length are both i32
+        Ty::Str => 4, // pointer and length are both i32
+        Ty::List(element) => {
+            flatten(element, layouts)?;
+            4
+        }
         Ty::Aggregate(id) => align_aggregate(*id, layouts)?,
         Ty::Closure => return Err(Unsupported::Closure),
         Ty::Capability => return Err(Unsupported::Capability),
