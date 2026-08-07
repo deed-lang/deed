@@ -130,11 +130,19 @@ release notes.
 
   Each grant offers exactly the imports it can answer, so a program asking
   for one that was not granted is turned down at link time by name — ``the
-  host does not offer `deed:io.save` `` — rather than at the first call. The
-  filesystem, the network, arguments, the environment and standard input are
-  not granted yet, and say so before they run rather than partway through.
-  See
+  host does not offer `deed:io.fetch` `` — rather than at the first call.
+  `deed run --compiled` grants what `deed run` grants: a console, a clock,
+  the directory `--dir` named, the variables `--env` named, the arguments,
+  and standard input when and only when `main`'s row says the program reads
+  it. Six of the seven corpus programs with a `main` now print exactly what
+  the interpreted ones print; the seventh runs out of the module's memory,
+  which is the reclamation question `design/05-backend.md` already names.
+
+  The network is not granted yet. See
   [design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md](design/decisions/2026-08-07-what-a-host-hands-a-compiled-program.md).
+
+- `deed run --compiled` hands the program its arguments, and no longer
+  refuses to start when it was given any.
 
 - Fixed: `deed build --component` panicked on a signature holding a capability
   or a function value one field down. `record Holder { dir: Dir }` walked past

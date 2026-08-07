@@ -139,6 +139,23 @@ pub struct Variant {
     pub fields: Vec<Field>,
 }
 
+/// The variants of a synthesized `Result`, in the order they are laid out.
+///
+/// Nobody writes a `Result` down, so its layout is built rather than
+/// declared, and the tag a compiled program compares against is the position
+/// in this list. Anything outside the compiler that builds one -- a host
+/// answering `Io.read`, for instance -- has to agree about which position is
+/// which, and a second copy of that order is a silently inverted answer.
+pub const RESULT_VARIANTS: [&str; 2] = ["ok", "err"];
+
+/// Which tag a `Result` variant is written with.
+pub fn result_variant(name: &str) -> Option<i64> {
+    RESULT_VARIANTS
+        .iter()
+        .position(|variant| *variant == name)
+        .map(|at| at as i64)
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Field {
     pub name: String,
@@ -636,6 +653,19 @@ pub mod runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The order a `Result` is laid out in, read by name.
+    ///
+    /// Anything outside the compiler that builds one -- a host answering
+    /// `Io.read` -- asks this rather than writing the numbers down, so an
+    /// inverted answer is a thing that cannot happen rather than a thing
+    /// nobody noticed.
+    #[test]
+    fn a_result_is_an_ok_and_then_an_err() {
+        assert_eq!(result_variant("ok"), Some(0));
+        assert_eq!(result_variant("err"), Some(1));
+        assert_eq!(result_variant("neither"), None);
+    }
 
     fn effect(name: &str) -> Effect {
         Effect {

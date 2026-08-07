@@ -207,6 +207,38 @@ impl<'a> HostCall<'a> {
         Some(Value::I64(at as i64))
     }
 
+    /// Put a list into the module's memory and answer with its address.
+    ///
+    /// The elements are whatever a value of that type is: a word each, an
+    /// address for the boxed ones.
+    pub fn write_list(&mut self, items: &[Value]) -> Option<Value> {
+        let at = self.allocate(crate::layout::list_size(items.len()) as usize)?;
+        self.memory[at..at + 8].copy_from_slice(&(items.len() as u64).to_le_bytes());
+        for (index, item) in items.iter().enumerate() {
+            let offset = at + crate::layout::element_offset(index) as usize;
+            self.memory[offset..offset + 8].copy_from_slice(&item.as_i64().to_le_bytes());
+        }
+        Some(Value::I64(at as i64))
+    }
+
+    /// Put an aggregate into the module's memory and answer with its address.
+    ///
+    /// `tag` is the variant for a shape with more than one, and nothing for
+    /// a record. Which tag is which is the layout's question rather than
+    /// this one's.
+    pub fn write_aggregate(&mut self, tag: Option<i64>, fields: &[Value]) -> Option<Value> {
+        let tagged = tag.is_some();
+        let at = self.allocate(crate::layout::aggregate_size(tagged, fields.len()) as usize)?;
+        if let Some(tag) = tag {
+            self.memory[at..at + 8].copy_from_slice(&tag.to_le_bytes());
+        }
+        for (index, field) in fields.iter().enumerate() {
+            let offset = at + crate::layout::field_offset(tagged, index) as usize;
+            self.memory[offset..offset + 8].copy_from_slice(&field.as_i64().to_le_bytes());
+        }
+        Some(Value::I64(at as i64))
+    }
+
     /// Move the module's bump pointer along and answer with what it was.
     fn allocate(&mut self, size: usize) -> Option<usize> {
         let bump = crate::layout::BUMP as usize;
@@ -358,6 +390,21 @@ impl Host {
 impl Linked<'_> {
     /// Call an exported function, dispatching host imports to the offer list.
     pub fn call(&self, name: &str, args: &[Value]) -> Result<Option<Value>, Trap> {
+        self.call_within(name, args, BUDGET)
+    }
+
+    /// The same, counting up to a budget the caller names.
+    ///
+    /// [`BUDGET`] is the size of a test. Running somebody's program is not a
+    /// test: a fixed instruction count there stops a real program part way
+    /// through and reports it as running too long, so whoever runs one says
+    /// how far they are willing to count.
+    pub fn call_within(
+        &self,
+        name: &str,
+        args: &[Value],
+        budget: u64,
+    ) -> Result<Option<Value>, Trap> {
         if let Err(crate::validate::Invalid(reason)) = crate::validate::validate(self.module) {
             return Err(Trap::Invalid(reason));
         }
@@ -370,7 +417,7 @@ impl Linked<'_> {
             .ok_or_else(|| Trap::Unimplemented(format!("no export named {name}")))?;
         let mut run = Run {
             module: self.module,
-            fuel: BUDGET,
+            fuel: budget,
             memory: memory_of(self.module),
             host: Some(self.host),
         };
@@ -970,6 +1017,61 @@ mod tests {
             64 + crate::layout::string_size(4) as u64,
             "the bump pointer moves past what was written"
         );
+    }
+
+    /// A list, which is how `Io.list` and `Io.args` answer.
+    ///
+    /// The length goes first and the elements follow it, which is the whole
+    /// of the layout and also three chances to write a word one slot out.
+    #[test]
+    fn a_host_writes_a_list_the_module_can_read_back() {
+        let mut memory = vec![0u8; 128];
+        memory[..8].copy_from_slice(&48u64.to_le_bytes());
+
+        let nothing: [Value; 0] = [];
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let list = call
+            .write_list(&[Value::I64(7), Value::I64(9), Value::I64(11)])
+            .expect("there is room");
+        assert_eq!(list, Value::I64(48));
+
+        let word = |at: usize| i64::from_le_bytes(memory[at..at + 8].try_into().unwrap());
+        assert_eq!(word(48), 3, "the length comes first");
+        assert_eq!(word(56), 7);
+        assert_eq!(word(64), 9);
+        assert_eq!(word(72), 11);
+        assert_eq!(
+            word(0),
+            48 + crate::layout::list_size(3) as i64,
+            "the bump pointer moves past the whole list"
+        );
+    }
+
+    /// An aggregate, which is how every `Result` a host answers with is
+    /// built. The tag goes first and the fields follow it.
+    #[test]
+    fn a_host_writes_an_aggregate_with_its_tag_first() {
+        let mut memory = vec![0u8; 128];
+        memory[..8].copy_from_slice(&32u64.to_le_bytes());
+
+        let nothing: [Value; 0] = [];
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let tagged = call
+            .write_aggregate(Some(1), &[Value::I64(5)])
+            .expect("there is room");
+        assert_eq!(tagged, Value::I64(32));
+
+        // A record has nothing to tell apart, so it has no tag and its first
+        // field sits where the tag would have been.
+        let mut call = HostCall::new(&nothing, &mut memory);
+        let bare = call
+            .write_aggregate(None, &[Value::I64(6)])
+            .expect("there is room");
+
+        let word = |at: usize| i64::from_le_bytes(memory[at..at + 8].try_into().unwrap());
+        assert_eq!(word(32), 1, "the tag");
+        assert_eq!(word(40), 5, "and the field after it");
+        assert_eq!(word(bare.as_i64() as usize), 6);
     }
 
     /// A host that ran out of room says so rather than writing over the

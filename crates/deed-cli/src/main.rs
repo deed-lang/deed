@@ -320,20 +320,21 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     if args.mode == Mode::Run {
+        let grants = Grants {
+            dir: args.dir.as_deref(),
+            allow: &args.allow,
+            env: &args.env,
+            arguments: &args.arguments,
+        };
         match if args.compiled {
-            run_compiled_main(&mut out, &sources, &checks, subject, &args.arguments)
+            run_compiled_main(&mut out, &sources, &checks, subject, &grants)
         } else {
             run_main(
                 &mut out,
                 &sources,
                 &checks,
                 subject,
-                &Grants {
-                    dir: args.dir.as_deref(),
-                    allow: &args.allow,
-                    env: &args.env,
-                    arguments: &args.arguments,
-                },
+                &grants,
                 args.runtime_profile,
             )
         } {
@@ -920,15 +921,8 @@ fn run_compiled_main(
     sources: &SourceMap,
     checks: &[Checked],
     subject: usize,
-    arguments: &[String],
+    grants: &Grants<'_>,
 ) -> io::Result<Option<bool>> {
-    if !arguments.is_empty() {
-        eprintln!(
-            "error: `deed run --compiled` does not hand arguments to the backend test runner"
-        );
-        return Ok(None);
-    }
-
     let mut runs = Vec::new();
     for (at, checked) in checks[..subject.min(checks.len())].iter().enumerate() {
         let has_main = checked.module.items.iter().any(|item| {
@@ -968,6 +962,7 @@ fn run_compiled_main(
             sources.file(checked.file).name().to_string(),
             module,
             args,
+            reads_input(checked),
         ));
     }
 
@@ -976,21 +971,40 @@ fn run_compiled_main(
         return Ok(None);
     }
     if runs.len() > 1 {
-        let names: Vec<&str> = runs.iter().map(|(_, name, _, _)| name.as_str()).collect();
+        let names: Vec<&str> = runs
+            .iter()
+            .map(|(_, name, _, _, _)| name.as_str())
+            .collect();
         eprintln!("error: more than one `main`, in {}", names.join(" and "));
         return Ok(None);
     }
 
-    let (file, _, module, args) = runs.remove(0);
+    let (file, _, module, args, reads) = runs.remove(0);
 
-    // What this run grants. A compiled program reaches its host and nothing
-    // else, so this is the whole of what it can do: a console that prints,
-    // and a clock. Anything else in the program's row is an import nobody
-    // here answers, and the module is turned down before it runs rather than
-    // at the first call.
+    // What this run grants, and the whole of what the program can do: a
+    // compiled module reaches its host and nothing else. These are the same
+    // grants `deed run` hands the interpreter, decided the same way -- the
+    // directory `--dir` named, the variables `--env` named, and standard
+    // input only when `main`'s row says the program reads it.
+    //
+    // What is not here is not answered, and a program whose row asks for it
+    // is turned down before it runs rather than at the first call.
+    let root = match grants.dir {
+        Some(dir) => dir.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+    let input = if reads {
+        read_standard_input()?
+    } else {
+        Vec::new()
+    };
     let granted = deed_codegen::Grants::none()
         .console(|line| println!("{line}"))
+        .input(input)
         .clock()
+        .files(root)
+        .arguments(grants.arguments.to_vec())
+        .environment(granted_environment(grants.env))
         .into_host();
 
     // Every parameter of `main` is the root capability, the same as the
@@ -1004,7 +1018,9 @@ fn run_compiled_main(
             return Ok(Some(false));
         }
     };
-    match linked.call("main", &args) {
+    // No instruction budget: the runner's default is the size of a test, and
+    // running somebody's program is not one.
+    match linked.call_within("main", &args, u64::MAX) {
         Ok(_) => Ok(Some(true)),
         Err(trap) => {
             if let Some(diagnostic) = compiled_diagnostic(file, &trap) {
