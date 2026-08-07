@@ -5,7 +5,7 @@ mod lock;
 
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -1150,6 +1150,51 @@ struct Grants<'a> {
     arguments: &'a [String],
 }
 
+/// Whether this program's `main` says it reads what somebody typed.
+///
+/// Standard input is read only when the answer is yes, and that is the whole
+/// rule: no guessing about whether a terminal is attached, no flag to
+/// remember. The row is already the list of what a program does with the
+/// outside, so it is the thing that decides what the outside hands over, and a
+/// program that never says `Io.line` cannot be left waiting for input nobody
+/// was going to type.
+fn reads_input(checked: &Checked) -> bool {
+    checked.module.items.iter().any(|item| match item {
+        deed_ast::Item::Function(function) if function.sig.name.name == "main" => {
+            function.contract.uses.iter().any(|entry| {
+                entry.effect.name == "Io"
+                    && match &entry.operation {
+                        Some(operation) => operation.name == "line",
+                        // `uses Io.*` is every operation, this one included.
+                        None => true,
+                    }
+            })
+        }
+        _ => false,
+    })
+}
+
+/// Every line on standard input, without its terminator.
+///
+/// Read in full before the program starts rather than a line at a time,
+/// because a run here is already a batch: what a program prints is collected
+/// and written when it finishes, so there was never a conversation to have.
+/// A carriage return in front of the newline goes with it, since which one a
+/// line ends with is a fact about the machine the input was typed on.
+fn read_standard_input() -> io::Result<Vec<String>> {
+    let mut text = String::new();
+    io::stdin().read_to_string(&mut text)?;
+    // A trailing newline ends the last line rather than starting an empty one.
+    let text = text.strip_suffix('\n').unwrap_or(&text);
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect())
+}
+
 /// Calls `main`, handing it the one `System` there is.
 ///
 /// Exactly one is required. Two entry points in one invocation is not a
@@ -1179,17 +1224,18 @@ fn run_main(
     // Only the files that were named. A library pulled in because an import
     // needed it is not an answer to "which program did you mean".
     for checked in &checks[..subject.min(checks.len())] {
-        let run = if runtime_profile {
-            deed_interp::run_main_profiled_reaching(
-                &program,
-                checked.file,
-                &root,
-                arguments,
-                &reach,
-            )
+        let input = if reads_input(checked) {
+            read_standard_input()?
         } else {
-            deed_interp::run_main_reaching(&program, checked.file, &root, arguments, &reach)
+            Vec::new()
         };
+        let given = deed_interp::Given {
+            arguments,
+            reach: Some(&reach),
+            input: &input,
+        };
+        let run =
+            deed_interp::run_main_given(&program, checked.file, &root, &given, runtime_profile);
         if let Some(run) = run {
             runs.push((sources.file(checked.file).name().to_string(), run));
         }
@@ -1910,6 +1956,76 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    fn checked_of(source: &str) -> Checked {
+        let mut sources = SourceMap::new();
+        let file = sources.add("test.deed", source.to_string());
+        deed_driver::check(&sources, file)
+    }
+
+    fn main_using(row: &str, body: &str) -> String {
+        format!("module a\n\nfn main(sys: System) -> Int\n  uses\n{row}{{\n{body}\n    0\n}}\n")
+    }
+
+    /// The rule, in the direction that grants.
+    #[test]
+    fn a_main_that_says_it_reads_a_line_reads_input() {
+        let checked = checked_of(&main_using(
+            "    Io.line,\n",
+            "    let _ = Io.line(sys.console)",
+        ));
+        assert!(reads_input(&checked));
+    }
+
+    /// And in the direction that is the whole point: a program that never
+    /// mentions input is never left waiting for it.
+    #[test]
+    fn a_main_that_writes_and_nothing_else_reads_no_input() {
+        let checked = checked_of(&main_using(
+            "    Io.write,\n",
+            "    Io.write(sys.console, \"x\")",
+        ));
+        assert!(!reads_input(&checked));
+    }
+
+    /// `Io` is not enough and `line` is not enough. Either half on its own
+    /// would let a row about something else decide this.
+    #[test]
+    fn another_effect_with_an_operation_of_the_same_name_is_not_it() {
+        let source = "module a\n\n\
+             effect Reader {\n    fn line() -> String\n}\n\n\
+             fn main(sys: System) -> Int\n  uses\n    Reader.line,\n    Io.write,\n{\n    \
+             Io.write(sys.console, Reader.line())\n    0\n}\n";
+        assert!(!reads_input(&checked_of(source)));
+    }
+
+    /// The row that decides is `main`'s. A function further down the file
+    /// reading a line says what that function does, not what the program was
+    /// started with.
+    #[test]
+    fn a_row_on_a_function_that_is_not_main_does_not_decide_it() {
+        let source = "module a\n\n\
+             fn ask(console: Console) -> Result<String, String>\n  uses\n    Io.line,\n{\n    \
+             Io.line(console)\n}\n\n\
+             fn main(sys: System) -> Int\n  uses\n    Io.write,\n{\n    \
+             Io.write(sys.console, \"x\")\n    0\n}\n";
+        assert!(!reads_input(&checked_of(source)));
+    }
+
+    /// `uses Io.*` is every operation, and this is one of them.
+    #[test]
+    fn a_row_naming_the_whole_effect_includes_reading() {
+        let checked = checked_of(&main_using(
+            "    Io.*,\n",
+            "    Io.write(sys.console, \"x\")",
+        ));
+        assert!(reads_input(&checked));
+    }
 }
 
 #[cfg(test)]

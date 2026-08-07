@@ -261,6 +261,30 @@ pub struct RuntimeProfile {
     pub functions: Vec<FunctionProfile>,
 }
 
+/// What the outside hands a running program.
+///
+/// One struct rather than a parameter each, and the reason is the history: the
+/// arguments arrived first, then the hosts a program may reach, then the lines
+/// on standard input, and each one doubled the entry points below so that the
+/// caller who wanted nothing could not get the default wrong. Three of those
+/// is five functions; a fourth would be eight. The default is still the one
+/// that grants nothing, and it is `Given::default()`.
+#[derive(Default)]
+pub struct Given<'a> {
+    /// What the program reads with `Io.args`.
+    pub arguments: &'a [String],
+    /// The hosts `sys.net` may reach. Nothing, unless a caller says otherwise.
+    pub reach: Option<&'a Reach>,
+    /// The lines `Io.line` hands back, in order.
+    ///
+    /// Handed over rather than read from the process, for the reason the root
+    /// directory is: what a program is allowed to see is a decision, and a
+    /// decision belongs at the call site. It is a list rather than a stream
+    /// because the interpreter collects output rather than writing it, so a
+    /// run here is already a batch rather than a conversation.
+    pub input: &'a [String],
+}
+
 /// Runs `main`, handing it the one `System` capability that exists.
 ///
 /// There is no other way to obtain one, which is what makes reading `main`
@@ -269,12 +293,36 @@ pub struct RuntimeProfile {
 /// `root` is the directory `sys.files` is rooted at, and the program can reach
 /// nothing outside it. The caller supplies it rather than the runtime picking
 /// one, because how much of the filesystem a program gets is a decision and
-/// decisions belong at the call site. `arguments` arrives the same way and for
-/// the same reason: the runtime does not read the process's own command line,
-/// so nothing about how the compiler was invoked can leak into the program it
-/// is running.
+/// decisions belong at the call site. Everything in [`Given`] arrives the same
+/// way and for the same reason: the runtime does not read the process's own
+/// command line or its standard input, so nothing about how the compiler was
+/// invoked can leak into the program it is running.
 pub fn run_main(program: &Program, file: FileId, root: &Path, arguments: &[String]) -> Option<Run> {
-    run_main_with_profile(program, file, root, arguments, &Reach::none(), false)
+    run_main_given(
+        program,
+        file,
+        root,
+        &Given {
+            arguments,
+            ..Given::default()
+        },
+        false,
+    )
+}
+
+/// Runs `main` with whatever the caller is handing over, and nothing else.
+///
+/// The general form. The named ones above and below it exist so that a call
+/// site granting nothing says so by not mentioning it, rather than by passing
+/// an empty list it could have got wrong.
+pub fn run_main_given(
+    program: &Program,
+    file: FileId,
+    root: &Path,
+    given: &Given<'_>,
+    profile: bool,
+) -> Option<Run> {
+    run_main_inner(program, file, root, given, profile, None)
 }
 
 /// Runs `main` with the network granted as well.
@@ -291,7 +339,17 @@ pub fn run_main_reaching(
     arguments: &[String],
     reach: &Reach,
 ) -> Option<Run> {
-    run_main_with_profile(program, file, root, arguments, reach, false)
+    run_main_given(
+        program,
+        file,
+        root,
+        &Given {
+            arguments,
+            reach: Some(reach),
+            ..Given::default()
+        },
+        false,
+    )
 }
 
 /// Runs `main` and records where runtime went.
@@ -301,7 +359,16 @@ pub fn run_main_profiled(
     root: &Path,
     arguments: &[String],
 ) -> Option<Run> {
-    run_main_with_profile(program, file, root, arguments, &Reach::none(), true)
+    run_main_given(
+        program,
+        file,
+        root,
+        &Given {
+            arguments,
+            ..Given::default()
+        },
+        true,
+    )
 }
 
 /// Runs `main`, reaching the given hosts, and records where runtime went.
@@ -312,18 +379,17 @@ pub fn run_main_profiled_reaching(
     arguments: &[String],
     reach: &Reach,
 ) -> Option<Run> {
-    run_main_with_profile(program, file, root, arguments, reach, true)
-}
-
-fn run_main_with_profile(
-    program: &Program,
-    file: FileId,
-    root: &Path,
-    arguments: &[String],
-    reach: &Reach,
-    profile: bool,
-) -> Option<Run> {
-    run_main_inner(program, file, root, arguments, reach, profile, None)
+    run_main_given(
+        program,
+        file,
+        root,
+        &Given {
+            arguments,
+            reach: Some(reach),
+            ..Given::default()
+        },
+        true,
+    )
 }
 
 /// Runs `main` with something watching every statement.
@@ -344,15 +410,25 @@ pub fn run_main_watched(
     reach: &Reach,
     watcher: Box<dyn Watcher>,
 ) -> Option<Run> {
-    run_main_inner(program, file, root, arguments, reach, false, Some(watcher))
+    run_main_inner(
+        program,
+        file,
+        root,
+        &Given {
+            arguments,
+            reach: Some(reach),
+            ..Given::default()
+        },
+        false,
+        Some(watcher),
+    )
 }
 
 fn run_main_inner(
     program: &Program,
     file: FileId,
     root: &Path,
-    arguments: &[String],
-    reach: &Reach,
+    given: &Given<'_>,
     profile: bool,
     watcher: Option<Box<dyn Watcher>>,
 ) -> Option<Run> {
@@ -372,11 +448,13 @@ fn run_main_inner(
     interp.watcher = watcher;
     interp.entry = interp.promise_of(main);
     interp.root = sandbox::root(root).ok().map(Rc::from);
-    interp.reach = Rc::new(reach.clone());
-    interp.arguments = arguments
+    interp.reach = Rc::new(given.reach.cloned().unwrap_or_else(Reach::none));
+    interp.arguments = given
+        .arguments
         .iter()
         .map(|argument| Rc::from(&**argument))
         .collect();
+    interp.input = given.input.iter().map(|line| Rc::from(&**line)).collect();
 
     let span = main.sig.name.span;
     let args = main
@@ -772,6 +850,15 @@ pub(crate) struct Interp<'a> {
     /// answer depended on how the test runner was invoked would be a test of
     /// the test runner.
     arguments: Vec<Rc<str>>,
+    /// The lines `Io.line` hands back, and how many of them have been read.
+    ///
+    /// Empty for a `test` block and for the playground, for the reason
+    /// `arguments` is: a test whose answer depended on what somebody typed
+    /// would be a test of the typing. A program that asks for a line when
+    /// there are none left is told so rather than blocked, because there is
+    /// nothing here that could ever arrive later.
+    input: Vec<Rc<str>>,
+    read_lines: usize,
     profile: Option<ProfileState>,
     /// Who is watching, if anybody is.
     ///
@@ -864,6 +951,8 @@ impl<'a> Interp<'a> {
             root: None,
             reach: Rc::new(Reach::none()),
             arguments: Vec::new(),
+            input: Vec::new(),
+            read_lines: 0,
             profile: None,
             watcher: None,
             calls: Vec::new(),
@@ -2234,13 +2323,35 @@ impl<'a> Interp<'a> {
                 self.output.push(line);
                 Ok(Value::Unit)
             }
+            // Reading from the console rather than writing to it. The same
+            // capability and a separate entry in the row, which is the split
+            // `read` and `save` make about a `Dir`: holding the console says
+            // nothing about which direction a function may go, and a program
+            // that reads what somebody typed behaves differently depending on
+            // it, which is worth writing down in the signature.
+            //
+            // The line comes back without its terminator, and without a
+            // carriage return in front of it, because which of those a line
+            // ends with is a fact about the machine the input was typed on and
+            // not about the program reading it.
+            //
+            // Running out is `err` rather than an empty string. A program that
+            // cannot tell "somebody typed nothing" from "there is nothing left
+            // to type" is a program that loops forever on the second one, and
+            // an empty line is a real answer that has to stay one.
+            ("line", Capability::Console) => Ok(match self.input.get(self.read_lines) {
+                Some(line) => {
+                    self.read_lines += 1;
+                    Value::ok(Value::Str(Rc::clone(line)))
+                }
+                None => Value::err(Value::str("there is no more input")),
+            }),
             // A monotonic count of milliseconds. Wall clock time would make
             // every run different, and P8 says the default is deterministic.
             ("now", Capability::Clock) => {
                 self.ticks += 1;
                 Ok(Value::Int(self.ticks))
-            }
-            // The machine's clock, in milliseconds since 1970. Separate from
+            } // The machine's clock, in milliseconds since 1970. Separate from
             // `now` for the same reason `save` is separate from `read`: the
             // capability says which resource, the row says what is being done
             // to it, and the difference here is whether the program can give

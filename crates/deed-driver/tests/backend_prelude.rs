@@ -87,6 +87,9 @@ fn probe_for_io(operation: &str) -> &'static str {
         "write" => {
             "module probe\n\nfn f(sys: System) -> ()\n  uses\n    Io.write,\n{\n    Io.write(sys.console, \"x\")\n}\n"
         }
+        "line" => {
+            "module probe\n\nfn f(sys: System) -> Result<String, String>\n  uses\n    Io.line,\n{\n    Io.line(sys.console)\n}\n"
+        }
         "now" => {
             "module probe\n\nfn f(sys: System) -> Int\n  uses\n    Io.now,\n{\n    Io.now(sys.clock)\n}\n"
         }
@@ -189,7 +192,7 @@ fn every_callable_prelude_name_is_named_by_whether_the_backend_compiles_it() {
 /// Every `Io` operation, and whether the backend compiles it, pinned by
 /// name.
 ///
-/// All thirteen do: capabilities reach the backend as host imports (#569), and
+/// All fourteen do: capabilities reach the backend as host imports (#569), and
 /// a call through one compiles the same way any other direct call does. That
 /// contradicts `compile.rs`'s own doc comment, which still says capabilities
 /// are refused by name; fixed alongside this test, since a stale comment a

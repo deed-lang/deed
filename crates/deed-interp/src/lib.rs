@@ -66,9 +66,9 @@ pub mod watch;
 pub use deed_rt::sandbox;
 
 pub use interp::{
-    DeclaredRows, FunctionProfile, Guard, Guards, OperatorCalls, Program, RowItem, Run,
-    RuntimeProfile, TestOutcome, run_main, run_main_profiled, run_main_profiled_reaching,
-    run_main_reaching, run_main_watched, run_tests,
+    DeclaredRows, FunctionProfile, Given, Guard, Guards, OperatorCalls, Program, RowItem, Run,
+    RuntimeProfile, TestOutcome, run_main, run_main_given, run_main_profiled,
+    run_main_profiled_reaching, run_main_reaching, run_main_watched, run_tests,
 };
 pub use property::{
     GeneratedInputs, PropertyConfig, PropertyOutcome, generate_inputs, is_testable, run_properties,
