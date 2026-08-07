@@ -47,6 +47,25 @@ release notes.
   finished in the driver, off the same table that writes the `use` line. No
   repair: adding the import leaves the call as broken as it was.
 
+### Tools
+
+- Fixed: `deed build --component` panicked on a signature holding a capability
+  or a function value one field down. `record Holder { dir: Dir }` walked past
+  the refusal and reached an `unreachable!` while the WIT world was being
+  written, so the compiler crashed on the one shape
+  `design/04-capabilities.md` rests on being impossible. The refusal was a
+  list written beside the WIT printer and it did not look inside a record or a
+  choice.
+
+  It asks the canonical ABI now. `crates/deed-codegen/src/abi.rs` is this
+  workspace's transcription of the component model's own rules for how a value
+  crosses a boundary, it walks fields and variants because a host has to read
+  them, and until now nothing in the compiler called it. One rule instead of
+  two, and the weaker of the two is gone.
+
+  The canonical ABI grew the half it was missing in return: a `list<T>` is
+  refused when `T` is, which the list beside the printer did check.
+
 ## 0.2.6 (2026-08-07)
 
 This release is about the edges of what the language can say and what the
