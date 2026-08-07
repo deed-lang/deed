@@ -1748,6 +1748,13 @@ fn narrow_side(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: 
         // returning early, 2266 tests still pass. The test below it pins the
         // answer rather than the arm, so the behaviour is held either way.
         //
+        // Not solved, and worth writing down rather than leaving for whoever
+        // touches this next: `Ge` measures exactly the same way. Deleting it
+        // leaves the same 2266 tests passing, and a guard written against a
+        // bounded name is still proved without it. The other three comparisons
+        // were not in that diff and have not been measured, so finishing the
+        // job is its own change, on its own evidence.
+        //
         // `!=` says something exactly when the other side is a single value
         // sitting at an edge of what is already known: everything the term
         // could have been, minus one end, is still a range.
