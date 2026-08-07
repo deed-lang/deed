@@ -218,3 +218,17 @@ jobs:
       - name: node's engine loads and runs what `deed build` wrote
         run: node crates/deed-codegen/smoke.mjs target/release/deed "$RUNNER_TEMP/foreign"
 
+      # Deliberately unpinned, for the reason the MCP client is: the crate's
+      # own tests cover what this repository believes about the component
+      # model, and the only thing this adds is whether the toolchain that
+      # would actually consume it still agrees.
+      - name: install a component toolchain
+        run: npm install --global @bytecodealliance/jco
+
+      # A measurement rather than a gate. `--component` writes a core module
+      # and a `.wit` world, and a real toolchain turns that into a component
+      # with nothing in it. Pinned so the day it stops being true is the day
+      # somebody has to say why.
+      - name: what a component toolchain makes of it
+        run: node crates/deed-codegen/component.mjs target/release/deed "$RUNNER_TEMP/component"
+

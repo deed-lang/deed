@@ -149,6 +149,11 @@ pub enum Ins {
     /// One byte, which is what a string is made of.
     I32Load8U(u32),
     I32Store8(u32),
+    /// How many 64KiB pages the memory has now.
+    MemorySize,
+    /// Ask for this many more pages, answering with the count before the
+    /// growth, or -1 when the engine would not.
+    MemoryGrow,
 }
 
 impl Ins {
@@ -251,6 +256,14 @@ impl Ins {
                 out.push(0x3a);
                 write_u32(out, 0);
                 write_u32(out, *offset);
+            }
+            Ins::MemorySize => {
+                out.push(0x3f);
+                out.push(0x00);
+            }
+            Ins::MemoryGrow => {
+                out.push(0x40);
+                out.push(0x00);
             }
             Ins::I32Const(value) => {
                 out.push(0x41);

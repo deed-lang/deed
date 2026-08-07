@@ -432,6 +432,29 @@ fn an_import_nobody_uses_is_taken_out_of_the_list() {
     assert!(result.contains("use dep.{used}\n"), "{result}");
 }
 
+/// Importing a name the language already provides. Five benchmark runs wrote
+/// this, so what matters is that the repair leaves a file that checks rather
+/// than a file with `use std/string.{}` in it, which checks and means nothing.
+#[test]
+fn importing_a_name_already_in_scope_takes_the_whole_declaration() {
+    let source = "module a\n\nuse dep.{join}\n\nfn f(xs: List<String>) -> String {\n    join(xs, \", \")\n}\n";
+    let result = fixed_with(source, DEP);
+    assert!(!result.contains("use dep"), "{result}");
+    assert!(result.contains("join(xs"), "the call stays: {result}");
+    assert_eq!(error_count(&diagnose(&result)), 0, "{result}");
+}
+
+/// The same name beside one the module really does declare. Here only the name
+/// goes, and the trailing comma it leaves is the formatter's to tidy: the fix
+/// makes the file right, `deed fmt` makes it neat.
+#[test]
+fn a_name_already_in_scope_leaves_the_rest_of_the_list() {
+    let source = "module a\n\nuse dep.{used, join}\n\nfn f() -> Int {\n    used()\n}\n";
+    let result = fixed_with(source, DEP);
+    assert!(result.contains("use dep.{used"), "{result}");
+    assert!(!result.contains("join"), "{result}");
+}
+
 #[test]
 fn the_last_name_takes_the_line_and_a_blank_with_it() {
     // Deleting only the line leaves the blank above it and the blank below it

@@ -20,7 +20,18 @@ release notes.
 
 ### Diagnostics
 
-- Nothing yet.
+- Changed: importing a name the language already provides now says so. Five
+  benchmark runs of one model against one build all wrote `use
+  std/string.{join}`, and the compiler answered with two messages: an error
+  that `std/string` declares no `join`, and a warning that `join` hides a
+  builtin. Both were true and both pointed at the module, which is the one
+  place the answer was not.
+
+  It is now one error saying the name is already in scope, with a
+  machine-applicable repair that deletes the import. Nothing is declared for
+  the refused name either, so the call in the body binds the builtin and the
+  rest of the file goes on being checked instead of cascading. Importing a
+  name a module really does declare is unchanged and still warns.
 
 ### Standard library
 
@@ -28,7 +39,52 @@ release notes.
 
 ### Tools
 
-- Nothing yet.
+- Fixed: a compiled program called its host with the wrong arguments when one
+  of them was computed. `Io.write(sys.console, to_string(n))` declared an
+  import taking *one* argument, because the signature was built from a
+  function that recognised literals and capabilities and answered nothing for
+  anything else, and "nothing" was dropped from the parameter list rather than
+  refused. The host was then handed the text where the console belonged.
+
+  Nothing could see it before there was a host: the runner reached the import
+  and stopped without reading what it had been passed. The check that a
+  capability is one the host handed out is what found it.
+
+  The signature is the argument types the program actually produces now.
+
+- A module's memory grows. The sixteen pages it starts with were a starting
+  point and never a decision, and until now they were a ceiling: a compiled
+  walk building a list stopped at about sixty-five thousand elements with
+  "reached past the end of memory", which says nothing about the program.
+  It runs to two million now, and what stops it there is the host.
+
+  This changes only where the ceiling is. Nothing is given back, so total
+  allocation is still peak memory: `examples/logs.deed` over one file
+  finishes and over two does not, and raising the runner's limit to four
+  gigabytes — the whole of a thirty-two bit address space — does not change
+  that. Reclamation is still the question, and
+  `design/decisions/2026-07-31-compiled-memory-reclamation.md` is still where
+  it is asked.
+
+- `deed build --component` says what it writes. It produces a core module and
+  the `.wit` world its exports describe, and the help text used to say it
+  "produces a component". Handing that core module to `wasm-tools component
+  new` produces a component whose world is empty, because the exports cross
+  the boundary in this backend's own layout rather than the canonical ABI and
+  nothing writes the component-type section.
+
+  Measured on every commit now rather than assumed, with the Bytecode
+  Alliance's own tooling. The day the component stops being empty is the day
+  that job fails and somebody says why. See
+  [design/decisions/2026-08-07-a-wit-world-is-not-a-component.md](design/decisions/2026-08-07-a-wit-world-is-not-a-component.md)
+  for the three things that are missing.
+
+- New guide: [how-to/embed-a-compiled-program.md](how-to/embed-a-compiled-program.md),
+  which is what a host has to know. The memory layout it reads and writes
+  lived in `layout.rs`'s doc comments, so somebody embedding a compiled
+  program had to open the compiler's source to find out where a string keeps
+  its byte count. `crates/deed-driver/tests/embedding.rs` reads the numbers
+  off the page and asks `layout.rs` for the same ones.
 
 ### Measurements
 
