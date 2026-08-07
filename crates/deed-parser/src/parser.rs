@@ -497,8 +497,8 @@ impl<'a> Parser<'a> {
         let mut uses = Vec::new();
         while self.at_kw(Keyword::Use) {
             let before = self.pos;
-            self.bump();
-            match self.parse_use() {
+            let keyword = self.bump().span;
+            match self.parse_use(keyword) {
                 Some(item) => uses.push(item),
                 None => self.synchronize_item(),
             }
@@ -609,7 +609,11 @@ impl<'a> Parser<'a> {
     }
 
     /// `use std/result.{Result, ok, err}`
-    fn parse_use(&mut self) -> Option<Use> {
+    ///
+    /// `keyword` is the span of the `use` the caller has already eaten, so the
+    /// declaration's span covers the whole declaration. A repair that deletes
+    /// an import has to delete the word that starts it too.
+    fn parse_use(&mut self, keyword: Span) -> Option<Use> {
         let path = self.parse_module_path("a `use` declaration")?;
         self.expect(TokenKind::Dot, "a `use` declaration")?;
         self.expect(TokenKind::LBrace, "an import list")?;
@@ -632,7 +636,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RBrace, "an import list");
         let end = self.read_to();
         Some(Use {
-            span: path.span.to(end),
+            span: keyword.to(end),
             path,
             names,
         })

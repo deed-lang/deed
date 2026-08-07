@@ -242,6 +242,19 @@ fn importing_a_name_the_language_provides_says_it_is_already_here() {
     .never_says("hides a builtin");
 }
 
+/// Beside a name the module really does declare, only the name can go: taking
+/// the declaration would take the working import with it.
+#[test]
+fn a_name_already_in_scope_beside_a_real_one_only_takes_itself() {
+    let universe = universe_of(&["module other\n\nfn thing() -> Int {\n  1\n}\n"]);
+    message_in(
+        "module a\n\nuse other.{thing, join}\n\nfn f() -> Int {\n  thing()\n}\n",
+        &universe,
+    )
+    .says("take `join` out of the list")
+    .never_says("stop importing");
+}
+
 /// Nothing is declared for the refused import, so the call in the body binds
 /// the builtin and the rest of the file goes on being checked. Declaring it
 /// would shadow the prelude and turn one mistake into a body full of them.

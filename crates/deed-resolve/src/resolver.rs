@@ -875,6 +875,13 @@ impl Resolver<'_> {
                 if PRELUDE.contains(&name.name.as_str())
                     && exports.is_some_and(|exports| exports.get(&name.name).is_none())
                 {
+                    // Taking the name out of a list of one leaves `use
+                    // std/string.{}` behind, which checks and means nothing.
+                    // A repair that has to be tidied up after is not one.
+                    let (cut, wording) = match import.names.len() {
+                        1 => (import.span, format!("stop importing `{}`", name.name)),
+                        _ => (name.span, format!("take `{}` out of the list", name.name)),
+                    };
                     self.diagnostics.push(
                         Diagnostic::error(
                             codes::UNKNOWN_EXPORT,
@@ -889,12 +896,7 @@ impl Resolver<'_> {
                         .with_note(
                             "the prelude is in every file, so importing one of its names both fails and hides it",
                         )
-                        .with_fix(
-                            format!("stop importing `{}`", name.name),
-                            name.span,
-                            "",
-                            Applicability::MachineApplicable,
-                        ),
+                        .with_fix(wording, cut, "", Applicability::MachineApplicable),
                     );
                     continue;
                 }
