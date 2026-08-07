@@ -68,6 +68,9 @@ fn val_type(ty: &Ty) -> Option<ValType> {
 pub fn compile(program: &Program) -> Result<Module, Unsupported> {
     let mut module = Module::new();
     module.memory_pages = Some(16);
+    // Under the name every other toolchain uses, so a host that already knows
+    // how to read a WebAssembly module's memory does not have to be told.
+    module.exported_memory = Some("memory".to_string());
 
     // Signatures first, so a body can call anything regardless of where it
     // sits, and so a function's index here is its index in the program.

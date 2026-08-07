@@ -28,7 +28,24 @@ release notes.
 
 ### Tools
 
-- Nothing yet.
+- `deed build` exports the module's memory, so a host that is not this one can
+  read what a compiled program hands it.
+
+  A capability crosses the boundary as a number, but a string does not:
+  `Io.write(console, text)` passes an address into the module's own memory.
+  The host inside `deed` shares an address space with the module and is handed
+  that memory directly, so nothing here noticed that a module which does not
+  export it can only be answered from inside this workspace.
+
+  Measured in the engine Node ships, before the export existed: the module
+  compiled, it instantiated, its import section was exactly the row,
+  `twice(21)` answered `42` — and every operation carrying text was
+  unreachable. `crates/deed-codegen/smoke.mjs` is that measurement kept, and
+  CI runs it, because an artifact that was built and weighed and never run is
+  a mistake this repository has already paid for once.
+
+  This grants a program nothing. A module could always read and write its own
+  memory; the export is about what the host may look at.
 
 ### Measurements
 

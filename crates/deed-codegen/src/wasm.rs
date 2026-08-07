@@ -358,6 +358,21 @@ pub struct Module {
     pub exports: Vec<(String, u32)>,
     /// How many 64KiB pages of memory the module wants, when it wants any.
     pub memory_pages: Option<u32>,
+    /// What to export the memory under, when it should be exported at all.
+    ///
+    /// A capability crosses the boundary as a number, but a string does not:
+    /// `Io.write(console, text)` hands the text over as an address into the
+    /// module's own memory. A host that cannot see that memory cannot read
+    /// the string, so a module that does not export it is one only a host
+    /// sharing its address space can answer for -- which is this repository's
+    /// runner and nothing else. Measured in a real engine before this
+    /// existed: pure functions ran, and every operation carrying text was
+    /// unreachable.
+    ///
+    /// This grants the program nothing. A module could already read and write
+    /// its own memory; exporting it is about what the *host* may look at, and
+    /// the host is the one deciding in the first place.
+    pub exported_memory: Option<String>,
     /// Bytes placed in memory before anything runs, by offset.
     pub data: Vec<(u32, Vec<u8>)>,
     /// Functions reachable through `call_indirect`, in table order.
@@ -502,13 +517,19 @@ impl Module {
             write_u32(&mut section, pages);
             write_section(&mut out, 5, &section);
         }
-        if !self.exports.is_empty() {
+        if !self.exports.is_empty() || self.exported_memory.is_some() {
             let mut section = Vec::new();
-            write_u32(&mut section, self.exports.len() as u32);
+            let memory = self.exported_memory.iter().len();
+            write_u32(&mut section, (self.exports.len() + memory) as u32);
             for (name, index) in &self.exports {
                 write_name(&mut section, name);
                 section.push(0x00);
                 write_u32(&mut section, *index);
+            }
+            if let Some(name) = &self.exported_memory {
+                write_name(&mut section, name);
+                section.push(0x02);
+                write_u32(&mut section, 0);
             }
             write_section(&mut out, 7, &section);
         }

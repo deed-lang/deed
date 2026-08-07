@@ -172,6 +172,10 @@ and which value reclamation is the answer to.
 - What an embedder should be handed so it can answer an interface a program declared for
   itself with `effect ... from`. `Host::offer` is already the shape, and what is missing
   is a way to say it from outside `deed-codegen` without also being handed the module.
+- Whether a module built with `--component` should still export its memory. It does today,
+  because what that flag writes is a core module and a `.wit` text rather than a component
+  binary, and the toolchain that turns one into the other reads the memory. A real
+  component may not export one, so the answer changes when the binary does.
 - What a host should do when a module hands it a string the layout says is there and the
   bytes say is not valid UTF-8. Today that is a refusal, which is right for a module that
   does not match its own signature and may be wrong for one that read bytes off a disk.
@@ -179,6 +183,7 @@ and which value reclamation is the answer to.
 ## References
 
 - `crates/deed-codegen/src/grant.rs`, `crates/deed-codegen/src/run.rs`
+- `crates/deed-codegen/smoke.mjs`, the same measurement in an engine that is not this one
 - `crates/deed-rt/src/http.rs`, `crates/deed-rt/src/reach.rs`, `crates/deed-rt/src/sandbox.rs`
 - `crates/deed-driver/tests/host.rs`, `crates/deed-driver/tests/capabilities.rs`,
   `crates/deed-cli/tests/cli.rs`

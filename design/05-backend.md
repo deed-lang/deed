@@ -192,6 +192,25 @@ from`. Nothing here can know what `wasi:random/random` means, so the module is t
 with the name of what it wanted, which is the most useful thing this could say about a
 module on its way to a real embedder.
 
+### The module exports its memory, and that is what makes the host real
+
+A capability crosses the boundary as a number, but a string does not: `Io.write(console,
+text)` hands the text over as an address into the module's own memory. The host inside
+`deed` shares an address space with the module and is handed that memory directly, so
+nothing here noticed that a module which does not export it can only be answered by a host
+that lives inside this workspace.
+
+Measured, in the engine Node ships, before the export existed: the module compiled, it
+instantiated, its import section was exactly the row, `twice(21)` answered `42` -- and
+every operation carrying text was unreachable, because the host had no way to read what it
+was handed. `crates/deed-codegen/smoke.mjs` is that measurement kept, and CI runs it,
+because the thing this repository has already paid for once is an artifact that was built
+and weighed and never run.
+
+Exporting it grants the program nothing. A module could always read and write its own
+memory; the export is about what the *host* may look at, and the host is the party
+deciding in the first place.
+
 **What would change this:** adopting the component/import declarations sketched in
 `design/04-capabilities.md` would let modules name additional host imports in source, but only if
 those imports are still capability-row entries with explicit capability arguments and host refusal
