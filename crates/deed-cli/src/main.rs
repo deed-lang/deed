@@ -1959,6 +1959,76 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
 }
 
 #[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    fn checked_of(source: &str) -> Checked {
+        let mut sources = SourceMap::new();
+        let file = sources.add("test.deed", source.to_string());
+        deed_driver::check(&sources, file)
+    }
+
+    fn main_using(row: &str, body: &str) -> String {
+        format!("module a\n\nfn main(sys: System) -> Int\n  uses\n{row}{{\n{body}\n    0\n}}\n")
+    }
+
+    /// The rule, in the direction that grants.
+    #[test]
+    fn a_main_that_says_it_reads_a_line_reads_input() {
+        let checked = checked_of(&main_using(
+            "    Io.line,\n",
+            "    let _ = Io.line(sys.console)",
+        ));
+        assert!(reads_input(&checked));
+    }
+
+    /// And in the direction that is the whole point: a program that never
+    /// mentions input is never left waiting for it.
+    #[test]
+    fn a_main_that_writes_and_nothing_else_reads_no_input() {
+        let checked = checked_of(&main_using(
+            "    Io.write,\n",
+            "    Io.write(sys.console, \"x\")",
+        ));
+        assert!(!reads_input(&checked));
+    }
+
+    /// `Io` is not enough and `line` is not enough. Either half on its own
+    /// would let a row about something else decide this.
+    #[test]
+    fn another_effect_with_an_operation_of_the_same_name_is_not_it() {
+        let source = "module a\n\n\
+             effect Reader {\n    fn line() -> String\n}\n\n\
+             fn main(sys: System) -> Int\n  uses\n    Reader.line,\n    Io.write,\n{\n    \
+             Io.write(sys.console, Reader.line())\n    0\n}\n";
+        assert!(!reads_input(&checked_of(source)));
+    }
+
+    /// The row that decides is `main`'s. A function further down the file
+    /// reading a line says what that function does, not what the program was
+    /// started with.
+    #[test]
+    fn a_row_on_a_function_that_is_not_main_does_not_decide_it() {
+        let source = "module a\n\n\
+             fn ask(console: Console) -> Result<String, String>\n  uses\n    Io.line,\n{\n    \
+             Io.line(console)\n}\n\n\
+             fn main(sys: System) -> Int\n  uses\n    Io.write,\n{\n    \
+             Io.write(sys.console, \"x\")\n    0\n}\n";
+        assert!(!reads_input(&checked_of(source)));
+    }
+
+    /// `uses Io.*` is every operation, and this is one of them.
+    #[test]
+    fn a_row_naming_the_whole_effect_includes_reading() {
+        let checked = checked_of(&main_using(
+            "    Io.*,\n",
+            "    Io.write(sys.console, \"x\")",
+        ));
+        assert!(reads_input(&checked));
+    }
+}
+
+#[cfg(test)]
 mod manifest_tests {
     use super::*;
 
