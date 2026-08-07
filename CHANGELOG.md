@@ -20,7 +20,18 @@ release notes.
 
 ### Diagnostics
 
-- Nothing yet.
+- Changed: importing a name the language already provides now says so. Five
+  benchmark runs of one model against one build all wrote `use
+  std/string.{join}`, and the compiler answered with two messages: an error
+  that `std/string` declares no `join`, and a warning that `join` hides a
+  builtin. Both were true and both pointed at the module, which is the one
+  place the answer was not.
+
+  It is now one error saying the name is already in scope, with a
+  machine-applicable repair that deletes the import. Nothing is declared for
+  the refused name either, so the call in the body binds the builtin and the
+  rest of the file goes on being checked instead of cascading. Importing a
+  name a module really does declare is unchanged and still warns.
 
 ### Standard library
 

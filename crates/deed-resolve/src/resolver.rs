@@ -864,6 +864,41 @@ impl Resolver<'_> {
             }
 
             for name in &import.names {
+                // A name the language already provides, asked of a module.
+                // Measured across five benchmark runs: a model reaching for
+                // `join` or `length` writes an import for it, and being told
+                // the module does not declare it is true and is not the
+                // answer, because the name is already in scope. Nothing is
+                // declared for it, so the rest of the file binds the builtin
+                // and goes on being checked, and the warning about hiding a
+                // builtin has nothing left to warn about.
+                if PRELUDE.contains(&name.name.as_str())
+                    && exports.is_some_and(|exports| exports.get(&name.name).is_none())
+                {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            codes::UNKNOWN_EXPORT,
+                            self.file,
+                            name.span,
+                            format!(
+                                "`{}` is one the language provides, not one `{path}` declares",
+                                name.name
+                            ),
+                        )
+                        .with_primary_label("already in scope")
+                        .with_note(
+                            "the prelude is in every file, so importing one of its names both fails and hides it",
+                        )
+                        .with_fix(
+                            format!("stop importing `{}`", name.name),
+                            name.span,
+                            "",
+                            Applicability::MachineApplicable,
+                        ),
+                    );
+                    continue;
+                }
+
                 // Declared whatever happened above, so one missing module
                 // produces one diagnostic rather than one per name plus a
                 // cascade of unresolved uses further down the file.

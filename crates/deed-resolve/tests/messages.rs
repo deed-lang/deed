@@ -222,6 +222,57 @@ fn an_unknown_export_names_the_module_and_the_missing_name() {
     .says("`other` declares no `Thng`");
 }
 
+/// Five benchmark runs of one model against one build wrote imports for names
+/// the prelude already provides. Telling the truth ("the module declares no
+/// `join`") sends the reader to the module, which is the one place the answer
+/// is not. `message_in` allows exactly one diagnostic, which is half of what
+/// this holds: the shadowing warning used to fire on the same span, so a
+/// single mistake produced two messages that disagreed about what was wrong.
+#[test]
+fn importing_a_name_the_language_provides_says_it_is_already_here() {
+    let universe = universe_of(&["module other\n\nrecord Thing { n: Int }\n"]);
+    message_in(
+        "module a\n\nuse other.{join}\n\nfn f(xs: List<String>) -> String {\n  join(xs, \", \")\n}\n",
+        &universe,
+    )
+    .under(codes::UNKNOWN_EXPORT)
+    .says("`join` is one the language provides, not one `other` declares")
+    .says("already in scope")
+    .says("stop importing `join`")
+    .never_says("hides a builtin");
+}
+
+/// Nothing is declared for the refused import, so the call in the body binds
+/// the builtin and the rest of the file goes on being checked. Declaring it
+/// would shadow the prelude and turn one mistake into a body full of them.
+/// Held by the same single-diagnostic rule: a cascade would break this.
+#[test]
+fn the_refused_import_leaves_the_builtin_reachable() {
+    let universe = universe_of(&["module other\n\nrecord Thing { n: Int }\n"]);
+    message_in(
+        "module a\n\nuse other.{join}\n\nfn f(xs: List<String>) -> String {\n  join(join(xs, \" \"), \", \")\n}\n",
+        &universe,
+    )
+    .never_says("cannot find `join`");
+}
+
+/// The boundary of the sentence above. A module that really does declare a
+/// name the prelude provides is importable, and importing it is the older
+/// warning rather than the newer error: the import resolves, it just takes
+/// the builtin's place. Getting this wrong would refuse a legal import.
+#[test]
+fn a_module_that_really_declares_a_prelude_name_still_only_warns() {
+    let universe =
+        universe_of(&["module other\n\nfn join(xs: List<String>) -> String {\n  \"\"\n}\n"]);
+    message_in(
+        "module a\n\nuse other.{join}\n\nfn f(xs: List<String>) -> String {\n  join(xs)\n}\n",
+        &universe,
+    )
+    .under(codes::SHADOWED_DECLARATION)
+    .says("hides a name the language provides")
+    .never_says("is one the language provides, not one");
+}
+
 // -- what nothing can reach --------------------------------------------------
 
 /// The `DEED3005` for builtins is the only emission site not held by a

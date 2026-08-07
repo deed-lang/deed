@@ -97,3 +97,43 @@ If answers score the same here as the same answers translated into a language
 with no contracts, then the contracts are decoration and the pitch is wrong.
 That is a real possible outcome and the reason to run this before believing the
 pitch, rather than after.
+
+## What five runs said
+
+One model, one build, six tasks, five times. Before this the number of runs
+against any single compiler was one, and one run cannot tell a fixed problem
+from a coin landing the same way twice.
+
+| Run | Answered | Check | Pass their tests |
+| --- | --- | --- | --- |
+| 1 | 6/6 | 6 | 5 |
+| 2 | 6/6 | 6 | 5 |
+| 3 | 6/6 | 6 | 5 |
+| 4 | 6/6 | 5 | 5 |
+| 5 | 6/6 | 6 | 5 |
+
+The interesting column is not the score. It is that the same task is hard in
+every run and the same sentence gets said in every run:
+
+| Code | Times | Tasks | Runs | The sentence, most often |
+| --- | --- | --- | --- | --- |
+| DEED2003 | 49 | 6 | 5 | expected a declaration, found identifier `export` |
+| DEED3001 | 44 | 3 | 5 | cannot find `head` in this scope |
+| DEED2001 | 36 | 4 | 5 | expected `.` while parsing a `use` declaration |
+| DEED2015 | 28 | 2 | 5 | match arms are separated by commas |
+
+Forty-five of the forty-nine `DEED2003`s are the word `export`, in all six
+tasks in all five runs. That one already says the right thing and already
+carries a repair that deletes the word, so the measurement's verdict on it is
+"nothing left to fix here", which is a real answer and worth having.
+
+The one that was still worth fixing came from the third row's neighbours: an
+answer reaching for `join` writes `use std/string.{join}` and used to get two
+messages, an error saying the module declares no `join` and a warning saying
+`join` hides a builtin. Both true, and together they point at the module, which
+is the one place the answer is not. It now gets one message saying the name is
+already in scope, with a repair that deletes the import.
+
+Reproducing this needs a model, so it is not in CI and the numbers above are a
+record rather than a ratchet. `crates/deed-resolve/tests/messages.rs` holds the
+sentence that came out of it.
