@@ -50,6 +50,20 @@ release notes.
 
 ### Tools
 
+- The command line crate is published as `deed-lang`, so `cargo install
+  deed-lang` is a thing that will work. `deed` on crates.io belongs to somebody
+  else, and the name a reader would guess is the org's. The binary is still
+  `deed` and nothing anyone types changes.
+
+  Its directory stays `crates/deed-cli`: every decision record and changelog
+  entry that points into this crate points at that path, and moving it would
+  rewrite sentences that were true when they were written. `Cargo.toml` says
+  so where the two names sit next to each other.
+
+  Nothing in the tree spells a package name, so a rename is invisible until a
+  workflow fails on a tag. `the_workflows_build_packages_that_exist` reads
+  every `-p` in `.github/workflows` and asks whether that crate is here.
+
 - The workspace can be published. Internal dependencies were paths with no
   version, which `cargo publish` refuses, and putting a version next to each of
   twenty paths would have made the release checklist nineteen lines longer. They

@@ -10,28 +10,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deed-cli"
-version = "0.2.8"
-dependencies = [
- "deed-ast",
- "deed-codegen",
- "deed-dap",
- "deed-diagnostics",
- "deed-driver",
- "deed-explain",
- "deed-fetch",
- "deed-fmt",
- "deed-interp",
- "deed-lexer",
- "deed-lsp",
- "deed-mcp",
- "deed-mir",
- "deed-rt",
- "deed-typeck",
- "deed-wasm",
-]
-
-[[package]]
 name = "deed-codegen"
 version = "0.2.8"
 dependencies = [
@@ -114,6 +92,28 @@ dependencies = [
  "deed-parser",
  "deed-resolve",
  "deed-rt",
+]
+
+[[package]]
+name = "deed-lang"
+version = "0.2.8"
+dependencies = [
+ "deed-ast",
+ "deed-codegen",
+ "deed-dap",
+ "deed-diagnostics",
+ "deed-driver",
+ "deed-explain",
+ "deed-fetch",
+ "deed-fmt",
+ "deed-interp",
+ "deed-lexer",
+ "deed-lsp",
+ "deed-mcp",
+ "deed-mir",
+ "deed-rt",
+ "deed-typeck",
+ "deed-wasm",
 ]
 
 [[package]]

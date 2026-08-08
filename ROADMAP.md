@@ -202,11 +202,9 @@ What stands in the way of publishing, measured with `cargo publish --workspace
       would have been found by whoever typed `cargo install` first. CI runs it
       now, as "it could be published", and it is green.
 
-What is left is a decision rather than a defect: which package holds the name.
-`cargo install deed-cli` would work today. `deed-lang` is the name that matches
-the org and the one somebody would guess, and giving it to the command line
-crate is a rename rather than a new crate, because a placeholder holding a name
-it does not use is the thing §4c complains about above.
+What is left is the publish itself, which needs a crates.io account rather than
+a commit. The command line crate is named `deed-lang` now, so `cargo install
+deed-lang` is what it will answer to, and the binary is still `deed`.
 
 ### 4d. There is no way to depend on somebody else's code
 
@@ -239,7 +237,9 @@ Exit: a person who wants to try Deed can install it and produce a working
 project without reading the compiler's source.
 
 - [ ] Claim **`deed-lang`** on crates.io. Do this first; it is the only item
-      here that can be lost by waiting.
+      here that can be lost by waiting. *The workspace publishes green now and
+      the command line crate is named `deed-lang`; what is left is the upload,
+      which needs an account rather than a commit.*
 - [x] `deed new <name>` — scaffolds a module, a test, and whatever manifest
       `how-to/depend-on-another-module.md` specifies. Held by a driver test that
       runs `deed new` into a temp directory and then runs `deed test` on the

@@ -1,5 +1,13 @@
 [package]
-name = "deed-cli"
+# The name somebody installs, which is the language rather than the shape of
+# this crate: `cargo install deed-lang` puts a `deed` on the path. `deed` on
+# crates.io belongs to someone else, and this is the org's name and the one a
+# reader would guess.
+#
+# The directory stays `crates/deed-cli`, because every decision record and
+# changelog entry that points into this crate points at that path, and moving
+# it would rewrite sentences that were true when they were written.
+name = "deed-lang"
 description = "The deed command line tool"
 version.workspace = true
 edition.workspace = true

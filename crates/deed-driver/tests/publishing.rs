@@ -96,6 +96,49 @@ fn every_internal_dependency_points_at_the_crate_of_that_name() {
 ///
 /// A bare `path` is what `cargo publish` refuses, and it is also the shape
 /// that used to make the version question have twenty answers.
+/// Every `-p name` in a workflow names a package that is here.
+///
+/// A package can be renamed without anything in the tree noticing, because
+/// nothing in the tree spells the name: the workflows do, and they would fail
+/// on a tag rather than on the commit that renamed it.
+#[test]
+fn the_workflows_build_packages_that_exist() {
+    let names: Vec<String> = std::fs::read_dir(root().join("crates"))
+        .expect("crates/")
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read_to_string(entry.path().join("Cargo.toml")).ok())
+        .map(|text| field(&text, "[package]", "name"))
+        .collect();
+
+    let mut asked = 0;
+    for entry in std::fs::read_dir(root().join(".github").join("workflows")).expect("workflows/") {
+        let path = entry.expect("an entry").path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (_, after) in text
+            .match_indices("-p ")
+            .map(|(at, _)| text.split_at(at + 3))
+        {
+            let name = after
+                .split(|c: char| c.is_whitespace())
+                .next()
+                .unwrap_or_default();
+            if !name.starts_with("deed-") {
+                continue;
+            }
+            asked += 1;
+            assert!(
+                names.iter().any(|package| package == name),
+                "{} builds `{name}` and no crate here is called that",
+                path.display()
+            );
+        }
+    }
+
+    assert!(asked > 2, "only {asked} workflow package names were read");
+}
+
 #[test]
 fn no_crate_names_a_sibling_by_path_alone() {
     let names: Vec<String> = declared().into_iter().map(|(name, _, _)| name).collect();
