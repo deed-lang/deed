@@ -21,8 +21,28 @@ Built for code that machines write and humans review.
 
 ## Getting it
 
-Every release carries a `deed` binary for Linux, macOS and Windows. Take the one for your
-machine from [releases](https://github.com/deed-lang/deed/releases), unpack it, and run it.
+One line, on Linux or an Apple-silicon Mac:
+
+```
+$ curl -fsSL https://raw.githubusercontent.com/deed-lang/deed/main/install.sh | sh
+```
+
+On Windows:
+
+```
+> irm https://raw.githubusercontent.com/deed-lang/deed/main/install.ps1 | iex
+```
+
+Either one downloads the release asset for your machine, refuses it if its hash
+is not the one the release published, and puts a single file in your own profile.
+It never asks for a password, because it never writes outside it. The checksums
+come from the same release as the binary, so that catches a corrupted download
+and does not catch a compromised release; saying so is better than a `sha256`
+that reads like it proves more than it does.
+
+By hand instead: every release carries a `deed` binary for Linux, macOS and Windows.
+Take the one for your machine from
+[releases](https://github.com/deed-lang/deed/releases), unpack it, and run it.
 There is nothing else to install: the compiler, the formatter, the test runner and the
 language server are all in that one file.
 

@@ -161,11 +161,17 @@ project has none. `crates/deed-cli/tests/new.rs` runs it into a temporary
 directory on every commit and then checks, tests, runs and format-checks the
 result, so the scaffold cannot rot into something that does not compile.
 
-### 4b. Installing requires cloning the repo and having Rust
+### 4b. Installing requires cloning the repo and having Rust — **closed**
 
-README says `cargo install --path crates/deed-cli`. There is no `curl | sh`, no
-Homebrew formula, no winget package, no `cargo install deed`. Seventeen
-downloads across ten releases is what that costs.
+README used to say `cargo install --path crates/deed-cli` and nothing else.
+There was no `curl | sh`, no Homebrew formula, no winget package, and no
+`cargo install deed`. Seventeen downloads across ten releases is what that
+cost.
+
+`install.sh` and `install.ps1` now fetch the release asset for the machine,
+refuse it against the release's own checksum list, and install one file into
+the user's profile without asking for a password. Homebrew and winget are
+still absent, and both of them want a stable install base first.
 
 ### 4c. The crates.io name is taken, and the fallback is still free
 
@@ -214,9 +220,10 @@ project without reading the compiler's source.
       result, so the scaffold cannot rot into something that does not check.
       *Done. It writes two modules and no manifest, and the reason for the
       second of those is in §4a.*
-- [ ] One-line install that does not need Rust: a script that fetches the
+- [x] One-line install that does not need Rust: a script that fetches the
       release binary for the platform. The four release artifacts already exist;
-      nothing points at them.
+      nothing points at them. *Done: `install.sh` and `install.ps1`, and the
+      release now publishes a checksum list so they can refuse a download.*
 - [x] README's first code block becomes install → `deed new` → `deed test`,
       in that order.
 

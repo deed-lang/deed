@@ -50,6 +50,24 @@ release notes.
 
 ### Tools
 
+- `install.sh` and `install.ps1`: one line to get the binary, and no Rust.
+  Four release artifacts have existed for eight versions and nothing pointed at
+  them, so the shortest honest instruction was still "clone this and install a
+  toolchain". The scripts pick the asset for the machine, refuse it if its hash
+  is not the one the release published, and write one file inside your own
+  profile, so neither of them ever needs a password.
+
+  Releases now carry `deed-<tag>-checksums.txt`, which is what makes that
+  refusal possible. It comes from the same release as the binary, so it catches
+  a corrupted download and not a compromised release, and both scripts say so
+  rather than implying more.
+
+  `crates/deed-driver/tests/install.rs` builds a release, serves it to the real
+  script, and asks it to install a binary and then to refuse the same binary
+  with one byte changed. It also holds the platform list in the two scripts
+  against the build matrix in `.github/workflows/release.yml`, in both
+  directions.
+
 - `deed new <name>` writes a project. Until now the tool could check, test,
   run, compile, format, document, explain and answer an editor, and the one
   thing it could not do was produce a file to point any of that at, so
