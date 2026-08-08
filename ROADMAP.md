@@ -173,18 +173,17 @@ refuse it against the release's own checksum list, and install one file into
 the user's profile without asking for a password. Homebrew and winget are
 still absent, and both of them want a stable install base first.
 
-### 4c. The crates.io name is taken, and the fallback is still free
+### 4c. The crates.io name is taken, and the fallback is claimed — **closed**
 
 - `deed` on crates.io: owned by **`degenie-ai`**, version **0.0.0**, published
   **2026-07-06** — three weeks before this repository existed. A placeholder.
-  `cargo install deed` today installs somebody else's crate.
-- **`deed-lang` on crates.io is unclaimed.** So are all twenty crate names
-  under `crates/` (measured 2026-08-08).
+  `cargo install deed` still installs somebody else's crate.
+- **`deed-lang` is ours**, along with the nineteen crates the compiler is made
+  of, all at 0.2.9 (2026-08-09). `cargo install deed-lang` installs a `deed`.
 
-This is the one item with a clock on it. Names do not stay free.
-
-What stands in the way of publishing, measured with `cargo publish --workspace
---dry-run` and `cargo package --list` rather than assumed:
+Getting there took four days' worth of defects out of one afternoon, all found
+with `cargo package --list` and `cargo publish --workspace --dry-run` rather
+than assumed:
 
 - [x] `deed-explain` would have published **successfully and empty**. Its pages
       came from a build script that read the whole workspace, and a `.crate`
@@ -195,16 +194,21 @@ What stands in the way of publishing, measured with `cargo publish --workspace
       `cargo package -p deed-driver --list` carried none of them. Fixed: the
       text is generated into the crate, and a rule now holds every package
       against reading above its own root.
-- [x] Path dependencies carry no version, which `cargo publish` refuses.
+- [x] Path dependencies carried no version, which `cargo publish` refuses.
       Fixed: declared once in `[workspace.dependencies]`, held against
       `workspace.package.version` by a test.
-- [x] Nothing runs `cargo publish --workspace --dry-run`, so all of the above
-      would have been found by whoever typed `cargo install` first. CI runs it
-      now, as "it could be published", and it is green.
+- [x] Nothing ran `cargo publish --workspace --dry-run`. CI runs it now, as
+      "it could be published".
 
-What is left is the publish itself, which needs a crates.io account rather than
-a commit. The command line crate is named `deed-lang` now, so `cargo install
-deed-lang` is what it will answer to, and the binary is still `deed`.
+The install was verified the way a stranger does it: `cargo install deed-lang`
+into an empty root, then `deed explain DEED4025`, `deed new`, `deed test` and a
+program that imports `std/list`. The first two are exactly what the two bugs
+above would have broken.
+
+⚠️ crates.io allows five new crates and then one every ten minutes, so twenty
+crates take about two and a half hours. `cargo publish --workspace` cannot
+resume: a crate already on the index is a warning under `--dry-run` and an
+error on the real run. Publish them one at a time, in dependency order.
 
 ### 4d. There is no way to depend on somebody else's code
 
@@ -236,10 +240,9 @@ number that can be checked with the commands in §2.
 Exit: a person who wants to try Deed can install it and produce a working
 project without reading the compiler's source.
 
-- [ ] Claim **`deed-lang`** on crates.io. Do this first; it is the only item
-      here that can be lost by waiting. *The workspace publishes green now and
-      the command line crate is named `deed-lang`; what is left is the upload,
-      which needs an account rather than a commit.*
+- [x] Claim **`deed-lang`** on crates.io. Do this first; it is the only item
+      here that can be lost by waiting. *Done 2026-08-09: `deed-lang` and the
+      nineteen crates the compiler is made of, all at 0.2.9.*
 - [x] `deed new <name>` — scaffolds a module, a test, and whatever manifest
       `how-to/depend-on-another-module.md` specifies. Held by a driver test that
       runs `deed new` into a temp directory and then runs `deed test` on the

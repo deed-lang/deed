@@ -54,11 +54,15 @@ $ ./deed-v0.2.9-x86_64-unknown-linux-gnu/deed --version
 deed 0.2.9
 ```
 
-From source instead, which needs Rust 1.85 or newer:
+With Rust 1.85 or newer instead, from crates.io or from a clone:
 
 ```
+$ cargo install deed-lang
 $ cargo install --path crates/deed-cli
 ```
+
+`deed` on crates.io belongs to somebody else, so the package is `deed-lang`.
+The binary it installs is `deed`.
 
 **What the version promises.** `0.x` says the language can still move, so a file that
 compiles against one minor release may not compile against the next. Breaking moves are

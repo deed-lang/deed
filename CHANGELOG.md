@@ -28,7 +28,16 @@ release notes.
 
 ### Tools
 
-- Nothing yet.
+- `cargo install deed-lang` works. The compiler is on crates.io as of 0.2.9,
+  as twenty crates, and the install instructions say so. `deed` on crates.io
+  belongs to somebody else, so the package is `deed-lang` and the binary it
+  installs is `deed`.
+
+  Verified the way a stranger does it rather than by watching the upload
+  succeed: installed from crates.io into an empty root, then `deed explain
+  DEED4025`, `deed new`, `deed test`, and a program that imports `std/list`.
+  The first two are exactly what this version's two packaging bugs would have
+  broken, and one of them would have broken quietly.
 
 ### Measurements
 
