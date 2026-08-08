@@ -8,11 +8,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deed-diagnostics = { path = "../deed-diagnostics" }
-deed-driver = { path = "../deed-driver" }
-deed-interp = { path = "../deed-interp" }
-deed-lsp = { path = "../deed-lsp" }
-deed-rt = { path = "../deed-rt" }
+deed-diagnostics.workspace = true
+deed-driver.workspace = true
+deed-interp.workspace = true
+deed-lsp.workspace = true
+deed-rt.workspace = true
 
 [lints]
 workspace = true

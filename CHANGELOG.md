@@ -50,6 +50,18 @@ release notes.
 
 ### Tools
 
+- The workspace can be published. Internal dependencies were paths with no
+  version, which `cargo publish` refuses, and putting a version next to each of
+  twenty paths would have made the release checklist nineteen lines longer. They
+  are declared once in `[workspace.dependencies]` and inherited, and
+  `crates/deed-driver/tests/publishing.rs` compares that table to
+  `workspace.package.version` so the two cannot drift apart quietly.
+
+  `cargo publish --workspace --dry-run` packages all twenty crates and builds
+  each one out of its own archive, and CI runs it on every commit as "it could
+  be published". Both of the packaging bugs above were found by hand; this is
+  the question being asked automatically instead.
+
 - The shipped library travels inside the crate that carries it. `SHIPPED`
   read the nine `std/*.deed` modules with `include_str!` through three parent
   directories, and `cargo package -p deed-driver --list` carries none of them,

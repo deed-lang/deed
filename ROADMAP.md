@@ -195,9 +195,18 @@ What stands in the way of publishing, measured with `cargo publish --workspace
       `cargo package -p deed-driver --list` carried none of them. Fixed: the
       text is generated into the crate, and a rule now holds every package
       against reading above its own root.
-- [ ] Path dependencies carry no version, which `cargo publish` refuses.
-- [ ] Nothing runs `cargo publish --workspace --dry-run`, so all of the above
-      would have been found by whoever typed `cargo install` first.
+- [x] Path dependencies carry no version, which `cargo publish` refuses.
+      Fixed: declared once in `[workspace.dependencies]`, held against
+      `workspace.package.version` by a test.
+- [x] Nothing runs `cargo publish --workspace --dry-run`, so all of the above
+      would have been found by whoever typed `cargo install` first. CI runs it
+      now, as "it could be published", and it is green.
+
+What is left is a decision rather than a defect: which package holds the name.
+`cargo install deed-cli` would work today. `deed-lang` is the name that matches
+the org and the one somebody would guess, and giving it to the command line
+crate is a rename rather than a new crate, because a placeholder holding a name
+it does not use is the thing §4c complains about above.
 
 ### 4d. There is no way to depend on somebody else's code
 

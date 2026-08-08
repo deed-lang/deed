@@ -30,6 +30,32 @@ license = "Apache-2.0"
 repository = "https://github.com/deed-lang/deed"
 rust-version = "1.85"
 
+# Publishing needs a version next to every path, or `cargo publish` refuses,
+# and a version repeated in twenty manifests is nineteen places to forget. So
+# the internal dependencies are declared once here and each crate says
+# `deed-x.workspace = true`. These have to equal the version above, and
+# `crates/deed-driver/tests/publishing.rs` says so rather than trusting it.
+[workspace.dependencies]
+deed-ast = { path = "crates/deed-ast", version = "0.2.8" }
+deed-codegen = { path = "crates/deed-codegen", version = "0.2.8" }
+deed-dap = { path = "crates/deed-dap", version = "0.2.8" }
+deed-diagnostics = { path = "crates/deed-diagnostics", version = "0.2.8" }
+deed-driver = { path = "crates/deed-driver", version = "0.2.8" }
+deed-effects = { path = "crates/deed-effects", version = "0.2.8" }
+deed-explain = { path = "crates/deed-explain", version = "0.2.8" }
+deed-fetch = { path = "crates/deed-fetch", version = "0.2.8" }
+deed-fmt = { path = "crates/deed-fmt", version = "0.2.8" }
+deed-interp = { path = "crates/deed-interp", version = "0.2.8" }
+deed-lexer = { path = "crates/deed-lexer", version = "0.2.8" }
+deed-lsp = { path = "crates/deed-lsp", version = "0.2.8" }
+deed-mcp = { path = "crates/deed-mcp", version = "0.2.8" }
+deed-mir = { path = "crates/deed-mir", version = "0.2.8" }
+deed-parser = { path = "crates/deed-parser", version = "0.2.8" }
+deed-resolve = { path = "crates/deed-resolve", version = "0.2.8" }
+deed-rt = { path = "crates/deed-rt", version = "0.2.8" }
+deed-typeck = { path = "crates/deed-typeck", version = "0.2.8" }
+deed-wasm = { path = "crates/deed-wasm", version = "0.2.8" }
+
 [workspace.lints.clippy]
 all = "warn"
 
