@@ -8,13 +8,13 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deed-ast = { path = "../deed-ast" }
-deed-diagnostics = { path = "../deed-diagnostics" }
-deed-resolve = { path = "../deed-resolve" }
+deed-ast.workspace = true
+deed-diagnostics.workspace = true
+deed-resolve.workspace = true
 
 [dev-dependencies]
-deed-lexer = { path = "../deed-lexer" }
-deed-parser = { path = "../deed-parser" }
+deed-lexer.workspace = true
+deed-parser.workspace = true
 
 [lints]
 workspace = true

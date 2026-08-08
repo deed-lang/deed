@@ -8,9 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deed-diagnostics = { path = "../deed-diagnostics" }
-deed-mir = { path = "../deed-mir" }
-deed-rt = { path = "../deed-rt" }
+deed-diagnostics.workspace = true
+deed-mir.workspace = true
+deed-rt.workspace = true
 
 [lints]
 workspace = true

@@ -12,29 +12,29 @@ name = "deed"
 path = "src/main.rs"
 
 [dependencies]
-deed-ast = { path = "../deed-ast" }
-deed-diagnostics = { path = "../deed-diagnostics" }
-deed-codegen = { path = "../deed-codegen" }
-deed-dap = { path = "../deed-dap" }
-deed-driver = { path = "../deed-driver" }
-deed-explain = { path = "../deed-explain" }
-deed-fetch = { path = "../deed-fetch" }
-deed-mir = { path = "../deed-mir" }
-deed-fmt = { path = "../deed-fmt" }
-deed-interp = { path = "../deed-interp" }
+deed-ast.workspace = true
+deed-diagnostics.workspace = true
+deed-codegen.workspace = true
+deed-dap.workspace = true
+deed-driver.workspace = true
+deed-explain.workspace = true
+deed-fetch.workspace = true
+deed-mir.workspace = true
+deed-fmt.workspace = true
+deed-interp.workspace = true
 # `deed new` refuses a name the language could not hold. A second keyword list
 # here would be a list that drifts.
-deed-lexer = { path = "../deed-lexer" }
-deed-lsp = { path = "../deed-lsp" }
-deed-mcp = { path = "../deed-mcp" }
-deed-rt = { path = "../deed-rt" }
-deed-typeck = { path = "../deed-typeck" }
+deed-lexer.workspace = true
+deed-lsp.workspace = true
+deed-mcp.workspace = true
+deed-rt.workspace = true
+deed-typeck.workspace = true
 
 [dev-dependencies]
 # The artifact a page and an agent run, held against this binary by
 # `tests/surfaces.rs`. A dev-dependency because nothing the tool does at run
 # time goes through it.
-deed-wasm = { path = "../deed-wasm" }
+deed-wasm.workspace = true
 
 [lints]
 workspace = true

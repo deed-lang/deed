@@ -165,6 +165,28 @@ jobs:
             exit 1
           fi
 
+  publishable:
+    name: it could be published
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # A `.crate` archive is one package directory, and this workspace had
+      # already broken that twice in ways nothing else here could see:
+      # `deed-driver` embedded `std/*.deed` through three parent directories
+      # and would not have compiled, and `deed-explain` generated its pages
+      # from a build script that walked the workspace and would have compiled
+      # and printed nothing at all. Both were found by hand. This is the
+      # question asked on every commit instead, and it is asked of the real
+      # thing: every crate is packaged into an archive and then built out of
+      # that archive alone.
+      - name: cargo publish --workspace --dry-run
+        run: cargo publish --workspace --dry-run --locked
+
   mcp-session:
     name: mcp session
     runs-on: ubuntu-latest

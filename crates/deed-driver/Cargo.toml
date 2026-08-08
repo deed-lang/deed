@@ -8,27 +8,27 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deed-ast = { path = "../deed-ast" }
-deed-diagnostics = { path = "../deed-diagnostics" }
-deed-effects = { path = "../deed-effects" }
-deed-interp = { path = "../deed-interp" }
-deed-lexer = { path = "../deed-lexer" }
-deed-parser = { path = "../deed-parser" }
-deed-resolve = { path = "../deed-resolve" }
-deed-typeck = { path = "../deed-typeck" }
+deed-ast.workspace = true
+deed-diagnostics.workspace = true
+deed-effects.workspace = true
+deed-interp.workspace = true
+deed-lexer.workspace = true
+deed-parser.workspace = true
+deed-resolve.workspace = true
+deed-typeck.workspace = true
 
 [dev-dependencies]
-deed-ast = { path = "../deed-ast" }
-deed-codegen = { path = "../deed-codegen" }
-deed-diagnostics = { path = "../deed-diagnostics" }
-deed-effects = { path = "../deed-effects" }
-deed-explain = { path = "../deed-explain" }
-deed-fmt = { path = "../deed-fmt" }
-deed-interp = { path = "../deed-interp" }
-deed-mir = { path = "../deed-mir" }
-deed-resolve = { path = "../deed-resolve" }
-deed-rt = { path = "../deed-rt" }
-deed-typeck = { path = "../deed-typeck" }
+deed-ast.workspace = true
+deed-codegen.workspace = true
+deed-diagnostics.workspace = true
+deed-effects.workspace = true
+deed-explain.workspace = true
+deed-fmt.workspace = true
+deed-interp.workspace = true
+deed-mir.workspace = true
+deed-resolve.workspace = true
+deed-rt.workspace = true
+deed-typeck.workspace = true
 
 [lints]
 workspace = true

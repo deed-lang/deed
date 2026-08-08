@@ -8,9 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deed-ast = { path = "../deed-ast" }
-deed-diagnostics = { path = "../deed-diagnostics" }
-deed-lexer = { path = "../deed-lexer" }
+deed-ast.workspace = true
+deed-diagnostics.workspace = true
+deed-lexer.workspace = true
 
 [lints]
 workspace = true
