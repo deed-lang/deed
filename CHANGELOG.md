@@ -50,6 +50,21 @@ release notes.
 
 ### Tools
 
+- Fixed, before anybody could hit it: `deed explain` would have printed
+  nothing at all, for every code, in a compiler installed from crates.io. The
+  pages were produced by a build script that read every `codes.rs` in the
+  workspace and the whole test corpus. A published `.crate` carries one
+  package directory and no workspace, so that script would have found an empty
+  tree, generated zero pages, and **compiled**. Measured, not guessed:
+  `cargo package -p deed-explain --list` lists `build.rs` and `src/lib.rs`.
+
+  The pages are generated, committed as `crates/deed-explain/generated/pages.rs`,
+  and shipped as source. The reading of the tree happens in a test now, where
+  the tree is: one test fails when the committed file has drifted from the
+  `codes.rs` files it is made of, and an ignored one rewrites it. A third holds
+  the rule the bug broke, which is that whatever `src/lib.rs` includes has to be
+  a file the package carries.
+
 - `install.sh` and `install.ps1`: one line to get the binary, and no Rust.
   Four release artifacts have existed for eight versions and nothing pointed at
   them, so the shortest honest instruction was still "clone this and install a
