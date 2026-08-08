@@ -7,8 +7,8 @@
 //! once in `[workspace.dependencies]` and inherited.
 //!
 //! That trade buys a new way to be wrong: the table can drift from the version
-//! above it, and cargo would happily publish `deed-cli 0.2.9` asking for
-//! `deed-ast 0.2.8`. So the table is compared to `workspace.package.version`
+//! above it, and cargo would happily publish `deed-lang 0.3.0` asking for
+//! `deed-ast 0.2.9`. So the table is compared to `workspace.package.version`
 //! here rather than checked by hand at release time.
 //!
 //! The publish itself is measured, not inferred: `cargo publish --workspace
