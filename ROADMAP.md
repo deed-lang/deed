@@ -178,9 +178,24 @@ still absent, and both of them want a stable install base first.
 - `deed` on crates.io: owned by **`degenie-ai`**, version **0.0.0**, published
   **2026-07-06** — three weeks before this repository existed. A placeholder.
   `cargo install deed` today installs somebody else's crate.
-- **`deed-lang` on crates.io is unclaimed.**
+- **`deed-lang` on crates.io is unclaimed.** So are all twenty crate names
+  under `crates/` (measured 2026-08-08).
 
 This is the one item with a clock on it. Names do not stay free.
+
+What stands in the way of publishing, measured with `cargo publish --workspace
+--dry-run` and `cargo package --list` rather than assumed:
+
+- [x] `deed-explain` would have published **successfully and empty**. Its pages
+      came from a build script that read the whole workspace, and a `.crate`
+      carries one package directory. Every `deed explain` would have printed
+      nothing. Fixed: the pages are generated, committed and shipped as source.
+- [ ] `deed-driver` would not compile at all. `src/shipped.rs` embeds the nine
+      `std/*.deed` modules with `include_str!("../../../std/...")`, and
+      `cargo package -p deed-driver --list` carries none of them.
+- [ ] Path dependencies carry no version, which `cargo publish` refuses.
+- [ ] Nothing runs `cargo publish --workspace --dry-run`, so all of the above
+      would have been found by whoever typed `cargo install` first.
 
 ### 4d. There is no way to depend on somebody else's code
 

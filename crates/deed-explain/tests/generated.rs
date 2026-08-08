@@ -1,63 +1,161 @@
-//! Build script for deed-explain.
+//! The generator behind `crates/deed-explain/generated/pages.rs`, and the two
+//! tests that keep that file honest.
 //!
-//! Reads every `codes.rs` in the workspace, extracts each code's identifier,
-//! constant name and doc-comment reasoning, then searches the test corpus for
-//! the smallest deed snippet that triggers it.  The result is written to
-//! `${OUT_DIR}/pages.rs` and included by `src/lib.rs`.
+//! This used to be a build script. It read every `codes.rs` in the workspace
+//! and the whole test corpus, which works exactly as long as the workspace is
+//! there. A published `deed-explain` carries its own directory and nothing
+//! else, so the same build script would have found an empty tree, generated
+//! zero pages, and **compiled**: `deed explain DEED4025` would print nothing
+//! at all, for every code, on every machine that installed the compiler from
+//! crates.io. Measured with `cargo package -p deed-explain --list`, which
+//! lists `build.rs` and `src/lib.rs` and no workspace.
 //!
-//! Nothing here is invented.  The reasoning comes from the `///` lines
-//! already above each `pub const` in `codes.rs`; the example comes from the
-//! test that the ratchet in `deed-driver/tests/codes.rs` already requires to
-//! exist.  A code with no doc-comment lines produces an entry whose `text`
-//! field is empty, and the ratchet in `deed-driver/tests/explain.rs` treats
-//! that the same way as a code with no test: a build failure.
+//! So the pages are generated here, committed, and shipped as source. The
+//! reading of the tree happens where the tree exists: in a test.
+//!
+//! - `the_generated_pages_are_the_ones_this_tree_would_produce` fails when the
+//!   committed file has drifted from `codes.rs`.
+//! - `regenerate_the_pages` (`--ignored`) writes it.
+//!
+//! Nothing here is invented. The reasoning is the `///` lines already above
+//! each `pub const` in a `codes.rs`; the example is lifted from the test that
+//! `crates/deed-driver/tests/codes.rs` already requires to exist.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn main() {
-    println!("cargo:rerun-if-changed=../");
+fn root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("the workspace root should be two directories up")
+        .to_path_buf()
+}
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest_dir.join("..").join("..");
+fn generated() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("generated")
+        .join("pages.rs")
+}
 
-    let codes = declared_codes(&root);
-    let test_text = test_corpus(&root);
+#[test]
+fn the_generated_pages_are_the_ones_this_tree_would_produce() {
+    let committed = fs::read_to_string(generated()).expect("generated/pages.rs should be there");
+    assert_eq!(
+        committed.replace("\r\n", "\n"),
+        render(&root()),
+        "generated/pages.rs has drifted from the `codes.rs` files it is made of. \
+         Run: cargo test -p deed-explain --test generated -- --ignored"
+    );
+}
 
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR is set by Cargo");
-    let out_path = PathBuf::from(out_dir).join("pages.rs");
+#[test]
+#[ignore = "writes a file; run it on purpose"]
+fn regenerate_the_pages() {
+    fs::write(generated(), render(&root())).expect("should write generated/pages.rs");
+}
+
+/// The pages have to travel inside the crate.
+///
+/// This is the bug that started it, stated as a rule: whatever `src/lib.rs`
+/// pulls the pages out of has to be a file this package carries. `OUT_DIR`
+/// does not qualify, because filling it needed a workspace that a published
+/// crate does not have, and neither does anything above the package root.
+#[test]
+fn the_pages_come_from_a_file_this_package_carries() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib = fs::read_to_string(package.join("src").join("lib.rs")).expect("src/lib.rs");
+
+    let inside = carried_path(&lib).unwrap_or_else(|why| panic!("{why}"));
+    assert!(
+        package.join(inside).is_file(),
+        "the pages are included from a file that is not there"
+    );
+}
+
+/// Where `include!` reads the pages from, relative to the package root, if
+/// that is somewhere inside it.
+fn carried_path(lib: &str) -> Result<String, String> {
+    let argument = lib
+        .split_once("include!(")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(argument, _)| argument.trim())
+        .ok_or("src/lib.rs does not include the generated pages")?;
+
+    let path = argument
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .ok_or_else(|| {
+            format!(
+                "the pages are included as `{argument}`, which is not a path this package holds"
+            )
+        })?;
+
+    // Resolved against `src/`, where the including file sits.
+    let mut parts: Vec<&str> = vec!["src"];
+    for part in path.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(format!(
+                        "the pages are included from `{path}`, which leaves the package"
+                    ));
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+#[test]
+fn the_rule_rejects_the_shape_this_crate_used_to_have() {
+    let out_dir = carried_path("include!(concat!(env!(\"OUT_DIR\"), \"/pages.rs\"));").unwrap_err();
+    assert!(
+        out_dir.contains("not a path this package holds"),
+        "{out_dir}"
+    );
+
+    let above = carried_path("include!(\"../../pages.rs\");").unwrap_err();
+    assert!(above.contains("leaves the package"), "{above}");
+
+    assert_eq!(
+        carried_path("include!(\"../generated/pages.rs\");"),
+        Ok("generated/pages.rs".to_string())
+    );
+}
+
+/// The whole of the generated file, as text.
+fn render(root: &Path) -> String {
+    let codes = declared_codes(root);
+    assert!(
+        codes.len() > 50,
+        "only {} codes were found, so something did not read the tree",
+        codes.len()
+    );
+    let test_text = test_corpus(root);
 
     let mut output = String::new();
-    output.push_str("/// One generated page per diagnostic code.\n");
-    output.push_str("#[derive(Debug)]\n");
-    output.push_str("pub struct Page {\n");
-    output.push_str("    /// The code string, e.g. `\"DEED4025\"`.\n");
-    output.push_str("    pub code: &'static str,\n");
-    output.push_str("    /// The constant name, e.g. `\"BROKEN_PRECONDITION\"`.\n");
-    output.push_str("    pub name: &'static str,\n");
-    output.push_str("    /// The reasoning: doc-comment lines from `codes.rs`.\n");
-    output.push_str("    pub text: &'static str,\n");
-    output.push_str("    /// A deed snippet that triggers this code, if one could be\n");
-    output.push_str("    /// extracted automatically from an existing test.\n");
-    output.push_str("    pub example: Option<&'static str>,\n");
-    output.push_str("    /// The test file the example came from.\n");
-    output.push_str("    pub example_source: Option<&'static str>,\n");
-    output.push_str("}\n\n");
-
+    output
+        .push_str("// @generated by `cargo test -p deed-explain --test generated -- --ignored`.\n");
+    output.push_str("// The reasoning comes from the doc comments above each `pub const` in a\n");
+    output.push_str("// `codes.rs`; the example comes from a test that already had to exist.\n");
+    output.push_str("// Edit those, not this.\n\n");
     output.push_str("pub static PAGES: &[Page] = &[\n");
 
     for (name, code, doc) in &codes {
         let (example, example_source) = find_example(&test_text, name, code);
         output.push_str("    Page {\n");
-        output.push_str(&format!("        code: {:?},\n", code));
-        output.push_str(&format!("        name: {:?},\n", name));
-        output.push_str(&format!("        text: {:?},\n", doc));
+        output.push_str(&format!("        code: {code:?},\n"));
+        output.push_str(&format!("        name: {name:?},\n"));
+        output.push_str(&format!("        text: {doc:?},\n"));
         match example {
             Some(ex) => {
-                output.push_str(&format!("        example: Some({:?}),\n", ex));
+                output.push_str(&format!("        example: Some({ex:?}),\n"));
                 output.push_str(&format!(
                     "        example_source: Some({:?}),\n",
-                    example_source.unwrap_or_else(String::new)
+                    example_source.unwrap_or_default()
                 ));
             }
             None => {
@@ -69,8 +167,7 @@ fn main() {
     }
 
     output.push_str("];\n");
-
-    fs::write(&out_path, output).expect("should write pages.rs");
+    output
 }
 
 /// All `pub const NAME: &str = "DEEDnnnn"` entries across the workspace,
@@ -96,11 +193,9 @@ fn declared_codes(root: &Path) -> Vec<(String, String, String)> {
             let trimmed = line.trim();
 
             if let Some(rest) = trimmed.strip_prefix("///") {
-                // Doc-comment line: strip the leading space if any.
                 let content = rest.strip_prefix(' ').unwrap_or(rest);
                 doc_lines.push(content.to_string());
             } else if let Some(rest) = trimmed.strip_prefix("pub const ") {
-                // Constant declaration.
                 if let Some((name, rest)) = rest.split_once(':') {
                     if let Some(start) = rest.find("\"DEED") {
                         if let Some(end) = rest[start + 1..].find('"') {
@@ -112,7 +207,6 @@ fn declared_codes(root: &Path) -> Vec<(String, String, String)> {
                 }
                 doc_lines.clear();
             } else if !trimmed.is_empty() && !trimmed.starts_with("//") {
-                // Non-comment, non-empty, non-constant line resets accumulator.
                 doc_lines.clear();
             }
         }
@@ -144,15 +238,17 @@ fn collect_test_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) 
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    // Sorted, or the pages depend on what order the filesystem hands them back
+    // and the freshness check above becomes a coin toss.
+    paths.sort();
+    for path in paths {
         if path.is_dir() {
             collect_test_files(&path, root, out);
         } else if path.extension().is_some_and(|e| e == "rs")
             && path.file_name().is_some_and(|n| n != "codes.rs")
         {
             if let Ok(text) = fs::read_to_string(&path) {
-                // Record a workspace-relative path for display.
                 let rel = path
                     .strip_prefix(root)
                     .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -168,7 +264,7 @@ fn collect_test_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) 
 ///
 /// Strategy: find the test function that references the code (by constant
 /// name or by the `"DEEDnnnn"` string), then look for the first string
-/// literal in that function that looks like deed source.  "Looks like deed
+/// literal in that function that looks like deed source. "Looks like deed
 /// source" means it contains a newline and at least one deed keyword.
 fn find_example(
     corpus: &[(String, String)],
@@ -176,7 +272,6 @@ fn find_example(
     code: &str,
 ) -> (Option<String>, Option<String>) {
     for (path, text) in corpus {
-        // Quick check before the heavier per-function scan.
         if !text.contains(name) && !text.contains(code) {
             continue;
         }
@@ -191,11 +286,9 @@ fn find_example(
 /// Find the first deed snippet in `text` that is in a function referencing
 /// `name` or `code`.
 fn extract_from_file(text: &str, name: &str, code: &str) -> Option<String> {
-    // Split into test functions.  Each starts at a `#[test]` marker.
     let test_positions: Vec<usize> = text.match_indices("#[test]").map(|(i, _)| i).collect();
 
     for &start in &test_positions {
-        // The function body ends at the next `#[test]` or end of file.
         let end = test_positions
             .iter()
             .find(|&&p| p > start)
@@ -217,14 +310,9 @@ fn extract_from_file(text: &str, name: &str, code: &str) -> Option<String> {
 /// Attempt to extract the first deed-looking string literal from a block of
 /// Rust source.
 fn first_deed_snippet(body: &str) -> Option<String> {
-    // We are looking for a `"..."` string literal that:
-    //  - spans at least two characters and contains a newline
-    //  - contains at least one deed keyword (`fn `, `type `, `record `,
-    //    `module `, `handler `, `let `, `for `, `effect `)
-    //
-    // We walk character by character rather than using a regex so there
-    // are no extra dependencies.
-
+    // A `"..."` literal that spans a newline and carries a deed keyword.
+    // Walked character by character rather than with a regex, because this
+    // workspace has no dependencies.
     let deed_markers = [
         "fn ", "type ", "record ", "module ", "handler ", "let ", "for ", "effect ", "choice ",
     ];
@@ -234,7 +322,7 @@ fn first_deed_snippet(body: &str) -> Option<String> {
     let mut i = 0;
 
     while i < len {
-        // Skip line comments so we do not find strings inside them.
+        // Line comments, skipped so a string inside one is not found.
         if bytes[i] == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
             while i < len && bytes[i] != b'\n' {
                 i += 1;
@@ -248,13 +336,11 @@ fn first_deed_snippet(body: &str) -> Option<String> {
         }
 
         // #780: a `format!` argument is a template, not a program. Its
-        // placeholders and its doubled braces are Rust telling `format!` what
-        // to do, and a page that prints them is showing something no compiler
-        // would accept. The literal is skipped rather than repaired, and the
-        // search carries on to the next one.
+        // placeholders and doubled braces are Rust talking to `format!`, and a
+        // page that prints them shows something no compiler would accept. The
+        // literal is skipped rather than repaired.
         let is_template = ends_with_format_macro(&body[..i]);
 
-        // We are at the opening `"`.
         i += 1;
         let mut buf = String::new();
         let mut escaped = false;
@@ -268,19 +354,16 @@ fn first_deed_snippet(body: &str) -> Option<String> {
                     'r' => buf.push('\r'),
                     '\\' => buf.push('\\'),
                     '"' => buf.push('"'),
-                    // `\x20` and similar hex escapes: skip to end of escape.
                     'x' => {
                         i += 1;
                         if i + 1 < len {
-                            i += 1; // consume two hex digits
+                            i += 1;
                         }
-                        buf.push(' '); // approximate
+                        buf.push(' ');
                     }
                     // A backslash before a newline is Rust joining two source
-                    // lines into one string line: the newline and the
-                    // indentation that follows it are not in the string. This
-                    // arm used to fall through to the one below and put the
-                    // backslash in the page.
+                    // lines: neither the newline nor the indentation after it
+                    // is in the string.
                     '\n' => {
                         i += 1;
                         while i < len && (bytes[i] as char).is_whitespace() {
@@ -313,7 +396,7 @@ fn first_deed_snippet(body: &str) -> Option<String> {
                 }
                 '"' => {
                     i += 1;
-                    break; // end of string
+                    break;
                 }
                 _ => {
                     buf.push(ch);
@@ -326,7 +409,6 @@ fn first_deed_snippet(body: &str) -> Option<String> {
             continue;
         }
 
-        // Check whether this looks like deed source.
         if buf.contains('\n') && deed_markers.iter().any(|m| buf.contains(m)) {
             return Some(buf);
         }

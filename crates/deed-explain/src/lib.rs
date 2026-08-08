@@ -3,15 +3,37 @@
 //! Every entry comes from the `///` doc-comment lines that already sit above
 //! each `pub const` in a `codes.rs` file, together with the smallest deed
 //! snippet that triggers it extracted from an existing test.  Nothing here is
-//! invented: the build script (`build.rs`) reads both sources and writes the
-//! data into this crate.
+//! invented.
+//!
+//! The pages are generated, committed as `generated/pages.rs`, and shipped as
+//! source.  A build script did the reading until it was measured against a
+//! published crate: a `.crate` archive carries this directory and no
+//! workspace, so the script would have found an empty tree, produced no pages,
+//! and compiled.  `crates/deed-explain/tests/generated.rs` reads the tree now,
+//! where the tree is, and fails when the committed file has drifted from it.
 //!
 //! The public surface is small:
 //! - [`all_pages`] returns every page in sorted order.
 //! - [`page`] looks up a single code by its identifier (`"DEED4025"`) or its
 //!   constant name (`"BROKEN_PRECONDITION"`).
 
-include!(concat!(env!("OUT_DIR"), "/pages.rs"));
+/// One generated page per diagnostic code.
+#[derive(Debug)]
+pub struct Page {
+    /// The code string, e.g. `"DEED4025"`.
+    pub code: &'static str,
+    /// The constant name, e.g. `"BROKEN_PRECONDITION"`.
+    pub name: &'static str,
+    /// The reasoning: doc-comment lines from `codes.rs`.
+    pub text: &'static str,
+    /// A deed snippet that triggers this code, if one could be extracted
+    /// automatically from an existing test.
+    pub example: Option<&'static str>,
+    /// The test file the example came from.
+    pub example_source: Option<&'static str>,
+}
+
+include!("../generated/pages.rs");
 
 /// All generated pages, sorted by code identifier.
 pub fn all_pages() -> &'static [Page] {
