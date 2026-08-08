@@ -50,6 +50,24 @@ release notes.
 
 ### Tools
 
+- `deed new <name>` writes a project. Until now the tool could check, test,
+  run, compile, format, document, explain and answer an editor, and the one
+  thing it could not do was produce a file to point any of that at, so
+  somebody trying the language had to work the module header and the file
+  layout out of this repository first.
+
+  It writes a directory holding a library module with a contract and its
+  tests, and a program that imports it. Two files, because the `module` line
+  and the `use` line are the whole of how a project splits in two and seeing
+  it once beats reading about it. No manifest: a manifest here says where code
+  outside your tree lives, and a new project has none, so writing an empty one
+  would be text nothing reads.
+
+  `crates/deed-cli/tests/new.rs` runs the command into a temporary directory
+  and then checks, tests, runs and format-checks what came out. The scaffold
+  lives in a Rust string literal where none of the corpus ratchets reach it,
+  so the claim that it works is held end to end rather than described.
+
 - Fixed: a compiled program called its host with the wrong arguments when one
   of them was computed. `Io.write(sys.console, to_string(n))` declared an
   import taking *one* argument, because the signature was built from a

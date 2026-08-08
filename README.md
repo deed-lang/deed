@@ -16,7 +16,8 @@ Built for code that machines write and humans review.
 > than guessed at: `design/01-principles.md` has the table and the reason a compiler is not
 > the next thing. Criticism of the design is still the most useful
 > contribution. See [issue #228](https://github.com/deed-lang/deed/issues/228) for where
-> this is going.
+> this is going, and [ROADMAP.md](ROADMAP.md) for what stands between a language one
+> person writes and a language GitHub names, measured rather than asserted.
 
 ## Getting it
 
@@ -44,6 +45,43 @@ compiles against one minor release may not compile against the next. Breaking mo
 called out in release notes, and `deed fix` carries the mechanical part when possible. The
 full policy, including diagnostics and `std/`, is in
 [design/07-versioning.md](design/07-versioning.md).
+
+## Starting something
+
+`deed new` writes a project rather than leaving you to work out the module header
+and the file layout from this repository. The name becomes both the directory and
+the module path.
+
+```
+$ deed new greeter
+greeter/greeter.deed
+greeter/main.deed
+
+next: cd greeter && deed test .
+
+$ cd greeter
+$ deed test .
+./greeter.deed
+  ok    a greeting carries the name it was given
+  ok    there is no greeting for nobody
+  ok    property greeting (100 cases)
+
+3 passed, 0 failed
+
+$ deed run main.deed
+hello, world
+```
+
+Three tests from two files, and only two of them were written down. The third is
+generated from the contract on `greeting`, which is what a signature being a
+promise buys. There is no manifest, because a manifest here says where code
+outside your tree lives and a new project has none.
+
+`crates/deed-cli/tests/new.rs` runs that command into a temporary directory on
+every commit and then checks, tests, runs and format-checks what came out, so the
+scaffold cannot rot into something that no longer compiles.
+
+## What it looks like on real code
 
 ```
 $ deed run examples/config.deed --dir examples
@@ -232,7 +270,7 @@ Read them in order. Each one leans on the one before it.
 | `deed-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, signature help, quick fixes, an outline, workspace search and formatting |
 | `deed-dap` | A debug adapter: breakpoints, stepping, the call stack and the bindings of every active call |
 | `deed-driver` | Runs all of the above, in one place, so nothing drifts |
-| `deed-cli` | The `deed` binary: `check`, `test`, `run`, `fmt`, `fix`, `lsp` and `debug` |
+| `deed-cli` | The `deed` binary: `new`, `check`, `test`, `run`, `fmt`, `fix`, `lsp` and `debug` |
 
 `deed lsp` is a language server, and most of it is plumbing over things that already existed:
 the compiler produces structured diagnostics with spans, `Types::type_of` can say what an

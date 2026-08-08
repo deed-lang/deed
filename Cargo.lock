@@ -22,6 +22,7 @@ dependencies = [
  "deed-fetch",
  "deed-fmt",
  "deed-interp",
+ "deed-lexer",
  "deed-lsp",
  "deed-mcp",
  "deed-mir",
