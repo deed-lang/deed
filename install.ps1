@@ -30,7 +30,7 @@ $installDir = if ($env:DEED_INSTALL_DIR) {
 # beats installing something that will not start.
 $arch = $env:PROCESSOR_ARCHITECTURE
 if ($arch -ne 'AMD64') {
-    throw "no release is built for Windows on $arch: ``cargo install --path crates/deed-cli`` from a clone builds one"
+    throw "no release is built for Windows on $arch: ``cargo install deed-lang`` builds one"
 }
 $target = 'x86_64-pc-windows-msvc'
 

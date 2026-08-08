@@ -71,9 +71,9 @@ case "$os/$arch" in
     Linux/x86_64)          target="x86_64-unknown-linux-gnu" ;;
     Darwin/arm64|Darwin/aarch64) target="aarch64-apple-darwin" ;;
     Darwin/x86_64)
-        die "there is no Intel Mac build: \`cargo install --path crates/deed-cli\` from a clone builds one" ;;
+        die "there is no Intel Mac build: \`cargo install deed-lang\` builds one" ;;
     *)
-        die "no release is built for $os on $arch: \`cargo install --path crates/deed-cli\` from a clone builds one" ;;
+        die "no release is built for $os on $arch: \`cargo install deed-lang\` builds one" ;;
 esac
 
 # -- which release -----------------------------------------------------------
