@@ -10,6 +10,7 @@ pub const USAGE: &str = "\
 deed, a contract-first language
 
 Usage:
+  deed new   <name>
   deed check [options] <path>...
   deed test  [options] <path>...
   deed run   [options] <path>... [-- <argument>...]
@@ -57,6 +58,11 @@ Options:
 
 Paths may be files or directories. A directory is searched for `.deed` files.
 
+`deed new` writes a directory of that name holding a library module with a
+contract and its tests, and a program that imports it. The name becomes both
+the directory and the module path, so it is lowercase letters, digits and `_`.
+It writes no manifest: a manifest here says where code outside your tree lives,
+and a new project has none.
 `deed test` refuses to run anything that does not check.
 `deed test --compiled` runs the same test blocks through the compiled backend.
   Blocks the backend cannot compile are skipped, and the count of the ones that
@@ -181,6 +187,8 @@ pub struct CheckArgs {
 #[derive(Debug)]
 pub enum Command {
     Check(CheckArgs),
+    /// Write a new project into a directory of this name.
+    New(String),
     /// Print the page for one diagnostic code.
     Explain(String),
     /// Speak the language server protocol on stdin and stdout.
@@ -250,6 +258,18 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 Some(code) => Ok(Command::Explain(code)),
             };
         }
+        // One name and nothing else. Everything a project needs beyond the
+        // name is a decision the files themselves make, and a flag here would
+        // be a second place to make it.
+        "new" => {
+            return match (args.next(), args.next()) {
+                (None, _) => Err("`deed new` needs a name, e.g. `deed new greeter`".to_string()),
+                (Some(_), Some(extra)) => Err(format!(
+                    "`deed new` takes one name, found `{extra}` as well"
+                )),
+                (Some(name), None) => Ok(Command::New(name)),
+            };
+        }
         "check" => Mode::Check,
         "test" => Mode::Test,
         "run" => Mode::Run,
@@ -259,7 +279,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "doc" => Mode::Doc,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `check`, `test`, `run`, `build`, `fmt`, `fix`, `explain`, `lsp` and `debug`"
+                "unknown command `{other}`, the choices are `new`, `check`, `test`, `run`, `build`, `doc`, `fmt`, `fix`, `explain`, `lsp`, `debug` and `mcp`"
             ));
         }
     };

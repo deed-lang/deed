@@ -2,6 +2,7 @@
 
 mod args;
 mod lock;
+mod scaffold;
 
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
@@ -62,11 +63,49 @@ fn run() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Explain(code) => run_explain(&code),
+        Command::New(name) => run_new(&name),
         Command::Check(check) => run_check(check),
         Command::Lsp => run_lsp(),
         Command::Debug => run_debug(),
         Command::Mcp => run_mcp(),
     }
+}
+
+/// Writes a new project into a directory named after it.
+///
+/// Refuses an existing directory rather than merging into it. "New" is the
+/// whole of what this command claims, and the way a scaffold destroys work is
+/// by writing over a file somebody had already started.
+fn run_new(name: &str) -> ExitCode {
+    if let Err(message) = scaffold::check_name(name) {
+        eprintln!("error: {message}");
+        return ExitCode::from(EXIT_USAGE);
+    }
+
+    let root = PathBuf::from(name);
+    if root.exists() {
+        eprintln!("error: `{name}` is already there, and `deed new` does not write into it");
+        return ExitCode::from(EXIT_USAGE);
+    }
+    if let Err(error) = std::fs::create_dir(&root) {
+        eprintln!("error: could not create `{name}`: {error}");
+        return ExitCode::from(EXIT_USAGE);
+    }
+
+    let written = scaffold::files(name);
+    for (file, contents) in &written {
+        let path = root.join(file);
+        if let Err(error) = std::fs::write(&path, contents) {
+            eprintln!("error: could not write `{}`: {error}", display_path(&path));
+            return ExitCode::from(EXIT_USAGE);
+        }
+    }
+
+    for (file, _) in &written {
+        println!("{}", display_path(&root.join(file)));
+    }
+    println!("\nnext: cd {name} && deed test .");
+    ExitCode::SUCCESS
 }
 
 /// Prints the generated page for one diagnostic code.
