@@ -50,6 +50,24 @@ release notes.
 
 ### Tools
 
+- The shipped library travels inside the crate that carries it. `SHIPPED`
+  read the nine `std/*.deed` modules with `include_str!` through three parent
+  directories, and `cargo package -p deed-driver --list` carries none of them,
+  so a compiler installed from crates.io would not have built at all. The text
+  is generated into `crates/deed-driver/generated/shipped_sources.rs` now, and
+  held against the files by a test that names the command that rewrites it.
+
+  The order the library is listed in moved into the open while doing it. It was
+  a side effect of how the table happened to be written, and three documents
+  read in it, so it is a declared list now and the generated part is only text.
+
+- New rule, held for every package: nothing a crate compiles may read above
+  its own root. `crates/deed-driver/tests/packaging.rs` walks every `src/` for
+  `include!`, `include_str!` and `include_bytes!` and measures how far each
+  path climbs, and asks the same of any build script. Both ways this workspace
+  had broken it are the two entries above, and they failed differently: one
+  would not compile, the other compiled and went silent.
+
 - Fixed, before anybody could hit it: `deed explain` would have printed
   nothing at all, for every code, in a compiler installed from crates.io. The
   pages were produced by a build script that read every `codes.rs` in the

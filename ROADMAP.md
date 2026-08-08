@@ -190,9 +190,11 @@ What stands in the way of publishing, measured with `cargo publish --workspace
       came from a build script that read the whole workspace, and a `.crate`
       carries one package directory. Every `deed explain` would have printed
       nothing. Fixed: the pages are generated, committed and shipped as source.
-- [ ] `deed-driver` would not compile at all. `src/shipped.rs` embeds the nine
-      `std/*.deed` modules with `include_str!("../../../std/...")`, and
-      `cargo package -p deed-driver --list` carries none of them.
+- [x] `deed-driver` would not compile at all. `src/shipped.rs` embedded the
+      nine `std/*.deed` modules with `include_str!("../../../std/...")`, and
+      `cargo package -p deed-driver --list` carried none of them. Fixed: the
+      text is generated into the crate, and a rule now holds every package
+      against reading above its own root.
 - [ ] Path dependencies carry no version, which `cargo publish` refuses.
 - [ ] Nothing runs `cargo publish --workspace --dry-run`, so all of the above
       would have been found by whoever typed `cargo install` first.

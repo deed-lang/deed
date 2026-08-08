@@ -42,21 +42,48 @@ use std::collections::HashSet;
 /// The name and the text, rather than a path, because at run time there is no
 /// path. The file in this repository is where the text is edited and the
 /// constant is what a program gets.
-const SHIPPED: &[(&str, &str)] = &[
-    ("std/string", include_str!("../../../std/string.deed")),
-    ("std/list", include_str!("../../../std/list.deed")),
-    ("std/table", include_str!("../../../std/table.deed")),
-    ("std/map", include_str!("../../../std/map.deed")),
-    ("std/hashmap", include_str!("../../../std/hashmap.deed")),
-    ("std/set", include_str!("../../../std/set.deed")),
-    ("std/ratio", include_str!("../../../std/ratio.deed")),
-    ("std/date", include_str!("../../../std/date.deed")),
-    ("std/task", include_str!("../../../std/task.deed")),
+///
+/// The text is generated into this crate rather than read out of `std/` with
+/// `include_str!`, because a published crate carries its own directory and
+/// nothing above it: the three parent directories that spelling needed do not
+/// exist in a `.crate` archive, so a compiler installed from crates.io would
+/// not have built at all. `crates/deed-driver/tests/shipped.rs` holds the
+/// generated text against the files, and rewrites it on request.
+/// The library, in the order it is listed everywhere else.
+///
+/// The order is the order these arrived, and `design/02-syntax.md` and
+/// `docs/std.md` both read in it, so it is a decision rather than a
+/// consequence of how a directory walk sorts. The text next to each name is
+/// generated; which names there are, and in what order, is written here.
+const ORDER: &[&str] = &[
+    "std/string",
+    "std/list",
+    "std/table",
+    "std/map",
+    "std/hashmap",
+    "std/set",
+    "std/ratio",
+    "std/date",
+    "std/task",
 ];
+
+// The text of every module that ships, by the name a `use` writes: `SOURCES`.
+//
+// The name and the text, rather than a path, because at run time there is no
+// path. The file in this repository is where the text is edited and the
+// constant is what a program gets.
+//
+// Generated into this crate rather than read out of `std/` with
+// `include_str!`, because a published crate carries its own directory and
+// nothing above it: the three parent directories that spelling needed do not
+// exist in a `.crate` archive, so a compiler installed from crates.io would
+// not have built at all. `crates/deed-driver/tests/shipped.rs` holds the
+// generated text against the files, and rewrites it on request.
+include!("../generated/shipped_sources.rs");
 
 /// Every module that ships, in the order they are declared.
 pub fn shipped_modules() -> impl Iterator<Item = &'static str> {
-    SHIPPED.iter().map(|(name, _)| *name)
+    ORDER.iter().copied()
 }
 
 /// The source of a module that ships with the compiler.
@@ -65,7 +92,7 @@ pub fn shipped_modules() -> impl Iterator<Item = &'static str> {
 /// every name that is simply wrong. A `use` naming neither is reported by the
 /// resolver, which is the pass that can point at the line.
 pub fn shipped_source(module: &str) -> Option<&'static str> {
-    SHIPPED
+    SOURCES
         .iter()
         .find(|(name, _)| *name == module)
         .map(|(_, text)| *text)
