@@ -153,6 +153,16 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # One list, written here rather than per platform, because it is a claim
+      # about the set of assets and only this job has all of them. `install.sh`
+      # refuses a download whose hash is not in it, so a release without it is
+      # a release nothing can install.
+      - name: checksums
+        run: |
+          version="${GITHUB_REF_NAME}"
+          (cd dist && sha256sum deed-*.tar.gz deed-*.zip deed-*.wasm > "deed-$version-checksums.txt")
+          cat "dist/deed-$version-checksums.txt"
+
       - name: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
