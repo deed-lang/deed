@@ -197,8 +197,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo build -p deed-cli
-        run: cargo build --release -p deed-cli --locked
+      - name: cargo build -p deed-lang
+        run: cargo build --release -p deed-lang --locked
 
       # Deliberately unpinned. The crate's own tests already cover the protocol
       # this repository believes in; the only thing this job adds is whether the
@@ -224,8 +224,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo build -p deed-cli
-        run: cargo build --release -p deed-cli --locked
+      - name: cargo build -p deed-lang
+        run: cargo build --release -p deed-lang --locked
 
       # The runner in `deed-codegen` is this repository's own, and it hands a
       # host implementation the module's memory directly because it shares an

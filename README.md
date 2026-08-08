@@ -290,7 +290,7 @@ Read them in order. Each one leans on the one before it.
 | `deed-lsp` | A language server: diagnostics, hover, go to definition, references, rename, completion, signature help, quick fixes, an outline, workspace search and formatting |
 | `deed-dap` | A debug adapter: breakpoints, stepping, the call stack and the bindings of every active call |
 | `deed-driver` | Runs all of the above, in one place, so nothing drifts |
-| `deed-cli` | The `deed` binary: `new`, `check`, `test`, `run`, `fmt`, `fix`, `lsp` and `debug` |
+| `deed-lang` | The `deed` binary: `new`, `check`, `test`, `run`, `fmt`, `fix`, `lsp` and `debug`. Its directory is `crates/deed-cli` |
 
 `deed lsp` is a language server, and most of it is plumbing over things that already existed:
 the compiler produces structured diagnostics with spans, `Types::type_of` can say what an

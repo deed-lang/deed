@@ -47,7 +47,7 @@ jobs:
       # checking here is the thing CI cannot: that the binary each platform
       # produces runs, and says the version the tag claims.
       - name: cargo build
-        run: cargo build --release --locked -p deed-cli --target ${{ matrix.target }}
+        run: cargo build --release --locked -p deed-lang --target ${{ matrix.target }}
 
       - name: the binary runs and knows its version
         shell: bash
