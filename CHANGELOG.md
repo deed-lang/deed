@@ -16,6 +16,32 @@ release notes.
 
 ### Language
 
+- Nothing yet.
+
+### Diagnostics
+
+- Nothing yet.
+
+### Standard library
+
+- Nothing yet.
+
+### Tools
+
+- Nothing yet.
+
+### Measurements
+
+- Nothing yet.
+
+## 0.2.9 (2026-08-08)
+
+### Programs that used to compile and no longer do
+
+- None yet.
+
+### Language
+
 - Fixed: a contract that mentions `result` or `old(...)` inside a closure now
   runs. `deed check` accepted it and running it answered `DEED6006`, whose own
   note says either the file was not checked or the check has a hole; it was the
