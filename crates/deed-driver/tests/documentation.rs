@@ -541,6 +541,60 @@ fn the_security_policy_lists_the_io_operations_that_exist() {
     assert_eq!(backticked(sentence), expected);
 }
 
+/// And the modules that ship, which it also names as running under the same
+/// rules.
+///
+/// It named three of the nine. The operation list beside it has been held for
+/// a while and stayed current; this one was not, and drifted the way an
+/// unheld list does.
+#[test]
+fn the_security_policy_lists_the_modules_that_ship() {
+    let security = read("SECURITY.md");
+    let sentence = between(
+        &security,
+        "Embedded std modules (",
+        ") are normal Deed code",
+    );
+
+    let shipping: Vec<String> = deed_driver::shipped_modules().map(str::to_string).collect();
+    assert_eq!(backticked(sentence), shipping);
+}
+
+/// A security policy may not say there is nothing released.
+///
+/// It said "There are no releases and the version is `0.0.0`", and used that
+/// to advise reporting a sandbox escape in the open because it "costs nobody
+/// anything". Both halves stopped being true at the first tag, and the second
+/// half is advice rather than description, which is the part that matters:
+/// somebody who found one would have read it and published.
+///
+/// Held against the changelog rather than against the network, so it answers
+/// on an aeroplane and does not need a token.
+#[test]
+fn the_security_policy_does_not_say_nothing_has_shipped() {
+    let released: Vec<&str> = read("CHANGELOG.md")
+        .lines()
+        .filter_map(|line| line.strip_prefix("## "))
+        .filter(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        .map(|rest| rest.split_whitespace().next().unwrap_or(rest))
+        .map(|version| Box::leak(version.to_string().into_boxed_str()) as &str)
+        .collect();
+    assert!(
+        !released.is_empty(),
+        "the changelog should name released versions"
+    );
+
+    let security = read("SECURITY.md");
+    for wrong in ["no releases", "0.0.0", "no users"] {
+        assert!(
+            !security.contains(wrong),
+            "SECURITY.md says {wrong:?}, and {} versions have been released, the latest {}",
+            released.len(),
+            released.first().unwrap_or(&"")
+        );
+    }
+}
+
 /// What ships inside the compiler, where the document says what ships.
 ///
 /// The table is a list of names the compiler holds, so it is the checkable

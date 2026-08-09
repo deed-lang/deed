@@ -27,8 +27,9 @@ The runtime boundary here is capability passing plus host-enforced operations:
   happen to.
 - Runtime row checking reports `DEED6010` when a run performs an operation the checked row did
   not admit. That is treated as a compiler/runtime invariant failure, not as a program fault.
-- Embedded std modules (`std/string`, `std/list`, `std/table`) are normal Deed code and run
-  under the same row and capability rules as any other module.
+- Embedded std modules (`std/string`, `std/list`, `std/table`, `std/map`, `std/hashmap`,
+  `std/set`, `std/ratio`, `std/date`, `std/task`) are normal Deed code and run under the
+  same row and capability rules as any other module.
 - In compiled output, host imports are the authority boundary. A module can only ask for what
   it imports, and the host decides what those imports do.
 
@@ -46,8 +47,9 @@ The runtime boundary here is capability passing plus host-enforced operations:
 
 ## Supported versions
 
-None yet. There are no releases and the version is `0.0.0`, so the only supported version is
-whatever `main` is today. Fixes land on `main` and nowhere else.
+The supported version is the most recent release. Fixes land on `main` and go out in the
+release after that; there are no backports to older tags, and an older tag that carries a
+sandbox escape will not be patched in place. `CHANGELOG.md` says what changed in each one.
 
 ## Reporting
 
@@ -55,10 +57,13 @@ Use GitHub's private vulnerability reporting on this repository, under **Securit
 **Report a vulnerability**. That reaches the maintainer without the report being public
 first.
 
-If that is unavailable, open a normal issue. Given there are no users and no releases, a
-sandbox escape reported in the open costs nobody anything, and having it written down is
-worth more than the delay of arranging a private channel. There is no email address here on
-purpose: an address nobody monitors is worse than none.
+This file used to say that reporting in the open cost nobody anything, on the grounds that
+nothing had shipped and nobody was running it. Both halves stopped being true at the first
+tag, and `cargo install deed-lang` installs a compiler somebody has, so please use the
+private channel first. If it is unavailable, open an issue saying that you have a
+capability or `Dir` finding and would like somewhere to send it, without the details.
+
+There is no email address here on purpose: an address nobody monitors is worse than none.
 
 ## What to expect
 
