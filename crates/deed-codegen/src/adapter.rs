@@ -55,15 +55,38 @@ pub enum Cross {
     /// `string`. Two core `i32`s going in, a pointer to two more coming back,
     /// and UTF-8 bytes in the module's own memory either way.
     Text,
+    /// `list<s64>`. Two core `i32`s going in, a pointer to two more coming
+    /// back, and the elements in the module's own memory either way.
+    ///
+    /// The one aggregate needing no element loop on the way out. A list here
+    /// is a length and then its elements, eight bytes each, and a canonical
+    /// `list<s64>` is those elements with nothing in front of them, so what
+    /// goes back is the list's own address plus one word.
+    Numbers,
 }
 
 impl Cross {
-    /// The component model's byte for this type.
-    pub(crate) fn byte(self) -> u8 {
+    /// The component model's byte for this type, when it has one.
+    ///
+    /// `None` for a type the format writes out in its type section and refers
+    /// to by index afterwards. A value type is one byte for a primitive or an
+    /// index for anything else, and the two cannot be confused: the
+    /// primitives start at `0x73` and an index is written smallest first.
+    pub(crate) fn byte(self) -> Option<u8> {
         match self {
-            Cross::Bool => 0x7f,
-            Cross::Signed64 => 0x78,
-            Cross::Text => 0x73,
+            Cross::Bool => Some(0x7f),
+            Cross::Signed64 => Some(0x78),
+            Cross::Text => Some(0x73),
+            Cross::Numbers => None,
+        }
+    }
+
+    /// What defines this type, for one with no byte of its own.
+    pub(crate) fn definition(self) -> Option<&'static [u8]> {
+        match self {
+            // `70` a list, then what it holds.
+            Cross::Numbers => Some(&[0x70, 0x78]),
+            Cross::Bool | Cross::Signed64 | Cross::Text => None,
         }
     }
 
@@ -74,7 +97,7 @@ impl Cross {
     /// is what keeps the components that worked before byte for byte what
     /// they were.
     pub fn crosses_unchanged(self) -> bool {
-        !matches!(self, Cross::Text)
+        !matches!(self, Cross::Text | Cross::Numbers)
     }
 
     /// The core types this one arrives as, in order.
@@ -82,7 +105,7 @@ impl Cross {
         match self {
             Cross::Bool => &[ValType::I32],
             Cross::Signed64 => &[ValType::I64],
-            Cross::Text => &[ValType::I32, ValType::I32],
+            Cross::Text | Cross::Numbers => &[ValType::I32, ValType::I32],
         }
     }
 }
@@ -255,45 +278,41 @@ fn wrapper(called: u32, one: &Crossing<'_>) -> (FuncType, Vec<ValType>, Vec<Ins>
         params.extend_from_slice(cross.flat());
     }
 
-    // A local per string parameter, for the address of the value built from
+    // A local per adapted parameter, for the address of the value built from
     // it, and then the four every wrapper uses.
-    let texts = one
+    let adapted = one
         .params
         .iter()
-        .filter(|cross| **cross == Cross::Text)
+        .filter(|cross| !cross.crosses_unchanged())
         .count();
     let base = params.len() as u32;
-    let counter = base + texts as u32;
+    let counter = base + adapted as u32;
     let characters = counter + 1;
     let answer = counter + 2;
     let area = counter + 3;
-    let locals = vec![ValType::I32; texts + 4];
+    let locals = vec![ValType::I32; adapted + 4];
 
     let mut body = Vec::new();
     let mut built = Vec::new();
     for (at, cross) in one.params.iter().enumerate() {
-        if *cross != Cross::Text {
+        if cross.crosses_unchanged() {
             continue;
         }
         let into = base + built.len() as u32;
-        body.extend(lower_text(
-            starts[at],
-            starts[at] + 1,
-            into,
-            counter,
-            characters,
-        ));
+        body.extend(match cross {
+            Cross::Text => lower_text(starts[at], starts[at] + 1, into, counter, characters),
+            _ => lower_numbers(starts[at], starts[at] + 1, into, counter),
+        });
         built.push(into);
     }
 
     let mut next = 0;
     for (at, cross) in one.params.iter().enumerate() {
-        match cross {
-            Cross::Text => {
-                body.extend([Ins::LocalGet(built[next]), Ins::I64ExtendI32S]);
-                next += 1;
-            }
-            _ => body.push(Ins::LocalGet(starts[at])),
+        if cross.crosses_unchanged() {
+            body.push(Ins::LocalGet(starts[at]));
+        } else {
+            body.extend([Ins::LocalGet(built[next]), Ins::I64ExtendI32S]);
+            next += 1;
         }
     }
     body.push(Ins::Call(called));
@@ -306,9 +325,17 @@ fn wrapper(called: u32, one: &Crossing<'_>) -> (FuncType, Vec<ValType>, Vec<Ins>
         // the callee write them somewhere and give back where. Not a choice
         // this backend makes: a caller reads the answer at that address
         // whether or not anything here would have preferred a pair.
-        Some(Cross::Text) => vec![ValType::I32],
+        Some(Cross::Text) | Some(Cross::Numbers) => vec![ValType::I32],
     };
-    if one.result == Some(Cross::Text) {
+    // Where the elements start, and where the count is read from, are the
+    // whole difference between handing back text and handing back numbers.
+    // Text keeps two words in front of its bytes and the second is the byte
+    // count; a list keeps one and it is the length.
+    if let Some(carried @ (Cross::Text | Cross::Numbers)) = one.result {
+        let (elements, count) = match carried {
+            Cross::Text => (TEXT, layout::WORD),
+            _ => (layout::WORD, 0),
+        };
         body.extend([Ins::I32WrapI64, Ins::LocalSet(answer)]);
         // A word: the return area is a pointer and a length, and both are
         // four bytes wide on this boundary whatever else here is eight.
@@ -318,12 +345,12 @@ fn wrapper(called: u32, one: &Crossing<'_>) -> (FuncType, Vec<ValType>, Vec<Ins>
         body.extend([
             Ins::LocalGet(area),
             Ins::LocalGet(answer),
-            Ins::I32Const(TEXT as i32),
+            Ins::I32Const(elements as i32),
             Ins::I32Add,
             Ins::I32Store(0),
             Ins::LocalGet(area),
             Ins::LocalGet(answer),
-            Ins::I64Load(layout::WORD),
+            Ins::I64Load(count),
             Ins::I32WrapI64,
             Ins::I32Store(4),
             Ins::LocalGet(area),
@@ -332,6 +359,53 @@ fn wrapper(called: u32, one: &Crossing<'_>) -> (FuncType, Vec<ValType>, Vec<Ins>
     body.push(Ins::Return);
 
     (FuncType { params, results }, locals, body)
+}
+
+/// Builds the list the module uses out of the pointer and length a caller
+/// passed, leaving its address in `into`.
+///
+/// Element for element rather than byte for byte, because both sides store an
+/// `s64` in eight bytes and the only difference is the length this backend
+/// keeps in front. A caller's elements are already in this module's memory,
+/// because a list arriving here was allocated through `cabi_realloc`.
+fn lower_numbers(pointer: u32, length: u32, into: u32, counter: u32) -> Vec<Ins> {
+    let mut body = allocate(into, |ins| {
+        ins.extend([
+            Ins::LocalGet(length),
+            Ins::I64ExtendI32S,
+            Ins::I64Const(1),
+            Ins::I64Add,
+            Ins::I64Const(layout::WORD as i64),
+            Ins::I64Mul,
+        ]);
+    });
+    body.extend([
+        Ins::LocalGet(into),
+        Ins::LocalGet(length),
+        Ins::I64ExtendI32S,
+        Ins::I64Store(0),
+    ]);
+    body.extend(count_to(
+        counter,
+        length,
+        vec![
+            Ins::LocalGet(into),
+            Ins::I32Const(layout::WORD as i32),
+            Ins::I32Add,
+            Ins::LocalGet(counter),
+            Ins::I32Const(layout::WORD as i32),
+            Ins::I32Mul,
+            Ins::I32Add,
+            Ins::LocalGet(pointer),
+            Ins::LocalGet(counter),
+            Ins::I32Const(layout::WORD as i32),
+            Ins::I32Mul,
+            Ins::I32Add,
+            Ins::I64Load(0),
+            Ins::I64Store(0),
+        ],
+    ));
+    body
 }
 
 /// Builds the value the module uses out of the pointer and length a caller
@@ -583,13 +657,22 @@ mod tests {
         assert_eq!(signature.results, vec![ValType::I32]);
     }
 
-    /// The two bytes that used to be the whole of this, and the one that is
-    /// new. Swapping them is a component that lies about what it takes.
+    /// The bytes the format gives the primitives, and the shape it gives the
+    /// one that has none. Swapping them is a component that lies about what
+    /// it takes.
     #[test]
-    fn the_three_crossings_are_the_bytes_the_format_gives_them() {
-        assert_eq!(Cross::Bool.byte(), 0x7f);
-        assert_eq!(Cross::Signed64.byte(), 0x78);
-        assert_eq!(Cross::Text.byte(), 0x73);
+    fn the_crossings_are_the_bytes_and_shapes_the_format_gives_them() {
+        assert_eq!(Cross::Bool.byte(), Some(0x7f));
+        assert_eq!(Cross::Signed64.byte(), Some(0x78));
+        assert_eq!(Cross::Text.byte(), Some(0x73));
+
+        // A list is written out and referred to by index, so it has no byte
+        // of its own: `70` a list, `78` the `s64` in it.
+        assert_eq!(Cross::Numbers.byte(), None);
+        assert_eq!(Cross::Numbers.definition(), Some(&[0x70, 0x78][..]));
+        for primitive in [Cross::Bool, Cross::Signed64, Cross::Text] {
+            assert_eq!(primitive.definition(), None, "{primitive:?}");
+        }
     }
 
     /// Which of them needs standing in front of, which is the question the
@@ -1033,6 +1116,153 @@ mod tests {
         assert_eq!(
             crate::run::call(&module, "moved", &[]),
             Ok(Some(crate::run::Value::I64(42)))
+        );
+    }
+
+    /// Well clear of where the bump pointer reaches in these tests, so a list
+    /// written here is not something an allocation walks over.
+    const AWAY: u32 = layout::HEAP_START + 4096;
+
+    /// Three numbers as a caller passes them: the elements, and nothing in
+    /// front of them.
+    fn passed(count: i32) -> Vec<Ins> {
+        let mut body = Vec::new();
+        for at in 0..count {
+            body.extend([
+                Ins::I32Const(AWAY as i32 + at * layout::WORD as i32),
+                Ins::I64Const(i64::from(at) + 1),
+                Ins::I64Store(0),
+            ]);
+        }
+        body.extend([Ins::I32Const(AWAY as i32), Ins::I32Const(count)]);
+        body
+    }
+
+    /// One list parameter and a number back, so the answer can be anything
+    /// the wrapper built.
+    fn one_list() -> Crossing<'static> {
+        Crossing {
+            name: "under_test",
+            params: &[Cross::Numbers],
+            result: Some(Cross::Signed64),
+        }
+    }
+
+    /// A list arrives with its length in front of the elements the caller
+    /// passed, which is the layout everything else in this backend reads.
+    #[test]
+    fn a_list_arrives_with_its_length_and_its_elements() {
+        let reads = |offset: u32| {
+            standing_in(
+                vec![ValType::I64],
+                vec![ValType::I64],
+                vec![
+                    Ins::LocalGet(0),
+                    Ins::I32WrapI64,
+                    Ins::I64Load(offset),
+                    Ins::Return,
+                ],
+            )
+        };
+
+        assert_eq!(answered(reads(0), one_list(), passed(3), vec![]), 3);
+        for (at, expected) in [(1, 1), (2, 2), (3, 3)] {
+            assert_eq!(
+                answered(reads(at * layout::WORD), one_list(), passed(3), vec![]),
+                expected,
+                "element {at}"
+            );
+        }
+    }
+
+    /// An empty one is the case where the pointer points at no elements, and
+    /// the length in front of them is the only thing written.
+    #[test]
+    fn an_empty_list_crosses_as_an_empty_list() {
+        let module = standing_in(
+            vec![ValType::I64],
+            vec![ValType::I64],
+            vec![
+                Ins::LocalGet(0),
+                Ins::I32WrapI64,
+                Ins::I64Load(0),
+                Ins::Return,
+            ],
+        );
+        assert_eq!(answered(module, one_list(), passed(0), vec![]), 0);
+    }
+
+    /// Coming back, the boundary reads a pointer and a count out of a return
+    /// area. The pointer is the list's own address a word along, because the
+    /// word in front of the elements is the length and the caller is not
+    /// expecting one.
+    #[test]
+    fn a_list_going_back_is_its_elements_and_a_count() {
+        let stored = |count: i64| {
+            let mut body = vec![
+                Ins::I32Const(AWAY as i32),
+                Ins::I64Const(count),
+                Ins::I64Store(0),
+            ];
+            for at in 0..count {
+                body.extend([
+                    Ins::I32Const(AWAY as i32 + (at as i32 + 1) * layout::WORD as i32),
+                    Ins::I64Const((at + 1) * 10),
+                    Ins::I64Store(0),
+                ]);
+            }
+            body.extend([Ins::I64Const(i64::from(AWAY)), Ins::Return]);
+            standing_in(vec![], vec![ValType::I64], body)
+        };
+
+        let giving = || Crossing {
+            name: "under_test",
+            params: &[],
+            result: Some(Cross::Numbers),
+        };
+
+        // The count, read out of the second half of the return area.
+        assert_eq!(
+            answered(
+                stored(3),
+                giving(),
+                vec![],
+                vec![Ins::I32Load(4), Ins::I64ExtendI32S]
+            ),
+            3
+        );
+
+        // The pointer, which is the list's address and a word.
+        assert_eq!(
+            answered(
+                stored(3),
+                giving(),
+                vec![],
+                vec![Ins::I32Load(0), Ins::I64ExtendI32S]
+            ),
+            i64::from(AWAY + layout::WORD)
+        );
+
+        // And what is actually at that pointer, which is the first element
+        // rather than the length.
+        assert_eq!(
+            answered(
+                stored(3),
+                giving(),
+                vec![],
+                vec![Ins::I32Load(0), Ins::I64Load(0)]
+            ),
+            10
+        );
+
+        assert_eq!(
+            answered(
+                stored(0),
+                giving(),
+                vec![],
+                vec![Ins::I32Load(4), Ins::I64ExtendI32S]
+            ),
+            0
         );
     }
 }

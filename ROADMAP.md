@@ -250,10 +250,10 @@ Carried here so the roadmap does not pretend they are closed:
   interpreter prints. A trap whose message names a resource is not a
   measurement of that resource.
 
-- A list, a record or a choice crossing a component boundary. `deed build
-  --component` writes a component binary, and numbers, booleans and text cross
-  it; anything wider is refused by name, because its lowering is per element and
-  per field. See
+- A record or a choice crossing a component boundary, or a list of anything but
+  numbers. `deed build --component` writes a component binary, and numbers,
+  booleans, text and `list<s64>` cross it; anything wider is refused by name,
+  because its lowering is per element and per field. See
   `design/decisions/2026-08-09-text-crosses-the-component-boundary.md`.
 
 - No dependency discovery, which is §4d and is the one on this list that costs

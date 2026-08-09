@@ -80,6 +80,31 @@ appended. Every function keeps its index and every export keeps its name. The
 `<name>.wasm` written beside the source has none of them: a host embedding that
 file is not handed adapters it did not ask for.
 
+## A list of numbers, added since
+
+The same machinery, and the cheapest possible case of it. A `list<s64>` is a
+pointer and a count on the boundary, exactly as a string is, and this backend
+already stores a list as a length and then its elements at eight bytes each.
+The canonical form of the elements is what is already there, so handing one
+back is the list's own address a word along, with no copy and no element loop.
+Going the other way is one: a caller's elements arrive in this module's memory
+through `cabi_realloc`, and what gets built around them is the length.
+
+Two things about the encoding turned out to matter, and both were read out of a
+component `jco` built rather than out of the specification:
+
+- `list<T>` is not a primitive. It is written into the type section as `70`
+  followed by what it holds, and referred to afterwards by index. A value type
+  is a byte for a primitive or an index for anything else, and the two cannot
+  be confused because the primitives start at `0x73`.
+- So the defined types come first and every function type moves along by as
+  many. The index the lift names moves with them, and a lift naming the wrong
+  one is a component whose signature a runtime reads and believes.
+
+What is still refused is what needs a loop over elements or fields: a list of
+anything but numbers, a record, a choice. `list<bool>` is on that list rather
+than this one, because a canonical `bool` is one byte and a slot here is eight.
+
 ## What this buys
 
 Measured through `jco`, which bundles the Bytecode Alliance's own `wasm-tools`,
