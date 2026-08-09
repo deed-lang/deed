@@ -110,25 +110,38 @@ pub fn encode(core: &Module, lifted: &[Lifted]) -> Vec<u8> {
     }
     section(&mut out, 6, &aliases);
 
-    // A component function type per export. Parameters are named because the
-    // format names them; `p0`, `p1` and so on, which is what the `.wit` beside
-    // the file already says, for the same reason.
+    // A component function type per export, and in front of them the types
+    // that are not a single byte. A value type is written as a primitive byte
+    // or as an index into this section, so anything with a shape of its own
+    // is spelled out first and pointed at afterwards.
+    let mut defined: Vec<Cross> = Vec::new();
+    for one in lifted {
+        for carried in one.params.iter().chain(one.result.iter()) {
+            if carried.definition().is_some() && !defined.contains(carried) {
+                defined.push(*carried);
+            }
+        }
+    }
+
     let mut types = Vec::new();
-    write_u32(&mut types, lifted.len() as u32);
+    write_u32(&mut types, (defined.len() + lifted.len()) as u32);
+    for carried in &defined {
+        types.extend_from_slice(carried.definition().expect("it is in this list for that"));
+    }
     for one in lifted {
         types.push(0x40);
         write_u32(&mut types, one.params.len() as u32);
         for (at, param) in one.params.iter().enumerate() {
             name(&mut types, &format!("p{at}"));
-            types.push(param.byte());
+            valtype(&mut types, param, &defined);
         }
-        match one.result {
+        match &one.result {
             Some(result) => {
                 types.push(0x00);
-                types.push(result.byte());
+                valtype(&mut types, result, &defined);
             }
-            // Not a zero-length list of results: the format spells "none" with
-            // its own pair of bytes.
+            // Not a zero-length list of results: the format spells "none"
+            // with its own pair of bytes.
             None => types.extend_from_slice(&[0x01, 0x00]),
         }
     }
@@ -155,7 +168,7 @@ pub fn encode(core: &Module, lifted: &[Lifted]) -> Vec<u8> {
         } else {
             canon.push(0x00);
         }
-        write_u32(&mut canon, at as u32);
+        write_u32(&mut canon, (defined.len() + at) as u32);
     }
     section(&mut out, 8, &canon);
 
@@ -185,6 +198,20 @@ fn section(out: &mut Vec<u8>, id: u8, payload: &[u8]) {
 fn name(out: &mut Vec<u8>, text: &str) {
     write_u32(out, text.len() as u32);
     out.extend_from_slice(text.as_bytes());
+}
+
+/// One value type: a primitive's byte, or the index of a type defined above.
+fn valtype(out: &mut Vec<u8>, carried: &Cross, defined: &[Cross]) {
+    match carried.byte() {
+        Some(byte) => out.push(byte),
+        None => {
+            let at = defined
+                .iter()
+                .position(|one| one == carried)
+                .expect("a type with no byte of its own was written out above");
+            write_u32(out, at as u32);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -402,6 +429,59 @@ mod tests {
         assert!(one(vec![Cross::Text], Some(Cross::Bool)));
         assert!(one(vec![Cross::Signed64], Some(Cross::Text)));
         assert!(one(vec![Cross::Bool, Cross::Text], None));
+        assert!(one(vec![Cross::Numbers], Some(Cross::Bool)));
+        assert!(one(vec![Cross::Signed64], Some(Cross::Numbers)));
+    }
+
+    /// A type with a shape of its own is written out and pointed at.
+    ///
+    /// A primitive is one byte in place; anything else is an entry in this
+    /// section and an index afterwards. So the entries come first and every
+    /// function type moves along by as many, including the index the lift
+    /// names — which is the byte that decides whether a runtime reads the
+    /// right signature or a list as though it were a function.
+    #[test]
+    fn a_list_is_written_out_and_the_types_after_it_move_along() {
+        let mut core = adder();
+        core.export(REALLOC, 0);
+        let carrying = vec![Lifted {
+            name: "doubled".to_string(),
+            core: "doubled.lift".to_string(),
+            params: vec![Cross::Numbers],
+            result: Some(Cross::Numbers),
+        }];
+
+        let types = payload(&encode(&core, &carrying), 7);
+        assert_eq!(
+            types,
+            vec![
+                // Two types: the list, and the function that carries it.
+                0x02, //
+                // `70` a list, `78` the `s64` in it.
+                0x70, 0x78, //
+                // `40` a function, one parameter named `p0`, and both its
+                // type and the result's written as index 0 rather than as a
+                // byte.
+                0x40, 0x01, 0x02, b'p', b'0', 0x00, 0x00, 0x00,
+            ]
+        );
+
+        // And the lift names the function type, which is now the second.
+        let canon = payload(&encode(&core, &carrying), 8);
+        assert_eq!(canon.last(), Some(&0x01));
+    }
+
+    /// Nothing changes for a component carrying only primitives, which is
+    /// what keeps the ones that worked before byte for byte what they were.
+    #[test]
+    fn a_component_carrying_only_primitives_writes_the_types_it_used_to() {
+        let types = payload(&encode(&adder(), &lifted()), 7);
+        assert_eq!(
+            types,
+            vec![
+                0x01, 0x40, 0x02, 0x02, b'p', b'0', 0x78, 0x02, b'p', b'1', 0x78, 0x00, 0x78
+            ]
+        );
     }
 
     /// The payload of the first section with this id.

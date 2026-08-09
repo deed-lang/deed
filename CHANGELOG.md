@@ -70,6 +70,35 @@ release notes.
 
 ### Tools
 
+- A list of numbers crosses a component boundary. `deed build --component`
+  refused any export carrying a list; `List<Int>` now goes both ways, and a
+  component runtime reads it as `list<s64>`:
+
+  ```
+  $ jco wit lists.component.wasm
+  export doubled: func(p0: list<s64>) -> list<s64>;
+  ```
+
+  The cheapest case of the machinery text already used. This backend stores a
+  list as a length and then its elements at eight bytes each, and the canonical
+  form of a `list<s64>` is those elements with the length taken off the front,
+  so handing one back is the list's own address a word along — no copy and no
+  loop over elements. Taking one in is a copy: the caller's elements are already
+  in this module's memory, allocated through `cabi_realloc`, and what is built
+  around them is the length.
+
+  Two things about the format had to be read out of a component the Bytecode
+  Alliance's tooling built, because a list is not a primitive: it is written
+  into the type section as `70` and what it holds, and referred to by index
+  afterwards, which moves every function type along by as many — including the
+  index the lift names. Held by `crates/deed-codegen/component.mjs`, which
+  builds one on every commit and calls it through `jco`, with 500 elements and
+  with none.
+
+  Still refused, by name: a list of anything but numbers, a record, a choice.
+  Their lowering is per element and per field. `list<bool>` is among them,
+  because a canonical `bool` is one byte and a slot here is eight.
+
 - `deed build --reuse` prints what each function does with each parameter.
   Four answers: `releases`, `returns`, `retains`, `keeps` — whether the value
   the function returns may reach the storage that parameter arrived in, and

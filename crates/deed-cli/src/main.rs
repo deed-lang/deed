@@ -697,7 +697,7 @@ fn lift_all(program: &deed_mir::Program) -> Result<Crossings, String> {
             params.push(crossing(param).ok_or_else(|| {
                 format!(
                     "`{}` parameter {at} is a {} and lifting one needs canonical ABI adapters, \
-                     which are written for text and for nothing wider",
+                     which are written for text and for a list of numbers and nothing wider",
                     function.name,
                     to_wit_type(param, program)
                 )
@@ -708,7 +708,7 @@ fn lift_all(program: &deed_mir::Program) -> Result<Crossings, String> {
             ref ty => Some(crossing(ty).ok_or_else(|| {
                 format!(
                     "`{}` returns a {} and lifting one needs canonical ABI adapters, \
-                     which are written for text and for nothing wider",
+                     which are written for text and for a list of numbers and nothing wider",
                     function.name,
                     to_wit_type(ty, program)
                 )
@@ -725,6 +725,12 @@ fn crossing(ty: &deed_mir::Ty) -> Option<deed_codegen::adapter::Cross> {
         deed_mir::Ty::Bool => Some(deed_codegen::adapter::Cross::Bool),
         deed_mir::Ty::Int => Some(deed_codegen::adapter::Cross::Signed64),
         deed_mir::Ty::Str => Some(deed_codegen::adapter::Cross::Text),
+        // A list of numbers and nothing wider: both sides keep an `s64` in
+        // eight bytes, so the elements are already what the boundary reads.
+        // A list of anything else needs lowering an element at a time.
+        deed_mir::Ty::List(element) if **element == deed_mir::Ty::Int => {
+            Some(deed_codegen::adapter::Cross::Numbers)
+        }
         _ => None,
     }
 }

@@ -230,7 +230,10 @@ for. A number is an `s64` on both sides and a boolean is a `bool` on both sides,
 lifting one is a declaration rather than a conversion. Text needs a conversion and gets
 one: a string crosses as a pointer and a length into memory the caller asked the callee
 to allocate, so the module inside the component carries a `cabi_realloc` and a wrapper
-per export, and the lift names both. Anything wider -- a list, a record, a choice --
+per export, and the lift names both. A list of numbers crosses the same way and
+needs no element loop, because both sides keep an `s64` in eight bytes and the
+only difference is the length this backend keeps in front of them. Anything
+wider -- a list of anything else, a record, a choice --
 has adapters nobody has written, because their lowering is per element and per field.
 Those modules get the core module and the world, and a line naming the export and what
 it would need. A component that answered wrongly would be worse than one that is not

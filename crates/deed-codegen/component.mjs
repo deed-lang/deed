@@ -193,11 +193,67 @@ check(
 
 check("an export needing no adapter still answers in a component that has them", said.plain(41n) === 42n, said.plain(41n));
 
+// -- a list of numbers, which needs no element loop -------------------------
+//
+// Both sides keep an `s64` in eight bytes, and this backend stores a list as a
+// length and then its elements, so the canonical form is those elements with
+// the length taken off the front. Going the other way is a copy: the caller's
+// elements are already in this module's memory, allocated through
+// `cabi_realloc`, and what is built around them is the length.
+const NUMBERS = `module lists
+
+fn doubled(numbers: List<Int>) -> List<Int> {
+  for n in numbers with out = [] { push(out, n + n) }
+}
+
+fn total(numbers: List<Int>) -> Int {
+  for n in numbers with sum = 0 { sum + n }
+}
+
+fn counting(upto: Int) -> List<Int> {
+  for _s at i in repeat(0, upto) with out = [] { push(out, i) }
+}
+`;
+
+const numbers = join(scratch, "lists.deed");
+writeFileSync(numbers, NUMBERS);
+execFileSync(deed, ["build", "--component", numbers], { encoding: "utf8" });
+
+const listing = join(scratch, "lists.component.wasm");
+const held = jco(["wit", listing], { encoding: "utf8" });
+check(
+  "a list of numbers is a list of numbers on the boundary",
+  held.includes("export doubled: func(p0: list<s64>) -> list<s64>") &&
+    held.includes("export total: func(p0: list<s64>) -> s64") &&
+    held.includes("export counting: func(p0: s64) -> list<s64>"),
+  held,
+);
+
+jco(["transpile", listing, "-o", join(scratch, "rows"), "--name", "lists"], { stdio: "pipe" });
+const rows = await import(pathToFileURL(resolve(scratch, "rows", "lists.js")).href);
+
+const doubled = Array.from(rows.doubled([1n, 2n, 3n]));
+check("a component runtime hands it a list and reads one back", `${doubled}` === "2,4,6", `${doubled}`);
+check("one going only in crosses too", rows.total([1n, 2n, 3n, 4n]) === 10n, rows.total([1n, 2n, 3n, 4n]));
+check("and one going only out", `${Array.from(rows.counting(5n))}` === "0,1,2,3,4");
+
+// Nothing about either direction is a fixed size, and an empty one is the
+// case where the pointer points at no elements at all.
+check("an empty list in and out", rows.doubled([]).length === 0 && rows.total([]) === 0n);
+
+const many = Array.from({ length: 500 }, (_, i) => BigInt(i));
+const back = Array.from(rows.doubled(many));
+check(
+  "a long one keeps every element and its order",
+  back.length === 500 && back[0] === 0n && back[499] === 998n,
+  `${back.length} back, last ${back[back.length - 1]}`,
+);
+
 // -- and what still has none ------------------------------------------------
 //
-// A list crosses as a pointer and a length as well, and the elements behind it
-// have to be lowered one at a time. Nothing here does that, so the component is
-// not written rather than written wrongly.
+// A list of anything wider than a number crosses as a pointer and a length as
+// well, and the elements behind it have to be lowered one at a time. Nothing
+// here does that, so the component is not written rather than written wrongly.
 const LIST = `module rows
 
 fn firsts(rows: List<String>) -> String { join(rows, ",") }

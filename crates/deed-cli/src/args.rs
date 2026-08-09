@@ -47,11 +47,11 @@ Options:
   --component             With `build`, write a core module, the `.wit` world
                           its exports describe, and a component binary, instead
                           of a standalone program. The component is written
-                          when every export carries numbers, booleans or text;
-                          anything wider needs adapters that are not written,
-                          and says so by name. Refuses programs that declare
-                          `main` or use a capability in an exported function's
-                          signature.
+                          when every export carries numbers, booleans, text or
+                          a list of numbers; anything wider needs adapters that
+                          are not written, and says so by name. Refuses programs
+                          that declare `main` or use a capability in an exported
+                          function's signature.
   --reuse                 With `build`, print what each function does with each
                           parameter: `releases`, `returns`, `retains` or
                           `keeps`. Answers the question a caller has to ask
@@ -91,11 +91,12 @@ in WIT and are refused with an explanation. Tests are not part of the interface.
 
 The component binary is written when every export carries values the canonical
 ABI has a crossing for here: a number and a boolean cross unchanged, and text
-crosses through `cabi_realloc` and a wrapper per export, which the component
-carries. Anything wider -- a list, a record, a choice -- has adapters that are
-not written; those modules get the core module and the world, and a line naming
-the export and what it needs. A component that answered wrongly would be worse
-than one that is not written. Every part of this is measured on every commit
+and a list of numbers cross through `cabi_realloc` and a wrapper per export,
+which the component carries. A list of numbers needs no element loop because
+both sides keep an `s64` in eight bytes. Anything wider -- a list of anything
+else, a record, a choice -- has adapters that are not written; those modules get
+the core module and the world, and a line naming the export and what it needs. A
+component that answered wrongly would be worse than one that is not written. Every part of this is measured on every commit
 against the Bytecode Alliance's own tooling, and
 `design/decisions/2026-08-09-a-component-for-what-crosses-unchanged.md` says
 what is still missing.
