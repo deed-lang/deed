@@ -19,6 +19,10 @@ There is nothing else to install. `deed` is one binary and the standard library 
 it, so the server can check a program that says `use std/list` without a `std` directory
 existing anywhere.
 
+If you would rather see the answers before wiring anything up,
+<https://deed-lang.github.io/agents/> runs the same compiler in a browser tab and prints
+what each of the calls below comes back with.
+
 ## What it can answer
 
 | Tool | Argument | What comes back |
