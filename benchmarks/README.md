@@ -55,15 +55,22 @@ against the real compiler rather than against its memory of one.
 
 And it does not measure most of that server. Every prompt asks for a module and
 says "no tests", which is what stops an answer passing tests it wrote for
-itself, and the cost is that the answer has nothing to test and no `main` to
-run. So `deed_test`, `deed_run` and `deed_fmt` have nothing to do here, and a
-transcript of a run is evidence about `deed_check` and about very little else.
+itself, and the cost is that the answer has no `main` to run. Across the five
+runs in [RESULTS.md](RESULTS.md), eighty-three of a hundred and two tool calls
+were `deed_check` and none at all were `deed_run`, so a transcript here is
+evidence about checking and about not much else.
 
-That is worth saying because the mistake is easy and I made it. A run came back
-with sixty-five `deed_check` calls and no `deed_test` calls, and I read the
-second number as the server failing to point at a tool. It was the tasks: there
-was nothing to test. If a task ever asks for tests, that reading becomes right
-and this paragraph becomes wrong, which is why
+Not none, though, and the exception is the language's own point. `deed_test`
+was called eight times and three of those ran a property the compiler generated
+from the contract in the answer, a hundred cases each, with nobody having
+written a test. An answer with no tests in it is not an answer with nothing to
+test, as long as it carries a contract.
+
+That distinction is worth drawing because the mistake is easy and I made it. A
+run came back with sixty-five `deed_check` calls and no `deed_test` calls, and
+I read the second number as the server failing to point at a tool. It was the
+tasks. If a task ever asks for tests, that reading becomes right and this
+paragraph becomes wrong, which is why
 `crates/deed-driver/tests/benchmark.rs` holds the two together.
 
 ## The tasks
@@ -98,42 +105,10 @@ with no contracts, then the contracts are decoration and the pitch is wrong.
 That is a real possible outcome and the reason to run this before believing the
 pitch, rather than after.
 
-## What five runs said
+## What it has said so far
 
-One model, one build, six tasks, five times. Before this the number of runs
-against any single compiler was one, and one run cannot tell a fixed problem
-from a coin landing the same way twice.
-
-| Run | Answered | Check | Pass their tests |
-| --- | --- | --- | --- |
-| 1 | 6/6 | 6 | 5 |
-| 2 | 6/6 | 6 | 5 |
-| 3 | 6/6 | 6 | 5 |
-| 4 | 6/6 | 5 | 5 |
-| 5 | 6/6 | 6 | 5 |
-
-The interesting column is not the score. It is that the same task is hard in
-every run and the same sentence gets said in every run:
-
-| Code | Times | Tasks | Runs | The sentence, most often |
-| --- | --- | --- | --- | --- |
-| DEED2003 | 49 | 6 | 5 | expected a declaration, found identifier `export` |
-| DEED3001 | 44 | 3 | 5 | cannot find `head` in this scope |
-| DEED2001 | 36 | 4 | 5 | expected `.` while parsing a `use` declaration |
-| DEED2015 | 28 | 2 | 5 | match arms are separated by commas |
-
-Forty-five of the forty-nine `DEED2003`s are the word `export`, in all six
-tasks in all five runs. That one already says the right thing and already
-carries a repair that deletes the word, so the measurement's verdict on it is
-"nothing left to fix here", which is a real answer and worth having.
-
-The one that was still worth fixing came from the third row's neighbours: an
-answer reaching for `join` writes `use std/string.{join}` and used to get two
-messages, an error saying the module declares no `join` and a warning saying
-`join` hides a builtin. Both true, and together they point at the module, which
-is the one place the answer is not. It now gets one message saying the name is
-already in scope, with a repair that deletes the import.
-
-Reproducing this needs a model, so it is not in CI and the numbers above are a
-record rather than a ratchet. `crates/deed-resolve/tests/messages.rs` holds the
-sentence that came out of it.
+[RESULTS.md](RESULTS.md) is the record: one model, one build, six tasks, five
+times, against a control arm with the compiler taken away. It is a separate
+file because it is the only part of this directory a person outside the project
+has any reason to read, and because a record and a harness go stale for
+different reasons.
