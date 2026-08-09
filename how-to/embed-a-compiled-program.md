@@ -88,6 +88,47 @@ A host that has run out of room has to say so rather than write past the end.
 The module's memory can grow, and a host allocating into it should grow it the
 way the module does instead of failing at the first page boundary.
 
+## Nothing is given back, so plan for that
+
+The bump pointer only goes up. A compiled program reclaims one thing, a handler
+frame, and nothing else: the value a block produces outlives the block, so
+rewinding would free something the caller is about to read. **What a module
+allocates in total is what its memory reaches.**
+
+That is not a detail of this release. It is measured, and the shape is worth
+knowing before it is discovered in production. The same call, five times, on
+one instance — bytes past where the bump pointer started:
+
+```
+3216   6432   9648   12864   16080
+```
+
+Every identical call costs the same again. There is no point at which the
+module notices it has answered this before.
+
+The way to get the memory back is to make another instance. The same module,
+instantiated a second time, after the first had run five times:
+
+```
+3216
+```
+
+So a host that calls an export in a loop should decide how long an instance
+lives. Per request, per batch, per document — anything with an end to it. An
+instance that lives as long as the process does is one whose memory only grows,
+and the program cannot tell you it is happening.
+
+This also applies from the outside now. A component's caller allocates through
+the module's `cabi_realloc` to pass a string, and that allocator is the same
+bump pointer, so passing arguments in grows the memory as surely as computing
+answers does.
+
+What would change this: `design/decisions/2026-08-09-what-a-callee-does-with-its-argument.md`
+names the one missing fact, and
+`design/decisions/2026-07-31-compiled-memory-reclamation.md` is why there is no
+collector. Until one of them moves, the paragraph above is the whole story and
+this page would rather say so than let a host find out on a long day.
+
 ## Where a failure ends up
 
 A compiled program that breaks a contract writes two strings before it stops:

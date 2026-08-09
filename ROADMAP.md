@@ -210,6 +210,20 @@ crates take about two and a half hours. `cargo publish --workspace` cannot
 resume: a crate already on the index is a warning under `--dry-run` and an
 error on the real run. Publish them one at a time, in dependency order.
 
+⚠️ **The two install paths are not on the same version.** The releases are at
+`v0.2.10`; crates.io is still at `0.2.9`, because tagging does not publish and
+nothing has run the queue since. So `install.sh` gives a compiler that joins
+text without walking off the end of its memory and writes a component for a
+module carrying strings, and `cargo install deed-lang` gives one that does
+neither. Whichever way this is closed — by publishing or by saying so on the
+install page — it should not be closed by leaving both sentences up.
+
+```powershell
+# Are they the same today?
+(Invoke-RestMethod "https://crates.io/api/v1/crates/deed-lang").crate.max_version
+gh release view --json tagName --jq .tagName
+```
+
 ### 4d. There is no way to depend on somebody else's code
 
 `how-to/depend-on-another-module.md` is written and
@@ -222,10 +236,28 @@ language where nobody can build on anybody produces very few repositories.
 
 Carried here so the roadmap does not pretend they are closed:
 
-- `deed build --component` writes a core module and a `.wit`, not a component
-  binary. Three missing pieces are named in the decision record.
-- No value reclamation. `examples/logs.deed` over two files exhausts memory at
-  a 4 GB ceiling, so long-running data processing is not yet a use for this.
+- No value reclamation. A compiled program gives nothing back except a handler
+  frame, so total allocation is peak memory. The measured shape of what is left
+  is one fact and it is interprocedural: the same `push` moved into a two-line
+  function allocates the answer once per element again, sixty-five times over at
+  a length of a hundred and twenty-eight. See
+  `design/decisions/2026-08-09-what-a-callee-does-with-its-argument.md`.
+
+  The old entry here said `examples/logs.deed` exhausts memory at a 4 GB
+  ceiling and named this page as the reason. That was wrong twice over: the
+  program died because `str_concat` moved the bump pointer without growing the
+  memory, and it now runs compiled and prints the same 69,680 bytes the
+  interpreter prints. A trap whose message names a resource is not a
+  measurement of that resource.
+
+- A list, a record or a choice crossing a component boundary. `deed build
+  --component` writes a component binary, and numbers, booleans and text cross
+  it; anything wider is refused by name, because its lowering is per element and
+  per field. See
+  `design/decisions/2026-08-09-text-crosses-the-component-boundary.md`.
+
+- No dependency discovery, which is §4d and is the one on this list that costs
+  repositories rather than programs.
 
 ---
 
@@ -296,8 +328,15 @@ we did not write and were not asked about.
 - [ ] Dependency discovery. §4d, in whatever the smallest form is — an index
       file in this repo listing known modules is enough to start and requires no
       registry.
-- [ ] Value reclamation, or an honest ceiling in the docs. People stop using a
-      language the first time it dies on their real input.
+- [x] Value reclamation, or an honest ceiling in the docs. People stop using a
+      language the first time it dies on their real input. *The second half is
+      done: `how-to/embed-a-compiled-program.md` now says that nothing is given
+      back, what that costs across repeated calls, and that a fresh instance is
+      what returns it. The numbers on the page are produced by
+      `crates/deed-codegen/smoke.mjs` in a real engine on every commit and
+      compared against the page, so it cannot quote a compiler two releases old.
+      Reclamation itself is still open and now has a named next step in
+      `design/decisions/2026-08-09-what-a-callee-does-with-its-argument.md`.*
 - [ ] `deed new --lib` and a worked example of one person's module being used by
       another person's program.
 
@@ -366,7 +405,9 @@ tests the premise rather than the execution.
 - The gap is not technical, and no amount of compiler work closes it.
 - Stage 0 is closed. Somebody who hears about Deed can install it in one line,
   or with `cargo install deed-lang`, and `deed new` gives them a project that
-  checks. Nothing on that path now requires reading this repository.
+  checks. Nothing on that path now requires reading this repository. The one
+  thing left on it is that the two ways do not currently install the same
+  version (§4c).
 - The next action is the one nobody else can do for us: **give somebody outside
   this repository a reason to write a `.deed` file**, and the two remaining
   Stage 1 items with no clock on them are the measurements that would make the

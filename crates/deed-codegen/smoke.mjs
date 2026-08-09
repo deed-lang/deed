@@ -156,6 +156,71 @@ try {
   check("a handle the host never gave out is refused", refused > 0);
 }
 
+// -- what the memory does over time -----------------------------------------
+//
+// `how-to/embed-a-compiled-program.md` tells an embedder that nothing is given
+// back and that a fresh instance is what returns it. That is a claim about how
+// somebody's process behaves after a week, which is the worst possible thing to
+// leave as prose. So it is measured here, in a real engine, and the page's own
+// numbers are read back out of it.
+
+const GROWING = `module growing
+
+fn built(n: Int) -> Int {
+    let out = for x in repeat(0, n) with acc = [] { push(acc, x) }
+    length(out)
+}
+`;
+
+const growing = join(scratch, "growing.deed");
+writeFileSync(growing, GROWING);
+execFileSync(deed, ["build", growing], { stdio: "pipe" });
+const grown = await WebAssembly.compile(readFileSync(join(scratch, "growing.wasm")));
+
+const bump = (one) => Number(new DataView(one.exports.memory.buffer).getBigInt64(0, true));
+
+const first = await WebAssembly.instantiate(grown, {});
+const started = bump(first);
+const costs = [];
+for (let turn = 0; turn < 5; turn += 1) {
+  first.exports.built(200n);
+  costs.push(bump(first) - started);
+}
+
+const again = await WebAssembly.instantiate(grown, {});
+again.exports.built(200n);
+const afresh = bump(again) - started;
+
+const step = costs[0];
+check(
+  "every identical call costs the same again",
+  costs.every((cost, at) => cost === step * (at + 1)),
+  costs.join(" "),
+);
+check(
+  "and a fresh instance is what gives it back",
+  afresh === step,
+  `${afresh} against ${step}`,
+);
+
+// And the page says the numbers this run produced, rather than numbers from a
+// compiler two releases ago.
+const page = readFileSync(
+  new URL("../../how-to/embed-a-compiled-program.md", import.meta.url),
+  "utf8",
+);
+const section = (page.split("## Nothing is given back, so plan for that")[1] ?? "").split(
+  "\n## ",
+)[0];
+const quoted = [...section.matchAll(/```\n([^`]*)```/g)].map((block) =>
+  block[1].trim().split(/\s+/).map(Number),
+);
+check(
+  "and the page an embedder reads quotes this measurement",
+  JSON.stringify(quoted) === JSON.stringify([costs, [afresh]]),
+  `page ${JSON.stringify(quoted)}, measured ${JSON.stringify([costs, [afresh]])}`,
+);
+
 console.log(
   failures === 0
     ? "\nan engine that is not this one ran it"
