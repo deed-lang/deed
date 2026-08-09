@@ -247,10 +247,10 @@ jobs:
       - name: install a component toolchain
         run: npm install --global @bytecodealliance/jco
 
-      # A measurement rather than a gate. `--component` writes a core module
-      # and a `.wit` world, and a real toolchain turns that into a component
-      # with nothing in it. Pinned so the day it stops being true is the day
-      # somebody has to say why.
+      # `--component` writes a component binary for exports that cross
+      # unchanged, so this runs one through a real component runtime and
+      # checks the answers, and checks that a module carrying text is refused
+      # by name instead. Reading a world is not running one.
       - name: what a component toolchain makes of it
         run: node crates/deed-codegen/component.mjs target/release/deed "$RUNNER_TEMP/component"
 

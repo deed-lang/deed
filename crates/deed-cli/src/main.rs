@@ -593,6 +593,29 @@ fn build_component(
         std::fs::write(&wit_target, wit.as_bytes())?;
         writeln!(out, "{}", wasm_target.display())?;
         writeln!(out, "{}", wit_target.display())?;
+
+        // Step 7: And the component binary, when every export crosses the
+        // boundary the way the canonical ABI says it does. The core module
+        // above is written either way and is what `deed build` writes, so
+        // nothing that reads it has to know about this step.
+        match lift_all(&lowered) {
+            Ok(lifted) => {
+                let component_target = path.with_extension("component.wasm");
+                std::fs::write(
+                    &component_target,
+                    deed_codegen::component::encode(&module, &lifted),
+                )?;
+                writeln!(out, "{}", component_target.display())?;
+            }
+            Err(why) => {
+                writeln!(
+                    out,
+                    "{}: no component binary, because {why}; \
+                     the core module and the world are still here",
+                    path.display()
+                )?;
+            }
+        }
         wrote = true;
     }
 
@@ -601,6 +624,61 @@ fn build_component(
         return Ok(false);
     }
     Ok(true)
+}
+
+/// Every exported function as a lifted one, or why one of them cannot be.
+///
+/// A component's caller passes a string as a pointer and a length into memory
+/// it helped allocate, and takes anything wider than a word back through a
+/// return area it provided. This backend passes one address in its own layout.
+/// The two agree exactly on the scalars, where the core value and the
+/// component value are the same value, and nowhere else.
+///
+/// So this refuses the rest rather than lifting it. A component that answers
+/// wrongly is worse than one that is not written, and
+/// `design/decisions/2026-08-07-a-wit-world-is-not-a-component.md` turned that
+/// down in as many words when the question was whether to emit one early.
+fn lift_all(program: &deed_mir::Program) -> Result<Vec<deed_codegen::component::Lifted>, String> {
+    let mut lifted = Vec::new();
+    for function in &program.functions {
+        let mut params = Vec::new();
+        for (at, param) in function.params.iter().enumerate() {
+            params.push(flat(param).ok_or_else(|| {
+                format!(
+                    "`{}` parameter {at} is a {} and lifting one needs the canonical ABI adapters, \
+                     which are not written yet",
+                    function.name,
+                    to_wit_type(param, program)
+                )
+            })?);
+        }
+        let result = match function.ret {
+            deed_mir::Ty::Unit => None,
+            ref ty => Some(flat(ty).ok_or_else(|| {
+                format!(
+                    "`{}` returns a {} and lifting one needs the canonical ABI adapters, \
+                     which are not written yet",
+                    function.name,
+                    to_wit_type(ty, program)
+                )
+            })?),
+        };
+        lifted.push(deed_codegen::component::Lifted {
+            name: function.name.to_string(),
+            params,
+            result,
+        });
+    }
+    Ok(lifted)
+}
+
+/// The component type this one crosses as, when it crosses unchanged.
+fn flat(ty: &deed_mir::Ty) -> Option<deed_codegen::component::Flat> {
+    match ty {
+        deed_mir::Ty::Bool => Some(deed_codegen::component::Flat::Bool),
+        deed_mir::Ty::Int => Some(deed_codegen::component::Flat::Signed64),
+        _ => None,
+    }
 }
 
 /// Returns a human-readable description of why this type has no WIT

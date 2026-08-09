@@ -14,6 +14,7 @@
 
 pub mod abi;
 pub mod compile;
+pub mod component;
 mod equality;
 pub mod grant;
 mod hashing;

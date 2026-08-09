@@ -2150,6 +2150,82 @@ fn component_build_writes_wasm_and_wit() {
     assert!(wit.contains("bool"), "{wit}");
 }
 
+/// And a component binary, for a module whose exports need no adapters.
+///
+/// The core module above is still written and still a core module: what a
+/// host embedding this reads did not change. This is the other file, and the
+/// four bytes after the magic number are the whole difference between the two
+/// formats.
+///
+/// What a real toolchain makes of it is measured separately, by
+/// `crates/deed-codegen/component.mjs`, because that needs one installed.
+#[test]
+fn component_build_writes_a_component_binary_too() {
+    let scratch = Scratch::new("component-binary");
+    let source = scratch.write(
+        "math.deed",
+        "module math\n\nfn double(n: Int) -> Int { n + n }\n\nfn negate(b: Bool) -> Bool { !b }\n",
+    );
+
+    let output = run(&["build", "--component", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("math.component.wasm"), "{text}");
+
+    let component = std::fs::read(scratch.path().join("math.component.wasm")).unwrap();
+    assert_eq!(&component[..4], b"\0asm", "the magic number");
+    assert_eq!(
+        &component[4..8],
+        &[0x0d, 0x00, 0x01, 0x00],
+        "the layer, which is what says this is not a core module"
+    );
+
+    let core = std::fs::read(scratch.path().join("math.wasm")).unwrap();
+    assert_eq!(
+        &core[4..8],
+        &1u32.to_le_bytes(),
+        "the core module is still one"
+    );
+    assert!(
+        component.windows(core.len()).any(|window| window == core),
+        "the component carries the core module it was told about"
+    );
+}
+
+/// A function carrying text is refused a component binary, by name, and
+/// everything that already worked still works.
+///
+/// The canonical ABI passes a string as a pointer and a length into memory the
+/// caller helped allocate. This backend passes one address in its own layout.
+/// Lifting that anyway would produce a component that answers wrongly, which is
+/// worse than one that is not written, so it is not written and the reason is
+/// on the line.
+#[test]
+fn component_build_says_which_export_needs_the_adapters() {
+    let scratch = Scratch::new("component-text");
+    let source = scratch.write(
+        "greeter.deed",
+        "module greeter\n\nfn double(n: Int) -> Int { n + n }\n\n\
+         fn greet(name: String) -> String { join([\"hello, \", name], \"\") }\n",
+    );
+
+    let output = run(&["build", "--component", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(text.contains("no component binary"), "{text}");
+    assert!(text.contains("`greet`"), "{text}");
+    assert!(text.contains("canonical ABI"), "{text}");
+    assert!(
+        !scratch.path().join("greeter.component.wasm").exists(),
+        "a component that would answer wrongly is not written"
+    );
+    assert!(
+        scratch.path().join("greeter.wasm").exists() && scratch.path().join("greeter.wit").exists(),
+        "the core module and the world are still there"
+    );
+}
+
 /// A module that declares `main` is a program, not a component.
 ///
 /// `deed build --component` refuses it with a message that names both the

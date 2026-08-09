@@ -221,17 +221,25 @@ deciding in the first place.
 
 ### What `--component` writes, and what it does not
 
-`deed build --component` writes a core module and the `.wit` world its exports describe.
-The derivation is the claim -- nobody else derives a world from code -- and it is checked
-against the rows by `crates/deed-driver/tests/wit_world.rs`.
+`deed build --component` writes a core module, the `.wit` world its exports describe, and
+a component binary. The derivation is the claim -- nobody else derives a world from
+code -- and it is checked against the rows by `crates/deed-driver/tests/wit_world.rs`.
 
-It is not a component binary, and that is measured rather than assumed. Handing the core
-module to `wasm-tools component new` produces a component whose world is empty, because
-the exports cross the boundary in this backend's own layout rather than the canonical ABI
-and nothing writes the component-type section that carries the world.
-`crates/deed-codegen/component.mjs` runs that transcript on every commit and fails when
-either half of it stops being true. What is missing is written up in
-`design/decisions/2026-08-07-a-wit-world-is-not-a-component.md`.
+The component is written when every export crosses the boundary the way the canonical ABI
+says it does. A number is an `s64` on both sides and a boolean is a `bool` on both sides,
+so lifting one is a declaration rather than a conversion. Anything wider than a word --
+a string, a list, a record -- crosses as a pointer and a length into memory the caller
+helped allocate through `cabi_realloc`, and this backend passes one address in its own
+layout instead. Those modules get the core module and the world, and a line naming the
+export and the adapters it would need. A component that answered wrongly would be worse
+than one that is not written.
+
+Measured rather than assumed, on every commit.
+`crates/deed-codegen/component.mjs` reads the component's world with the Bytecode
+Alliance's own tooling, transpiles it, calls both exports and checks the answers, and
+then checks that a module carrying text is refused by name. What is still missing --
+the canonical ABI adapters and `cabi_realloc` -- is written up in
+`design/decisions/2026-08-09-a-component-for-what-crosses-unchanged.md`.
 
 **What would change this:** adopting the component/import declarations sketched in
 `design/04-capabilities.md` would let modules name additional host imports in source, but only if
