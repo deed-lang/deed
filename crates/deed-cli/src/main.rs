@@ -2257,6 +2257,42 @@ mod input_tests {
 }
 
 #[cfg(test)]
+mod crossing_tests {
+    use super::*;
+    use deed_codegen::adapter::Cross;
+
+    /// Which types have a crossing, and which are refused so the component is
+    /// not written rather than written wrongly.
+    ///
+    /// `crates/deed-codegen/component.mjs` calls the result of this through a
+    /// real component runtime, but it runs under Node and the mutation gate
+    /// does not, so the mapping needs saying here too.
+    #[test]
+    fn a_list_of_numbers_crosses_and_a_list_of_anything_else_does_not() {
+        assert_eq!(crossing(&deed_mir::Ty::Bool), Some(Cross::Bool));
+        assert_eq!(crossing(&deed_mir::Ty::Int), Some(Cross::Signed64));
+        assert_eq!(crossing(&deed_mir::Ty::Str), Some(Cross::Text));
+        assert_eq!(
+            crossing(&deed_mir::Ty::List(Box::new(deed_mir::Ty::Int))),
+            Some(Cross::Numbers)
+        );
+
+        // A canonical `bool` is one byte and a slot here is eight, and a
+        // string is a pointer and a length per element. Both need a loop
+        // nothing writes.
+        for element in [deed_mir::Ty::Str, deed_mir::Ty::Bool] {
+            assert_eq!(
+                crossing(&deed_mir::Ty::List(Box::new(element.clone()))),
+                None,
+                "a list of {element:?}"
+            );
+        }
+        assert_eq!(crossing(&deed_mir::Ty::Capability), None);
+        assert_eq!(crossing(&deed_mir::Ty::Unit), None);
+    }
+}
+
+#[cfg(test)]
 mod manifest_tests {
     use super::*;
 
