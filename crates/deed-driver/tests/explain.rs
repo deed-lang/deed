@@ -161,6 +161,14 @@ fn no_example_is_a_rust_template_rather_than_a_program() {
 /// The count is the point. A change to the extractor that quietly stopped
 /// finding examples would leave every other test in this file green, because
 /// the pages would still exist and still have reasoning in them.
+///
+/// The floor was 76 while an example was the first deed-looking string in a
+/// test that mentioned the code, which let it be the control arm, or one
+/// module of a two-module program: of the eighty-nine it reached, forty-three
+/// did not produce the code. It is 75 now, and
+/// `explain_pages.rs::every_example_produces_the_code_its_page_is_about` holds
+/// every one of them. A higher number bought with programs that do not
+/// produce the code is a worse number.
 #[test]
 fn the_pages_that_carry_an_example_keep_carrying_one() {
     let with_example = deed_explain::all_pages()
@@ -169,7 +177,7 @@ fn the_pages_that_carry_an_example_keep_carrying_one() {
         .count();
 
     assert!(
-        with_example >= 76,
+        with_example >= 75,
         "only {with_example} pages have an example; the extractor found fewer than it used to"
     );
 }

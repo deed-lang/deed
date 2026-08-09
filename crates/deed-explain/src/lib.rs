@@ -1,16 +1,21 @@
 //! Generated pages for every diagnostic code deed can produce.
 //!
 //! Every entry comes from the `///` doc-comment lines that already sit above
-//! each `pub const` in a `codes.rs` file, together with the smallest deed
-//! snippet that triggers it extracted from an existing test.  Nothing here is
-//! invented.
+//! each `pub const` in a `codes.rs` file, together with a deed snippet taken
+//! from an existing test and kept only because running it produces this code.
+//! Nothing here is invented.
 //!
 //! The pages are generated, committed as `generated/pages.rs`, and shipped as
 //! source.  A build script did the reading until it was measured against a
 //! published crate: a `.crate` archive carries this directory and no
 //! workspace, so the script would have found an empty tree, produced no pages,
-//! and compiled.  `crates/deed-explain/tests/generated.rs` reads the tree now,
-//! where the tree is, and fails when the committed file has drifted from it.
+//! and compiled.  `crates/deed-driver/tests/explain_pages.rs` reads the tree
+//! now, where the tree is, and fails when the committed file has drifted from
+//! it.  It sits over there because deciding that a program produces a code
+//! takes a compiler, and this package depends on nothing.
+//!
+//! An `example` of `None` means no test offered a program that produces the
+//! code.  Callers print nothing rather than something close.
 //!
 //! The public surface is small:
 //! - [`all_pages`] returns every page in sorted order.
@@ -26,8 +31,8 @@ pub struct Page {
     pub name: &'static str,
     /// The reasoning: doc-comment lines from `codes.rs`.
     pub text: &'static str,
-    /// A deed snippet that triggers this code, if one could be extracted
-    /// automatically from an existing test.
+    /// A deed program that produces this code, checked against the compiler
+    /// when the pages were generated.  `None` when no test offered one.
     pub example: Option<&'static str>,
     /// The test file the example came from.
     pub example_source: Option<&'static str>,

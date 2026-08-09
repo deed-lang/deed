@@ -20,6 +20,31 @@ release notes.
 
 ### Diagnostics
 
+- `deed explain` showed programs that do not produce the code being explained.
+  Forty-three of the eighty-nine pages carrying an example, measured by
+  checking each one and running its tests. The example was "the first
+  deed-looking string in a test that mentions this code", which is a different
+  claim from "a program that produces it", and the gap had two shapes: the
+  extractor read a test from its `#[test]` to the *next* `#[test]`, so it
+  swallowed the banner introducing the following test and every code named in
+  a banner was offered the previous test's program; and where a test carried
+  two modules or a passing control arm, the first string was the wrong half.
+  `deed explain DEED2011`, "there is no range in this language", printed
+  `Int n = 1`.
+
+  This is read by `deed explain`, by the `deed_explain` MCP tool, and by the
+  error index the site builds from the same artefact, so an agent asking what a
+  code means was being handed a program about a different one.
+
+  The example is now the first candidate that produces the code, asked of the
+  compiler: checked, and run when the code is one that only appears at run
+  time. Seventy-five pages carry one and every one of them is verified; the
+  other twenty-nine carry none, which is what a page with nothing true to show
+  should carry. The generator moved to `crates/deed-driver/tests/explain_pages.rs`,
+  because deciding this needs a checker and `deed-explain` deliberately depends
+  on nothing — making it depend on the compiler to test itself would put two
+  published crates in a cycle `cargo publish` cannot order.
+
 - A `deed.manifest` or a `deed.lock` saved with a byte order mark is read.
   `design/06-grammar.md` says a mark at the start of a file is silently
   discarded, and the lexer has always done that for source, so a `.deed` file
