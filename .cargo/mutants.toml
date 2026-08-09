@@ -42,4 +42,7 @@ additional_cargo_test_args = ["--all-targets"]
 # Measured 2026-08-09, on the run that found it: `&&` to `||` in
 # `facts::round_down` fails `an_open_end_divided_by_minus_one_stays_open`
 # at 22.7s of a 23s run, and CI called it a timeout.
-timeout = 120
+#
+# This raises the floor rather than fixing the timeout, so a workspace whose
+# baseline is ever measured properly still gets a timeout derived from it.
+minimum_test_timeout = 120
