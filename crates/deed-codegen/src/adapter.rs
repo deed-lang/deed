@@ -898,9 +898,24 @@ mod tests {
             "the first is still the first"
         );
         assert_eq!(
-            answered(giving_back(1), both(), args, characters_back()),
+            answered(giving_back(1), both(), args.clone(), characters_back()),
             6,
             "and the second is still the second"
+        );
+        assert_eq!(
+            answered(giving_back(1), both(), args.clone(), byte_back(0)),
+            i64::from(b's'),
+            "the second one's bytes are the second one's"
+        );
+        // The second value built has to go somewhere no parameter is, and a
+        // slot chosen by counting the wrong way lands on the length the caller
+        // passed. The character count survives that, because it is counted
+        // before the slot is written; the byte count is the length itself, and
+        // is what comes back wrong.
+        assert_eq!(
+            answered(giving_back(1), both(), args, bytes_back()),
+            6,
+            "and its length is its own"
         );
     }
 
