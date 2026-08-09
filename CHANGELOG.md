@@ -14,6 +14,32 @@ release notes.
 
 - None yet.
 
+### Language
+
+- Nothing yet.
+
+### Diagnostics
+
+- Nothing yet.
+
+### Standard library
+
+- Nothing yet.
+
+### Tools
+
+- Nothing yet.
+
+### Measurements
+
+- Nothing yet.
+
+## 0.2.10 (2026-08-09)
+
+### Programs that used to compile and no longer do
+
+- None yet.
+
 ### Fixed
 
 - A compiled program that joins strings past the memory it started with no
