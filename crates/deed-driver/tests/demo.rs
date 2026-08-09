@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 
-use deed_codegen::{Trap, Value, call, compile};
+use deed_codegen::{Host, Trap, Value, call, compile};
 use deed_diagnostics::SourceMap;
 use deed_driver::check_all;
 
@@ -135,50 +135,129 @@ fn the_readme_lists_the_imports_the_modules_actually_have() {
     }
 }
 
-// -- the host's behaviour ---------------------------------------------------
-
-/// A host that provides only Io.read refuses the read-write component.
+/// The README also prints this file's test names, and that listing was typed.
 ///
-/// The module declared `deed:io.save` in its imports. The runner sees that
-/// before executing a single instruction and stops with the name of the
-/// operation it was asked for. This is the host enforcing the boundary:
-/// not a runtime check, not a permission bit, but the module's own
-/// declaration turned into a refusal.
+/// It said `running 5 tests` and named one that no longer exists, which is how
+/// a transcript nobody reads back goes stale. The import listing above has been
+/// held since #783; this is the other listing on the same page.
 #[test]
-fn running_read_write_without_save_names_what_it_wanted() {
-    let module = module_for("read_write.deed");
+fn the_readme_lists_the_tests_this_file_declares() {
+    let readme = std::fs::read_to_string(root().join("demo").join("README.md"))
+        .expect("demo/README.md should be there");
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("demo.rs"),
+    )
+    .expect("this file should be readable");
 
-    // Call `process` with two i64 arguments (capability handles).
-    // The runner stops at the first host import it cannot satisfy.
-    let stopped = call(&module, "process", &[Value::I64(0), Value::I64(0)])
-        .expect_err("read_write needs a host to provide save");
+    // Spelled in two pieces so this line is not itself one of the markers it
+    // counts.
+    let marker = concat!("#[", "test]");
+    let mut declared: Vec<String> = source
+        .split(marker)
+        .skip(1)
+        .filter_map(|after| after.split_once("fn "))
+        .filter_map(|(_, rest)| rest.split_once('('))
+        .map(|(name, _)| name.trim().to_string())
+        .collect();
+    assert!(declared.len() > 1, "the source should declare tests");
 
-    let Trap::NeedsAHost(what) = stopped else {
-        panic!("it should say what it wanted, not {stopped}");
-    };
+    let after = readme
+        .split_once("$ cargo test -p deed-driver --test demo\n")
+        .expect("the README should show the transcript")
+        .1;
+    let mut listed: Vec<String> = after
+        .lines()
+        .skip(1)
+        .take_while(|line| line.starts_with("test "))
+        .filter_map(|line| line.split_whitespace().nth(1).map(str::to_string))
+        .collect();
+
     assert!(
-        what.starts_with("deed:io"),
-        "it should name an Io operation: {what}"
+        after.starts_with(&format!("running {} tests\n", declared.len())),
+        "the README says `{}`, and this file declares {} tests",
+        after.lines().next().unwrap_or(""),
+        declared.len()
+    );
+
+    declared.sort();
+    listed.sort();
+    assert_eq!(
+        listed, declared,
+        "demo/README.md names {listed:?}, this file declares {declared:?}"
     );
 }
 
-/// A read-only component reaches the same stop for a different reason:
-/// the runner has no filesystem to hand it.
+// -- the host's behaviour ---------------------------------------------------
+
+/// A host that answers `Io.read` and not `Io.save` refuses the read-write
+/// component, and says which operation it could not meet.
 ///
-/// Both components stop when run without a host, but for different imports.
-/// The read-only one names `deed:io.read`; the read-write one names
-/// `deed:io.read` or `deed:io.save` depending on execution order. What does
-/// not change: each module's import section declares exactly what it needs,
-/// and the host sees that list before any code runs.
+/// This is the sentence `demo/README.md` is built on, and until #964 nothing
+/// demonstrated it. What was here called itself
+/// `running_read_write_without_save_names_what_it_wanted`, ran the module with
+/// no host at all, and asserted only that the answer began `deed:io`. Measured:
+/// it said `deed:io.read`, because `process` reads before it saves. The test
+/// named for `save` never mentioned `save`, and the operation it did name is
+/// the one both modules share — the opposite of the difference the demo is
+/// about.
+///
+/// `Host::link` is the mechanism the prose describes: it reads the whole
+/// import section and refuses before an instruction runs, rather than stopping
+/// at whichever import execution reaches first. A host that stopped on the
+/// first one would already have read the file.
 #[test]
-fn running_read_only_without_a_host_names_read() {
-    let module = module_for("read_only.deed");
+fn a_host_without_save_refuses_read_write_and_names_save() {
+    let mut host = Host::new();
+    host.offer("deed:io", "read", |_| Ok(Some(Value::I64(0))));
 
-    let stopped = call(&module, "process", &[Value::I64(0), Value::I64(0)])
-        .expect_err("read_only needs a host to provide read");
+    let refused = host
+        .link(&module_for("read_write.deed"))
+        .expect_err("a host that cannot save should refuse the module that saves");
 
-    let Trap::NeedsAHost(what) = stopped else {
-        panic!("it should say what it wanted, not {stopped}");
-    };
-    assert_eq!(what, "deed:io.read", "read_only wants exactly read: {what}");
+    assert_eq!(refused.module, "deed:io");
+    assert_eq!(
+        refused.name, "save",
+        "the refusal should name the clause that is the difference"
+    );
+}
+
+/// And the same host runs the read-only component without restriction.
+///
+/// Half of the claim is the refusal; this is the other half. A host that
+/// refused both would be a host with no filesystem, which demonstrates
+/// nothing about the clause.
+#[test]
+fn the_same_host_links_read_only_without_restriction() {
+    let mut host = Host::new();
+    host.offer("deed:io", "read", |_| Ok(Some(Value::I64(0))));
+
+    assert!(
+        host.link(&module_for("read_only.deed")).is_ok(),
+        "read_only asks for nothing this host withheld"
+    );
+}
+
+/// With no host at all, a module stops at the first import it reaches.
+///
+/// Kept because it is the weaker guarantee and it is worth being able to tell
+/// the two apart: this one is a trap during execution, and the two above are a
+/// refusal before it. Both modules name `deed:io.read` here, which is why this
+/// shape cannot demonstrate what the clause bought.
+#[test]
+fn running_without_a_host_stops_at_the_first_import_either_way() {
+    for name in ["read_only.deed", "read_write.deed"] {
+        let stopped = call(
+            &module_for(name),
+            "process",
+            &[Value::I64(0), Value::I64(0)],
+        )
+        .expect_err("neither runs without a host");
+
+        let Trap::NeedsAHost(what) = stopped else {
+            panic!("it should say what it wanted, not {stopped}");
+        };
+        assert_eq!(what, "deed:io.read", "{name} reaches read first");
+    }
 }
