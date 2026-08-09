@@ -750,30 +750,14 @@ fn str_concat() -> (Vec<ValType>, Vec<Ins>) {
         Ins::LocalGet(NB),
         Ins::I32Add,
         Ins::LocalSet(TOTAL),
-        // out = bump
-        Ins::I32Const(layout::BUMP as i32),
-        Ins::I64Load(0),
-        Ins::I32WrapI64,
-        Ins::LocalSet(OUT),
-        // bump = out + headers + total, rounded up to a word
-        Ins::I32Const(layout::BUMP as i32),
-        Ins::LocalGet(OUT),
-        Ins::I64ExtendI32S,
-        Ins::I64Const(TEXT as i64),
-        Ins::I64Add,
-        Ins::LocalGet(TOTAL),
-        Ins::I64ExtendI32S,
-        Ins::I64Add,
-        Ins::I64Const(layout::WORD as i64),
-        Ins::LocalGet(TOTAL),
-        Ins::I64ExtendI32S,
-        Ins::I64Const(layout::WORD as i64),
-        Ins::I64RemS,
-        Ins::I64Sub,
-        Ins::I64Const(layout::WORD as i64),
-        Ins::I64RemS,
-        Ins::I64Add,
-        Ins::I64Store(0),
+    ]);
+    // Through `allocate`, which is what grows the memory. This helper used to
+    // move the bump pointer itself and skip that, so joining two strings once
+    // the memory was full wrote the bytes past the end of it and the program
+    // stopped with "reached past the end of memory" -- which reads like the
+    // limit the reclamation record is about and was a missing call.
+    body.extend(allocate(OUT, |ins| ins.extend(string_room(TOTAL))));
+    body.extend([
         // characters
         Ins::LocalGet(OUT),
         Ins::LocalGet(A),
@@ -2138,6 +2122,7 @@ fn text_number(at: &mut Where<'_>) -> (Vec<ValType>, Vec<Ins>) {
 #[cfg(test)]
 mod tests {
     use super::{Helper, PAGE, STR_FIND, STR_HASH, STR_SLICE};
+    use crate::wasm::Ins;
 
     /// A page is the size the format fixes it at, in both places that name it.
     ///
@@ -2207,5 +2192,85 @@ mod tests {
             seen.len(),
             "two helpers carry the same name: {seen:?}"
         );
+    }
+
+    /// Every helper that reserves room grows the memory while doing it.
+    ///
+    /// `allocate` does both, and it is the only thing here that should move
+    /// the bump pointer. `str_concat` moved it by hand and skipped the
+    /// growth, so joining two strings once the memory was full wrote them
+    /// past the end of it, and what came out was "reached past the end of
+    /// memory" -- the same sentence the reclamation record's measured limit
+    /// produces. `examples/logs.deed` dying compiled was read as that limit
+    /// for two releases and was a missing call.
+    ///
+    /// Counted rather than pattern-matched on the bump pointer's address,
+    /// because that address is zero and a zero is the commonest constant a
+    /// body has. What a helper that reserves room has is a growth loop, and
+    /// what it takes to grow is `memory.grow`.
+    #[test]
+    fn every_helper_that_reserves_room_grows_the_memory() {
+        // The helpers that reserve room themselves. Anything not here either
+        // answers a question about what it was given, asks one of these for
+        // the room, which is what `TrimmedText` does with `TextSlice`, or
+        // writes into room somebody else reserved, which is what
+        // `ListAppended` does for a walk that only pushes.
+        let reserving = [
+            Helper::JoinedText,
+            Helper::TextSlice,
+            Helper::NumberText,
+            Helper::TextPieces,
+            Helper::PiecesText,
+            Helper::RaisedText,
+            Helper::LoweredText,
+        ];
+
+        for &helper in &reserving {
+            assert!(
+                grows(helper),
+                "{helper:?} reserves room and never grows the memory, so what \
+                 it writes goes past the end of it"
+            );
+        }
+
+        // And the other direction, or a set where everything grew would pass
+        // the loop above while saying nothing.
+        assert!(
+            !grows(Helper::SameText),
+            "comparing two strings reserves nothing, so this test is no longer \
+             telling the two apart"
+        );
+    }
+
+    /// Whether this helper's body grows the memory anywhere in it.
+    fn grows(helper: Helper) -> bool {
+        let mut index = std::collections::HashMap::new();
+        for (at, &one) in Helper::ALL.iter().enumerate() {
+            index.insert(one, at as u32);
+        }
+        let mut strings = crate::compile::Strings::new();
+        let mut at = super::Where::new(&index, &mut strings);
+        let (_, body) = helper.compile(&mut at);
+
+        let mut flat = Vec::new();
+        flatten(&body, &mut flat);
+        flat.iter().any(|one| matches!(one, Ins::MemoryGrow))
+    }
+
+    /// Bodies nest, and an allocation inside a branch is still an allocation.
+    fn flatten(body: &[Ins], out: &mut Vec<Ins>) {
+        for one in body {
+            out.push(one.clone());
+            match one {
+                Ins::If {
+                    then, otherwise, ..
+                } => {
+                    flatten(then, out);
+                    flatten(otherwise, out);
+                }
+                Ins::Block { body, .. } | Ins::Loop { body, .. } => flatten(body, out),
+                _ => {}
+            }
+        }
     }
 }

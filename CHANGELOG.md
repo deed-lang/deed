@@ -14,6 +14,26 @@ release notes.
 
 - None yet.
 
+### Fixed
+
+- A compiled program that joins strings past the memory it started with no
+  longer writes them past the end of it. Eleven of the twelve runtime helpers
+  that reserve room grow the memory while doing it; `str_concat` moved the bump
+  pointer itself and skipped the growth, so text crossing the sixteen pages a
+  module starts with went out of bounds and the program stopped with "reached
+  past the end of memory".
+
+  That is the sentence a program which has genuinely run out produces, so
+  `examples/logs.deed` dying compiled was read for two releases as the limit
+  `design/decisions/2026-07-31-compiled-memory-reclamation.md` measures, and
+  raising the runner's ceiling not helping was taken as confirmation. It never
+  tried to grow. The program now runs compiled and prints the same 69,680 bytes
+  the interpreter prints, byte for byte.
+
+  Nothing about reclamation changes: a compiled program still gives nothing
+  back, and a keyed update is still quadratic. What changed is that one program
+  counted as evidence for that limit was not evidence for anything.
+
 ### Language
 
 - A comparison with the name written second now settles as much as the same
