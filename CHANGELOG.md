@@ -70,6 +70,22 @@ release notes.
 
 ### Tools
 
+- `deed build --reuse` prints what each function does with each parameter.
+  Four answers: `releases`, `returns`, `retains`, `keeps` — whether the value
+  the function returns may reach the storage that parameter arrived in, and
+  whether anything else keeps it past the call. That is the one fact
+  `design/decisions/2026-08-09-what-a-callee-does-with-its-argument.md` named
+  as missing, and the record fixes the order: compute it and be able to read it
+  before anything acts on it. Nothing acts on it, so no compiled program writes
+  a different byte than it did before.
+
+  Measured over the nine shipped modules: 389 boxed parameters, 329 of them not
+  retained. The analysis is one-sided by design — a call through a value, an
+  operation a handler answers, anything crossing to the host, and a parameter
+  written into a handler's `state` all answer "keeps it" — so the number that
+  matters is how often it manages to say something else, and it says something
+  else five times out of six.
+
 - The embedding guide says what the memory does over time.
   `how-to/embed-a-compiled-program.md` described the layout and how to allocate
   into it, and never said that nothing is ever given back — so a host that

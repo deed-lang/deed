@@ -102,6 +102,46 @@ does not. An analysis that guesses would be the first place the compiler quietly
 guesses, and it would guess about the one thing nothing else in the system
 double-checks.
 
+## What has been built since
+
+The first of the two halves, and only the first. `crates/deed-mir/src/reuse.rs`
+computes the summary this record names and `deed build --reuse` prints it.
+Nothing reads the answer, so no compiled program writes different bytes than it
+did before this landed.
+
+The printed word per parameter is one of four:
+
+| | result may reach it | kept elsewhere |
+| --- | --- | --- |
+| `releases` | no | no |
+| `returns` | yes | no |
+| `retains` | no | yes |
+| `keeps` | yes | yes |
+
+Measured over the nine shipped modules: 389 boxed parameters, of which **329
+are not retained** — 225 `releases` and 104 `returns`. That number is the one
+worth watching, because it is what the transformation will have to work with,
+and an analysis that answered `keeps` everywhere would have satisfied every
+individual case above while buying nothing. It is held as a floor by
+`crates/deed-driver/tests/reuse.rs`.
+
+What answers `keeps`, and why, is unchanged from the paragraph above: a call
+through a value, an operation a handler answers, anything handed to the host,
+and a parameter written into a handler's `state` — the one thing in the
+language that outlives the call that wrote it. Recursion converges rather than
+being refused, because the summary is a least fixed point over the call graph
+and two bits per parameter is a finite lattice.
+
+Two sharpenings turned out to be free and worth having. Only a boxed type has
+storage to share, so a parameter or a return type that is a number answers
+without looking at the body. And the runtime helpers are a closed set this
+compiler publishes, so what each of them does with its arguments is read from a
+table rather than assumed: `push` hands back a fresh spine holding the
+argument's elements, `join` and `upper` and concatenation write every byte they
+return, `length` returns a number. That table is the one place this analysis
+knows something rather than deriving it, and it knows it about its own
+primitives.
+
 ## What this buys
 
 The sentence in `design/hash-map-requirements.md` now has a table under it, and

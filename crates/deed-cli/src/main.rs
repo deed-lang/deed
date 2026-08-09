@@ -388,7 +388,14 @@ fn run_check(args: CheckArgs) -> ExitCode {
     }
 
     if args.mode == Mode::Build {
-        match build(&mut out, &files, &checks, subject, args.component) {
+        match build(
+            &mut out,
+            &files,
+            &checks,
+            subject,
+            args.component,
+            args.reuse,
+        ) {
             Ok(true) => {}
             Ok(false) => return ExitCode::FAILURE,
             Err(error) => {
@@ -445,6 +452,7 @@ fn build(
     checks: &[Checked],
     subject: usize,
     component: bool,
+    reuse: bool,
 ) -> io::Result<bool> {
     if component {
         return build_component(out, files, checks, subject);
@@ -465,6 +473,15 @@ fn build(
                 continue;
             }
         };
+
+        if reuse {
+            write!(
+                out,
+                "{}",
+                deed_mir::reuse::summarise(&lowered).print(&lowered)
+            )?;
+        }
+
         let module = match deed_codegen::compile(&lowered) {
             Ok(module) => module,
             Err(why) => {
