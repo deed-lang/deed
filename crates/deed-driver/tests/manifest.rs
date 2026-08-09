@@ -202,6 +202,35 @@ fn spans_account_for_crlf_and_surrounding_whitespace() {
     assert_eq!(m.diagnostics[1].primary.span.end, 38);
 }
 
+// ---- a byte order mark ----
+
+/// `design/06-grammar.md` says a byte order mark at the start of a file is
+/// silently discarded, and the lexer does that for source. A manifest is a
+/// file a person writes in the same editor on the same day, and Windows
+/// editors add one by default.
+///
+/// Without this the first directive was refused as unrecognized by a message
+/// whose own note lists it as one of the two that are recognized, and the
+/// cause has no glyph on screen.
+#[test]
+fn a_manifest_that_starts_with_a_byte_order_mark_is_read() {
+    let m = parse("\u{FEFF}component ../shared\n");
+    assert!(m.diagnostics.is_empty(), "{:?}", m.diagnostics);
+    assert_eq!(m.components.len(), 1);
+}
+
+/// And the mark is skipped rather than deleted, so the caret still lands on
+/// the bytes the file actually has. Stripping it without moving the offset
+/// would point three bytes early at every line.
+#[test]
+fn a_byte_order_mark_does_not_move_the_spans_after_it() {
+    let m = parse("\u{FEFF}target release\n");
+    let span = m.diagnostics[0].primary.span;
+    let mark = "\u{FEFF}".len() as u32;
+    assert_eq!(span.start, mark);
+    assert_eq!(span.end, mark + 14);
+}
+
 // ---- DEED7003-7005: a module declared by location and hash ----
 
 const A_DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

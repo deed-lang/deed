@@ -37,6 +37,38 @@ Nothing in a fetched module runs while it is being fetched. There are no
 install hooks, no build scripts, and no post-fetch step, because every
 supply-chain incident worth naming went through one.
 
+## Getting the digest you have to write
+
+A `module` line needs a hash you do not have yet, and there is no subcommand
+that prints one. Two ways, both of which work today.
+
+Ask the machine you are on:
+
+```
+$ sha256sum ledger.deed          # Linux
+$ shasum -a 256 ledger.deed      # macOS
+> Get-FileHash ledger.deed -Algorithm SHA256   # Windows
+```
+
+Or write the line with a hash you know is wrong and read the refusal, which is
+the one that works when the bytes are somebody else's and are only on the far
+end of a URL:
+
+```
+error[DEED7006]: `http://…/ledger.deed` answered with bytes that hash to
+5e8206aa39cb8d7afa21c2fef8bbda60894e28e36aad152659e6788cf5332ef4, and the
+manifest says 0000000000000000000000000000000000000000000000000000000000000000
+```
+
+It names both, so the first number is the one to paste. Nothing was stored and
+nothing was compiled while it said so: bytes under a hash that is not theirs
+are bytes for a different dependency.
+
+A manifest saved with a byte order mark is read the same as one without,
+which is the rule `design/06-grammar.md` gives source files and the reason
+a file written by a Windows editor is not a file with a different first
+directive.
+
 ## Pinning the whole build
 
 ```

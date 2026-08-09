@@ -99,6 +99,11 @@ pub fn read(path: &Path) -> Result<Vec<Entry>, String> {
 }
 
 fn parse(text: &str) -> Result<Vec<Entry>, String> {
+    // A lock file is written by this compiler, but it is also a file people
+    // keep in version control and open. An editor that adds a byte order mark
+    // would otherwise turn it into "not a deed lock file", with nothing on
+    // screen to say why.
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut lines = text.lines();
     let header = lines.next().unwrap_or("");
     if header != HEADER {
@@ -268,6 +273,19 @@ mod tests {
     fn wrong_header_is_rejected() {
         let err = parse("cargo lock v1\nsha256:aa  x.deed\n").unwrap_err();
         assert!(err.contains("deed lock file"), "{err}");
+    }
+
+    /// A byte order mark is not the header being wrong.
+    ///
+    /// The same rule source files get. An editor that adds one would otherwise
+    /// turn a lock file this compiler wrote into "not a deed lock file", and
+    /// the difference is three bytes nothing on screen shows.
+    #[test]
+    fn a_byte_order_mark_before_the_header_is_not_a_wrong_header() {
+        let text = format!("\u{FEFF}{HEADER}\nsha256:{}  a.deed\n", hex(&sha256(b"a")));
+        let parsed = parse(&text).expect("a mark is not part of the file");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].path, "a.deed");
     }
 
     /// A truncated hash is rejected.
