@@ -51,9 +51,17 @@ impl ParamUse {
         retained: false,
     };
 
-    /// Whether the caller's only reference is free once the call returns.
-    pub fn released(&self) -> bool {
-        !self.shared_with_result && !self.retained
+    /// The one word for this answer, which is what `--reuse` prints.
+    ///
+    /// `releases` is the one the transformation will look for: nothing the
+    /// caller can still see holds the storage once the call returns.
+    pub fn word(&self) -> &'static str {
+        match (self.shared_with_result, self.retained) {
+            (false, false) => "releases",
+            (true, false) => "returns",
+            (false, true) => "retains",
+            (true, true) => "keeps",
+        }
     }
 
     fn widen(&mut self, other: ParamUse) {
@@ -98,16 +106,7 @@ impl Summaries {
         for (index, summary) in self.of.iter().enumerate() {
             let function = &program.functions[index];
             for (at, use_of) in summary.params.iter().enumerate() {
-                let word = if use_of.released() {
-                    "releases"
-                } else if !use_of.retained {
-                    "returns"
-                } else if !use_of.shared_with_result {
-                    "retains"
-                } else {
-                    "keeps"
-                };
-                out.push_str(&format!("{word:9} {}#{at}\n", function.name));
+                out.push_str(&format!("{:9} {}#{at}\n", use_of.word(), function.name));
             }
         }
         out
@@ -136,12 +135,12 @@ pub fn summarise(program: &Program) -> Summaries {
         })
         .collect();
 
-    // Two bits per parameter and nothing here ever clears one, so a round
-    // that changes anything sets a bit that stays set. Counting the bits
-    // bounds the rounds, which makes stopping a property of the lattice
-    // rather than of the comparison below noticing.
-    let bound: usize = of.iter().map(|s| s.params.len() * 2).sum::<usize>() + 1;
-    for _ in 0..bound {
+    // One round per function, and one more to notice nothing moved. A round
+    // carries an answer back along one call edge, and no chain of calls is
+    // longer than the number of functions there are, so this bounds the loop
+    // without depending on the comparison below noticing. An inclusive range
+    // rather than arithmetic, so there is no constant here to get wrong.
+    for _ in 0..=of.len() {
         let before = of.clone();
         for (index, function) in program.functions.iter().enumerate() {
             let found = Walk::new(program, function, &of).summarise();

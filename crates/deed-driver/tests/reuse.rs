@@ -73,7 +73,7 @@ fn a_function_that_pushes_onto_its_argument_returns_it_and_keeps_nothing() {
     let list = use_of(&program, &summaries, "added", 0);
     assert!(list.shared_with_result, "the answer holds the argument");
     assert!(!list.retained, "nothing keeps it past the call");
-    assert!(!list.released());
+    assert_eq!(list.word(), "returns");
 }
 
 /// A number is copied into the call, so the question does not arise.
@@ -83,7 +83,7 @@ fn a_parameter_that_is_not_boxed_has_no_storage_to_share() {
         fn added(list: List<Int>, n: Int) -> List<Int> { push(list, n) }\n\n\
         test \"t\" { assert length(added([1], 2)) == 2 }\n";
     let (program, summaries) = summarise(src);
-    assert!(use_of(&program, &summaries, "added", 1).released());
+    assert_eq!(use_of(&program, &summaries, "added", 1).word(), "releases");
 }
 
 /// Reading a length gives back a number, and a number cannot be the list.
@@ -93,7 +93,10 @@ fn a_function_that_only_measures_its_argument_releases_it() {
         fn counted(list: List<Int>) -> Int { length(list) }\n\n\
         test \"t\" { assert counted([1, 2]) == 2 }\n";
     let (program, summaries) = summarise(src);
-    assert!(use_of(&program, &summaries, "counted", 0).released());
+    assert_eq!(
+        use_of(&program, &summaries, "counted", 0).word(),
+        "releases"
+    );
 }
 
 /// Text comes back built character by character, never sharing a byte.
@@ -103,8 +106,8 @@ fn joining_text_hands_back_something_new() {
         fn joined(parts: List<String>, sep: String) -> String { join(parts, sep) }\n\n\
         test \"t\" { assert joined([\"a\", \"b\"], \",\") == \"a,b\" }\n";
     let (program, summaries) = summarise(src);
-    assert!(use_of(&program, &summaries, "joined", 0).released());
-    assert!(use_of(&program, &summaries, "joined", 1).released());
+    assert_eq!(use_of(&program, &summaries, "joined", 0).word(), "releases");
+    assert_eq!(use_of(&program, &summaries, "joined", 1).word(), "releases");
 }
 
 /// The helpers that write text write all of it.
@@ -131,9 +134,10 @@ fn every_helper_that_builds_text_builds_all_of_it() {
     let (program, summaries) = summarise(src);
     for name in ["shouted", "tidied", "loud", "quiet", "pieces"] {
         let word = use_of(&program, &summaries, name, 0);
-        assert!(
-            word.released(),
-            "`{name}` hands back text it wrote itself: {word:?}"
+        assert_eq!(
+            word.word(),
+            "releases",
+            "`{name}` hands back text it wrote itself"
         );
     }
 }
@@ -160,7 +164,10 @@ fn a_function_returning_a_number_shares_nothing_however_it_got_there() {
         fn measured(list: List<Int>) -> Int { Holder { items: list, size: 1 }.size }\n\n\
         test \"t\" { assert measured([1]) == 1 }\n";
     let (program, summaries) = summarise(src);
-    assert!(use_of(&program, &summaries, "measured", 0).released());
+    assert_eq!(
+        use_of(&program, &summaries, "measured", 0).word(),
+        "releases"
+    );
 }
 
 /// A handler's `state` is the one thing in the language that outlives the call
@@ -227,7 +234,10 @@ fn a_caller_reads_its_callees_answer() {
         fn twice_counted(list: List<Int>) -> Int { counted(list) + counted(list) }\n\n\
         test \"t\" { assert twice_counted([1]) == 2 }\n";
     let (program, summaries) = summarise(src);
-    assert!(use_of(&program, &summaries, "twice_counted", 0).released());
+    assert_eq!(
+        use_of(&program, &summaries, "twice_counted", 0).word(),
+        "releases"
+    );
 }
 
 /// Recursion converges rather than being refused for being recursive.
@@ -239,7 +249,10 @@ fn a_function_that_calls_itself_still_gets_an_answer() {
         }\n\n\
         test \"t\" { assert drained([1, 2], 0) == 2 }\n";
     let (program, summaries) = summarise(src);
-    assert!(use_of(&program, &summaries, "drained", 0).released());
+    assert_eq!(
+        use_of(&program, &summaries, "drained", 0).word(),
+        "releases"
+    );
 }
 
 /// Handing a list to the host is handing it somewhere this program cannot see.
@@ -254,19 +267,33 @@ fn what_goes_to_the_host_is_retained() {
 
 /// The printed form is what a person tuning this reads, and the decision
 /// record asks for it by name because the cheap answer is otherwise silent.
+///
+/// All four words on one program, because each is one arm of one match and a
+/// fixture producing three of them leaves the fourth saying whatever it likes.
 #[test]
-fn the_summary_can_be_printed() {
+fn the_summary_prints_all_four_answers() {
     let src = "module a\n\n\
         fn added(list: List<Int>, n: Int) -> List<Int> { push(list, n) }\n\n\
         fn counted(list: List<Int>) -> Int { length(list) }\n\n\
-        test \"t\" { assert length(added([1], 2)) == counted([1, 2]) }\n";
+        fn shown(sys: System, line: String) -> Int uses Io.write {\n\
+        \x20 Io.write(sys.console, line)\n\
+        \x20 length(line)\n\
+        }\n\n\
+        fn echoed(sys: System, line: String) -> String uses Io.write {\n\
+        \x20 Io.write(sys.console, line)\n\
+        \x20 line\n\
+        }\n";
     let (program, summaries) = summarise(src);
     let printed = summaries.print(&program);
 
-    assert!(printed.contains("returns"), "{printed}");
-    assert!(printed.contains("releases"), "{printed}");
-    for word in ["added", "counted"] {
-        assert!(printed.contains(word), "{printed}");
+    for line in [
+        "returns   added#0",
+        "releases  added#1",
+        "releases  counted#0",
+        "retains   shown#1",
+        "keeps     echoed#1",
+    ] {
+        assert!(printed.contains(line), "missing `{line}` in:\n{printed}");
     }
 }
 
@@ -286,9 +313,9 @@ fn reading_a_value_out_of_text_hands_back_none_of_it() {
         \x20 assert same(\"a\", \"a\")\n\
         }\n";
     let (program, summaries) = summarise(src);
-    assert!(use_of(&program, &summaries, "parsed", 0).released());
-    assert!(use_of(&program, &summaries, "same", 0).released());
-    assert!(use_of(&program, &summaries, "same", 1).released());
+    assert_eq!(use_of(&program, &summaries, "parsed", 0).word(), "releases");
+    assert_eq!(use_of(&program, &summaries, "same", 0).word(), "releases");
+    assert_eq!(use_of(&program, &summaries, "same", 1).word(), "releases");
 }
 
 /// An element read out of a list lives inside the list, and the index does not.
@@ -305,8 +332,9 @@ fn an_element_comes_from_the_list_rather_than_the_index() {
         "the answer holds a string that lives in the list: {words:?}"
     );
     assert!(!words.retained);
-    assert!(
-        use_of(&program, &summaries, "picked", 1).released(),
+    assert_eq!(
+        use_of(&program, &summaries, "picked", 1).word(),
+        "releases",
         "the index is a number"
     );
 }
