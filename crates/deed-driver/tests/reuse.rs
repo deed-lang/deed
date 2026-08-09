@@ -270,6 +270,70 @@ fn the_summary_can_be_printed() {
     }
 }
 
+/// The helpers that hand back a number, a boolean or a fresh `Result` hand
+/// back none of what they were given.
+///
+/// `to_int` is the one worth a case of its own: it answers with a `Result`,
+/// which is an aggregate and so is boxed, so unlike `length` its answer is a
+/// thing that could in principle hold the argument. It does not.
+#[test]
+fn reading_a_value_out_of_text_hands_back_none_of_it() {
+    let src = "module a\n\n\
+        fn parsed(text: String) -> Result<Int, String> { to_int(text) }\n\n\
+        fn same(left: String, right: String) -> Bool { left == right }\n\n\
+        test \"t\" {\n\
+        \x20 assert parsed(\"1\") == ok(1)\n\
+        \x20 assert same(\"a\", \"a\")\n\
+        }\n";
+    let (program, summaries) = summarise(src);
+    assert!(use_of(&program, &summaries, "parsed", 0).released());
+    assert!(use_of(&program, &summaries, "same", 0).released());
+    assert!(use_of(&program, &summaries, "same", 1).released());
+}
+
+/// An element read out of a list lives inside the list, and the index does not.
+#[test]
+fn an_element_comes_from_the_list_rather_than_the_index() {
+    let src = "module a\n\n\
+        fn picked(words: List<String>, index: Int) -> Result<String, String> { at(words, index) }\n\n\
+        test \"t\" { assert picked([\"a\"], 0) == ok(\"a\") }\n";
+    let (program, summaries) = summarise(src);
+
+    let words = use_of(&program, &summaries, "picked", 0);
+    assert!(
+        words.shared_with_result,
+        "the answer holds a string that lives in the list: {words:?}"
+    );
+    assert!(!words.retained);
+    assert!(
+        use_of(&program, &summaries, "picked", 1).released(),
+        "the index is a number"
+    );
+}
+
+/// An answer travels back up a chain of calls, however deep.
+///
+/// Three deep and written outermost first, so a single pass over the functions
+/// in declaration order cannot reach it: the outer one is looked at before the
+/// one it depends on has an answer. Anything that stopped iterating early
+/// would leave `outer` looking like it releases, which is the wrong half.
+#[test]
+fn an_answer_travels_back_up_a_chain_of_calls() {
+    let src = "module a\n\n\
+        fn outer(line: String, sys: System) -> () uses Io.write { middle(line, sys) }\n\n\
+        fn middle(line: String, sys: System) -> () uses Io.write { inner(line, sys) }\n\n\
+        fn inner(line: String, sys: System) -> () uses Io.write { Io.write(sys.console, line) }\n";
+    let (program, summaries) = summarise(src);
+
+    for name in ["outer", "middle", "inner"] {
+        let line = use_of(&program, &summaries, name, 0);
+        assert!(
+            line.retained,
+            "`{name}` hands it towards the host: {line:?}"
+        );
+    }
+}
+
 /// How much of the shipped library the analysis can answer.
 ///
 /// A floor rather than the exact number: the point is that the answer is

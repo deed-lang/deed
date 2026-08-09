@@ -56,11 +56,9 @@ impl ParamUse {
         !self.shared_with_result && !self.retained
     }
 
-    fn widen(&mut self, other: ParamUse) -> bool {
-        let before = *self;
+    fn widen(&mut self, other: ParamUse) {
         self.shared_with_result |= other.shared_with_result;
         self.retained |= other.retained;
-        before != *self
     }
 }
 
@@ -90,14 +88,6 @@ impl Summaries {
         &self.of[func.0]
     }
 
-    pub fn len(&self) -> usize {
-        self.of.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.of.is_empty()
-    }
-
     /// One line per parameter that is not the default answer.
     ///
     /// The decision record asks for this by name: the cheap direction is
@@ -108,11 +98,14 @@ impl Summaries {
         for (index, summary) in self.of.iter().enumerate() {
             let function = &program.functions[index];
             for (at, use_of) in summary.params.iter().enumerate() {
-                let word = match (use_of.shared_with_result, use_of.retained) {
-                    (false, false) => "releases",
-                    (true, false) => "returns",
-                    (false, true) => "retains",
-                    (true, true) => "keeps",
+                let word = if use_of.released() {
+                    "releases"
+                } else if !use_of.retained {
+                    "returns"
+                } else if !use_of.shared_with_result {
+                    "retains"
+                } else {
+                    "keeps"
                 };
                 out.push_str(&format!("{word:9} {}#{at}\n", function.name));
             }
@@ -143,18 +136,21 @@ pub fn summarise(program: &Program) -> Summaries {
         })
         .collect();
 
-    // Monotone and finite: two bits per parameter, only ever set. The loop
-    // stops because nothing here clears one.
-    let mut changed = true;
-    while changed {
-        changed = false;
+    // Two bits per parameter and nothing here ever clears one, so a round
+    // that changes anything sets a bit that stays set. Counting the bits
+    // bounds the rounds, which makes stopping a property of the lattice
+    // rather than of the comparison below noticing.
+    let bound: usize = of.iter().map(|s| s.params.len() * 2).sum::<usize>() + 1;
+    for _ in 0..bound {
+        let before = of.clone();
         for (index, function) in program.functions.iter().enumerate() {
             let found = Walk::new(program, function, &of).summarise();
             for (at, use_of) in found.params.iter().enumerate() {
-                if of[index].params[at].widen(*use_of) {
-                    changed = true;
-                }
+                of[index].params[at].widen(*use_of);
             }
+        }
+        if of == before {
+            break;
         }
     }
 
@@ -340,7 +336,7 @@ impl<'a> Walk<'a> {
                 let mut result = From::new();
                 for (at, arg) in args.iter().enumerate() {
                     let from = self.expr(arg);
-                    if ret.is_boxed() && helper_result_reaches(name, at) {
+                    if ret.is_boxed() && helper_result_reaches(name, at).unwrap_or(true) {
                         union(&mut result, &from);
                     }
                 }
@@ -457,21 +453,26 @@ impl<'a> Walk<'a> {
 
 /// Whether the result of a runtime helper may reach its argument at `at`.
 ///
-/// The set is closed and this compiler publishes it, so this is reading its
-/// own primitives rather than guessing about a library. A helper not named
-/// here is answered yes for every argument.
+/// `None` for a name this does not know, which the caller reads as yes. The
+/// difference is not decoration: the set is closed and this compiler publishes
+/// it, so `crates/deed-driver/tests/reuse.rs` can ask that every name in it
+/// gets an answer here. Folding "unknown" into "yes" would make dropping an
+/// entry invisible.
 ///
 /// None of them retain anything: the runtime keeps no state between calls, so
 /// the only storage that outlives one is the storage it returns.
-fn helper_result_reaches(name: &str, at: usize) -> bool {
-    match name {
+fn helper_result_reaches(name: &str, at: usize) -> Option<bool> {
+    let reaches = match name {
         // Numbers and booleans out; nothing of the argument comes with them.
         runtime::STR_EQ
         | runtime::STR_CMP
         | runtime::STR_LEN
-        | runtime::STR_TO_INT
         | runtime::LIST_LEN
         | runtime::CONTRACT_FAILED => false,
+
+        // A `Result`, which is an aggregate and so is boxed, holding a number
+        // it read and a sentence it wrote.
+        runtime::STR_TO_INT => false,
 
         // Fresh text, character by character.
         runtime::STR_CONCAT
@@ -500,6 +501,41 @@ fn helper_result_reaches(name: &str, at: usize) -> bool {
         // An element, which lives inside the list.
         runtime::LIST_AT => at == 0,
 
-        _ => true,
+        _ => return None,
+    };
+    Some(reaches)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every helper the runtime publishes has an answer written down.
+    ///
+    /// The set is closed, so "this one was never considered" is a thing that
+    /// can be checked rather than a thing somebody notices later. Without
+    /// this, dropping an entry costs nothing: the caller reads a missing one
+    /// as yes, which is the safe half, and the analysis quietly gets worse.
+    #[test]
+    fn every_helper_the_runtime_publishes_has_an_answer() {
+        let missing: Vec<&str> = runtime::ALL
+            .iter()
+            .copied()
+            .filter(|name| helper_result_reaches(name, 0).is_none())
+            .collect();
+        assert!(missing.is_empty(), "no answer written down for {missing:?}");
+    }
+
+    /// And a name from outside that set is not quietly given one.
+    #[test]
+    fn a_name_the_runtime_does_not_publish_has_none() {
+        assert_eq!(helper_result_reaches("deed_rt_invented", 0), None);
+    }
+
+    /// The list is the first argument of `at`, and the index is the second.
+    #[test]
+    fn an_element_comes_from_the_list_and_not_the_index() {
+        assert_eq!(helper_result_reaches(runtime::LIST_AT, 0), Some(true));
+        assert_eq!(helper_result_reaches(runtime::LIST_AT, 1), Some(false));
     }
 }
