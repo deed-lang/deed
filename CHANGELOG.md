@@ -45,6 +45,31 @@ release notes.
 
 ### Tools
 
+- `deed build --component` writes a component binary. Until now it wrote a core
+  module and a `.wit` world, and handing that core module to
+  `wasm-tools component new` produced a component exporting nothing, which
+  `design/decisions/2026-08-07-a-wit-world-is-not-a-component.md` measured and
+  wrote down as the gap. `<name>.component.wasm` is that gap closed for the
+  exports that cross the boundary unchanged: a number is an `s64` on both sides
+  and a boolean is a `bool` on both sides, so lifting one needs no adapter.
+
+  Anything wider than a word does not get one. A string crosses as a pointer
+  and a length into memory the caller helped allocate through `cabi_realloc`,
+  and this backend passes one address in its own layout, so a module carrying
+  text gets the core module, the world, and a line naming the export and what
+  it needs. A component that answered wrongly would be worse than one that is
+  not written.
+
+  The core module and the `.wit` are unchanged and are still written, so
+  nothing that reads them has to know about any of this.
+
+  Measured rather than asserted: `crates/deed-codegen/component.mjs` now reads
+  the component's world with the Bytecode Alliance's own tooling, transpiles
+  it, calls both exports and checks the answers, because reading a world is not
+  running one. The encoder is in `crates/deed-codegen/src/component.rs` and has
+  no dependency; every constant in it was read out of a component that
+  toolchain built.
+
 - `cargo install deed-lang` works. The compiler is on crates.io as of 0.2.9,
   as twenty crates, and the install instructions say so. `deed` on crates.io
   belongs to somebody else, so the package is `deed-lang` and the binary it

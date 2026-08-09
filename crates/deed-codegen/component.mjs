@@ -1,24 +1,33 @@
 // What a real component toolchain makes of what `deed build --component` wrote.
 //
 // The claim `deed build --component` is for is `design/05-backend.md`'s: a
-// program's effect row is its world, and nothing else derives one. The world
-// is written as `.wit` text, and nothing in this repository reads it back,
-// which is the shape of a claim that has never been tested by anybody who
-// would have to believe it.
+// program's effect row is its world, and nothing else derives one. For four
+// releases the world was written as `.wit` text and nothing in this repository
+// read it back, which is the shape of a claim nobody who would have to believe
+// it had ever tested. This file was written to ask the toolchain that would,
+// and what it measured was a gap: `wasm-tools component new` turned the core
+// module into a component that exported nothing.
 //
-// So this asks the toolchain that would. `jco` bundles the Bytecode
-// Alliance's own `wasm-tools`, and `jco new` is `wasm-tools component new`:
-// the step somebody adopting the component model would run next.
+// That gap is closed for the exports that need no adapters, so this file now
+// measures the thing working rather than the thing missing. Both halves are
+// here, because the second one is still true:
 //
-// It is a measurement rather than a gate. What it pins is what is true today,
-// so that the day it stops being true is the day this file changes and
-// somebody has to say why.
+//   - a component `deed build --component` wrote, whose world names the
+//     functions, and which answers correctly when a component runtime calls
+//     it;
+//   - and a module carrying text, which is not given a component at all,
+//     because the canonical ABI adapters a string needs are not written.
+//
+// `jco` bundles the Bytecode Alliance's own `wasm-tools` and adds a
+// transpiler, so the calls below go through a real component runtime rather
+// than through anything in this workspace.
 //
 //   node crates/deed-codegen/component.mjs <path to deed> <scratch directory>
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const [deed, scratch] = process.argv.slice(2);
 if (!deed || !scratch) {
@@ -36,75 +45,113 @@ function check(what, ok, detail) {
   }
 }
 
-// No `main` and no capability in a signature: what a component is allowed to
-// be. One function of numbers and one of text, because the two cross the
-// boundary differently and only one of them is a word.
-const SOURCE = `module adder
+// Through a shell, because npm installs it as a wrapper script and Node will
+// not spawn one directly on Windows.
+const jco = (args, options = {}) => execFileSync("jco", args, { shell: true, ...options });
+
+mkdirSync(scratch, { recursive: true });
+
+// -- what crosses unchanged -------------------------------------------------
+//
+// No `main` and no capability in a signature, which is what a component is
+// allowed to be, and nothing wider than a word in either direction, which is
+// what can be lifted without adapters. Two types rather than one: a number and
+// a boolean are different bytes on the boundary, and swapping them is a
+// component that lies about what it takes.
+const FLAT = `module adder
 
 fn add(a: Int, b: Int) -> Int { a + b }
 
-fn greet(name: String) -> String { "hello, " + name }
+fn positive(n: Int) -> Bool { n > 0 }
 `;
 
-mkdirSync(scratch, { recursive: true });
-const source = join(scratch, "adder.deed");
-writeFileSync(source, SOURCE);
-execFileSync(deed, ["build", "--component", source], { stdio: "pipe" });
+const flat = join(scratch, "adder.deed");
+writeFileSync(flat, FLAT);
+execFileSync(deed, ["build", "--component", flat], { stdio: "pipe" });
 
 const world = readFileSync(join(scratch, "adder.wit"), "utf8");
 check(
   "the world names both functions the module declares",
-  world.includes("export add:") && world.includes("export greet:"),
+  world.includes("export add:") && world.includes("export positive:"),
   JSON.stringify(world),
 );
 
-// The core module is a core module, which is the half that already works.
+// The core module is still a core module. A host embedding one reads this
+// file, and it is the same bytes `deed build` writes.
 const core = readFileSync(join(scratch, "adder.wasm"));
 const module = await WebAssembly.compile(core);
 const exports = WebAssembly.Module.exports(module).map((one) => one.name);
 check(
-  "and the core module exports them",
-  exports.includes("add") && exports.includes("greet"),
+  "and the core module beside it still exports them",
+  exports.includes("add") && exports.includes("positive"),
   JSON.stringify(exports),
 );
 
-// The step somebody adopting the component model runs next. Through a shell,
-// because npm installs it as a wrapper script and Node will not spawn one
-// directly on Windows.
-const jco = (args, options = {}) =>
-  execFileSync("jco", args, { shell: true, ...options });
-
-const componentised = join(scratch, "adder.component.wasm");
-jco(["new", join(scratch, "adder.wasm"), "-o", componentised], { stdio: "pipe" });
-check("a component toolchain accepts the core module", true);
-
-const produced = jco(["wit", componentised], { encoding: "utf8" });
-
-// What is true today, and the reason `--component` does not claim to write a
-// component binary. The exports cross the boundary in this backend's own
-// layout rather than the canonical ABI, and nothing writes the
-// component-type custom section that carries the world, so the component the
-// toolchain builds has nothing in it.
-//
-// The day this stops being true, this file is the one that fails, and the
-// assertion below is the one to rewrite.
-const empty = !produced.includes("add") && !produced.includes("greet");
+// The component, read with the tooling somebody adopting the component model
+// would read it with. This is the assertion that used to say the world was
+// empty.
+const component = join(scratch, "adder.component.wasm");
+const produced = jco(["wit", component], { encoding: "utf8" });
 check(
-  "and the component it builds has an empty world, which is the gap",
-  empty,
+  "and the component it wrote has a world with both of them in it",
+  produced.includes("export add:") && produced.includes("export positive:"),
   produced.trim(),
 );
 
-if (!empty) {
-  console.log(
-    "\nthe world is not empty any more. If that was on purpose, this file and\n" +
-      "design/decisions/2026-08-07-a-wit-world-is-not-a-component.md are what to update.",
-  );
+// Reading a world is not running one. Anything that got the lift wrong -- the
+// wrong core function, the wrong type, a parameter in the wrong place -- still
+// produces a component whose world reads correctly.
+jco(["transpile", component, "-o", join(scratch, "js"), "--name", "adder"], { stdio: "pipe" });
+const running = await import(pathToFileURL(resolve(scratch, "js", "adder.js")).href);
+check(
+  "a component runtime runs it",
+  running.add(20n, 22n) === 42n,
+  `add(20, 22) = ${running.add(20n, 22n)}`,
+);
+check(
+  "and the second export is the second function rather than the first",
+  running.positive(3n) === true && running.positive(-1n) === false,
+  `positive(3) = ${running.positive(3n)}, positive(-1) = ${running.positive(-1n)}`,
+);
+
+// -- and what does not ------------------------------------------------------
+//
+// A string crosses as a pointer and a length into memory the caller helped
+// allocate, through `cabi_realloc`. This backend passes one address in its own
+// layout. Lifting that anyway is a component that answers wrongly, which is
+// worse than one that is not written.
+const TEXT = `module greeter
+
+fn greet(name: String) -> String { join(["hello, ", name], "") }
+`;
+
+const text = join(scratch, "greeter.deed");
+writeFileSync(text, TEXT);
+const said = execFileSync(deed, ["build", "--component", text], { encoding: "utf8" });
+check(
+  "a module carrying text is told which export needs the adapters",
+  said.includes("no component binary") && said.includes("greet") && said.includes("canonical ABI"),
+  JSON.stringify(said),
+);
+
+let wrote = true;
+try {
+  readFileSync(join(scratch, "greeter.component.wasm"));
+} catch {
+  wrote = false;
 }
+check("and is not given a component that would answer wrongly", !wrote);
+
+// The world and the core module are still written for it, because the
+// derivation is the claim and it does not depend on the adapters.
+check(
+  "while the world it derived is still there",
+  readFileSync(join(scratch, "greeter.wit"), "utf8").includes("export greet:"),
+);
 
 console.log(
   failures === 0
-    ? "\nmeasured: a world in text, and a component with nothing in it"
+    ? "\nmeasured: a component that runs, and a refusal where the adapters are missing"
     : `\n${failures} failed`,
 );
 process.exit(failures === 0 ? 0 : 1);

@@ -44,11 +44,14 @@ Options:
                           would have changed.
   --compiled              With `test`, run test blocks through the compiled
                           WebAssembly backend instead of the interpreter.
-  --component             With `build`, write a core module and the `.wit`
-                          world its exports describe, instead of a
-                          standalone program. Not a component binary yet.
-                          Refuses programs that declare `main` or
-                          use a capability in an exported function's signature.
+  --component             With `build`, write a core module, the `.wit` world
+                          its exports describe, and a component binary, instead
+                          of a standalone program. The component is written
+                          when every export crosses unchanged; anything wider
+                          than a word needs adapters that are not written yet,
+                          and says so by name. Refuses programs that declare
+                          `main` or use a capability in an exported function's
+                          signature.
   --lock <path>           Write a lock file listing every input with its
                           SHA-256 hash. Existing file is overwritten.
   --locked <path>         Refuse to proceed if any input differs from the lock
@@ -75,19 +78,22 @@ no flag to remember because the signature already says which programs read.
 `deed build` compiles to a WebAssembly module beside the file it was given. It
 says what it could not compile rather than guessing, which as of #877 is a
 function value compared with another one and nothing else in the corpus.
-`deed build --component` produces a WebAssembly core module and a `.wit` world file
-beside the source. The world's exported interface is every function the
-module declares. A function is its own export; there is no `main`. Functions
-whose signatures contain a capability have no world-level type in WIT and are
-refused with an explanation. Tests are not part of the interface.
+`deed build --component` produces a WebAssembly core module, a `.wit` world file
+and a component binary beside the source. The world's exported interface is
+every function the module declares. A function is its own export; there is no
+`main`. Functions whose signatures contain a capability have no world-level type
+in WIT and are refused with an explanation. Tests are not part of the interface.
 
-What it does not produce yet is a component binary. Handing the core module to
-`wasm-tools component new` makes a component whose world is empty, because the
-exports cross the boundary in this backend's own layout rather than the
-canonical ABI and nothing writes the component-type section. That is measured
-rather than assumed, on every commit, and
-`design/decisions/2026-08-07-a-wit-world-is-not-a-component.md` says what is
-missing.
+The component binary is written when every export crosses the boundary the way
+the canonical ABI says it does, which is a number and a boolean. Anything wider
+than a word crosses as a pointer and a length into memory the caller helped
+allocate, and the adapters for that are not written; those modules get the core
+module and the world, and a line naming the export and what it needs. A
+component that answered wrongly would be worse than one that is not written.
+Both halves are measured on every commit against the Bytecode Alliance's own
+tooling, and
+`design/decisions/2026-08-09-a-component-for-what-crosses-unchanged.md` says
+what is still missing.
 `deed doc` writes the API reference a module carries to standard output, as
 Markdown. There are no visibility modifiers here, so every declaration is API
 and there is nothing to decide about what belongs on the page: the signature,

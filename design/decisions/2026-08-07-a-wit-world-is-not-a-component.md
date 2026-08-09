@@ -1,9 +1,15 @@
 # Decision: a WIT world is not a component
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-08-07
 - Supersedes: None
-- Superseded by: None
+- Superseded by: `2026-08-09-a-component-for-what-crosses-unchanged.md`
+
+> The third thing this record lists as missing is written. `deed build
+> --component` writes a component binary for exports that cross unchanged, and
+> the measurement below now runs one rather than finding it empty. The other
+> two are still missing, and the record that supersedes this one says which
+> exports they cost.
 
 ## Context
 
