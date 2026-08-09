@@ -93,6 +93,25 @@ release notes.
 
 ### Measurements
 
+- The security policy said nothing had shipped, and gave reporting advice that
+  rested on it. `SECURITY.md` read "There are no releases and the version is
+  `0.0.0`", and told a reporter to open a sandbox escape in public because,
+  with no users and no releases, it "costs nobody anything". Measured: twelve
+  releases, version 0.2.10, and a compiler installable with `cargo install
+  deed-lang`. The description going stale is ordinary; this one had turned into
+  advice, and somebody who found a capability or `Dir` escape would have read
+  it and published.
+
+  It now says the supported version is the most recent release, that fixes go
+  out in the next one and are not backported, and to use the private channel
+  first. Held against `CHANGELOG.md` rather than the network, so it answers
+  without a token: a policy may not claim nothing has shipped while the
+  changelog names released versions.
+
+  The same file named three of the nine modules that ship. The `Io` operation
+  list beside it has been held for a while and stayed current; the module list
+  was not held, and drifted the way an unheld list does. Both are held now.
+
 - The demo the project leads with was demonstrating something weaker than it
   claimed, and naming the wrong operation while doing it. `demo/README.md` and
   the site's one-clause page both say a host offering `Io.read` and not
