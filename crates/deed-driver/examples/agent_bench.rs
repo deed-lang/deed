@@ -65,12 +65,12 @@ fn main() {
         println!(
             "{task:<16} {:>7} {:>7} {:>7} {:>8}  {}",
             yes(score.checks),
-            match score.checks {
-                true => format!("{}/{}", score.tests_passed, score.tests_run),
-                false => "-".to_string(),
-            },
-            score.proven,
-            score.guarded,
+            measured(
+                score.checks,
+                format!("{}/{}", score.tests_passed, score.tests_run)
+            ),
+            measured(score.checks, score.proven.to_string()),
+            measured(score.checks, score.guarded.to_string()),
             match score.reasons.is_empty() {
                 true => "-".to_string(),
                 false => score
@@ -92,6 +92,11 @@ fn main() {
 
 fn yes(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+/// A zero that was measured, or a dash for one that was not.
+fn measured(checks: bool, value: String) -> String {
+    if checks { value } else { "-".to_string() }
 }
 
 /// What one answer scored.
@@ -128,6 +133,22 @@ pub fn score(task: &str, answer: &str) -> Score {
     let checked = check_all(&sources, &ids);
     let checks = !checked.iter().any(|one| one.has_errors());
 
+    // Nothing further is measured, which is what the README promises. A file
+    // the compiler rejected still carries obligations, and reporting their
+    // tiers scores a program that does not exist: four blind runs came back
+    // "0 check" with a proven obligation beside it.
+    if !checks {
+        return Score {
+            checks,
+            tests_run: 0,
+            tests_passed: 0,
+            tests_pass: false,
+            proven: 0,
+            guarded: 0,
+            reasons: BTreeMap::new(),
+        };
+    }
+
     let mut proven = 0;
     let mut guarded = 0;
     let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
@@ -146,18 +167,6 @@ pub fn score(task: &str, answer: &str) -> Score {
             }
             _ => {}
         }
-    }
-
-    if !checks {
-        return Score {
-            checks,
-            tests_run: 0,
-            tests_passed: 0,
-            tests_pass: false,
-            proven,
-            guarded,
-            reasons,
-        };
     }
 
     let mut program = Program::new();

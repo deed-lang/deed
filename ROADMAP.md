@@ -264,10 +264,13 @@ the control query in §2 returning non-zero on the same day.
 This is the largest single step in the whole document, because it is the step
 from zero. Everything after it is multiplication; this one is addition.
 
-- [ ] Publish the benchmark result as its own artefact. Five runs of one model
+- [x] Publish the benchmark result as its own artefact. Five runs of one model
       against one build, with the DEED2003/DEED3001 table, is a measurement
       almost no language has made about itself. It is the most defensible
-      interesting thing this project owns.
+      interesting thing this project owns. *Done: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+      Writing it found a real defect — the scorer was reporting proven
+      obligations for answers the compiler had rejected, so the control arm's
+      row read `0 check` with `proven 1` beside it.*
 - [ ] Write the `deed mcp` story down where agent developers read it. "A
       compiler an agent can ask questions of, and a benchmark that measures
       whether the agent got it right" is a sentence no other language can
@@ -355,5 +358,10 @@ tests the premise rather than the execution.
 - Everything Linguist needs from **the world** is at zero. Not near zero: the
   six files that carry the extension elsewhere are somebody else's format.
 - The gap is not technical, and no amount of compiler work closes it.
-- The next action is the one with a clock on it: **claim `deed-lang` on
-  crates.io.**
+- Stage 0 is closed. Somebody who hears about Deed can install it in one line,
+  or with `cargo install deed-lang`, and `deed new` gives them a project that
+  checks. Nothing on that path now requires reading this repository.
+- The next action is the one nobody else can do for us: **give somebody outside
+  this repository a reason to write a `.deed` file**, and the two remaining
+  Stage 1 items with no clock on them are the measurements that would make the
+  reason checkable rather than assertable.

@@ -41,7 +41,23 @@ release notes.
 
 ### Measurements
 
-- Nothing yet.
+- `benchmarks/RESULTS.md`: what five runs of one model against one build said,
+  as its own document rather than a section at the bottom of the harness's
+  README. Six tasks, five runs, a control arm with the compiler taken away, the
+  hundred and two tool calls it made, and a list of what it does not establish.
+
+- The scorer stops reporting `proven` and `guarded` for an answer the compiler
+  rejected. `benchmarks/README.md` already said "anything else, and nothing
+  further is measured", and the tool measured further: four blind runs came
+  back `0 check` with a proven obligation printed beside them, which reads as
+  the arm that wrote nothing compilable proving as much as the arm that did.
+  Those columns now print `-`, the way the tests column already did, so a zero
+  that was measured is distinguishable from one that was not.
+
+- `deed_test` is not one of the tools a benchmark task leaves with nothing to
+  do, and the README said it was. Three of the eight `deed_test` calls across
+  those runs came back with a property the compiler generated from the contract
+  in the answer, a hundred cases each, in tasks whose prompts say "no tests".
 
 ## 0.2.9 (2026-08-08)
 
