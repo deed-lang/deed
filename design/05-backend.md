@@ -225,21 +225,29 @@ deciding in the first place.
 a component binary. The derivation is the claim -- nobody else derives a world from
 code -- and it is checked against the rows by `crates/deed-driver/tests/wit_world.rs`.
 
-The component is written when every export crosses the boundary the way the canonical ABI
-says it does. A number is an `s64` on both sides and a boolean is a `bool` on both sides,
-so lifting one is a declaration rather than a conversion. Anything wider than a word --
-a string, a list, a record -- crosses as a pointer and a length into memory the caller
-helped allocate through `cabi_realloc`, and this backend passes one address in its own
-layout instead. Those modules get the core module and the world, and a line naming the
-export and the adapters it would need. A component that answered wrongly would be worse
-than one that is not written.
+The component is written when every export carries values this backend has a crossing
+for. A number is an `s64` on both sides and a boolean is a `bool` on both sides, so
+lifting one is a declaration rather than a conversion. Text needs a conversion and gets
+one: a string crosses as a pointer and a length into memory the caller asked the callee
+to allocate, so the module inside the component carries a `cabi_realloc` and a wrapper
+per export, and the lift names both. Anything wider -- a list, a record, a choice --
+has adapters nobody has written, because their lowering is per element and per field.
+Those modules get the core module and the world, and a line naming the export and what
+it would need. A component that answered wrongly would be worse than one that is not
+written.
+
+The core module beside the source has none of the adapters in it. What goes inside the
+component is that module with them appended, so every function keeps its index and every
+export keeps its name, and a host embedding `<name>.wasm` is not handed a boundary it did
+not ask for.
 
 Measured rather than assumed, on every commit.
-`crates/deed-codegen/component.mjs` reads the component's world with the Bytecode
-Alliance's own tooling, transpiles it, calls both exports and checks the answers, and
-then checks that a module carrying text is refused by name. What is still missing --
-the canonical ABI adapters and `cabi_realloc` -- is written up in
-`design/decisions/2026-08-09-a-component-for-what-crosses-unchanged.md`.
+`crates/deed-codegen/component.mjs` reads each component's world with the Bytecode
+Alliance's own tooling, transpiles it, calls the exports and checks the answers -- an
+empty string, a string that is not the first parameter, two at once, text outside ASCII,
+and one long enough to need more memory than the module starts with -- and then checks
+that a module carrying a list is refused by name. What is still missing is written up in
+`design/decisions/2026-08-09-text-crosses-the-component-boundary.md`.
 
 **What would change this:** adopting the component/import declarations sketched in
 `design/04-capabilities.md` would let modules name additional host imports in source, but only if

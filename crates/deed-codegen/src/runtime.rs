@@ -27,7 +27,7 @@ use crate::layout;
 use crate::wasm::{FuncType, Ins, ValType};
 
 /// A string's bytes start after its two headers.
-const TEXT: u32 = 2 * layout::WORD;
+pub(crate) const TEXT: u32 = 2 * layout::WORD;
 
 /// A list's elements start after its length.
 const ELEMENTS: u32 = layout::WORD;
@@ -352,7 +352,7 @@ pub(crate) fn grow_to_fit() -> Vec<Ins> {
 /// How many bytes a WebAssembly page is.
 const PAGE: u32 = 64 * 1024;
 /// Reserves as many bytes as `size` pushes, leaving the address in `out`.
-fn allocate(out: u32, size: impl FnOnce(&mut Vec<Ins>)) -> Vec<Ins> {
+pub(crate) fn allocate(out: u32, size: impl FnOnce(&mut Vec<Ins>)) -> Vec<Ins> {
     let mut ins = vec![
         Ins::I32Const(layout::BUMP as i32),
         Ins::I64Load(0),
@@ -375,7 +375,7 @@ fn allocate(out: u32, size: impl FnOnce(&mut Vec<Ins>)) -> Vec<Ins> {
 /// The padding is a remainder rather than a mask because this backend's own
 /// runner reads `i32.and` as the boolean operator the language has and not as
 /// the bitwise one WebAssembly has, and nothing here may depend on which.
-fn string_room(bytes: u32) -> Vec<Ins> {
+pub(crate) fn string_room(bytes: u32) -> Vec<Ins> {
     vec![
         Ins::I64Const(TEXT as i64),
         Ins::LocalGet(bytes),
@@ -508,7 +508,7 @@ fn text_at(slot: u32, index: u32) -> Vec<Ins> {
 ///
 /// The body may leave the loop early by branching two levels out, which is
 /// what the comparisons do when they have their answer.
-fn count_to(counter: u32, limit: u32, mut body: Vec<Ins>) -> Vec<Ins> {
+pub(crate) fn count_to(counter: u32, limit: u32, mut body: Vec<Ins>) -> Vec<Ins> {
     let mut inner = vec![
         Ins::LocalGet(counter),
         Ins::LocalGet(limit),

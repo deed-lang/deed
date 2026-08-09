@@ -6,72 +6,71 @@
 //! was never the gap. The gap was that nothing wrapped the module in the
 //! format a component runtime reads.
 //!
-//! This writes that wrapper. It is the whole of a component for exports whose
-//! values already cross the boundary the way the canonical ABI says they do,
-//! which is the scalars: a number is an `s64` on both sides and a boolean is a
-//! `bool` on both sides, so lifting one is a declaration rather than a
-//! conversion.
+//! This writes that wrapper. For exports whose values already cross the
+//! boundary the way the canonical ABI says they do -- the scalars, where a
+//! number is an `s64` on both sides and a boolean is a `bool` on both sides --
+//! lifting is a declaration and this is the whole of it.
 //!
-//! It is deliberately not the whole of a component for anything else. A string
-//! or a list crosses as a pointer and a length into memory the caller helped
-//! allocate, through `cabi_realloc`, and this backend passes one address in
-//! its own layout instead. Lifting those without the adapters would produce a
-//! component that answers wrongly, and the record this replaces says in as
-//! many words that answering wrongly is worse than not answering. So the
-//! caller checks first, and what arrives here is already only what fits.
+//! A string is not one of those. It crosses as a pointer and a length into
+//! memory the caller asked the callee to allocate, and this backend passes one
+//! address to a header and some bytes. [`crate::adapter`] is what stands
+//! between the two, and what this adds when it is there: an alias for the
+//! memory and one for `cabi_realloc`, and a lift that names both. An export
+//! carrying nothing that needs them lifts with no options, exactly as before.
 //!
 //! The encoding is the component model's binary format, and every constant in
 //! it was read out of a component the Bytecode Alliance's own tooling built
 //! rather than out of the specification: `crates/deed-codegen/component.mjs`
-//! builds one the same way on every commit and compares the worlds.
+//! builds one the same way on every commit, reads its world, and calls it.
 
+use crate::adapter::REALLOC;
 use crate::wasm::{Module, write_u32};
 
-/// What a lifted export carries across, on both sides.
-///
-/// Only the types that need no adapter. The name is the whole argument: these
-/// are the ones where the core value and the component value are the same
-/// value.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Flat {
-    /// `bool`. One core `i32`, zero or one.
-    Bool,
-    /// `s64`. One core `i64`.
-    Signed64,
-}
-
-impl Flat {
-    /// The component model's byte for this type.
-    fn byte(self) -> u8 {
-        match self {
-            Flat::Bool => 0x7f,
-            Flat::Signed64 => 0x78,
-        }
-    }
-}
+pub use crate::adapter::Cross;
 
 /// One function the component exports, as it appears on the boundary.
 #[derive(Clone, Debug)]
 pub struct Lifted {
-    /// The name the component exports it under, and the name the core module
-    /// exports it under. They are the same name; a component that renamed
-    /// them would be describing a module other than the one it holds.
+    /// The name the component exports it under.
     pub name: String,
+    /// The core module's export this lifts, which is the same name when
+    /// nothing needed an adapter and the wrapper's name when something did.
+    pub core: String,
     /// Parameter types in order. The names are generated, because a Deed
     /// parameter name is not part of what the module exports.
-    pub params: Vec<Flat>,
+    pub params: Vec<Cross>,
     /// The single result, or none. The component model allows a list; this
     /// language returns one value or nothing.
-    pub result: Option<Flat>,
+    pub result: Option<Cross>,
+}
+
+impl Lifted {
+    /// Whether lifting this one has to name the module's memory and
+    /// allocator.
+    ///
+    /// Exactly when something it carries does not cross unchanged. A lift
+    /// that named them anyway would be describing a boundary that is not
+    /// there, and one that failed to name them where they are needed is a
+    /// component a runtime refuses to instantiate.
+    fn needs_the_memory(&self) -> bool {
+        self.params.iter().any(|one| !one.crosses_unchanged())
+            || self.result.is_some_and(|one| !one.crosses_unchanged())
+    }
 }
 
 /// Wraps `core` in a component that exports `lifted`.
 ///
-/// The core module goes in verbatim. Nothing about it changes: the same bytes
-/// `deed build` writes are the bytes inside this, which is what keeps the two
-/// commands describing one compiler rather than two.
+/// The core module goes in whole. Nothing in it is rewritten: what `deed
+/// build` writes is inside this, and when an export needed adapters they were
+/// appended to it, so every function that was there is there under the name
+/// and at the index it had. That is what keeps the two commands describing one
+/// compiler rather than two.
 pub fn encode(core: &Module, lifted: &[Lifted]) -> Vec<u8> {
     let mut out = Vec::new();
+    // The allocator's presence is how this tells an adapted module from one
+    // that needed nothing, rather than a flag a caller could get wrong.
+    let adapted = core.exports.iter().any(|(name, _)| name == REALLOC);
+    let first = u32::from(adapted);
 
     // `\0asm`, then a version of 13 and a layer of 1. The layer is what tells
     // a reader this is a component rather than a module; a core module writes
@@ -88,11 +87,26 @@ pub fn encode(core: &Module, lifted: &[Lifted]) -> Vec<u8> {
     // An alias per export, which is how a core function becomes something the
     // component's own index space can name. `00 00` is the core sort and the
     // core function sort; `01` is "an export of a core instance".
+    //
+    // When there are adapters, the memory and the allocator come first: a
+    // lift's options name them by index, and the indexes are handed out here.
+    // The memory has an index space of its own, so it takes nothing from the
+    // functions; the allocator takes function zero and moves every export up
+    // one, which is what `first` is.
     let mut aliases = Vec::new();
-    write_u32(&mut aliases, lifted.len() as u32);
+    write_u32(
+        &mut aliases,
+        lifted.len() as u32 + if adapted { 2 } else { 0 },
+    );
+    if adapted {
+        aliases.extend_from_slice(&[0x00, 0x02, 0x01, 0x00]);
+        name(&mut aliases, "memory");
+        aliases.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]);
+        name(&mut aliases, REALLOC);
+    }
     for one in lifted {
         aliases.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]);
-        name(&mut aliases, &one.name);
+        name(&mut aliases, &one.core);
     }
     section(&mut out, 6, &aliases);
 
@@ -120,15 +134,28 @@ pub fn encode(core: &Module, lifted: &[Lifted]) -> Vec<u8> {
     }
     section(&mut out, 7, &types);
 
-    // The lift itself. No options, which is the whole reason only these types
-    // are here: options are where a memory and a `cabi_realloc` would go.
+    // The lift itself. The options are where the memory and the allocator go;
+    // an export carrying nothing that needs either says it has none, which is
+    // what every component this wrote before said.
     let mut canon = Vec::new();
     write_u32(&mut canon, lifted.len() as u32);
-    for at in 0..lifted.len() as u32 {
+    for (at, one) in lifted.iter().enumerate() {
         canon.extend_from_slice(&[0x00, 0x00]);
-        write_u32(&mut canon, at);
-        canon.push(0x00);
-        write_u32(&mut canon, at);
+        write_u32(&mut canon, at as u32 + first);
+        if one.needs_the_memory() {
+            // `03` a memory and `04` a `cabi_realloc`, each followed by the
+            // index the alias above gave it. UTF-8 is what a lift is read
+            // with when it does not say otherwise, and it is what this
+            // backend stores, so it does not say.
+            write_u32(&mut canon, 2);
+            canon.push(0x03);
+            write_u32(&mut canon, 0);
+            canon.push(0x04);
+            write_u32(&mut canon, 0);
+        } else {
+            canon.push(0x00);
+        }
+        write_u32(&mut canon, at as u32);
     }
     section(&mut out, 8, &canon);
 
@@ -198,8 +225,9 @@ mod tests {
     fn lifted() -> Vec<Lifted> {
         vec![Lifted {
             name: "add".to_string(),
-            params: vec![Flat::Signed64, Flat::Signed64],
-            result: Some(Flat::Signed64),
+            core: "add".to_string(),
+            params: vec![Cross::Signed64, Cross::Signed64],
+            result: Some(Cross::Signed64),
         }]
     }
 
@@ -264,6 +292,7 @@ mod tests {
         let mut two = lifted();
         two.push(Lifted {
             name: "nothing".to_string(),
+            core: "nothing".to_string(),
             params: vec![],
             result: None,
         });
@@ -292,6 +321,7 @@ mod tests {
             &core,
             &[Lifted {
                 name: "nothing".to_string(),
+                core: "nothing".to_string(),
                 params: vec![],
                 result: None,
             }],
@@ -300,12 +330,78 @@ mod tests {
         assert_eq!(types, vec![0x01, 0x40, 0x00, 0x01, 0x00]);
     }
 
-    /// The two types this can carry are two different bytes, and swapping them
-    /// is a component that lies about what it takes.
+    /// A module with adapters in it: the memory and the allocator are aliased
+    /// before anything else, and the allocator taking core function zero is
+    /// what moves every export up one.
+    ///
+    /// A lift left pointing at the function it pointed at before the allocator
+    /// arrived calls the allocator instead, which is a component that answers
+    /// with an address where a caller expects text.
     #[test]
-    fn the_two_flat_types_are_the_bytes_the_format_gives_them() {
-        assert_eq!(Flat::Bool.byte(), 0x7f);
-        assert_eq!(Flat::Signed64.byte(), 0x78);
+    fn the_allocator_takes_the_first_core_function_and_moves_the_exports_up() {
+        let mut core = adder();
+        core.export(REALLOC, 0);
+
+        let bytes = encode(
+            &core,
+            &[Lifted {
+                name: "greet".to_string(),
+                core: "greet.lift".to_string(),
+                params: vec![Cross::Text],
+                result: Some(Cross::Text),
+            }],
+        );
+
+        let aliases = payload(&bytes, 6);
+        assert_eq!(
+            &aliases[..1],
+            &[0x03],
+            "three aliases: the memory, the allocator, and the export"
+        );
+        assert_eq!(
+            &aliases[1..5],
+            &[0x00, 0x02, 0x01, 0x00],
+            "the memory is a core memory alias"
+        );
+
+        let canon = payload(&bytes, 8);
+        assert_eq!(
+            canon,
+            vec![0x01, 0x00, 0x00, 0x01, 0x02, 0x03, 0x00, 0x04, 0x00, 0x00],
+            "one lift, of core function one, with a memory and an allocator"
+        );
+    }
+
+    /// An export that carries nothing needing them still lifts with no
+    /// options, even in a module that has them. Options naming a boundary an
+    /// export does not cross are a description of something that is not there.
+    #[test]
+    fn an_export_that_crosses_unchanged_lifts_without_options() {
+        let mut core = adder();
+        core.export(REALLOC, 0);
+
+        let bytes = encode(&core, &lifted());
+        let canon = payload(&bytes, 8);
+        assert_eq!(canon, vec![0x01, 0x00, 0x00, 0x01, 0x00, 0x00]);
+    }
+
+    /// A string in either direction is what asks for them, and nothing else
+    /// does.
+    #[test]
+    fn text_is_what_makes_a_lift_name_the_memory() {
+        let one = |params: Vec<Cross>, result: Option<Cross>| {
+            Lifted {
+                name: "f".to_string(),
+                core: "f".to_string(),
+                params,
+                result,
+            }
+            .needs_the_memory()
+        };
+        assert!(!one(vec![Cross::Signed64], Some(Cross::Bool)));
+        assert!(one(vec![Cross::Text], Some(Cross::Bool)));
+        assert!(one(vec![Cross::Signed64], Some(Cross::Text)));
+        assert!(one(vec![Cross::Bool, Cross::Text], None));
     }
 
     /// The payload of the first section with this id.

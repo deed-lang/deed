@@ -28,7 +28,37 @@ release notes.
 
 ### Tools
 
-- Nothing yet.
+- Text crosses the component boundary. `deed build --component` writes a
+  component for a module whose exports take and return `String`, and a caller
+  passes and receives a `string` without learning anything about this backend's
+  layout. Until now those modules were refused by name, which
+  `design/decisions/2026-08-09-a-component-for-what-crosses-unchanged.md` said
+  was for turning the gap into a failing test; this is that test passing.
+
+  The module inside the component carries a `cabi_realloc`, which is the
+  allocator a caller looks for by that spelling, and a wrapper per export that
+  takes the boundary's shape: two words in per string, one address out to a
+  return area. The character count the layout carries is counted from the bytes,
+  because the boundary carries a byte count and nothing else.
+
+  The core module beside the source has none of it. What goes inside the
+  component is that module with the adapters appended, so every function keeps
+  its index and every export keeps its name, and a host embedding `<name>.wasm`
+  is not handed a boundary it did not ask for. An export that carries only
+  numbers and booleans still lifts with no options, so every component this
+  wrote before is byte for byte what it was.
+
+  A list, a record and a choice are still refused, and the line still names the
+  export and what it needs.
+
+  Measured through the Bytecode Alliance's own tooling rather than asserted, and
+  in ten checks rather than one, because the ways this can be wrong are not one
+  way: an empty string, a string that is not the first parameter, two at once, a
+  string going one way only, text outside ASCII, and one long enough to need
+  more memory than the module starts with. The last is there because a
+  `cabi_realloc` that moved the bump pointer without growing the memory is
+  exactly the bug `str_concat` carried for two releases, and it passes
+  everything short.
 
 ### Measurements
 
