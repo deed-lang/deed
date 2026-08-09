@@ -20,7 +20,24 @@ release notes.
 
 ### Diagnostics
 
-- Nothing yet.
+- A `deed.manifest` or a `deed.lock` saved with a byte order mark is read.
+  `design/06-grammar.md` says a mark at the start of a file is silently
+  discarded, and the lexer has always done that for source, so a `.deed` file
+  written by a Windows editor checks. The manifest parser did not, and the
+  refusal was the worst shape a refusal has: ``unknown manifest directive
+  `module` ``, whose own note lists `module <url> sha256:<digest>` as one of
+  the two directives that exist. Three bytes with no glyph, and a message
+  arguing with itself. A lock file had the same gap, where it read as `not a
+  deed lock file`.
+
+  The mark is skipped rather than deleted, so every caret after it still lands
+  on the bytes the file has. That half has a test of its own, because stripping
+  without moving the offset would point three bytes early at every line.
+
+  `how-to/depend-on-another-module.md` also now says how to get the digest a
+  `module` line needs, which nothing had said: three per-platform commands, or
+  write a hash you know is wrong and read `DEED7006`, which names both the one
+  the bytes have and the one the manifest claims.
 
 ### Standard library
 

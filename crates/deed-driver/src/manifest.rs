@@ -93,7 +93,19 @@ pub fn parse_manifest(file: FileId, text: &str) -> Manifest {
     let mut modules = Vec::new();
     let mut diagnostics = Vec::new();
 
+    // The same rule `design/06-grammar.md` gives source: a byte order mark is
+    // not part of the file. Windows editors write one by default, and without
+    // this the first directive is refused as unrecognized by a message that
+    // lists it as one of the two that are recognized.
     let mut offset: u32 = 0;
+    let text = match text.strip_prefix('\u{FEFF}') {
+        Some(rest) => {
+            offset = '\u{FEFF}'.len_utf8() as u32;
+            rest
+        }
+        None => text,
+    };
+
     for raw_line in text.split_inclusive('\n') {
         let line_start = offset;
         offset += raw_line.len() as u32;
