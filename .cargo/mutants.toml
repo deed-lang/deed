@@ -24,3 +24,22 @@ profile = "mutants"
 
 # Doctests are a separate binary each and there are eight of them.
 additional_cargo_test_args = ["--all-targets"]
+
+# Long enough that a mutant caught late is caught rather than killed.
+#
+# The default is five times the baseline test run, with a floor of twenty
+# seconds, and the baseline here reports `0s test`: with `--in-diff` and a
+# shard there is nothing for it to measure, so every run takes the floor. The
+# suite needs about twenty-three seconds to reach its last test, so a mutant
+# that only some test near the end has an opinion about was killed at twenty
+# and reported as a timeout.
+#
+# That is the worst possible failure for this gate, because a timeout is read
+# here as a miss: an unread mutant is one nothing has an opinion about, and the
+# whole point of the job is to say so. A caught mutant wearing that word makes
+# the number meaningless in the direction of more work rather than less.
+#
+# Measured 2026-08-09, on the run that found it: `&&` to `||` in
+# `facts::round_down` fails `an_open_end_divided_by_minus_one_stays_open`
+# at 22.7s of a 23s run, and CI called it a timeout.
+timeout = 120
