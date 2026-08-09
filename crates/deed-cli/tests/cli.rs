@@ -2192,16 +2192,20 @@ fn component_build_writes_a_component_binary_too() {
     );
 }
 
-/// A function carrying text is refused a component binary, by name, and
-/// everything that already worked still works.
+/// A function carrying text gets a component, and the adapters that make one
+/// possible are in the module inside it.
 ///
 /// The canonical ABI passes a string as a pointer and a length into memory the
-/// caller helped allocate. This backend passes one address in its own layout.
-/// Lifting that anyway would produce a component that answers wrongly, which is
-/// worse than one that is not written, so it is not written and the reason is
-/// on the line.
+/// caller asks the callee to allocate. This backend passes one address to a
+/// header and some bytes. `deed_codegen::adapter` stands between them, and a
+/// caller looks for the allocator by the name the ABI gives it, so that name
+/// appearing in the component is the whole of whether a host can hand it
+/// anything.
+///
+/// What a real toolchain makes of it, and whether the answers are right, is
+/// measured separately by `crates/deed-codegen/component.mjs`.
 #[test]
-fn component_build_says_which_export_needs_the_adapters() {
+fn component_build_writes_one_for_a_module_carrying_text() {
     let scratch = Scratch::new("component-text");
     let source = scratch.write(
         "greeter.deed",
@@ -2213,15 +2217,63 @@ fn component_build_says_which_export_needs_the_adapters() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 
     let text = stdout(&output);
+    assert!(text.contains("greeter.component.wasm"), "{text}");
+    assert!(!text.contains("no component binary"), "{text}");
+
+    let component = std::fs::read(scratch.path().join("greeter.component.wasm")).unwrap();
+    let holds = |needle: &str| {
+        component
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+    };
+    assert!(holds("cabi_realloc"), "the allocator a caller looks for");
+    assert!(holds("greet.lift"), "the wrapper the lift points at");
+
+    // The core module beside it is the one `deed build` writes, with none of
+    // this in it: a host embedding that file is not being handed adapters it
+    // did not ask for.
+    let core = std::fs::read(scratch.path().join("greeter.wasm")).unwrap();
+    assert!(
+        !core
+            .windows("cabi_realloc".len())
+            .any(|window| window == b"cabi_realloc"),
+        "the core module beside it is untouched"
+    );
+    assert!(
+        scratch.path().join("greeter.wit").exists(),
+        "and the world is still there"
+    );
+}
+
+/// A function carrying a list is refused a component binary, by name, and
+/// everything that already worked still works.
+///
+/// A list crosses as a pointer and a length too, and every element behind it
+/// has to be lowered one at a time. Nothing does that yet. Lifting it anyway
+/// would produce a component that answers wrongly, which is worse than one
+/// that is not written, so it is not written and the reason is on the line.
+#[test]
+fn component_build_says_which_export_needs_the_adapters() {
+    let scratch = Scratch::new("component-list");
+    let source = scratch.write(
+        "rows.deed",
+        "module rows\n\nfn double(n: Int) -> Int { n + n }\n\n\
+         fn firsts(rows: List<String>) -> String { join(rows, \",\") }\n",
+    );
+
+    let output = run(&["build", "--component", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let text = stdout(&output);
     assert!(text.contains("no component binary"), "{text}");
-    assert!(text.contains("`greet`"), "{text}");
+    assert!(text.contains("`firsts`"), "{text}");
     assert!(text.contains("canonical ABI"), "{text}");
     assert!(
-        !scratch.path().join("greeter.component.wasm").exists(),
+        !scratch.path().join("rows.component.wasm").exists(),
         "a component that would answer wrongly is not written"
     );
     assert!(
-        scratch.path().join("greeter.wasm").exists() && scratch.path().join("greeter.wit").exists(),
+        scratch.path().join("rows.wasm").exists() && scratch.path().join("rows.wit").exists(),
         "the core module and the world are still there"
     );
 }

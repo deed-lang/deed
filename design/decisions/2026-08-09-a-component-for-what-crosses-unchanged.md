@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-09
 - Supersedes: `2026-08-07-a-wit-world-is-not-a-component.md`
-- Superseded by: None
+- Superseded by: `2026-08-09-text-crosses-the-component-boundary.md`
 
 ## Context
 

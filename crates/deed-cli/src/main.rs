@@ -594,16 +594,42 @@ fn build_component(
         writeln!(out, "{}", wasm_target.display())?;
         writeln!(out, "{}", wit_target.display())?;
 
-        // Step 7: And the component binary, when every export crosses the
-        // boundary the way the canonical ABI says it does. The core module
-        // above is written either way and is what `deed build` writes, so
-        // nothing that reads it has to know about this step.
+        // Step 7: And the component binary, with the canonical ABI adapters
+        // in front of whatever does not cross the boundary unchanged. The core
+        // module above is written either way and is what `deed build` writes;
+        // the one inside the component is that module with the adapters
+        // appended, so every function it had is there under the name it had.
         match lift_all(&lowered) {
-            Ok(lifted) => {
+            Ok(crossings) => {
+                let mut inside = module.clone();
+                let named: Vec<deed_codegen::adapter::Crossing<'_>> = crossings
+                    .iter()
+                    .map(|(name, params, result)| deed_codegen::adapter::Crossing {
+                        name,
+                        params,
+                        result: *result,
+                    })
+                    .collect();
+                let added = deed_codegen::adapter::adapt(&mut inside, &named);
+                let lifted: Vec<deed_codegen::component::Lifted> = crossings
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(at, (name, params, result))| deed_codegen::component::Lifted {
+                            name: name.clone(),
+                            core: added
+                                .as_ref()
+                                .and_then(|added| added.wrappers[at].clone())
+                                .unwrap_or_else(|| name.clone()),
+                            params: params.clone(),
+                            result: *result,
+                        },
+                    )
+                    .collect();
                 let component_target = path.with_extension("component.wasm");
                 std::fs::write(
                     &component_target,
-                    deed_codegen::component::encode(&module, &lifted),
+                    deed_codegen::component::encode(&inside, &lifted),
                 )?;
                 writeln!(out, "{}", component_target.display())?;
             }
@@ -626,27 +652,35 @@ fn build_component(
     Ok(true)
 }
 
-/// Every exported function as a lifted one, or why one of them cannot be.
+/// Every exported function as it appears on the boundary, or why one of them
+/// cannot appear there at all.
 ///
 /// A component's caller passes a string as a pointer and a length into memory
-/// it helped allocate, and takes anything wider than a word back through a
-/// return area it provided. This backend passes one address in its own layout.
-/// The two agree exactly on the scalars, where the core value and the
-/// component value are the same value, and nowhere else.
+/// it asked the callee to allocate, and takes one back through a return area.
+/// This backend passes one address in its own layout. The two agree exactly on
+/// the scalars, and `deed_codegen::adapter` is what stands between them for
+/// text.
 ///
-/// So this refuses the rest rather than lifting it. A component that answers
-/// wrongly is worse than one that is not written, and
+/// What is left over is everything else: a list, a record, a choice, a
+/// closure, a capability. Those are refused rather than lifted, because a
+/// component that answers wrongly is worse than one that is not written, and
 /// `design/decisions/2026-08-07-a-wit-world-is-not-a-component.md` turned that
 /// down in as many words when the question was whether to emit one early.
-fn lift_all(program: &deed_mir::Program) -> Result<Vec<deed_codegen::component::Lifted>, String> {
+type Crossings = Vec<(
+    String,
+    Vec<deed_codegen::adapter::Cross>,
+    Option<deed_codegen::adapter::Cross>,
+)>;
+
+fn lift_all(program: &deed_mir::Program) -> Result<Crossings, String> {
     let mut lifted = Vec::new();
     for function in &program.functions {
         let mut params = Vec::new();
         for (at, param) in function.params.iter().enumerate() {
-            params.push(flat(param).ok_or_else(|| {
+            params.push(crossing(param).ok_or_else(|| {
                 format!(
-                    "`{}` parameter {at} is a {} and lifting one needs the canonical ABI adapters, \
-                     which are not written yet",
+                    "`{}` parameter {at} is a {} and lifting one needs canonical ABI adapters, \
+                     which are written for text and for nothing wider",
                     function.name,
                     to_wit_type(param, program)
                 )
@@ -654,29 +688,26 @@ fn lift_all(program: &deed_mir::Program) -> Result<Vec<deed_codegen::component::
         }
         let result = match function.ret {
             deed_mir::Ty::Unit => None,
-            ref ty => Some(flat(ty).ok_or_else(|| {
+            ref ty => Some(crossing(ty).ok_or_else(|| {
                 format!(
-                    "`{}` returns a {} and lifting one needs the canonical ABI adapters, \
-                     which are not written yet",
+                    "`{}` returns a {} and lifting one needs canonical ABI adapters, \
+                     which are written for text and for nothing wider",
                     function.name,
                     to_wit_type(ty, program)
                 )
             })?),
         };
-        lifted.push(deed_codegen::component::Lifted {
-            name: function.name.to_string(),
-            params,
-            result,
-        });
+        lifted.push((function.name.to_string(), params, result));
     }
     Ok(lifted)
 }
 
-/// The component type this one crosses as, when it crosses unchanged.
-fn flat(ty: &deed_mir::Ty) -> Option<deed_codegen::component::Flat> {
+/// The component type this one crosses as, when it can cross at all.
+fn crossing(ty: &deed_mir::Ty) -> Option<deed_codegen::adapter::Cross> {
     match ty {
-        deed_mir::Ty::Bool => Some(deed_codegen::component::Flat::Bool),
-        deed_mir::Ty::Int => Some(deed_codegen::component::Flat::Signed64),
+        deed_mir::Ty::Bool => Some(deed_codegen::adapter::Cross::Bool),
+        deed_mir::Ty::Int => Some(deed_codegen::adapter::Cross::Signed64),
+        deed_mir::Ty::Str => Some(deed_codegen::adapter::Cross::Text),
         _ => None,
     }
 }

@@ -13,6 +13,7 @@
 //! small.
 
 pub mod abi;
+pub mod adapter;
 pub mod compile;
 pub mod component;
 mod equality;

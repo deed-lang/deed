@@ -8,15 +8,16 @@
 // and what it measured was a gap: `wasm-tools component new` turned the core
 // module into a component that exported nothing.
 //
-// That gap is closed for the exports that need no adapters, so this file now
-// measures the thing working rather than the thing missing. Both halves are
-// here, because the second one is still true:
+// That gap is closed, so this file now measures the thing working rather than
+// the thing missing. Three halves of it, because the third is still true:
 //
-//   - a component `deed build --component` wrote, whose world names the
-//     functions, and which answers correctly when a component runtime calls
-//     it;
-//   - and a module carrying text, which is not given a component at all,
-//     because the canonical ABI adapters a string needs are not written.
+//   - a component `deed build --component` wrote whose exports need no
+//     adapters, which answers correctly when a component runtime calls it;
+//   - one whose exports carry text, which needs `cabi_realloc` and the two
+//     halves of a string, and which answers correctly through the same
+//     runtime;
+//   - and a module carrying a list, which is not given a component at all,
+//     because the adapters for that are not written.
 //
 // `jco` bundles the Bytecode Alliance's own `wasm-tools` and adds a
 // transpiler, so the calls below go through a real component runtime rather
@@ -114,29 +115,108 @@ check(
   `positive(3) = ${running.positive(3n)}, positive(-1) = ${running.positive(-1n)}`,
 );
 
-// -- and what does not ------------------------------------------------------
+// -- and what needs adapters -----------------------------------------------
 //
-// A string crosses as a pointer and a length into memory the caller helped
-// allocate, through `cabi_realloc`. This backend passes one address in its own
-// layout. Lifting that anyway is a component that answers wrongly, which is
-// worse than one that is not written.
+// A string crosses as a pointer and a length into memory the caller asked the
+// callee to allocate, and comes back through a return area. This backend
+// passes one address to a header and some bytes. `cabi_realloc` and the two
+// halves of a string are what stand between them.
+//
+// Four exports rather than one, because the ways this can be wrong are not the
+// same way: a string that is not the first parameter, two of them at once, a
+// string going one way only, and one export in the same component that needs
+// no adapter at all and must not be given one.
 const TEXT = `module greeter
 
 fn greet(name: String) -> String { join(["hello, ", name], "") }
+
+fn tag(n: Int, name: String, on: Bool) -> String {
+    join([name, "-", to_string(n)], "")
+}
+
+fn both(a: String, b: String) -> String { join([a, "|", b], "") }
+
+fn width(text: String) -> Int { length(text) }
+
+fn plain(n: Int) -> Int { n + 1 }
 `;
 
 const text = join(scratch, "greeter.deed");
 writeFileSync(text, TEXT);
-const said = execFileSync(deed, ["build", "--component", text], { encoding: "utf8" });
+execFileSync(deed, ["build", "--component", text], { stdio: "pipe" });
+
+const greeter = join(scratch, "greeter.component.wasm");
+const carrying = jco(["wit", greeter], { encoding: "utf8" });
 check(
-  "a module carrying text is told which export needs the adapters",
-  said.includes("no component binary") && said.includes("greet") && said.includes("canonical ABI"),
-  JSON.stringify(said),
+  "the world of a component carrying text says string on both sides",
+  carrying.includes("export greet: func(p0: string) -> string"),
+  carrying.trim(),
+);
+check(
+  "and says it for a string that is not the first parameter",
+  carrying.includes("export tag: func(p0: s64, p1: string, p2: bool) -> string"),
+  carrying.trim(),
+);
+
+jco(["transpile", greeter, "-o", join(scratch, "text"), "--name", "greeter"], { stdio: "pipe" });
+const said = await import(pathToFileURL(resolve(scratch, "text", "greeter.js")).href);
+
+check("a component runtime hands it a string", said.greet("world") === "hello, world", said.greet("world"));
+check("an empty one too", said.greet("") === "hello, ", JSON.stringify(said.greet("")));
+check(
+  "a string among other parameters lands in the right place",
+  said.tag(7n, "row", true) === "row-7",
+  said.tag(7n, "row", true),
+);
+check("two of them do not overwrite each other", said.both("left", "right") === "left|right", said.both("left", "right"));
+
+// The count the layout carries is characters and the boundary carries bytes,
+// so a wrapper that copied the byte count would be right for every string in
+// this file that is ASCII and wrong for the rest.
+const wide = "dünya 日本語";
+check(
+  "and text outside ASCII arrives with the right character count",
+  said.width(wide) === BigInt([...wide].length),
+  `width(${wide}) = ${said.width(wide)}, and it has ${[...wide].length} characters`,
+);
+check("while text going only one way still crosses", said.greet(wide) === `hello, ${wide}`, said.greet(wide));
+
+// Enough to need more memory than a module starts with, which is what a
+// `cabi_realloc` that moved the bump pointer without growing would fail at.
+// `str_concat` had exactly that bug for two releases.
+const long = "x".repeat(300_000);
+check(
+  "and a string past the pages the module starts with",
+  said.greet(long).length === long.length + 7,
+  `${said.greet(long).length} characters back from ${long.length}`,
+);
+
+check("an export needing no adapter still answers in a component that has them", said.plain(41n) === 42n, said.plain(41n));
+
+// -- and what still has none ------------------------------------------------
+//
+// A list crosses as a pointer and a length as well, and the elements behind it
+// have to be lowered one at a time. Nothing here does that, so the component is
+// not written rather than written wrongly.
+const LIST = `module rows
+
+fn firsts(rows: List<String>) -> String { join(rows, ",") }
+`;
+
+const list = join(scratch, "rows.deed");
+writeFileSync(list, LIST);
+const refused = execFileSync(deed, ["build", "--component", list], { encoding: "utf8" });
+check(
+  "a module carrying a list is told which export needs adapters that are not written",
+  refused.includes("no component binary") &&
+    refused.includes("firsts") &&
+    refused.includes("canonical ABI"),
+  JSON.stringify(refused),
 );
 
 let wrote = true;
 try {
-  readFileSync(join(scratch, "greeter.component.wasm"));
+  readFileSync(join(scratch, "rows.component.wasm"));
 } catch {
   wrote = false;
 }
@@ -146,12 +226,12 @@ check("and is not given a component that would answer wrongly", !wrote);
 // derivation is the claim and it does not depend on the adapters.
 check(
   "while the world it derived is still there",
-  readFileSync(join(scratch, "greeter.wit"), "utf8").includes("export greet:"),
+  readFileSync(join(scratch, "rows.wit"), "utf8").includes("export firsts:"),
 );
 
 console.log(
   failures === 0
-    ? "\nmeasured: a component that runs, and a refusal where the adapters are missing"
+    ? "\nmeasured: components that run, with and without the adapters, and a refusal where they are missing"
     : `\n${failures} failed`,
 );
 process.exit(failures === 0 ? 0 : 1);
