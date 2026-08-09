@@ -11,6 +11,7 @@
 //! of them disagreeing is the bug this split rules out.
 
 pub mod lower;
+pub mod reuse;
 pub mod shape;
 
 use deed_diagnostics::Span;

@@ -52,6 +52,11 @@ Options:
                           and says so by name. Refuses programs that declare
                           `main` or use a capability in an exported function's
                           signature.
+  --reuse                 With `build`, print what each function does with each
+                          parameter: `releases`, `returns`, `retains` or
+                          `keeps`. Answers the question a caller has to ask
+                          before handing over its only reference. Prints only;
+                          nothing acts on it yet.
   --lock <path>           Write a lock file listing every input with its
                           SHA-256 hash. Existing file is overwritten.
   --locked <path>         Refuse to proceed if any input differs from the lock
@@ -176,6 +181,8 @@ pub struct CheckArgs {
     pub check_only: bool,
     /// With `build`, produce a component instead of a standalone module.
     pub component: bool,
+    /// With `build`, print what each function does with its parameters.
+    pub reuse: bool,
     /// Everything after `--`, handed to the program rather than read here.
     ///
     /// A separator rather than "whatever is left over", because a program's
@@ -300,6 +307,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     let mut env: Vec<String> = Vec::new();
     let mut check_only = false;
     let mut component = false;
+    let mut reuse = false;
     let mut arguments = Vec::new();
     let mut compiled = false;
     let mut lock = None;
@@ -320,6 +328,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
             "--check" => check_only = true,
             "--compiled" => compiled = true,
             "--component" => component = true,
+            "--reuse" => reuse = true,
             "--format" => {
                 let value = args
                     .next()
@@ -441,6 +450,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         env,
         check_only,
         component,
+        reuse,
         arguments,
         compiled,
         lock,
@@ -595,6 +605,20 @@ mod tests {
         assert_eq!(check.paths.len(), 2);
         assert!(check.obligations);
         assert_eq!(check.format, Format::Human);
+    }
+
+    #[test]
+    fn build_may_be_asked_what_a_callee_does_with_its_argument() {
+        let Ok(Command::Check(check)) = parse(args(&["build", "a.deed", "--reuse"])) else {
+            panic!("should parse");
+        };
+        assert!(check.reuse);
+        assert!(!check.component, "one flag does not turn on the other");
+
+        let Ok(Command::Check(plain)) = parse(args(&["build", "a.deed"])) else {
+            panic!("should parse");
+        };
+        assert!(!plain.reuse);
     }
 
     #[test]

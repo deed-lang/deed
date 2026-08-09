@@ -2807,3 +2807,30 @@ fn a_location_that_answers_with_a_failure_is_refused_by_what_it_answered() {
         "the status should be what is named: {text}"
     );
 }
+/// `--reuse` prints what the compiler works out about each parameter.
+///
+/// The decision record asks for this by name: the analysis answers "keeps it"
+/// whenever it cannot see through something, and that answer is silent, so a
+/// function that could have handed its storage over and did not looks exactly
+/// like one that could not unless somebody can read the table.
+#[test]
+fn build_can_say_what_a_callee_does_with_its_argument() {
+    let scratch = Scratch::new("reuse-summary");
+    let file = scratch.write(
+        "shapes.deed",
+        "module a\n\n\
+         fn added(list: List<Int>, n: Int) -> List<Int> { push(list, n) }\n\n\
+         fn counted(list: List<Int>) -> Int { length(list) }\n",
+    );
+
+    let output = run(&["build", file.to_str().unwrap(), "--reuse"]);
+    let text = stdout(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("returns   added#0"), "{text}");
+    assert!(text.contains("releases  added#1"), "{text}");
+    assert!(text.contains("releases  counted#0"), "{text}");
+
+    // Without the flag it is a build and nothing else.
+    let quiet = stdout(&run(&["build", file.to_str().unwrap()]));
+    assert!(!quiet.contains("releases"), "{quiet}");
+}
