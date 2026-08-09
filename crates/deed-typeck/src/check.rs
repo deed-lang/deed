@@ -1254,10 +1254,12 @@ impl<'a> Checker<'a> {
         match &requires.origin {
             Origin::Here { .. } => {
                 let (def_of, call) = self.env();
+                let refined = self.refinements();
                 let env = facts::Env {
                     def_of: &def_of,
                     length: self.resolutions.builtin("length"),
                     call: &call,
+                    refined: &refined,
                 };
                 facts::holds(clause, facts, &env)
             }
@@ -1270,6 +1272,9 @@ impl<'a> Checker<'a> {
                     def_of: &def_of,
                     length: Some(imported_name(ClauseName::Length)),
                     call: &|_| Promise::any(),
+                    // No type table on this side of the boundary, and the
+                    // clause arrived without one.
+                    refined: &|_| Range::ANY,
                 };
                 let outcome = facts::holds(clause, facts, &env);
                 facts::thinned_by_boundary(clause, &env, outcome)
@@ -1305,10 +1310,12 @@ impl<'a> Checker<'a> {
             // brings its own size.
             let length = {
                 let (def_of, call) = self.env();
+                let refined = self.refinements();
                 let env = facts::Env {
                     def_of: &def_of,
                     length: self.resolutions.builtin("length"),
                     call: &call,
+                    refined: &refined,
                 };
                 facts::length_of(arg, &self.facts, &env)
             };
@@ -1336,10 +1343,12 @@ impl<'a> Checker<'a> {
     /// What a fact could be attached to, for an expression in this body.
     fn term_of(&self, expr: &Expr) -> Option<facts::Term> {
         let (def_of, call) = self.env();
+        let refined = self.refinements();
         let env = facts::Env {
             def_of: &def_of,
             length: self.resolutions.builtin("length"),
             call: &call,
+            refined: &refined,
         };
         facts::term_of(expr, &env)
     }
@@ -2046,10 +2055,14 @@ impl<'a> Checker<'a> {
         match &alias.refinement {
             Some(predicate) => {
                 let (def_of, call) = self.env();
+                // Blind about fields on purpose: a predicate is read against
+                // `value`, and asking what a field read in it admits would
+                // come straight back here for the type being read.
                 let env = facts::Env {
                     def_of: &def_of,
                     length: self.resolutions.builtin("length"),
                     call: &call,
+                    refined: &|_| Range::ANY,
                 };
                 facts::admitted_by(predicate, &env)
             }
@@ -2130,26 +2143,48 @@ impl<'a> Checker<'a> {
         (self.resolver(), |callee: &Expr| self.call_promise(callee))
     }
 
+    /// What a declared type admits, as the fact machinery asks it.
+    fn refinements(&self) -> impl Fn(&Expr) -> Range + '_ {
+        |expr: &Expr| self.refined_range(expr)
+    }
+
+    /// What this expression's declared type admits, when that type is refined.
+    ///
+    /// The type table rather than the facts, because the value has no name
+    /// here for anything to have narrowed. A record declaring `bottom:
+    /// Positive` has said its field is positive, and until this existed the
+    /// only place that survived was the literal that built it.
+    fn refined_range(&self, expr: &Expr) -> Range {
+        match self.types.type_of(expr.span()) {
+            Some(Ty::Named { def, .. }) => self.refinement_range(*def),
+            _ => Range::ANY,
+        }
+    }
+
     fn narrowed_by(&self, condition: &Expr, when_true: bool) -> Facts {
         self.narrowed_from(&self.facts, condition, when_true)
     }
 
     fn narrowed_from(&self, base: &Facts, condition: &Expr, when_true: bool) -> Facts {
         let (def_of, call) = self.env();
+        let refined = self.refinements();
         let env = facts::Env {
             def_of: &def_of,
             length: self.resolutions.builtin("length"),
             call: &call,
+            refined: &refined,
         };
         facts::narrowed(condition, base, &env, when_true)
     }
 
     fn range_of(&self, expr: &Expr) -> Range {
         let (def_of, call) = self.env();
+        let refined = self.refinements();
         let env = facts::Env {
             def_of: &def_of,
             length: self.resolutions.builtin("length"),
             call: &call,
+            refined: &refined,
         };
         facts::range_of(expr, &self.facts, &env)
     }
@@ -2157,10 +2192,12 @@ impl<'a> Checker<'a> {
     /// The range the value inside the `ok` of `expr` lands in.
     fn ok_range_of(&self, expr: &Expr) -> Range {
         let (def_of, call) = self.env();
+        let refined = self.refinements();
         let env = facts::Env {
             def_of: &def_of,
             length: self.resolutions.builtin("length"),
             call: &call,
+            refined: &refined,
         };
         facts::ok_range_of(expr, &self.facts, &env)
     }
@@ -2168,10 +2205,12 @@ impl<'a> Checker<'a> {
     /// What is known about how long an expression is.
     fn length_of(&self, expr: &Expr) -> Range {
         let (def_of, call) = self.env();
+        let refined = self.refinements();
         let env = facts::Env {
             def_of: &def_of,
             length: self.resolutions.builtin("length"),
             call: &call,
+            refined: &refined,
         };
         facts::length_of(expr, &self.facts, &env)
     }
@@ -2179,10 +2218,12 @@ impl<'a> Checker<'a> {
     /// Where the arithmetic in `expr` can have no answer, if anywhere.
     fn overflowing(&self, expr: &Expr) -> Option<Span> {
         let (def_of, call) = self.env();
+        let refined = self.refinements();
         let env = facts::Env {
             def_of: &def_of,
             length: self.resolutions.builtin("length"),
             call: &call,
+            refined: &refined,
         };
         facts::overflowing(expr, &self.facts, &env)
     }
@@ -2198,10 +2239,12 @@ impl<'a> Checker<'a> {
         };
         let with_subject = self.facts.with_subject(subject);
         let (def_of, call) = self.env();
+        let refined = self.refinements();
         let env = facts::Env {
             def_of: &def_of,
             length: self.resolutions.builtin("length"),
             call: &call,
+            refined: &refined,
         };
         facts::holds(predicate, &with_subject, &env)
     }

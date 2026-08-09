@@ -20,6 +20,34 @@ release notes.
 
 ### Diagnostics
 
+- A refinement written on a record's field survives reading the field back.
+  A parameter of type `Positive` was already known to be positive; a field
+  declared `Positive` was not, and the two say the same thing:
+
+  ```deed
+  record Held { by: Positive }
+
+  fn needs(n: Positive) -> Int where n > 0, { n }
+
+  fn through(h: Held) -> Int { needs(h.by) }   // was Guarded, is Proven
+  ```
+
+  The value has no name at that call for anything to have narrowed, and no
+  contract answered for it, so the only thing that knew anything was the type
+  the record was declared with — and nothing asked it. The comment in
+  `facts.rs` said so: "every other field read is a value nothing here knows".
+
+  It knows now, and only that. A field declared plainly is still a value
+  nothing knows, and a refinement the interval machinery cannot hold still
+  carries nothing either way: `value != 0` admits everything but one number,
+  which is two intervals and not one. That is a limit of what `Facts` keeps
+  rather than of fields, and it is the half that still stops `std/ratio` from
+  proving `simplified`'s `bottom != 0` at its call sites — along with the
+  product of two numbers, which no interval bounds.
+
+  No obligation in the corpus moves: the records there are declared with plain
+  `Int`. What moved is that the compiler stopped losing something it had.
+
 - `deed explain` showed programs that do not produce the code being explained.
   Forty-three of the eighty-nine pages carrying an example, measured by
   checking each one and running its tests. The example was "the first
