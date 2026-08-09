@@ -1244,6 +1244,162 @@ fn settling_a_value_exactly_narrows_the_branch_it_settled() {
     assert_eq!(types.obligations_at(Tier::Guarded), 0);
 }
 
+// -- compared against something that is not a constant ----------------------
+//
+// Two functions in `facts.rs` narrow a name from a comparison, and for a while
+// nobody could say which owned the question. `narrow_side` takes a bare name
+// on one side and the other side's range; `narrow_scaled` turns the whole
+// comparison into a linear form and reads the bound out of it. A bare name
+// compared with a literal is that form with a count of one, so both answer it,
+// and disabling four of `narrow_side`'s six arms changed nothing across the
+// whole suite. That measurement is what the four tests below close.
+//
+// The dividing line is the other side. `narrow_scaled` needs the form to come
+// down to one term, so `n < m` leaves it with two and it answers nothing;
+// `narrow_side` asks what `m` is worth and narrows `n` against that. Every one
+// of these is written with a name on the right, which is the half only
+// `narrow_side` can reach, and there is one per comparison because an arm can
+// be wrong on its own.
+
+/// `n < m` puts `n` below the largest `m` can be.
+#[test]
+fn a_name_below_another_name_takes_its_upper_bound() {
+    let types = check_ok(
+        "module a\n\n\
+         type Small = Int where value < 100\n\n\
+         fn f(n: Int, m: Small) -> Int {\n    \
+         if n < m {\n        let held: Small = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// `n <= m` is the same bound without the step, and a separate arm.
+#[test]
+fn a_name_at_most_another_name_takes_its_upper_bound() {
+    let types = check_ok(
+        "module a\n\n\
+         type Small = Int where value <= 100\n\n\
+         fn f(n: Int, m: Small) -> Int {\n    \
+         if n <= m {\n        let held: Small = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// `n > m` puts `n` above the smallest `m` can be. This is the one arm the
+/// corpus already reached, and it is here so the four read as one set.
+#[test]
+fn a_name_above_another_name_takes_its_lower_bound() {
+    let types = check_ok(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         type NonNegative = Int where value >= 0\n\n\
+         fn f(n: Int, m: NonNegative) -> Int {\n    \
+         if n > m {\n        let held: Positive = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// `n >= m` is the same bound without the step.
+#[test]
+fn a_name_at_least_another_name_takes_its_lower_bound() {
+    let types = check_ok(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f(n: Int, m: Positive) -> Int {\n    \
+         if n >= m {\n        let held: Positive = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// The bound travelling is the other name's, not any bound at all. Without
+/// this, an arm that narrowed to the whole of `Int` would keep the four above
+/// passing, since they only ask for what the comparison already implies.
+#[test]
+fn the_bound_that_travels_is_the_one_the_other_name_carries() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type Small = Int where value < 100\n\n\
+         type Tiny = Int where value < 10\n\n\
+         fn f(n: Int, m: Small) -> Int {\n    \
+         if n < m {\n        let held: Tiny = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
+    assert_eq!(checked.types.obligations_at(Tier::Proven), 0);
+}
+
+/// And a name with nothing known about it hands nothing over, which is the
+/// difference between reading its range and assuming one.
+#[test]
+fn an_unbounded_name_on_the_other_side_settles_nothing() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type Small = Int where value < 100\n\n\
+         fn f(n: Int, m: Int) -> Int {\n    \
+         if n < m {\n        let held: Small = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
+    assert_eq!(checked.types.obligations_at(Tier::Proven), 0);
+}
+
+// -- a comparison written with the name on the right ------------------------
+//
+// Turning a comparison into a linear form and reading the bound out of it puts
+// the name on whichever side it was written, at the cost of a count of minus
+// one when it was written second. Dividing by that is where `i64::MIN / -1`
+// overflowed, and the bound was dropped rather than kept open, so a clause
+// with the name on the right learned strictly less than the same clause the
+// other way round.
+//
+// A bare `0 < n` did not show it, because a second function was catching that
+// shape from the other end. `0 < n - 5` is the same claim with nothing
+// covering for it.
+
+/// The way round it was already written works.
+#[test]
+fn a_guard_with_the_name_first_settles_the_refinement() {
+    let types = check_ok(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f(n: Int) -> Int {\n    \
+         if n - 5 > 0 {\n        let held: Positive = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// And so does the other way round, which is the same claim and used to settle
+/// nothing.
+#[test]
+fn a_guard_with_the_name_last_settles_it_the_same_way() {
+    let types = check_ok(
+        "module a\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn f(n: Int) -> Int {\n    \
+         if 0 < n - 5 {\n        let held: Positive = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(types.obligations_at(Tier::Proven), 1);
+    assert_eq!(types.obligations_at(Tier::Guarded), 0);
+}
+
+/// The bound that arrives is the one the comparison states. Without this, an
+/// arm that gave up and left the name unbounded would keep the pair above
+/// passing, since both only ask for what `n > 5` already implies.
+#[test]
+fn the_name_on_the_right_carries_the_bound_it_was_given() {
+    let (_, checked) = check_source(
+        "module a\n\n\
+         type Plenty = Int where value > 10\n\n\
+         fn f(n: Int) -> Int {\n    \
+         if 0 < n - 5 {\n        let held: Plenty = n\n        held\n    } else {\n        1\n    }\n}\n",
+    );
+    assert_eq!(checked.types.obligations_at(Tier::Guarded), 1);
+    assert_eq!(checked.types.obligations_at(Tier::Proven), 0);
+}
+
 #[test]
 fn a_refinement_widens_to_its_base_without_an_obligation() {
     let types = check_ok(

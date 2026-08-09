@@ -1589,9 +1589,9 @@ fn apply_narrowing(condition: &Expr, facts: &mut Facts, env: &Env<'_>, when_true
 
             // Both directions, so `0 < n` narrows `n` the same way `n > 0`
             // does.
-            narrow_side(effective, lhs, rhs, facts, env);
+            rule_out_a_value(effective, lhs, rhs, facts, env);
             if let Some(flipped) = flipped(effective) {
-                narrow_side(flipped, rhs, lhs, facts, env);
+                rule_out_a_value(flipped, rhs, lhs, facts, env);
             }
 
             narrow_scaled(effective, lhs, rhs, facts, env);
@@ -1626,9 +1626,9 @@ fn bound_from(op: BinaryOp, offset: Range) -> Option<Range> {
         },
         BinaryOp::Ge => Range::between(least, i64::MAX),
         BinaryOp::Eq => Range::between(least, most),
-        // `!=` is answered in `narrow_side`, where the term whose range would
-        // be trimmed is in hand. Here the value has an offset on it, so the
-        // edge to compare against is not the one this function was given.
+        // `!=` is answered in `rule_out_a_value`, where the term whose range
+        // would be trimmed is in hand. Here the value has an offset on it, so
+        // the edge to compare against is not the one this function was given.
         _ => return None,
     })
 }
@@ -1652,11 +1652,12 @@ fn narrow_relation(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, e
     }
 }
 
-/// Narrows a name a comparison counts more than once, or not on its own.
+/// Narrows a name from a comparison, however many times it appears in it.
 ///
-/// `n * 2 <= 100` says `n <= 50` and `n - 5 > 0` says `n > 5`. Neither is a
-/// shape [`narrow_side`] can see, because neither has a bare name on one side
-/// of the comparison.
+/// `n * 2 <= 100` says `n <= 50`, `n - 5 > 0` says `n > 5`, and a bare `n > 0`
+/// is the same form with a count of one. Every comparison that bounds a name
+/// is answered here; what a range cannot hold, and what is therefore somewhere
+/// else, is a value ruled out rather than a bound.
 fn narrow_scaled(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
     let form = linear(left, facts, env).add(linear(right, facts, env).negate());
     let Some((term, count)) = form.scaled_name() else {
@@ -1698,6 +1699,13 @@ fn divided(bound: Range, count: i64) -> Option<Range> {
 /// the mirror of that when it is negative. Plain floor division, which Rust
 /// does not have.
 fn round_down(value: i64, by: i64) -> Option<i64> {
+    // The one division that overflows, and the value it overflows on is how
+    // "no bound" is written, so the answer is that there is still no bound.
+    // Returning nothing instead threw away the whole comparison: `0 < n - 5`
+    // reaches here and used to learn less than `n - 5 > 0` did.
+    if value == i64::MIN && by == -1 {
+        return Some(i64::MAX);
+    }
     let quotient = value.checked_div(by)?;
     let exact = value % by == 0;
     if exact || (value < 0) == (by < 0) {
@@ -1710,6 +1718,12 @@ fn round_down(value: i64, by: i64) -> Option<i64> {
 /// The smallest integer `d` with `d * by >= value`, and the mirror of that for
 /// a negative `by`.
 fn round_up(value: i64, by: i64) -> Option<i64> {
+    // The mirror of the case in `round_down`. Nothing an `i64` holds satisfies
+    // this one, so any answer is wider than the truth, and wider is the safe
+    // direction for a bound.
+    if value == i64::MIN && by == -1 {
+        return Some(i64::MAX);
+    }
     let quotient = value.checked_div(by)?;
     let exact = value % by == 0;
     if exact || (value < 0) != (by < 0) {
@@ -1719,81 +1733,63 @@ fn round_up(value: i64, by: i64) -> Option<i64> {
     }
 }
 
-/// Narrows the left side of `left op right`.
-fn narrow_side(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
+/// Rules a single value out of what a name could be, when it sits at an edge.
+///
+/// This used to narrow from every comparison, and for a while nobody could say
+/// whether it or [`narrow_scaled`] owned that question. Both did: a bare name
+/// compared with something is that function's linear form with a count of one.
+/// Disabling arms here and running the whole suite said as much, except for
+/// `Gt`, and the asymmetry was written down as possibly the shape of the
+/// corpus.
+///
+/// It was not. `0 < n` came through `divided` with a count of minus one and an
+/// unbounded end, `i64::MIN / -1` overflows, and the bound was dropped; this
+/// function happened to catch the same clause the other way round. With that
+/// division fixed, all four ordering arms here are dead across 2394 tests, so
+/// they are gone and `narrow_scaled` owns bounding a name.
+///
+/// What is left is a different question, and one an interval genuinely cannot
+/// ask the linear form: `!=` says something exactly when the other side is a
+/// single value sitting at an edge of what is already known, because
+/// everything the term could have been, minus one end, is still a range.
+///
+/// That was skipped as rare until #929 measured it. `if n == Int.min` and
+/// `if n <= Int.min` say the same thing about the else branch, and only the
+/// second one narrowed, so one of them proved an obligation and the other left
+/// it guarded. Two spellings of one claim answering differently is worse than
+/// either answer.
+fn rule_out_a_value(op: BinaryOp, left: &Expr, right: &Expr, facts: &mut Facts, env: &Env<'_>) {
+    if op != BinaryOp::Ne {
+        return;
+    }
     let Some(term) = term_of(left, env) else {
         return;
     };
     let Some((low, high)) = range_of(right, facts, env).bounds() else {
         return;
     };
+    // A range on the other side rules nothing out. One value does.
+    if low != high {
+        return;
+    }
+    let Some((known_low, known_high)) = facts.get(term).bounds() else {
+        return;
+    };
 
-    let narrowed = match op {
-        // `left < right` means left is below the largest right could be.
-        BinaryOp::Lt => match high.checked_sub(1) {
-            Some(bound) => Range::between(i64::MIN, bound),
+    let narrowed = if low == known_low {
+        match known_low.checked_add(1) {
+            Some(bound) => Range::between(bound, known_high),
             None => Range::Empty,
-        },
-        BinaryOp::Le => Range::between(i64::MIN, high),
-        BinaryOp::Gt => match low.checked_add(1) {
-            Some(bound) => Range::between(bound, i64::MAX),
-            None => Range::Empty,
-        },
-        BinaryOp::Ge => Range::between(low, i64::MAX),
-        // Equality is not here. It was, and nothing could tell: settling one
-        // name to what another is worth is what `narrow_relation` does with
-        // the pair, and it runs first, so this arm answered a question that
-        // had already been answered. `cargo mutants` said so on the day this
-        // match was next touched, and the whole suite agrees: with the arm
-        // returning early, 2266 tests still pass. The test below it pins the
-        // answer rather than the arm, so the behaviour is held either way.
-        //
-        // Not solved, and worth writing down rather than leaving for whoever
-        // touches this next. Disabling each remaining arm in turn and running
-        // the whole suite: `Lt`, `Le` and `Ge` change nothing, all 2266 still
-        // pass, and `Gt` fails 18. So four of the six comparisons here are
-        // answered somewhere else and one is load-bearing.
-        //
-        // Where they are answered is `narrow_scaled`, which turns the whole
-        // comparison into a linear form and reads the bound out of
-        // `bound_from`; a bare name is that form with a count of one, which is
-        // exactly the shape this function is for. Two functions overlapping on
-        // the same question is the thing this repository keeps finding, and
-        // which of them should keep it is a measurement rather than a tidy-up:
-        // the asymmetry above is as likely to be the shape of the corpus,
-        // where `> 0` is everywhere and `>= 1` is nowhere, as it is a real
-        // difference. Left alone here on purpose.
-        //
-        // `!=` says something exactly when the other side is a single value
-        // sitting at an edge of what is already known: everything the term
-        // could have been, minus one end, is still a range.
-        //
-        // That was skipped as rare until #929 measured it. `if n == Int.min`
-        // and `if n <= Int.min` say the same thing about the else branch, and
-        // only the second one narrowed, so one of them proved an obligation
-        // and the other left it guarded. Two spellings of one claim answering
-        // differently is worse than either answer.
-        BinaryOp::Ne if low == high => {
-            let Some((known_low, known_high)) = facts.get(term).bounds() else {
-                return;
-            };
-            if low == known_low {
-                match known_low.checked_add(1) {
-                    Some(bound) => Range::between(bound, known_high),
-                    None => Range::Empty,
-                }
-            } else if high == known_high {
-                match known_high.checked_sub(1) {
-                    Some(bound) => Range::between(known_low, bound),
-                    None => Range::Empty,
-                }
-            } else {
-                // Somewhere in the middle. What is left is two ranges, and a
-                // range is what this holds.
-                return;
-            }
         }
-        _ => return,
+    } else if high == known_high {
+        match known_high.checked_sub(1) {
+            Some(bound) => Range::between(known_low, bound),
+            None => Range::Empty,
+        }
+    } else {
+        // Somewhere in the middle. What is left is two ranges, and a range is
+        // what this holds.
+        return;
     };
 
     facts.narrow(term, narrowed);
@@ -2173,6 +2169,30 @@ mod tests {
         assert_eq!(divided(Range::between(4, 4), 2), Some(Range::exactly(2)));
         assert_eq!(divided(Range::between(1, 1), 2), Some(Range::Empty));
         assert_eq!(divided(Range::ANY, 0), None);
+    }
+
+    /// The end of what an `i64` holds is how "no bound" is written, and it
+    /// used to take the whole range with it.
+    ///
+    /// `i64::MIN / -1` is the one division that overflows, and a bound with an
+    /// open end and a count of minus one is what `0 < n - 5` comes to, so that
+    /// clause learned nothing while `n - 5 > 0` learned everything. Nothing
+    /// noticed, because `0 < n` on its own was caught by a second function
+    /// that has since been reduced to the question only it can answer.
+    #[test]
+    fn an_open_end_divided_by_minus_one_stays_open() {
+        assert_eq!(
+            divided(Range::between(i64::MIN, -6), -1),
+            Some(Range::between(6, i64::MAX))
+        );
+
+        // The mirror does not overflow, so it stays exact rather than opening
+        // up: `-d >= i64::MAX` puts `d` one above the smallest `i64`, and
+        // saying so is a tighter bound than saying there is none.
+        assert_eq!(
+            divided(Range::between(6, i64::MAX), -1),
+            Some(Range::between(-i64::MAX, -6))
+        );
     }
 
     /// A bare identifier, so a test can name a value without a real resolver.

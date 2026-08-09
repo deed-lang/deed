@@ -16,7 +16,24 @@ release notes.
 
 ### Language
 
-- Nothing yet.
+- A comparison with the name written second now settles as much as the same
+  comparison the other way round. `if 0 < n - 5` proved nothing while
+  `if n - 5 > 0` proved the refinement below it, because turning the clause
+  into a linear form gives the name a count of minus one, and dividing an open
+  bound by that overflows: `i64::MIN / -1`. The bound was dropped instead of
+  staying open. Two spellings of one claim answering differently is the same
+  defect #929 fixed for `!=`, in a different place.
+
+- The checker has one function that bounds a name from a comparison rather than
+  two. `narrow_side` and `narrow_scaled` both answered "what does this
+  comparison say about this name", and which of them owned it had been written
+  down as an open question, with a measurement attached: disabling three of
+  `narrow_side`'s arms changed nothing across the suite and disabling the
+  fourth broke eighteen tests. The asymmetry was the overflow above, not the
+  shape of the corpus. With that fixed, all four ordering arms are dead across
+  2394 tests and are gone. What is left of that function is the question only
+  it can ask, ruling a single value out at an edge of what is known, and it is
+  named for it.
 
 ### Diagnostics
 
