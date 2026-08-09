@@ -1717,13 +1717,11 @@ fn round_down(value: i64, by: i64) -> Option<i64> {
 
 /// The smallest integer `d` with `d * by >= value`, and the mirror of that for
 /// a negative `by`.
+///
+/// The overflowing case its neighbour has to handle is not here. It would be
+/// `d * -1 >= i64::MIN`, and no `i64` satisfies that, so there is nothing to
+/// round and answering with nothing is the honest end of it.
 fn round_up(value: i64, by: i64) -> Option<i64> {
-    // The mirror of the case in `round_down`. Nothing an `i64` holds satisfies
-    // this one, so any answer is wider than the truth, and wider is the safe
-    // direction for a bound.
-    if value == i64::MIN && by == -1 {
-        return Some(i64::MAX);
-    }
     let quotient = value.checked_div(by)?;
     let exact = value % by == 0;
     if exact || (value < 0) != (by < 0) {
@@ -2192,6 +2190,14 @@ mod tests {
         assert_eq!(
             divided(Range::between(6, i64::MAX), -1),
             Some(Range::between(-i64::MAX, -6))
+        );
+
+        // The same open end by a count that does not overflow, which is the
+        // half the case above must not swallow: minus one is the only divisor
+        // this is about.
+        assert_eq!(
+            divided(Range::between(i64::MIN, 9), -3),
+            Some(Range::between(-3, i64::MIN / -3))
         );
     }
 
