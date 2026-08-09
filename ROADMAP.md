@@ -271,10 +271,16 @@ from zero. Everything after it is multiplication; this one is addition.
       Writing it found a real defect — the scorer was reporting proven
       obligations for answers the compiler had rejected, so the control arm's
       row read `0 check` with `proven 1` beside it.*
-- [ ] Write the `deed mcp` story down where agent developers read it. "A
+- [x] Write the `deed mcp` story down where agent developers read it. "A
       compiler an agent can ask questions of, and a benchmark that measures
       whether the agent got it right" is a sentence no other language can
-      currently say.
+      currently say. *Done: <https://deed-lang.github.io/agents/>. It had been
+      one paragraph on the install page, which is not where somebody deciding
+      whether to wire a compiler into an agent is reading. Every transcript on
+      it is filled in by the pinned compiler in the reader's tab — an
+      obligation carrying a tier, a `guarded` one with its reason, the `export`
+      repair, and a property generated from a contract in a module with no
+      tests — so the page cannot claim an answer the compiler does not give.*
 - [ ] Ship a second model family in the benchmark. Today only `OPENAI_API_KEY`
       is configured, so "does this hold across model families" is unmeasured,
       and the result is quotable only with that caveat attached.
