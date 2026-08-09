@@ -28,6 +28,20 @@ release notes.
 
 ### Tools
 
+- The embedding guide says what the memory does over time.
+  `how-to/embed-a-compiled-program.md` described the layout and how to allocate
+  into it, and never said that nothing is ever given back — so a host that
+  called an export in a loop grew its memory forever with nothing to warn it.
+  The page now says so, with the measurement: the same call five times over
+  costs 3,216 bytes then 6,432 then 9,648 then 12,864 then 16,080, and a second
+  instance of the same module starts again at 3,216. A fresh instance is the
+  only thing that returns it, so a host should decide how long one lives.
+
+  `crates/deed-codegen/smoke.mjs` produces those numbers in the engine Node
+  ships, on every commit, and compares them against the page. A guide that
+  quotes a compiler two releases old is the failure this is for, and it was
+  verified by making one.
+
 - Text crosses the component boundary. `deed build --component` writes a
   component for a module whose exports take and return `String`, and a caller
   passes and receives a `string` without learning anything about this backend's
