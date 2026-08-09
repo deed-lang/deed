@@ -105,6 +105,45 @@ Held by `crates/deed-driver/tests/allocation.rs`, which asserts the shape rather
 
 The decision itself does not change here. This is still not the change that ships a collector, and reuse analysis is still a cross-cutting compiler and runtime project rather than a surgical fix. What changed is that the deferral is now against a measured limit that has been reached and a direction the measurement points at, rather than against a limit nobody had met.
 
+## Update: one of the programs this page was blamed for was a missing call
+
+`examples/logs.deed` stopped compiled with "reached past the end of memory".
+That is the sentence this page's measured limit produces, the program is the
+one that reads a directory and builds a keyed report, and a keyed structure of
+a few hundred entries is exactly what the first open question above says the
+limit costs. So it was read as this page for two releases. Raising the runner's
+ceiling did not change it, which was taken as confirmation.
+
+It was `str_concat`. Eleven of the twelve runtime helpers that reserve room go
+through `allocate`, which moves the bump pointer and grows the memory in the
+same breath. `str_concat` moved the pointer itself and never grew, so joining
+two strings once the memory was full wrote them past the end of it. The trap
+came from the write rather than from the allocation, which is why raising the
+ceiling changed nothing: the memory never tried to grow.
+
+`examples/logs.deed` now runs compiled and prints the same 69,680 bytes the
+interpreter prints, byte for byte.
+
+Held two ways. `crates/deed-codegen/src/runtime.rs` asks every helper that
+reserves room whether its body grows the memory, and asks a helper that
+reserves nothing the same question so the two are told apart.
+`crates/deed-driver/tests/compiled_memory.rs` runs a program that joins text
+past the pages a module starts with; with the growth removed it comes back
+`OutOfBounds`, which is the original symptom.
+
+**What this does not change.** Everything above about reclamation stands. A
+compiled program still gives nothing back, total allocation is still peak
+memory, and the keyed update is still quadratic: measured at 8, 16, 32 and 64
+keys, `set` in a walk allocates 560, 1616, 5264 and 18704 bytes against 144,
+272, 528 and 1040 for the same walk pushing. What changed is that one program
+which was being counted as evidence for that limit was not evidence for
+anything.
+
+The lesson is about the evidence rather than the machinery. A trap whose
+message names a resource is not a measurement of that resource: it says a write
+went somewhere it should not, and the reason it was allowed to is a separate
+question. Nothing here had asked which write.
+
 ## References
 
 - `crates/deed-codegen/src/layout.rs`

@@ -23,10 +23,18 @@ fn checked(source: &str) -> deed_driver::Checked {
 
 /// Compiles the source and runs `answer`.
 fn measured(source: &str) -> Result<deed_codegen::Outcome, Trap> {
+    measured_within(source, None)
+}
+
+/// The same, for a program that runs longer than a test's default budget.
+fn measured_within(source: &str, budget: Option<u64>) -> Result<deed_codegen::Outcome, Trap> {
     let one = checked(source);
     let lowered = deed_mir::lower(&one.module, &one.resolutions, &one.types).expect("this lowers");
     let module = compile(&lowered).expect("this compiles");
-    call_measured(&module, "answer", &[])
+    match budget {
+        None => call_measured(&module, "answer", &[]),
+        Some(budget) => deed_codegen::call_within(&module, "answer", &[], budget),
+    }
 }
 
 /// A loop that allocates both a record and a list on each turn.
@@ -109,6 +117,47 @@ fn a_host_that_stops_growing_the_memory_stops_the_program() {
     assert!(
         matches!(trap, Trap::Unreachable | Trap::OutOfBounds | Trap::TooLong),
         "it should stop rather than answer: {trap:?}"
+    );
+}
+
+/// Text keeps going past those pages too, which for two releases it did not.
+///
+/// Every helper that reserves room grows the memory, except that `str_concat`
+/// moved the bump pointer itself and skipped the growth. So a program joining
+/// strings wrote them past the end of memory the moment it filled the pages it
+/// started with, and stopped with "reached past the end of memory" -- which is
+/// the same sentence a program that has genuinely run out produces.
+///
+/// `examples/logs.deed` is the program that showed it, and for two releases
+/// its dying compiled was read as the limit
+/// `design/decisions/2026-07-31-compiled-memory-reclamation.md` measures. It
+/// was a missing call. That limit is real and this is not it: the answer here
+/// is small, and what does not fit is text on the way to it.
+#[test]
+fn joining_text_keeps_going_past_the_pages_a_module_starts_with() {
+    let pages = 16 * 64 * 1024;
+    // Each turn joins a fresh piece onto a growing one, so what the turns
+    // write adds up to the square and passes the starting pages well before
+    // the turn count looks large.
+    let source = "module bench\n\n\
+         fn answer() -> Int {\n\
+         \x20   let built = for piece in repeat(\"0123456789abcdef\", 800) with out = \"\" {\n\
+         \x20       out + piece\n\
+         \x20   }\n\
+         \x20   length(built)\n\
+         }\n";
+
+    // Copying a byte is an instruction, and passing the starting pages means
+    // copying more than a million of them, so this needs a budget of its own.
+    // The budget is the test's size rather than the question's.
+    let outcome = measured_within(source, Some(200_000_000))
+        .expect("joining text should grow the memory it needs");
+    assert_eq!(outcome.value, Some(Value::I64(12_800)));
+    assert!(
+        outcome.allocated > pages,
+        "this should be past the {pages} bytes a module starts with, and it \
+         allocated {}, so it is not reaching the case this is about",
+        outcome.allocated
     );
 }
 

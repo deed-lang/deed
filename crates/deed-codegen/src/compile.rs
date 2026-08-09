@@ -665,7 +665,7 @@ struct SiteDraft {
 }
 
 impl Strings {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Strings {
             next: layout::HEAP_START,
             data: Vec::new(),
