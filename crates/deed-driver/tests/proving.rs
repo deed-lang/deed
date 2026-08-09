@@ -1480,3 +1480,53 @@ fn a_value_nothing_is_known_about_gets_no_invented_number() {
     );
     assert!(!text.contains("when this is"), "{text}");
 }
+/// A refinement written on a record's field survives reading the field back.
+///
+/// A parameter of type `Positive` is already known to be positive; a field
+/// declared `Positive` was not, and the two say the same thing. The value has
+/// no name here for anything to have narrowed, so the only thing that knows
+/// is the type the record was declared with, and until this the only place
+/// that survived was the literal that built it.
+#[test]
+fn a_field_declared_with_a_refinement_carries_it_when_it_is_read() {
+    expect_each(
+        &[("needs requires", Tier::Proven)],
+        "\
+         record Held { by: Positive }\n\n\
+         fn needs(n: Positive) -> Int\n  where\n    n > 0,\n{\n    n\n}\n\n\
+         fn through(h: Held) -> Int { needs(h.by) }\n",
+    );
+}
+
+/// And a plain field still knows nothing, so this is the type talking rather
+/// than field reads having quietly become trustworthy.
+#[test]
+fn a_field_declared_without_one_is_still_a_value_nothing_knows() {
+    expect_each(
+        &[
+            ("needs requires", Tier::Guarded),
+            ("Positive", Tier::Guarded),
+        ],
+        "\
+         record Held { by: Int }\n\n\
+         fn needs(n: Positive) -> Int\n  where\n    n > 0,\n{\n    n\n}\n\n\
+         fn through(h: Held) -> Int { needs(h.by) }\n",
+    );
+}
+
+/// A refinement the interval machinery cannot hold is still not held.
+///
+/// `value != 0` admits everything but one number, which is two intervals and
+/// not one, so a field declared with it carries nothing. The type is not the
+/// limit here and neither is the field: it is that `Facts` keeps ranges.
+#[test]
+fn a_refinement_that_is_not_an_interval_carries_nothing_either_way() {
+    expect_each(
+        &[("needs requires", Tier::Guarded)],
+        "\
+         type NonZero = Int where value != 0\n\n\
+         record Held { by: NonZero }\n\n\
+         fn needs(n: NonZero) -> Int\n  where\n    n != 0,\n{\n    n\n}\n\n\
+         fn through(h: Held) -> Int { needs(h.by) }\n",
+    );
+}

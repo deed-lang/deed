@@ -816,6 +816,7 @@ pub fn promised_by(condition: &Expr, subject: &str, names: &[&str]) -> Guarantee
         def_of: &def_of,
         length: None,
         call: &|_| Promise::any(),
+        refined: &|_| Range::ANY,
     };
 
     let mut facts = Facts::new();
@@ -953,6 +954,15 @@ pub struct Env<'a> {
     /// answering for contracts that are themselves checked, since a promise
     /// nobody keeps is not a fact.
     pub call: &'a dyn Fn(&Expr) -> Promise,
+    /// What this expression's declared type admits, when that type is refined.
+    ///
+    /// A name carries what the body worked out about it, and a call carries
+    /// what its contract promises. A field read has neither: nothing narrowed
+    /// it here and no contract answered for it, and the only thing that knows
+    /// anything is the type the record declared the field with. Answered by
+    /// whoever has the type table, since this module has none, and answered
+    /// with [`Range::ANY`] when the type says nothing.
+    pub refined: &'a dyn Fn(&Expr) -> Range,
 }
 
 impl Env<'_> {
@@ -962,6 +972,7 @@ impl Env<'_> {
             def_of: &|_| None,
             length: None,
             call: &|_| Promise::any(),
+            refined: &|_| Range::ANY,
         }
     }
 }
@@ -1391,11 +1402,13 @@ fn interval_of(expr: &Expr, facts: &Facts, env: &Env<'_>) -> Range {
     match expr {
         Expr::Int { value, .. } => Range::exactly(*value),
         // `Int.max` is the number, so a clause naming it is one the checker
-        // can settle rather than guard. Every other field read is a value
-        // nothing here knows.
+        // can settle rather than guard. Otherwise the only thing that knows
+        // anything about a field is the type it was declared with: a record
+        // saying `bottom: Positive` has said it, and reading the field back
+        // used to lose it.
         Expr::Field { .. } => match expr.int_limit() {
             Some(value) => Range::exactly(value),
-            None => Range::ANY,
+            None => (env.refined)(expr),
         },
         Expr::Ident(_) => match term_of(expr, env) {
             Some(term) => facts.get(term),
@@ -2235,6 +2248,7 @@ mod tests {
             },
             length: Some(DefId::from_raw(1)),
             call: &|_| Promise::any(),
+            refined: &|_| Range::ANY,
         }
     }
 
