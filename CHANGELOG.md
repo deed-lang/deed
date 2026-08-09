@@ -93,6 +93,29 @@ release notes.
 
 ### Measurements
 
+- The demo the project leads with was demonstrating something weaker than it
+  claimed, and naming the wrong operation while doing it. `demo/README.md` and
+  the site's one-clause page both say a host offering `Io.read` and not
+  `Io.save` refuses `read_write`, and that the refusal happens before any code
+  runs. The test under that sentence ran the module with **no host at all** and
+  asserted only that the answer began `deed:io`.
+
+  Measured by asking it to name what it was named for: it said `deed:io.read`.
+  A test called `running_read_write_without_save_names_what_it_wanted` never
+  mentioned `save`, and the operation it did name is the one both modules
+  share — the opposite of the difference the demo is about. A host behaving
+  that way would have read the file before noticing it could not save.
+
+  `Host::link` is the mechanism the prose describes: it reads the whole import
+  section and refuses before an instruction runs. The demo uses it now and
+  asserts the refusal names `save` exactly, with the other half beside it —
+  the same host links `read_only` and hands it back ready to call.
+
+  Also held now: the list of test names printed in `demo/README.md`, which was
+  typed, said `running 5 tests`, and named a test that no longer exists. The
+  import listing on that page has been held since #783; this is the other
+  listing on the same page.
+
 - What a call boundary costs a walk, which was a sentence and is now a table.
   `design/hash-map-requirements.md` said the remaining copying was "`push` at a
   function boundary, where no bound is known". Measured: the same push, moved
