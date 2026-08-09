@@ -144,6 +144,25 @@ message names a resource is not a measurement of that resource: it says a write
 went somewhere it should not, and the reason it was allowed to is a separate
 question. Nothing here had asked which write.
 
+## Update: what is left has a number, and it is one fact
+
+The direction above is reuse analysis. What that means concretely was measured
+on 2026-08-09, and it is smaller and worse than "reuse analysis" sounds: the
+same `push` onto a walk's accumulator, moved into a two-line function and called
+from the walk, allocates the answer once per element again. Seventy-two bytes
+becomes three hundred and sixty at a length of eight, and a thousand and
+thirty-two becomes sixty-seven thousand at a hundred and twenty-eight.
+
+The walk knows its accumulator is unshared and has no way to tell the callee;
+the callee cannot see that its caller is finished. So the missing fact is one
+fact and it is interprocedural, and a wrong answer to it is a write into memory
+somebody else is still reading, which nothing in the language or the runtime
+would notice.
+`design/decisions/2026-08-09-what-a-callee-does-with-its-argument.md` names it,
+fixes the order as the fact before the transformation, and says which way the
+analysis is allowed to be wrong. Nothing here changes: reuse takes the copies
+away and still gives nothing back.
+
 ## References
 
 - `crates/deed-codegen/src/layout.rs`

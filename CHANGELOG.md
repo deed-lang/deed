@@ -62,7 +62,25 @@ release notes.
 
 ### Measurements
 
-- Nothing yet.
+- What a call boundary costs a walk, which was a sentence and is now a table.
+  `design/hash-map-requirements.md` said the remaining copying was "`push` at a
+  function boundary, where no bound is known". Measured: the same push, moved
+  into a two-line function and called from the walk, allocates the answer once
+  per element again — 72 bytes becomes 360 at a length of eight, and 1,032
+  becomes 67,080 at a hundred and twenty-eight.
+
+  The walk knows its accumulator is unshared and cannot tell the callee; the
+  callee cannot see that its caller is finished. So the missing fact is one
+  fact, it is interprocedural, and a wrong answer to it is a write into memory
+  something else is still reading, which nothing in the language or the runtime
+  would notice.
+  `design/decisions/2026-08-09-what-a-callee-does-with-its-argument.md` names
+  it, fixes the order as the fact before the transformation, and says which way
+  the analysis is allowed to be wrong. No compiler behaviour changes.
+
+  Held by `crates/deed-driver/tests/allocation.rs`, by the shape rather than the
+  numbers: a push behind a call allocates several times the answer, and doubling
+  the length more than doubles that, which a constant per call would not.
 
 ## 0.2.10 (2026-08-09)
 

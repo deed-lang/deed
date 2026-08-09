@@ -275,3 +275,52 @@ test \"grown\" {{
 
     allocated_within(&past_the_start(200_000), budget).expect("and one twice as far still runs");
 }
+
+/// The same push, one call away, allocates the answer once per turn again.
+///
+/// `for` knows its accumulator is unshared, so a walk that pushes onto it
+/// builds one list. It knows that about the walk rather than about `push`, and
+/// a function taking the list and returning it with one more on the end is the
+/// same operation with the walk's knowledge cut off: the callee cannot see that
+/// its caller is finished with the argument, and nothing tells it.
+///
+/// What that costs is measured here rather than argued: the copies come back,
+/// and doubling the length more than doubles them, which a constant per call
+/// would not. See
+/// `design/decisions/2026-08-09-what-a-callee-does-with-its-argument.md`.
+#[test]
+fn the_same_push_behind_a_call_copies_again() {
+    let through = |size: usize| {
+        format!(
+            "module bench
+
+fn added(list: List<Int>, n: Int) -> List<Int> {{ push(list, n) }}
+
+test \"walked\" {{
+    let source = repeat(0, {size})
+    let built = for n in source with out = [] {{ added(out, n) }}
+    assert length(built) == {size}
+}}
+"
+        )
+    };
+    let excess = |size: usize| {
+        let base = allocated(&walked(size)).expect("the walk alone should run");
+        allocated(&through(size)).expect("a walk through a call should run") - base
+    };
+
+    let written = allocated(&literal(64)).expect("a literal should run")
+        - allocated(&walked(64)).expect("the walk alone should run");
+    let near = excess(64);
+    assert!(
+        near > written * 4,
+        "a push behind a call allocated {near} bytes for an answer worth {written}"
+    );
+
+    let far = excess(128);
+    assert!(
+        far > near * 3,
+        "twice the length allocated {far} against {near}, which is not the shape \
+         a fixed cost per call has"
+    );
+}

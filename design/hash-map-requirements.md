@@ -124,6 +124,13 @@ the walk that numbers what it is building, which is what `range` here is. Both
 records print the count and `crates/deed-driver/tests/walks.rs` holds them to
 it. What is left is `push` at a function boundary, where no bound is known.
 
+That sentence has a number under it now, and it is larger than the sentence
+sounds: the same push, moved one line into a two-line function, allocates the
+answer once per element again -- sixty-five times the answer at a length of a
+hundred and twenty-eight.
+`design/decisions/2026-08-09-what-a-callee-does-with-its-argument.md` names the
+fact that is missing and says why it is not being guessed at.
+
 **Gap 3 is closed.** `hash` is a prelude function, structural, with no trait
 bound, as decided. See
 `design/decisions/2026-08-05-a-hash-is-the-equality-walk.md`.
