@@ -2424,10 +2424,31 @@ impl Lowering<'_> {
                 }
 
                 let ast::Expr::Ident(name) = &**callee else {
-                    return Err(unlowered(
-                        "a call through something other than a name",
-                        *span,
-                    ));
+                    // A callee that is not a name is a value, and a value can
+                    // be a call of its own, so it is held in a local: the
+                    // backend reads a `CallIndirect` callee twice, once for
+                    // the environment and once for the code pointer, and
+                    // evaluating `chooser()(n)` twice would run it twice.
+                    //
+                    // Held before the arguments are lowered, so what runs
+                    // first is what is written first.
+                    let callee_ty = self.ty_at(callee.span())?;
+                    let held = self.function.add_local(callee_ty);
+                    let value = self.expr(callee)?;
+                    let lowered = args
+                        .iter()
+                        .map(|arg| self.expr(arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let ret = self.ty_at(*span)?;
+                    return Ok(Expr::Block(Box::new(Block {
+                        stmts: vec![Stmt::Assign { local: held, value }],
+                        value: Expr::CallIndirect {
+                            callee: Box::new(Expr::Local(held)),
+                            args: lowered,
+                            ret: Box::new(ret),
+                            span: *span,
+                        },
+                    })));
                 };
                 let def = self
                     .resolutions

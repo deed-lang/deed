@@ -939,6 +939,18 @@ impl ProfileState {
     }
 }
 
+/// What a callee that is a name turned out to name.
+///
+/// Everything else is a value, and the two are told apart before the arguments
+/// are evaluated, because only a value can be an expression with something in
+/// it to run.
+enum Called {
+    Function,
+    Operation,
+    Builtin,
+    Imported,
+}
+
 impl<'a> Interp<'a> {
     fn new(program: &Program<'a>, file: FileId) -> Self {
         let mut modules = Vec::new();
@@ -1701,31 +1713,6 @@ impl<'a> Interp<'a> {
         result
     }
 
-    /// What a definition is bound to in the running frame, if anything.
-    fn lookup(&self, def: DefId) -> Option<Value> {
-        self.frames.last()?.get(&def).cloned()
-    }
-
-    /// What a name holds, wherever the value it holds lives.
-    ///
-    /// A name is looked up in the frame everywhere except one: handler state
-    /// lives in the handler instance instead. Everything that reads a name
-    /// goes through [`Interp::read`], which knows that, but calling one goes
-    /// through the callee expression, which used to ask the frame alone. So a
-    /// closure kept in handler state could be stored and never called: the
-    /// value was there and `held()` said the interpreter could not run the
-    /// call.
-    fn bound_value(&self, def: DefId) -> Option<Value> {
-        if self.kind_of(def) == DefKind::State {
-            let index = self.inside_handler.last().copied()?;
-            return self.handlers[index]
-                .state
-                .get(&self.state_name(def))
-                .cloned();
-        }
-        self.lookup(def)
-    }
-
     fn read(&mut self, ident: &Ident) -> Eval<Value> {
         let Some(def) = self.def_of(ident) else {
             return Err(self.not_runnable(ident.span, "an unresolved name"));
@@ -1958,12 +1945,26 @@ impl<'a> Interp<'a> {
     }
 
     // -- calls -------------------------------------------------------------
-
     fn call_expr(&mut self, callee: &'a Expr, args: &'a [Expr], span: Span) -> Eval<Value> {
         let def = match callee {
             Expr::Ident(ident) => self.def_of(ident),
             Expr::Field { name, .. } => self.resolutions().resolution(name.span),
             _ => None,
+        };
+        let named = def.and_then(|def| self.called_by_name(def).map(|kind| (def, kind)));
+
+        // Nothing here is called by name, so the callee is a value and a value
+        // can be a call of its own. It is evaluated before the arguments, in
+        // the order the two are written; on every path below the callee is a
+        // name and is never evaluated at all, so this is the only call whose
+        // order can be observed.
+        let Some((def, kind)) = named else {
+            let target = self.eval(callee)?;
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                values.push((self.eval(arg)?, arg.span()));
+            }
+            return self.call_value(target, values, span, callee.span());
         };
 
         let mut values = Vec::with_capacity(args.len());
@@ -1971,38 +1972,16 @@ impl<'a> Interp<'a> {
             values.push((self.eval(arg)?, arg.span()));
         }
 
-        // A closure is a value, not a declaration, so it is reached by looking
-        // at what the callee evaluates to rather than at what it resolves to.
-        if let Expr::Ident(ident) = callee
-            && let Some(def) = self.def_of(ident)
-            && let Some(bound) = self.bound_value(def)
-        {
-            match bound {
-                Value::Closure(closure) => return self.call_closure(&closure, values, span),
-                // A function handed over as a value. Called through the same
-                // path a written-out call takes, so its contract is checked
-                // rather than skipped by having been passed rather than named.
-                Value::Function { module, def } => {
-                    return self.call_declared(module, def, values, span, callee.span());
-                }
-                _ => {}
-            }
-        }
-
-        let Some(def) = def else {
-            return Err(self.not_runnable(callee.span(), "this call"));
-        };
-
-        match self.kind_of(def) {
-            DefKind::Function => {
+        match kind {
+            Called::Function => {
                 let Some(function) = self.function(def) else {
                     return Err(self.not_runnable(callee.span(), "this call"));
                 };
                 let here = self.file();
                 self.call(function, values, span, here, None)
             }
-            DefKind::EffectOp => self.dispatch(def, values, span),
-            DefKind::Builtin => {
+            Called::Operation => self.dispatch(def, values, span),
+            Called::Builtin => {
                 let name = self.resolutions().def(def).name.clone();
                 let carried = values.first().map(|(value, _)| value.clone());
                 match (name.as_str(), carried) {
@@ -2118,7 +2097,7 @@ impl<'a> Interp<'a> {
             // call runs with that module current. Reading the callee's names
             // out of the caller's scope would be a class of bug that does not
             // announce itself.
-            DefKind::Import => {
+            Called::Imported => {
                 let here = self.file();
                 match self.imported_function(def) {
                     Some((module, function)) => {
@@ -2131,7 +2110,45 @@ impl<'a> Interp<'a> {
                     None => Err(self.no_code_for(here, callee.span(), def)),
                 }
             }
-            _ => Err(self.not_runnable(callee.span(), "this call")),
+        }
+    }
+
+    /// Which of the four ways of being called by name this declaration is, if
+    /// it is one of them.
+    fn called_by_name(&self, def: DefId) -> Option<Called> {
+        match self.kind_of(def) {
+            DefKind::Function => Some(Called::Function),
+            DefKind::EffectOp => Some(Called::Operation),
+            DefKind::Builtin => Some(Called::Builtin),
+            DefKind::Import => Some(Called::Imported),
+            _ => None,
+        }
+    }
+
+    /// Calls whatever the callee produced, when it was not the name of
+    /// anything callable.
+    ///
+    /// A closure and a function handed over as a value are values rather than
+    /// declarations, so this is about what the callee evaluated to. It used to
+    /// be about bare names alone, and a call written any other way was refused:
+    /// `held.step(2)` and `chooser()(2)` both failed, while binding the very
+    /// same value to a name on the line above and calling that one ran.
+    fn call_value(
+        &mut self,
+        target: Value,
+        values: Vec<(Value, Span)>,
+        span: Span,
+        callee: Span,
+    ) -> Eval<Value> {
+        match target {
+            Value::Closure(closure) => self.call_closure(&closure, values, span),
+            // Through the same path a written-out call takes, so its contract
+            // is checked rather than skipped by having been passed rather than
+            // named.
+            Value::Function { module, def } => {
+                self.call_declared(module, def, values, span, callee)
+            }
+            _ => Err(self.not_runnable(callee, "this call")),
         }
     }
 

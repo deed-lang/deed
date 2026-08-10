@@ -716,6 +716,32 @@ fn programs() -> Vec<Agreed> {
             call: "answer",
             expect: 40,
         },
+        // A callee that is not a name. Both of these used to be refused by
+        // both engines, and binding the same value to a name on the line above
+        // ran, which is what said the refusal was about the shape of the
+        // callee rather than about the value.
+        Agreed {
+            name: "a function value held in a field",
+            source: "module a\n\nrecord Holder {\n    step: Fn(Int) -> Int,\n}\n\nfn twice(n: Int) -> Int { n + n }\n\nfn answer() -> Int {\n    let held = Holder { step: twice }\n    held.step(21)\n}\n\ntest \"a field can be called where it is read\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
+        Agreed {
+            name: "a callee that is a call",
+            source: "module a\n\nfn twice(n: Int) -> Int { n + n }\n\nfn chooser() -> Fn(Int) -> Int { twice }\n\nfn answer() -> Int { chooser()(21) }\n\ntest \"the call that picks the function runs once\" {\n    assert answer() == 42\n}\n",
+            call: "answer",
+            expect: 42,
+        },
+        // Which of the two runs first, where it can be seen. The callee is the
+        // only one that can carry an effect of its own, so this is the only
+        // call whose order is observable, and both engines have to pick the
+        // same one. `12` is the callee first; `21` would be the argument.
+        Agreed {
+            name: "the order a call reads its parts in",
+            source: "module a\n\neffect Log {\n    fn mark(n: Int) -> Int\n    fn order() -> Int\n}\n\nhandler Trace implements Log {\n    state seen: Int\n\n    fn mark(n) -> Int {\n        seen = seen * 10 + n\n        n\n    }\n\n    fn order() -> Int {\n        seen\n    }\n}\n\nfn twice(n: Int) -> Int { n + n }\n\nfn picking() -> Fn(Int) -> Int\n  uses\n    Log.mark,\n{\n    let _first = Log.mark(1)\n    twice\n}\n\nfn given() -> Int\n  uses\n    Log.mark,\n{\n    Log.mark(2)\n}\n\nfn answer() -> Int {\n    with Trace { seen: 0 } {\n        let _got = picking()(given())\n        Log.order()\n    }\n}\n\ntest \"the callee runs before the argument\" {\n    assert answer() == 12\n}\n",
+            call: "answer",
+            expect: 12,
+        },
         Agreed {
             name: "a generic function at one type",
             source: "module a\n\nfn firstly<T>(items: List<T>, fallback: T) -> T {\n    for item at i in items with found = fallback {\n        if i == 0 {\n            item\n        } else {\n            found\n        }\n    }\n}\n\nfn answer() -> Int { firstly([7, 8, 9], 0) }\n\ntest \"a generic function answers at the type it was called with\" {\n    assert answer() == 7\n}\n",
