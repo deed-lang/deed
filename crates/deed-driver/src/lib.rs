@@ -629,18 +629,20 @@ fn check_parsed(
 ///
 /// Asked of the resolver rather than of the text, so an effect called
 /// `unchanged` or a local called `Ledger` cannot fool it.
+///
+/// A bare name is not asked, because an operation is declared as a member of
+/// its effect and there is no scope a bare name could find one in: every
+/// mention of one is `Effect.operation`, whether it is being called or handed
+/// on as a value. Asking anyway was a branch no program could reach.
 fn reaches_an_effect(expr: &Expr, resolutions: &Resolutions) -> bool {
     if let Expr::Unchanged { .. } = expr {
         return true;
     }
-    let named = match expr {
-        Expr::Ident(ident) => Some(ident.span),
-        Expr::Field { name, .. } => Some(name.span),
+    let operation = match expr {
+        Expr::Field { name, .. } => resolutions.resolution(name.span),
         _ => None,
-    };
-    let operation = named
-        .and_then(|span| resolutions.resolution(span))
-        .is_some_and(|def| resolutions.def(def).kind == DefKind::EffectOp);
+    }
+    .is_some_and(|def| resolutions.def(def).kind == DefKind::EffectOp);
     if operation {
         return true;
     }

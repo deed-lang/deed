@@ -23,8 +23,10 @@
 use std::fs;
 use std::path::PathBuf;
 
+use deed_ast::{Expr, Item, block_children, children};
 use deed_diagnostics::SourceMap;
 use deed_driver::{Checked, check_all, shipped_modules, shipped_source};
+use deed_resolve::DefKind;
 use deed_typeck::Tier;
 use deed_typeck::facts::Reason;
 
@@ -327,5 +329,75 @@ fn peek() -> Int
         obligation.reason,
         Some(Reason::TheCallerInstallsTheHandler),
         "`unchanged` names an effect, and the handler behind it belongs to the caller"
+    );
+}
+
+/// The assumption the rule above rests on, measured rather than assumed.
+///
+/// An effect operation is declared as a member of its effect, so there is no
+/// scope a bare name in an expression could find one in and every mention is
+/// `Effect.operation`. `reaches_an_effect` asks about a field name and nothing
+/// else because of that; the first version asked about bare names too, and no
+/// program in this repository could reach the branch. If the resolver ever
+/// starts putting an operation somewhere a bare name can see it, that branch
+/// has to come back, and this is what says so.
+///
+/// About expressions, not about every mention: `fn note(message: String)` in
+/// an effect and in the handler implementing it are both bare, and both are
+/// declarations rather than uses.
+#[test]
+fn an_effect_operation_is_only_ever_named_through_its_effect() {
+    let checks = everything();
+
+    let mut through_an_effect = 0;
+    for checked in &checks {
+        let mut queue: Vec<&Expr> = Vec::new();
+        for item in &checked.module.items {
+            match item {
+                Item::Function(function) => {
+                    queue.extend(&function.contract.requires);
+                    queue.extend(function.contract.ensures.iter().map(|e| &e.condition));
+                    block_children(&function.body, &mut queue);
+                }
+                Item::Handler(handler) => {
+                    for operation in &handler.operations {
+                        block_children(&operation.body, &mut queue);
+                    }
+                    if let Some(finally) = &handler.finally {
+                        block_children(finally, &mut queue);
+                    }
+                }
+                Item::Test(test) => block_children(&test.body, &mut queue),
+                _ => {}
+            }
+        }
+
+        while let Some(expr) = queue.pop() {
+            let bare = match expr {
+                Expr::Ident(ident) => checked.resolutions.resolution(ident.span),
+                Expr::Field { name, .. } => {
+                    if checked
+                        .resolutions
+                        .resolution(name.span)
+                        .is_some_and(|def| checked.resolutions.def(def).kind == DefKind::EffectOp)
+                    {
+                        through_an_effect += 1;
+                    }
+                    None
+                }
+                _ => None,
+            };
+            assert!(
+                !bare.is_some_and(|def| checked.resolutions.def(def).kind == DefKind::EffectOp),
+                "an operation is named by itself in an expression, so the bare-name branch \
+                 `reaches_an_effect` dropped has to come back"
+            );
+            children(expr, &mut queue);
+        }
+    }
+
+    assert!(
+        through_an_effect > 0,
+        "no expression anywhere names an operation, so this holds nothing"
     );
 }
