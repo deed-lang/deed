@@ -40,6 +40,28 @@ release notes.
 
 ### Diagnostics
 
+- `deed test --compiled` says what it did not compile. It ran a hundred and
+  eleven of the corpus's blocks where the interpreter ran a hundred and
+  thirty-eight, and reported `111 passed, 0 failed`, which is what a complete
+  run looks like. A file the backend refused outright said `no tests found in
+  the compiled backend` and exited zero, which is what a file with no tests in
+  it says.
+
+  Skipping is right — the backend compiles a subset of the language on purpose
+  — and staying quiet about it was not. Every block that is dropped is now
+  named along with what stopped it:
+
+  ```
+  111 passed, 0 failed
+  6 not compiled, so they were not run
+    examples/kv_store.deed: a literal missing a field is not lowered yet
+    examples/transfer.deed: test "moves the money and conserves the total": a shorthand field naming something that is not a local is not lowered yet
+  ```
+
+  Three of the six are in the running example. `corpus_backend.rs` pins how
+  many there are, in both directions: fewer is the backend catching up and
+  worth reading, more is a shape that used to compile and no longer does.
+
 - `result` is checked wherever in a contract it is written. It used to be
   checked only where a hand-written walk went looking for it, and that walk
   matched expressions with a wildcard, so the same clause was rejected in one

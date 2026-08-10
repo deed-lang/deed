@@ -1603,10 +1603,13 @@ fn run_tests(
 
 /// Runs every test block that the compiled backend can lower and compile.
 ///
-/// Test blocks the backend cannot lower are silently skipped, because the
-/// backend compiles a subset of the language on purpose. The blocks that do
-/// run must all pass, and the output format matches `run_tests` so the two
-/// paths are comparable.
+/// Test blocks the backend cannot lower are skipped, because the backend
+/// compiles a subset of the language on purpose, and every one of them is
+/// named on the way past. Skipping quietly was the mistake: a run that drops
+/// twenty-seven of a hundred and thirty-eight blocks and then prints how many
+/// passed reads exactly like a run that had a hundred and eleven to begin
+/// with, and a file the backend refused outright read like a file with no
+/// tests in it.
 ///
 /// Each `assert refuses` probe is called and must produce a contract-failure
 /// trap. Any other outcome (no trap, or a different kind of trap) is a
@@ -1620,8 +1623,10 @@ fn run_compiled_tests(
     let mut passed = 0usize;
     let mut failed: Vec<(String, String)> = Vec::new();
     let mut ran = 0usize;
+    let mut skipped: Vec<String> = Vec::new();
 
     for (at, checked) in checks[..subject.min(checks.len())].iter().enumerate() {
+        let name = sources.file(checked.file).name().to_string();
         let lowered = match deed_mir::lower_with_tests_alongside(
             &checked.module,
             &checked.resolutions,
@@ -1629,8 +1634,15 @@ fn run_compiled_tests(
             &alongside(checks, at),
         ) {
             Ok(p) => p,
-            Err(_) => continue,
+            Err(why) => {
+                skipped.push(format!("{name}: {why}"));
+                continue;
+            }
         };
+
+        for block in &lowered.skipped_tests {
+            skipped.push(format!("{name}: test {:?}: {}", block.name, block.why));
+        }
 
         if lowered.tests.is_empty() {
             continue;
@@ -1638,7 +1650,10 @@ fn run_compiled_tests(
 
         let compiled = match deed_codegen::compile(&lowered) {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(why) => {
+                skipped.push(format!("{name}: {why}"));
+                continue;
+            }
         };
 
         writeln!(out, "{}", sources.file(checked.file).name())?;
@@ -1691,6 +1706,7 @@ fn run_compiled_tests(
 
     if ran == 0 {
         writeln!(out, "no tests found in the compiled backend")?;
+        report_skipped(out, &skipped)?;
         return Ok(true);
     }
 
@@ -1699,8 +1715,33 @@ fn run_compiled_tests(
     }
 
     writeln!(out, "\n{passed} passed, {} failed", failed.len())?;
+    report_skipped(out, &skipped)?;
 
     Ok(failed.is_empty())
+}
+
+/// Names everything the compiled path did not get to.
+///
+/// The count comes first because it is the number a reader is comparing
+/// against the interpreter's, and the reasons follow because a reader who
+/// wants to know why is looking at one of them.
+fn report_skipped(out: &mut impl Write, skipped: &[String]) -> io::Result<()> {
+    if skipped.is_empty() {
+        return Ok(());
+    }
+    writeln!(
+        out,
+        "{} not compiled, so {} not run",
+        skipped.len(),
+        match skipped.len() {
+            1 => "it was",
+            _ => "they were",
+        }
+    )?;
+    for reason in skipped {
+        writeln!(out, "  {reason}")?;
+    }
+    Ok(())
 }
 
 /// Whether a diagnostic code from the compiled backend counts as a contract

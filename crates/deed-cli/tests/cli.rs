@@ -280,6 +280,29 @@ fn compiled_tests_report_the_same_complete_count_as_the_interpreter() {
 }
 
 #[test]
+fn a_file_the_backend_refuses_says_so_rather_than_that_it_has_no_tests() {
+    let scratch = Scratch::new("compiled-refused");
+    let file = scratch.write(
+        "same.deed",
+        "module a\n\n\
+         fn twice(n: Int) -> Int { n + n }\n\n\
+         fn same(one: Fn(Int) -> Int, other: Fn(Int) -> Int) -> Bool { one == other }\n\n\
+         test \"a function is itself\" {\n    assert same(twice, twice)\n}\n",
+    );
+
+    let output = run(&["test", "--compiled", file.to_str().unwrap()]);
+    let text = stdout(&output);
+    assert!(
+        text.contains("not compiled"),
+        "a refused file read as one with nothing in it:\n{text}"
+    );
+    assert!(
+        text.contains("in memory"),
+        "the refusal did not say what it found:\n{text}"
+    );
+}
+
+#[test]
 fn obligations_are_reported_with_their_tier() {
     let output = run(&["check", RUNNABLE, "--obligations"]);
     assert_eq!(code(&output), 0);
@@ -767,6 +790,35 @@ fn a_file_with_no_tests_says_so() {
     let output = run(&["test", file.to_str().unwrap()]);
     assert_eq!(code(&output), 0);
     assert!(stdout(&output).contains("no tests found"));
+}
+
+/// A test block the backend cannot lower is named, with what stopped it.
+///
+/// A block the backend drops never reaches the `passed` line, and nothing used
+/// to say it had gone, so a run that compiled three of a file's blocks looked
+/// exactly like one that compiled all of them. Over the corpus that was
+/// twenty-seven of a hundred and thirty-eight.
+#[test]
+fn a_test_block_the_backend_cannot_lower_is_named_along_with_the_reason() {
+    let output = run(&[
+        "test",
+        "--compiled",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/transfer.deed"),
+    ]);
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("not compiled"),
+        "nothing said a block had been dropped:\n{text}"
+    );
+    assert!(
+        text.contains("moves the money and conserves the total"),
+        "the dropped block was not named:\n{text}"
+    );
+    assert!(
+        text.contains("shorthand field"),
+        "the reason was not given:\n{text}"
+    );
 }
 
 #[test]

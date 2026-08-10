@@ -219,3 +219,95 @@ fn the_backend_compiles_the_whole_corpus() {
         refused.join("\n")
     );
 }
+
+/// Every test block in the corpus the backend cannot lower, with its reason.
+///
+/// The test above asks about the module. This asks about the `test` blocks
+/// inside it, which are lowered separately and skipped one at a time, and
+/// which nothing here used to look at: `deed test --compiled` ran a hundred
+/// and eleven of the corpus's blocks, the interpreter ran all of them, and the
+/// difference was reported by neither.
+fn skipped_test_blocks() -> Vec<String> {
+    let mut skipped = Vec::new();
+    let mut sources = sources();
+    sources.sort();
+
+    for (name, text) in &sources {
+        let mut map = SourceMap::new();
+        let mut ids = vec![map.add(name.clone(), text.clone())];
+        let declared = imports_of(text).map(|(module, _)| module);
+        for module in shipped_modules() {
+            if declared.as_deref() == Some(module) {
+                continue;
+            }
+            if let Some(source) = shipped_source(module) {
+                ids.push(map.add(format!("<shipped>/{module}.deed"), source.to_string()));
+            }
+        }
+
+        let checks = check_all(&map, &ids);
+        let subject = &checks[0];
+        if subject.has_errors() {
+            continue;
+        }
+
+        let alongside: Vec<deed_mir::Alongside<'_>> = checks[1..]
+            .iter()
+            .map(|checked| deed_mir::Alongside {
+                module: &checked.module,
+                resolutions: &checked.resolutions,
+                types: &checked.types,
+            })
+            .collect();
+
+        if let Ok(lowered) = deed_mir::lower_with_tests_alongside(
+            &subject.module,
+            &subject.resolutions,
+            &subject.types,
+            &alongside,
+        ) {
+            for block in &lowered.skipped_tests {
+                skipped.push(format!("`{name}` test {:?}: {}", block.name, block.why));
+            }
+        }
+    }
+
+    skipped
+}
+
+/// A skipped block names itself and what stopped it.
+///
+/// Skipping is allowed and staying quiet about it was the bug, so what is
+/// required here is the sentence rather than the absence.
+#[test]
+fn every_test_block_the_backend_skips_says_which_one_and_why() {
+    let skipped = skipped_test_blocks();
+    assert!(
+        !skipped.is_empty(),
+        "no test block in the corpus is skipped, so this holds nothing; if the\
+         backend has caught up, delete this and the count below with it"
+    );
+    for one in &skipped {
+        assert!(
+            one.contains("not lowered yet") || one.contains("not"),
+            "a skipped block said nothing a reader can act on: {one}"
+        );
+    }
+}
+
+/// How many there are, so the number cannot move without being noticed.
+///
+/// A ratchet in both directions on purpose. Going down is the backend catching
+/// up and is worth reading; going up is a shape that used to compile and no
+/// longer does, which is the regression the file exists to catch, and neither
+/// should arrive as a silently smaller `passed` count.
+#[test]
+fn the_corpus_has_four_test_blocks_the_backend_cannot_lower() {
+    let skipped = skipped_test_blocks();
+    assert_eq!(
+        skipped.len(),
+        4,
+        "the number of skipped test blocks changed:\n{}",
+        skipped.join("\n")
+    );
+}
