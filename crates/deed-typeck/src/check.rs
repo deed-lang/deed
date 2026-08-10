@@ -2770,7 +2770,7 @@ impl<'a> Checker<'a> {
                 // there is nothing sensible for an `err` clause to see.
                 (_, Outcome::Err) => Ty::Unknown,
             };
-            if let Some(def) = self.result_def(&obligation.condition) {
+            if let Some(def) = deed_resolve::result_def(&obligation.condition, self.resolutions) {
                 self.def_types.insert(def, bound);
             }
 
@@ -2791,31 +2791,6 @@ impl<'a> Checker<'a> {
             Some((None, ret_span, "the declared return type".to_string())),
         );
         self.returns.pop();
-    }
-
-    /// The definition `result` refers to inside an obligation, if it is used.
-    ///
-    /// Found by looking, rather than carried on the tree, because the AST holds
-    /// no definitions and one binding for one keyword did not seem worth
-    /// threading identities through every node for.
-    fn result_def(&self, expr: &Expr) -> Option<DefId> {
-        match expr {
-            Expr::Ident(ident) if ident.name == "result" => self.def_of(ident),
-            Expr::Field { receiver, .. } => self.result_def(receiver),
-            Expr::Call { callee, args, .. } => self
-                .result_def(callee)
-                .or_else(|| args.iter().find_map(|arg| self.result_def(arg))),
-            Expr::StructLit { path, fields, .. } => self.result_def(path).or_else(|| {
-                fields
-                    .iter()
-                    .filter_map(|field| field.value.as_ref())
-                    .find_map(|value| self.result_def(value))
-            }),
-            Expr::Unary { operand, .. } | Expr::Try { operand, .. } => self.result_def(operand),
-            Expr::Binary { lhs, rhs, .. } => self.result_def(lhs).or_else(|| self.result_def(rhs)),
-            Expr::Old { expr, .. } => self.result_def(expr),
-            _ => None,
-        }
     }
 
     /// Checks an expression against the type that was wanted.

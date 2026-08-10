@@ -3048,7 +3048,7 @@ impl<'a> Interp<'a> {
 
             // `result` is what the function produced: the success value for an
             // `ok` clause, the error value for an `err` one.
-            if let Some(def) = result_def(&obligation.condition, self.resolutions()) {
+            if let Some(def) = deed_resolve::result_def(&obligation.condition, self.resolutions()) {
                 let bound = match (value, outcome) {
                     (Value::Result { value, .. }, _) => (**value).clone(),
                     (other, _) => other.clone(),
@@ -3636,19 +3636,6 @@ fn split(text: &str, separator: &str) -> Vec<Value> {
         return text.chars().map(|c| Value::str(c.to_string())).collect();
     }
     text.split(separator).map(Value::str).collect()
-}
-
-/// The definition `result` refers to inside an obligation, if it is used.
-fn result_def(expr: &Expr, resolutions: &Resolutions) -> Option<DefId> {
-    if let Expr::Ident(ident) = expr
-        && ident.name == "result"
-    {
-        return resolutions.resolution(ident.span);
-    }
-    let mut next = Vec::new();
-    children(expr, &mut next);
-    next.into_iter()
-        .find_map(|child| result_def(child, resolutions))
 }
 
 /// Every `old(...)` inside an expression, as its span and what it wraps.

@@ -224,3 +224,30 @@ impl Resolutions {
         self.dots.get(&span).copied()
     }
 }
+
+/// The definition `result` refers to inside an obligation, if it is used.
+///
+/// Found by looking, rather than carried on the tree, because the AST holds no
+/// definitions and one binding for one keyword did not seem worth threading
+/// identities through every node for.
+///
+/// Here rather than in each pass that wants it. The type checker and the
+/// interpreter both used to spell this out, the checker's copy matched
+/// expressions with a wildcard, and everything that fell through the wildcard
+/// got no type for `result` at all: `ensures ok => f(|x: Int| result == "text")`
+/// on a function returning `Int` passed `deed check` in silence and failed at
+/// run time as a broken promise. Written on `deed_ast::children`, which has no
+/// wildcard, so a new kind of expression is a build error rather than a clause
+/// that quietly stops being checked.
+pub fn result_def(expr: &deed_ast::Expr, resolutions: &Resolutions) -> Option<DefId> {
+    if let deed_ast::Expr::Ident(ident) = expr
+        && ident.name == "result"
+    {
+        return resolutions.resolution(ident.span);
+    }
+    let mut inside = Vec::new();
+    deed_ast::children(expr, &mut inside);
+    inside
+        .into_iter()
+        .find_map(|child| result_def(child, resolutions))
+}

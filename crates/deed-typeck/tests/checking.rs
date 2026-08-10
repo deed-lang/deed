@@ -7,15 +7,21 @@
 //! after. Attention is not countable anyway, so the header no longer claims
 //! any, and says something that can be read off the file instead.
 //!
-//! There are ninety-one tests. Eighty-eight of them hand the checker a module
-//! and then either insist it is accepted or name diagnostic codes that should
-//! come back, usually the whole list of them in order. The other three ask for
-//! something no code carries: that a particular sentence is absent from the
-//! rendering, the shape of a fix, and how many obligations landed in a tier.
-//! None of them settles for asserting that something failed, which matters
-//! because most of these rules were written to replace a worse message rather
-//! than to replace silence: a test that only asked for failure would have
-//! passed before the change it was written for.
+//! Most of these tests hand the checker a module and then either insist it is
+//! accepted or name diagnostic codes that should come back, usually the whole
+//! list of them in order. A few ask for something no code carries: that a
+//! particular sentence is absent from the rendering, the shape of a fix, and
+//! how many obligations landed in a tier. None of them settles for asserting
+//! that something failed, which matters because most of these rules were
+//! written to replace a worse message rather than to replace silence: a test
+//! that only asked for failure would have passed before the change it was
+//! written for.
+//!
+//! This paragraph used to open with a total, and the total was wrong: ninety
+//! one when the file held a hundred and thirty-seven, because nothing counted
+//! it and everyone who added a test read past it. The claim worth making about
+//! this file is the last sentence above, which stays true however many tests
+//! there are.
 //!
 //! What that leaves out is what the reader sees. A code is not a sentence, so
 //! the tests whose subject is the wording go on to render the diagnostic and
@@ -2133,6 +2139,87 @@ fn unchanged_is_a_condition() {
          \x20 ensures err => unchanged(Ledger),\n\
          { 0 }\n",
     );
+}
+
+/// `result` is the return type wherever in the clause it is written.
+///
+/// It used to be the return type only where a hand-written walk went looking
+/// for it, and that walk matched expressions with a wildcard. Everything that
+/// fell through the wildcard left `result` with no type, an unknown type
+/// agrees with everything, and the clause went through in silence: writing
+/// `result == "text"` in a function returning `Int` was rejected on its own
+/// and accepted one pair of pipes away, where it failed at run time as a
+/// broken promise instead.
+///
+/// One case per shape the wildcard swallowed, because the hole was never about
+/// closures in particular. `deed_resolve::result_def` is written on
+/// `deed_ast::children` now, which has no wildcard.
+#[test]
+fn result_is_checked_wherever_in_a_clause_it_is_written() {
+    let shapes = [
+        ("a closure", "use_it(|x: Int| result == \"text\")"),
+        ("a list", "length([result == \"text\"]) > 0"),
+        ("a branch", "if n > 0 { result == \"text\" } else { true }"),
+        (
+            "a match arm",
+            "match n > 0 {\n      true => result == \"text\",\n      false => true,\n    }",
+        ),
+        ("a block", "{\n      result == \"text\"\n    }"),
+        (
+            "a walk",
+            "for _each in [1] with seen = true { result == \"text\" }",
+        ),
+    ];
+
+    for (shape, clause) in shapes {
+        let source = format!(
+            "module a\n\n\
+             fn use_it(f: Fn(Int) -> Bool) -> Bool {{ f(1) }}\n\n\
+             fn twice(n: Int) -> Int\n\
+             \x20 ensures\n\
+             \x20   ok  => {clause},\n\
+             {{\n\
+             \x20 n + n\n\
+             }}\n"
+        );
+        let (sources, checked) = check_source(&source);
+        assert!(
+            codes_of(&checked.diagnostics).contains(&codes::TYPE_MISMATCH),
+            "`result` in {shape} was compared with a `String` and nothing objected: {}",
+            rendered(&sources, &checked.diagnostics)
+        );
+    }
+}
+
+/// The other direction: the same clauses are accepted when the type is right.
+///
+/// Without this the test above passes on a checker that rejects every one of
+/// these shapes for some reason of its own.
+#[test]
+fn a_clause_that_reads_result_correctly_is_accepted_in_every_shape() {
+    let shapes = [
+        "use_it(|x: Int| result > 0)",
+        "length([result > 0]) > 0",
+        "if n > 0 { result > 0 } else { true }",
+        "match n > 0 {\n      true => result > 0,\n      false => true,\n    }",
+        "{\n      result > 0\n    }",
+        "for _each in [1] with seen = true { result > 0 }",
+    ];
+
+    for clause in shapes {
+        let source = format!(
+            "module a\n\n\
+             fn use_it(f: Fn(Int) -> Bool) -> Bool {{ f(1) }}\n\n\
+             fn twice(n: Int) -> Int\n\
+             \x20 where n > 0,\n\
+             \x20 ensures\n\
+             \x20   ok  => {clause},\n\
+             {{\n\
+             \x20 n + n\n\
+             }}\n"
+        );
+        check_ok(&source);
+    }
 }
 
 // -- values nobody reads ---------------------------------------------------
