@@ -20,6 +20,34 @@ release notes.
 
 ### Diagnostics
 
+- `result` is checked wherever in a contract it is written. It used to be
+  checked only where a hand-written walk went looking for it, and that walk
+  matched expressions with a wildcard, so the same clause was rejected in one
+  position and accepted two characters away:
+
+  ```deed
+  fn twice(n: Int) -> Int
+    ensures
+      ok  => result == "text",              // rejected, DEED4001
+  { n + n }
+
+  fn twice(n: Int) -> Int
+    ensures
+      ok  => use_it(|x: Int| result == "text"),   // was silent
+  { n + n }
+  ```
+
+  Everything the wildcard swallowed — a closure, a list, a branch, a match arm,
+  a block, a walk — left `result` with no type at all, and an unknown type
+  agrees with everything, so the clause went through `deed check` in silence and
+  failed at run time as a broken promise instead. The failure named the
+  postcondition, which is the wrong thing to go and read.
+
+  The lookup now lives in `deed-resolve` and is written on `deed_ast::children`,
+  which matches without a wildcard. The interpreter had already been fixed for
+  this once and the checker's copy had not, which is what having two of them
+  cost.
+
 - An obligation nobody could ever prove no longer reads like one nobody has got
   round to. Every `ensures` clause that came back `Guarded` said "nothing tries
   to prove this one ahead of time"; seven of the nine in `examples/` are about
