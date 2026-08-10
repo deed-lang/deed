@@ -651,7 +651,7 @@ fn lower_impl(
             let saved_instantiated = instantiated.clone();
             let saved_answered = answered.clone();
 
-            let outcome: Option<crate::TestBlock> = 'block: {
+            let outcome: Result<crate::TestBlock, Unlowered> = 'block: {
                 let mut refuses_names: Vec<String> = Vec::new();
 
                 // Lower one probe function per `assert refuses` statement.
@@ -677,7 +677,7 @@ fn lower_impl(
                     );
                     let value = match lowering.expr(subject) {
                         Ok(v) => v,
-                        Err(_) => break 'block None,
+                        Err(why) => break 'block Err(why),
                     };
                     program.layouts = lowering.shapes;
                     for f in lowering.lifted {
@@ -719,7 +719,7 @@ fn lower_impl(
                 );
                 let body = match lowering.block(&filtered) {
                     Ok(b) => b,
-                    Err(_) => break 'block None,
+                    Err(why) => break 'block Err(why),
                 };
                 program.layouts = lowering.shapes;
                 for f in lowering.lifted {
@@ -729,7 +729,7 @@ fn lower_impl(
                 func.body = body;
                 program.functions[body_id.0] = func;
 
-                Some(crate::TestBlock {
+                Ok(crate::TestBlock {
                     name: test.name.clone(),
                     body: body_name,
                     refuses: refuses_names,
@@ -737,8 +737,12 @@ fn lower_impl(
             };
 
             match outcome {
-                Some(test_block) => program.tests.push(test_block),
-                None => {
+                Ok(test_block) => program.tests.push(test_block),
+                Err(why) => {
+                    program.skipped_tests.push(crate::SkippedTest {
+                        name: test.name.clone(),
+                        why: why.to_string(),
+                    });
                     program.functions.truncate(prev_functions);
                     instantiated = saved_instantiated;
                     answered = saved_answered;

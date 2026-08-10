@@ -235,6 +235,24 @@ pub struct Program {
     /// rather than failing the whole lowering, because the backend compiles
     /// a subset of the language on purpose.
     pub tests: Vec<TestBlock>,
+    /// The test blocks that were skipped, and what stopped each one.
+    ///
+    /// Skipping is the right thing to do and saying nothing about it was not:
+    /// a runner that drops a block it cannot compile and then reports how many
+    /// passed is telling a reader a smaller number and calling it the whole.
+    /// Twenty-seven of the corpus's hundred and thirty-eight tests went this
+    /// way, including every one in the running example, and the output looked
+    /// exactly like a clean run.
+    pub skipped_tests: Vec<SkippedTest>,
+}
+
+/// A test block the backend could not lower, named, with the reason.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SkippedTest {
+    /// The name string from the `test "..."` declaration.
+    pub name: String,
+    /// What the lowering said when it gave up.
+    pub why: String,
 }
 
 impl Program {
