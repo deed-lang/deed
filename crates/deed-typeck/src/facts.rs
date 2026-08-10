@@ -254,7 +254,8 @@ pub enum Truth {
 /// meant to. Each one is the answer to "what would make this Proven instead":
 /// narrow the name, establish the length, give the value a name, keep the
 /// clause on this side of a module boundary, or write the condition in a
-/// shape this checker reasons about at all.
+/// shape this checker reasons about at all. One of them answers "nothing",
+/// and saying so is the point of it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Reason {
     /// A name is being compared, but nothing in scope narrowed its range
@@ -281,6 +282,16 @@ pub enum Reason {
     /// its floor is `Guarded` whatever the body looks like, and no pass tries
     /// to settle one ahead of time.
     NothingTriesToProveThis,
+    /// The clause is about an effect, and the caller picks the handler.
+    ///
+    /// The only reason here whose answer to "what would make this Proven"
+    /// is nothing. A function is checked once; the `with` block that decides
+    /// what `Counter.value()` or `unchanged(Ledger)` means is written by
+    /// whoever calls it, and a different caller may install a different
+    /// handler. Filing these under [`Reason::NothingTriesToProveThis`] said
+    /// the compiler had not got round to them, which invites a reader to wait
+    /// for a release that cannot come.
+    TheCallerInstallsTheHandler,
 }
 
 impl Reason {
@@ -298,6 +309,9 @@ impl Reason {
             }
             Reason::NothingTriesToProveThis => {
                 "nothing tries to prove this one ahead of time, so it is checked on every call"
+            }
+            Reason::TheCallerInstallsTheHandler => {
+                "this is about an effect, and the caller installs the handler that answers it"
             }
         }
     }

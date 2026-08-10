@@ -799,6 +799,94 @@ impl Expr {
     }
 }
 
+/// Every expression one step inside `expr`.
+///
+/// Here rather than in a pass, because which expressions are inside another
+/// one is a fact about the tree and every reader of it wants the same answer.
+/// The interpreter used to keep this and had written it out twice before that;
+/// both copies stopped in the same place, a closure body, and `DEED6006`'s own
+/// note describes the hole that left.
+///
+/// Matched without a wildcard, so a new kind of expression is a build error
+/// here rather than a walk that silently stops covering it.
+pub fn children<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    match expr {
+        Expr::Field { receiver, .. } => out.push(receiver),
+        Expr::Call { callee, args, .. } => {
+            out.push(callee);
+            out.extend(args);
+        }
+        Expr::List { elements, .. } => out.extend(elements),
+        Expr::StructLit { path, fields, .. } => {
+            out.push(path);
+            out.extend(fields.iter().filter_map(|field| field.value.as_ref()));
+        }
+        Expr::Unary { operand, .. } | Expr::Try { operand, .. } => out.push(operand),
+        Expr::Binary { lhs, rhs, .. } => {
+            out.push(lhs);
+            out.push(rhs);
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            out.push(condition);
+            block_children(then_branch, out);
+            out.extend(else_branch.as_deref());
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            out.push(scrutinee);
+            out.extend(arms.iter().map(|arm| &arm.body));
+        }
+        Expr::For {
+            iterable,
+            accumulator,
+            keep,
+            body,
+            ..
+        } => {
+            out.push(iterable);
+            out.extend(accumulator.iter().map(|acc| acc.init.as_ref()));
+            out.extend(keep.as_deref());
+            block_children(body, out);
+        }
+        Expr::Block(block) => block_children(block, out),
+        Expr::Closure { body, .. } => out.push(body),
+        Expr::Old { expr, .. } => out.push(expr),
+        Expr::With { handlers, body, .. } => {
+            out.extend(handlers);
+            block_children(body, out);
+        }
+        Expr::Int { .. }
+        | Expr::Str { .. }
+        | Expr::Bool { .. }
+        | Expr::Unit(_)
+        | Expr::Ident(_)
+        | Expr::Unchanged { .. }
+        | Expr::Error(_) => {}
+    }
+}
+
+/// Every expression one step inside a block.
+pub fn block_children<'a>(block: &'a Block, out: &mut Vec<&'a Expr>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Let { init, .. } => out.push(init),
+            Stmt::Assign { value, .. } => out.push(value),
+            Stmt::Return { value, .. } => out.extend(value),
+            Stmt::Assert { condition, .. } => out.push(condition),
+            Stmt::Refuses { subject, .. } => out.push(subject),
+            Stmt::Expr(expr) => out.push(expr),
+            Stmt::Abandon { .. } => {}
+        }
+    }
+    out.extend(block.tail.as_deref());
+}
+
 #[derive(Clone, Debug)]
 pub struct PatternField {
     pub name: Ident,

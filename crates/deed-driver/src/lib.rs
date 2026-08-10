@@ -110,13 +110,13 @@ mod clock_tests {
     }
 }
 
-use deed_ast::{Item, Module, Outcome};
+use deed_ast::{Expr, Item, Module, Outcome, children};
 use deed_diagnostics::{Diagnostic, FileId, Severity, SourceMap, Span};
 use deed_effects::Effects;
 use deed_interp::{DeclaredRows, Guard, Guards, OperatorCalls, Program, RowItem};
 use deed_lexer::tokenize;
 use deed_parser::parse;
-use deed_resolve::{Resolutions, Universe};
+use deed_resolve::{DefKind, Resolutions, Universe};
 use deed_typeck::{Reason, Tier, Types, World};
 
 /// One obligation and how it was discharged.
@@ -565,12 +565,13 @@ fn check_parsed(
     // can be generated gets exercised by a property test as well, which is the
     // `Tested` tier and the only place it comes from.
     //
-    // A guarded one carries `NothingTriesToProveThis` rather than no reason at
-    // all. The distinction matters more here than anywhere else: the other
-    // guarded obligations are the checker having looked and failed, and these
-    // are the checker never having looked, and until this said so the two were
-    // the same word with nothing to tell them apart. Thirteen of the sixteen
-    // guarded obligations in `examples/` are this case.
+    // A guarded one says why it is guarded, and there are two answers. Most of
+    // these clauses are about an effect, and the `with` block that decides
+    // what the effect means belongs to whoever calls the function: nothing
+    // here can settle those, ever. The rest are simply not attempted, which is
+    // the checker never having looked rather than having looked and failed.
+    // Until these two were told apart, an obligation nobody could ever prove
+    // read the same as one nobody had got round to.
     for item in &parsed_module.items {
         let Item::Function(function) = item else {
             continue;
@@ -592,7 +593,12 @@ fn check_parsed(
                 // answer rather than the absence of one.
                 reason: match tested {
                     true => None,
-                    false => Some(deed_typeck::facts::Reason::NothingTriesToProveThis),
+                    false => Some(
+                        match reaches_an_effect(&obligation.condition, &resolved.resolutions) {
+                            true => Reason::TheCallerInstallsTheHandler,
+                            false => Reason::NothingTriesToProveThis,
+                        },
+                    ),
                 },
             });
         }
@@ -610,6 +616,41 @@ fn check_parsed(
         obligations,
         timings,
     }
+}
+
+/// Whether a contract clause talks about an effect.
+///
+/// Two shapes reach one: `unchanged(Ledger)`, which names an effect and
+/// nothing else, and any mention of an operation, whether it is performed
+/// directly or read through `old(...)`. Both mean the same thing for the
+/// tier, and it is a fact about the caller rather than about this function:
+/// the body is checked once, and which handler answers is decided by whoever
+/// wrote the `with` block above the call.
+///
+/// Asked of the resolver rather than of the text, so an effect called
+/// `unchanged` or a local called `Ledger` cannot fool it.
+///
+/// A bare name is not asked, because an operation is declared as a member of
+/// its effect and there is no scope a bare name could find one in: every
+/// mention of one is `Effect.operation`, whether it is being called or handed
+/// on as a value. Asking anyway was a branch no program could reach.
+fn reaches_an_effect(expr: &Expr, resolutions: &Resolutions) -> bool {
+    if let Expr::Unchanged { .. } = expr {
+        return true;
+    }
+    let operation = match expr {
+        Expr::Field { name, .. } => resolutions.resolution(name.span),
+        _ => None,
+    }
+    .is_some_and(|def| resolutions.def(def).kind == DefKind::EffectOp);
+    if operation {
+        return true;
+    }
+    let mut inside = Vec::new();
+    children(expr, &mut inside);
+    inside
+        .into_iter()
+        .any(|child| reaches_an_effect(child, resolutions))
 }
 
 /// Convenience for callers holding text rather than a populated map.

@@ -123,6 +123,10 @@ fn the_corpus_is_counted_by_tier_and_by_reason() {
         .iter()
         .filter(|o| o.reason.map(reason_text) == Some(Reason::NothingTriesToProveThis.text()))
         .count();
+    let the_caller_installs = guarded
+        .iter()
+        .filter(|o| o.reason.map(reason_text) == Some(Reason::TheCallerInstallsTheHandler.text()))
+        .count();
     let no_reason_at_all = guarded.iter().filter(|o| o.reason.is_none()).count();
 
     // Every Guarded obligation is accounted for by exactly one of the buckets
@@ -133,8 +137,9 @@ fn the_corpus_is_counted_by_tier_and_by_reason() {
     // holds it there. It used to be nine, all of them `ensures` clauses, which
     // `check_all` never routes through `facts::holds`: nothing tries to settle
     // one ahead of time, so the floor is Guarded whatever the body looks like.
-    // Saying nothing made that look like the same answer as "I looked and could
-    // not", so those nine now carry `NothingTriesToProveThis` instead.
+    // Those nine have since split in two, and the split is the interesting
+    // number: seven of them are about an effect, so no pass here could ever
+    // settle them, and only two are waiting on a checker that has not looked.
     assert_eq!(
         name_not_narrowed
             + length_not_established
@@ -142,6 +147,7 @@ fn the_corpus_is_counted_by_tier_and_by_reason() {
             + crossed_a_boundary
             + not_a_shape
             + nothing_tries
+            + the_caller_installs
             + no_reason_at_all,
         guarded.len(),
         "every Guarded obligation should fall into exactly one reason bucket, including \"none\""
@@ -157,9 +163,10 @@ fn the_corpus_is_counted_by_tier_and_by_reason() {
             crossed_a_boundary,
             not_a_shape,
             nothing_tries,
+            the_caller_installs,
             no_reason_at_all,
         ),
-        (167, 11, 13, 1, 0, 0, 0, 9, 0),
+        (167, 11, 13, 1, 0, 0, 0, 2, 7, 0),
         "the corpus's obligation counts changed; update this test and the table in \
          design/02-syntax.md together"
     );

@@ -20,6 +20,26 @@ release notes.
 
 ### Diagnostics
 
+- An obligation nobody could ever prove no longer reads like one nobody has got
+  round to. Every `ensures` clause that came back `Guarded` said "nothing tries
+  to prove this one ahead of time"; seven of the nine in `examples/` are about
+  an effect, and those are not waiting on anything:
+
+  ```deed
+  fn peek() -> Int uses Counter.value, ensures ok => unchanged(Counter), { .. }
+  ```
+
+  A function is checked once. The `with` block deciding what `Counter` means is
+  written by whoever calls it, and a different caller may install a different
+  handler, so no pass on this side settles that clause however hard it tries.
+  Those now say the caller installs the handler that answers it, which is the
+  one reason here whose answer to "what would make this Proven" is nothing.
+
+  The two left saying "nothing tries" are `transfer`'s `result.from == from`
+  and `result.amount == amount`, which really are obligations a checker could
+  one day discharge. Splitting the count is what makes the difference visible:
+  `design/02-syntax.md` now reports both rows separately.
+
 - A refinement written on a record's field survives reading the field back.
   A parameter of type `Positive` was already known to be positive; a field
   declared `Positive` was not, and the two say the same thing:
