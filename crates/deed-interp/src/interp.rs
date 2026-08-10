@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use deed_ast::{
     BinaryOp, Block, Ensures, Expr, FieldInit, FnDecl, HandlerDecl, Ident, Item, Module, Outcome,
-    Param, Pattern, Stmt, UnaryOp,
+    Param, Pattern, Stmt, UnaryOp, children,
 };
 use deed_diagnostics::{ByNumber, Diagnostic, FileId, Span};
 use deed_resolve::{DefId, DefKind, ExportKind, Resolutions};
@@ -3636,93 +3636,6 @@ fn split(text: &str, separator: &str) -> Vec<Value> {
         return text.chars().map(|c| Value::str(c.to_string())).collect();
     }
     text.split(separator).map(Value::str).collect()
-}
-
-/// Every expression one step inside `expr`.
-///
-/// The two walkers below are the only readers, and both used to spell this out
-/// for themselves. Both stopped in the same place: a closure body. `deed check`
-/// accepts `result` and `old(..)` inside one, and the interpreter then had
-/// nothing to bind them to, which is the hole `DEED6006`'s own note describes.
-///
-/// Matched without a wildcard, so a new kind of expression is a build error
-/// here rather than a contract that silently stops being checked.
-fn children<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
-    match expr {
-        Expr::Field { receiver, .. } => out.push(receiver),
-        Expr::Call { callee, args, .. } => {
-            out.push(callee);
-            out.extend(args);
-        }
-        Expr::List { elements, .. } => out.extend(elements),
-        Expr::StructLit { path, fields, .. } => {
-            out.push(path);
-            out.extend(fields.iter().filter_map(|field| field.value.as_ref()));
-        }
-        Expr::Unary { operand, .. } | Expr::Try { operand, .. } => out.push(operand),
-        Expr::Binary { lhs, rhs, .. } => {
-            out.push(lhs);
-            out.push(rhs);
-        }
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            out.push(condition);
-            block_children(then_branch, out);
-            out.extend(else_branch.as_deref());
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            out.push(scrutinee);
-            out.extend(arms.iter().map(|arm| &arm.body));
-        }
-        Expr::For {
-            iterable,
-            accumulator,
-            keep,
-            body,
-            ..
-        } => {
-            out.push(iterable);
-            out.extend(accumulator.iter().map(|acc| acc.init.as_ref()));
-            out.extend(keep.as_deref());
-            block_children(body, out);
-        }
-        Expr::Block(block) => block_children(block, out),
-        Expr::Closure { body, .. } => out.push(body),
-        Expr::Old { expr, .. } => out.push(expr),
-        Expr::With { handlers, body, .. } => {
-            out.extend(handlers);
-            block_children(body, out);
-        }
-        Expr::Int { .. }
-        | Expr::Str { .. }
-        | Expr::Bool { .. }
-        | Expr::Unit(_)
-        | Expr::Ident(_)
-        | Expr::Unchanged { .. }
-        | Expr::Error(_) => {}
-    }
-}
-
-/// Every expression one step inside a block.
-fn block_children<'a>(block: &'a Block, out: &mut Vec<&'a Expr>) {
-    for stmt in &block.stmts {
-        match stmt {
-            Stmt::Let { init, .. } => out.push(init),
-            Stmt::Assign { value, .. } => out.push(value),
-            Stmt::Return { value, .. } => out.extend(value),
-            Stmt::Assert { condition, .. } => out.push(condition),
-            Stmt::Refuses { subject, .. } => out.push(subject),
-            Stmt::Expr(expr) => out.push(expr),
-            Stmt::Abandon { .. } => {}
-        }
-    }
-    out.extend(block.tail.as_deref());
 }
 
 /// The definition `result` refers to inside an obligation, if it is used.

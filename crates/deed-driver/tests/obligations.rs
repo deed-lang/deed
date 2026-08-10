@@ -13,6 +13,12 @@
 //! the checker never having looked. A reader could not tell "I could not prove
 //! this" from "nobody tried", which is the distinction the whole tier exists to
 //! draw.
+//!
+//! One reason for all of them was still one reason too few. Most of these
+//! clauses are about an effect, and no pass here will ever settle one of those:
+//! the function is checked once, and the `with` block deciding what the effect
+//! means is written by whoever calls it. "Nobody tried" reads as a job somebody
+//! could finish, so those now say the caller installs the handler instead.
 
 use std::fs;
 use std::path::PathBuf;
@@ -167,6 +173,7 @@ fn every_reason_reads_as_advice() {
         Reason::CrossedAModuleBoundary,
         Reason::NotAShapeTheCheckerReasonsAbout,
         Reason::NothingTriesToProveThis,
+        Reason::TheCallerInstallsTheHandler,
     ] {
         let text = reason.text();
         assert!(text.len() > 20, "{reason:?} says almost nothing: {text:?}");
@@ -184,17 +191,16 @@ fn every_reason_reads_as_advice() {
 /// The measurement that made this worth doing, kept so it stays true.
 ///
 /// An `ensures` clause is checked on every call and nothing settles one ahead
-/// of time, so it is the floor of what lands in `Guarded`. It used to be the
-/// majority as well, and stopped being one when `std/ratio` grew preconditions
-/// that its own arithmetic cannot discharge. What the paragraph this file
-/// opens with rests on is that no `ensures` clause is ever settled early, not
-/// that they outnumber everything else, so that is what this holds: every
-/// unattempted obligation is one, and there are some.
+/// of time, so it is the floor of what lands in `Guarded`. Both reasons that
+/// belong to one say so in different words, and no other kind of obligation is
+/// allowed to borrow either: a `where` clause or a refinement that came back
+/// with one of these would mean the reason had stopped being about contracts.
 #[test]
-fn an_ensures_clause_is_the_common_reason_the_corpus_is_guarded() {
+fn only_an_ensures_clause_gives_a_reason_about_a_contract() {
     let checks = everything();
 
-    let mut unproven = 0;
+    let mut unattempted = 0;
+    let mut the_callers = 0;
     let mut total = 0;
     for checked in &checks {
         for obligation in &checked.obligations {
@@ -202,20 +208,124 @@ fn an_ensures_clause_is_the_common_reason_the_corpus_is_guarded() {
                 continue;
             }
             total += 1;
-            if obligation.reason == Some(Reason::NothingTriesToProveThis) {
-                unproven += 1;
-                assert!(
-                    obligation.subject.contains(" ensures "),
-                    "`{}` says nothing tries to prove it, but it is not an `ensures` clause",
-                    obligation.subject
-                );
-            }
+            let contract = match obligation.reason {
+                Some(Reason::NothingTriesToProveThis) => {
+                    unattempted += 1;
+                    true
+                }
+                Some(Reason::TheCallerInstallsTheHandler) => {
+                    the_callers += 1;
+                    true
+                }
+                _ => false,
+            };
+            assert!(
+                !contract || obligation.subject.contains(" ensures "),
+                "`{}` gives a reason only an `ensures` clause should give",
+                obligation.subject
+            );
         }
     }
 
     assert!(
-        unproven > 0 && total > unproven,
-        "{unproven} of {total} guarded obligations are unattempted `ensures` clauses, \
+        unattempted > 0 && the_callers > 0 && total > unattempted + the_callers,
+        "{unattempted} unattempted and {the_callers} the caller's, of {total} guarded, \
          which is not the shape this file was written about"
+    );
+}
+
+/// The split, asked of a program small enough to read.
+///
+/// Both directions, because a rule that only ever says yes would satisfy the
+/// counts above just as well as one that reads the clause. The two functions
+/// differ in one thing: whether the postcondition mentions the effect.
+#[test]
+fn a_clause_about_an_effect_says_the_caller_answers_it_and_one_that_is_not_does_not() {
+    let source = "module scratch/handlers
+
+effect Counter {
+    fn value() -> Int
+}
+
+fn watched(by: Int) -> Int
+  uses
+    Counter.value,
+  ensures
+    ok  => Counter.value() >= by,
+{
+    Counter.value() + by
+}
+
+fn plain(by: Int) -> Int
+  uses
+    Counter.value,
+  ensures
+    ok  => result >= by,
+{
+    Counter.value() + by
+}
+";
+
+    let mut sources = SourceMap::new();
+    let checked = deed_driver::check_text(&mut sources, "scratch/handlers.deed", source);
+    assert!(!checked.has_errors(), "the fixture should check cleanly");
+
+    let reason_for = |name: &str| {
+        checked
+            .obligations
+            .iter()
+            .find(|obligation| obligation.subject == format!("{name} ensures ok"))
+            .unwrap_or_else(|| panic!("`{name}` should carry one obligation"))
+            .reason
+    };
+
+    assert_eq!(
+        reason_for("watched"),
+        Some(Reason::TheCallerInstallsTheHandler),
+        "a clause performing an operation is one only the caller's handler can answer"
+    );
+    assert_eq!(
+        reason_for("plain"),
+        Some(Reason::NothingTriesToProveThis),
+        "a clause about the returned value is one nothing here tried"
+    );
+}
+
+/// `unchanged(E)` reaches the same answer by naming the effect alone.
+///
+/// It is the shape that is hardest to read off the text, since it performs no
+/// operation and mentions no dot. Held separately so that removing the arm
+/// that recognises it fails with a name rather than with a count.
+#[test]
+fn an_unchanged_clause_is_the_callers_to_answer_as_well() {
+    let source = "module scratch/still
+
+effect Counter {
+    fn value() -> Int
+}
+
+fn peek() -> Int
+  uses
+    Counter.value,
+  ensures
+    ok  => unchanged(Counter),
+{
+    Counter.value()
+}
+";
+
+    let mut sources = SourceMap::new();
+    let checked = deed_driver::check_text(&mut sources, "scratch/still.deed", source);
+    assert!(!checked.has_errors(), "the fixture should check cleanly");
+
+    let obligation = checked
+        .obligations
+        .iter()
+        .find(|obligation| obligation.subject == "peek ensures ok")
+        .expect("`peek` should carry one obligation");
+    assert_eq!(
+        obligation.reason,
+        Some(Reason::TheCallerInstallsTheHandler),
+        "`unchanged` names an effect, and the handler behind it belongs to the caller"
     );
 }

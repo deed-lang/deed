@@ -827,10 +827,11 @@ by reason.
 | Guarded, nothing names this value | 0 |
 | Guarded, crossed a module boundary | 0 |
 | Guarded, not a shape the checker reasons about | 0 |
-| Guarded, nothing tries to prove this one ahead of time (an `ensures` clause) | 9 |
+| Guarded, nothing tries to prove this one ahead of time (an `ensures` clause) | 2 |
+| Guarded, this is about an effect and the caller installs the handler | 7 |
 | Guarded, no reason at all | 0 |
 
-The last two rows used to be one row saying nothing. Nine of the twenty-three `Guarded`
+The last three rows used to be one row saying nothing. Nine of the twenty-three `Guarded`
 obligations are `ensures` clauses, which `check_all` never routes through `facts::holds`:
 nothing tries to settle one ahead of time, so the floor is `Guarded` whatever the body looks
 like. Reporting that as an absent reason made it read as the same answer the other three
@@ -839,17 +840,26 @@ deciding whether they have a bug needs "nobody tried" and "I could not" to be di
 sentences. `crates/deed-driver/tests/obligations.rs` now refuses any `Guarded` obligation
 that carries no reason at all.
 
+Counting those nine split them again, and the split is the number worth having. Seven of them
+are about an effect: `unchanged(Ledger)`, or a postcondition reading `Counter.value()`. A
+function is checked once and the `with` block that decides what the effect means belongs to
+whoever calls it, so a different caller can install a different handler and no pass on this
+side could settle these however hard it tried. Telling a reader "nobody tried" invites them to
+wait for a release that cannot come. Only the remaining two — `transfer`'s `result.from ==
+from` and `result.amount == amount` — are obligations a checker could one day discharge, and
+those are what a future move here would be measured against.
+
 The thirteen in the first `Guarded` row are almost all one thing: `std/ratio` writes
 preconditions saying its numbers are not the smallest `Int`, and the calls that cannot
 discharge them are the ones whose arguments are arithmetic. That is the honest answer for
 them, since `left.top * right.bottom` really can be anything.
 
 **What this decides.** Zero of the corpus's `Guarded` obligations are "not a shape the
-checker reasons about", and zero crossed a module boundary. The two that are categorised at
-all are both "nothing narrowed this name": a name the body never bothered to narrow, not a
-predicate the interval machinery is structurally unable to read. That is documentation and
-message work, not evidence for a solver, so the question in the next section is answered
-against a count rather than an impression.
+checker reasons about", and zero crossed a module boundary. Every one the checker actually
+attempted came back "nothing narrowed this name" or "nothing established this length": a name
+the body never bothered to narrow, not a predicate the interval machinery is structurally
+unable to read. That is documentation and message work, not evidence for a solver, so the
+question in the next section is answered against a count rather than an impression.
 
 ### Whether this checker ever calls a solver
 
