@@ -16,7 +16,27 @@ release notes.
 
 ### Language
 
-- Nothing yet.
+- A call can be written through something other than a name. Both engines used
+  to refuse it, and both accepted the same value one line earlier:
+
+  ```deed
+  let held = Holder { step: twice }
+  let f = held.step
+  f(2)              // ran
+  held.step(2)      // "the interpreter cannot run this call"
+  chooser()(2)      // the same
+  ```
+
+  `deed check` said nothing about either, which is what made the refusal a bug
+  rather than a rule: the type checker accepts a function value wherever a
+  function type fits, and where the callee was written is not something a type
+  is about. The interpreter looked at what the callee *resolved* to and a value
+  resolves to nothing; the backend refused to lower anything but a name.
+
+  This also settles which of the callee and the arguments runs first, because
+  until now the callee could not be an expression with anything in it to run.
+  It is the callee, in the order the two are written, and both engines are held
+  to it by a program in `agreement.rs` whose answer says which order it took.
 
 ### Diagnostics
 
