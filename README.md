@@ -8,16 +8,15 @@
 A contract-first language where a function signature is a promise the compiler checks.
 Built for code that machines write and humans review.
 
-> **Status: it runs.** The compiler lexes, parses, resolves names, type checks and checks
-> effect rows, and a tree walking interpreter executes `test` blocks and `main` with
-> contracts enforced at runtime. Programs get their authority from a `System` capability
-> handed to `main`, and a `Dir` narrows to a subdirectory and cannot be walked back out of.
-> There is no code generation, and what a run costs without it has been measured rather
-> than guessed at: `design/01-principles.md` has the table and the reason a compiler is not
-> the next thing. Criticism of the design is still the most useful
-> contribution. See [issue #228](https://github.com/deed-lang/deed/issues/228) for where
-> this is going, and [ROADMAP.md](ROADMAP.md) for what stands between a language one
-> person writes and a language GitHub names, measured rather than asserted.
+> **Status: the toolchain works; adoption is the open question.** The compiler lexes,
+> parses, resolves names, checks types, contracts and effect rows, and runs programs through
+> either the reference interpreter or a WebAssembly backend. `deed build` writes a core
+> module, and `--component` writes a component when its exported values cross the canonical
+> ABI. Programs get authority from explicit capabilities, with the same host rules in both
+> engines. The largest unfinished technical work is value reclamation and wider component
+> adapters; the largest project risk is simpler and measured: no public repository outside
+> this organization contains known Deed source yet. [ROADMAP.md](ROADMAP.md) keeps that
+> distinction and the commands that measure it.
 
 ## Getting it
 

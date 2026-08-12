@@ -42,7 +42,7 @@ So there is exactly one path, and it runs through other people's repositories.
 
 ---
 
-## 2. Where we are, measured on 2026-08-08
+## 2. Where we are, measured on 2026-08-12
 
 | Thing | Measured | How |
 | --- | --- | --- |
@@ -52,8 +52,8 @@ So there is exactly one path, and it runs through other people's repositories.
 | Repositories containing Deed source | **1** | same |
 | Stars | **7** | `gh api repos/deed-lang/deed` |
 | Forks | **0** | same |
-| Release downloads, all 10 releases | **17** | `gh api …/releases` |
-| Repo age | **14 days** | created 2026-07-25 |
+| Release downloads, all 12 releases | **26** | `gh api …/releases` |
+| Repo age | **18 days** | created 2026-07-25 |
 
 The distance is not 2000 − 87. It is 2000 − 0, because the owner is filtered
 out. At a typical ~10 `.deed` files per project, the shape of the target is:
@@ -95,13 +95,13 @@ word and the same extension, which is worth knowing for two reasons:
 ```powershell
 # The only number that matters: files that are Deed, in repos we do not own.
 gh api -X GET search/code --raw-field q='extension:deed "ensures" -user:deed-lang' --jq '.total_count'
-# 2026-08-08: 0
+# 2026-08-12: 0
 
 # The control. If this one is also 0, the query broke — it is not that Deed
 # vanished. A metric that cannot tell "nothing there" from "nothing measured"
 # is worse than no metric.
 gh api -X GET search/code --raw-field q='extension:deed "ensures"' --jq '.total_count'
-# 2026-08-08: 8
+# 2026-08-12: 8
 
 # Distribution: how many distinct owners, not just how many files.
 gh api -X GET search/code --raw-field q='extension:deed "ensures" -user:deed-lang' --paginate `
@@ -165,7 +165,7 @@ result, so the scaffold cannot rot into something that does not compile.
 
 README used to say `cargo install --path crates/deed-cli` and nothing else.
 There was no `curl | sh`, no Homebrew formula, no winget package, and no
-`cargo install deed`. Seventeen downloads across ten releases is what that
+`cargo install deed`. Twenty-six downloads across twelve releases is what that
 cost.
 
 `install.sh` and `install.ps1` now fetch the release asset for the machine,
@@ -402,6 +402,8 @@ tests the premise rather than the execution.
 - Everything Linguist needs from **us** is done.
 - Everything Linguist needs from **the world** is at zero. Not near zero: the
   six files that carry the extension elsewhere are somebody else's format.
+- Stage 1 is still open on 2026-08-12: the Deed-specific outside-owner query is
+      **0** while its control is **8**.
 - The gap is not technical, and no amount of compiler work closes it.
 - Stage 0 is closed. Somebody who hears about Deed can install it in one line,
   or with `cargo install deed-lang`, and `deed new` gives them a project that
