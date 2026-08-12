@@ -136,10 +136,12 @@ one answer and one confirmation.
 - **One model family.** Everything above is `gpt-5.6`. Whether any of it holds
   elsewhere is unmeasured, and every number here should be read with that
   attached.
-- **No comparison language.** The six tasks have not been run in a language
-  with no contracts. `README.md` names that as the thing that would falsify the
-  pitch, and until it is run, "contracts helped" is not something this file
-  establishes.
+- **The comparison language won this first run.** The same behaviours were run
+  once in contracts-free Starlark with no tools, and all 6/6 passed. See
+  [STARLARK.md](STARLARK.md) for the generated answers and checks. One run is
+  not an effect size, and the translated prompts are simpler because they do
+  not teach effects, refinements or `Result`; it is enough to say this record
+  does not establish that contracts helped on these tasks.
 - **Six tasks is a floor.** They cover the language rather than a domain. An
   answer that checks is not an answer that is good.
 - **The control is from a different build.** See the warning above.
