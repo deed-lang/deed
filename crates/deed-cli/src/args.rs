@@ -42,8 +42,8 @@ Options:
                           than all of it.
   --check                 With `fmt` or `fix`, change nothing and report what
                           would have changed.
-  --compiled              With `test`, run test blocks through the compiled
-                          WebAssembly backend instead of the interpreter.
+    --compiled              With `test`, run test blocks and generated properties
+                                                    through the compiled WebAssembly backend.
   --component             With `build`, write a core module, the `.wit` world
                           its exports describe, and a component binary, instead
                           of a standalone program. The component is written
@@ -72,9 +72,9 @@ the directory and the module path, so it is lowercase letters, digits and `_`.
 It writes no manifest: a manifest here says where code outside your tree lives,
 and a new project has none.
 `deed test` refuses to run anything that does not check.
-`deed test --compiled` runs the same test blocks through the compiled backend.
-  Blocks the backend cannot compile are skipped, and the count of the ones that
-  ran has to match what the interpreter ran.
+`deed test --compiled` runs test blocks and the properties contracts generate
+through the compiled backend. Blocks the backend cannot compile are skipped and
+named, so the summary says both how much ran and what did not.
 `deed run` calls `main`, handing it the one `System` capability there is.
 Everything after `--` goes to the program, which reads it with `Io.args`.
 Standard input is read when, and only when, `main`'s row says `Io.line`. A

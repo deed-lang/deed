@@ -71,8 +71,8 @@ pub use interp::{
     run_main_profiled_reaching, run_main_reaching, run_main_watched, run_tests,
 };
 pub use property::{
-    GeneratedInputs, PropertyConfig, PropertyOutcome, generate_inputs, is_testable, run_properties,
-    shrink_inputs,
+    GeneratedInputs, PropertyAttempt, PropertyConfig, PropertyInterpreter, PropertyOutcome,
+    generate_inputs, is_testable, run_properties, run_properties_with, shrink_inputs,
 };
 pub use sandbox::Refused;
 pub use value::{Capability, Fields, Value, VariantValue};

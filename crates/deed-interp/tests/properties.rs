@@ -215,6 +215,24 @@ fn the_counterexample_is_shrunk_to_something_readable() {
     );
 }
 
+#[test]
+fn a_negative_counterexample_is_shrunk_to_the_nearest_boundary() {
+    let (sources, outcome) = only(
+        "module a\n\n\
+         fn not_too_low(n: Int) -> Int\n\
+         \x20 where n < 0,\n\
+         \x20 ensures ok => result > 0 - 50,\n\
+         { n }\n",
+    );
+
+    let failure = outcome.failure.as_ref().expect("should have been caught");
+    let text = render_human(&sources, failure);
+    assert!(
+        text.contains("generated input: n = -50"),
+        "expected the nearest failing input, got:\n{text}"
+    );
+}
+
 /// The one counterexample from `src`, rendered.
 fn counterexample(src: &str) -> String {
     let (sources, outcome) = only(src);
@@ -397,10 +415,7 @@ fn inputs_violating_a_precondition_are_discarded_not_reported() {
     );
     assert!(outcome.passed(), "{:?}", outcome.failure.map(|f| f.message));
     assert_eq!(outcome.cases, 100);
-    assert!(
-        outcome.rejected > 0,
-        "roughly half of the inputs should be discarded"
-    );
+    assert_eq!(outcome.rejected, 135);
 }
 
 #[test]

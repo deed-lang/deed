@@ -28,7 +28,8 @@ pub mod wasm;
 pub use compile::{Unsupported, compile, escaping_operations};
 pub use grant::{Granted, Grants};
 pub use run::{
-    Host, HostCall, LinkError, Linked, Outcome, Trap, Value, call, call_measured, call_within,
+    Host, HostCall, LinkError, Linked, Outcome, Trap, Value, call, call_measured, call_prepared,
+    call_within,
 };
 pub use validate::{Invalid, validate};
 pub use wasm::Module;

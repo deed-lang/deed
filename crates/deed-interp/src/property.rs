@@ -61,6 +61,32 @@ impl PropertyOutcome {
     }
 }
 
+/// What happened when one generated input was handed to a runtime.
+pub enum PropertyAttempt {
+    Passed(Value),
+    /// The input violated a precondition, which makes the generator a bad
+    /// caller rather than the function a bad function.
+    Rejected,
+    Failed(Diagnostic),
+}
+
+/// The reference implementation of contract checking for generated inputs.
+pub struct PropertyInterpreter<'a> {
+    interp: Interp<'a>,
+}
+
+impl<'a> PropertyInterpreter<'a> {
+    pub fn new(program: &Program<'a>, file: FileId) -> Self {
+        Self {
+            interp: Interp::make(program, file),
+        }
+    }
+
+    pub fn attempt(&mut self, function: &'a FnDecl, args: &[Value]) -> PropertyAttempt {
+        attempt(&mut self.interp, function, args)
+    }
+}
+
 /// Inputs generated for one function.
 pub struct GeneratedInputs {
     /// Inputs that satisfied the function's preconditions.
@@ -97,6 +123,30 @@ pub fn run_properties<'a>(
     resolutions: &'a Resolutions,
     config: PropertyConfig,
 ) -> Vec<PropertyOutcome> {
+    let mut interp = PropertyInterpreter::new(program, file);
+    run_properties_with(
+        program,
+        file,
+        module,
+        resolutions,
+        config,
+        |function, args| interp.attempt(function, args),
+    )
+}
+
+/// Runs generated properties, handing each input to the runtime supplied by
+/// the caller.
+pub fn run_properties_with<'a, F>(
+    program: &Program<'a>,
+    file: FileId,
+    module: &'a Module,
+    resolutions: &'a Resolutions,
+    config: PropertyConfig,
+    mut attempt: F,
+) -> Vec<PropertyOutcome>
+where
+    F: FnMut(&'a FnDecl, &[Value]) -> PropertyAttempt,
+{
     module
         .items
         .iter()
@@ -106,7 +156,17 @@ pub fn run_properties<'a>(
             }
             _ => None,
         })
-        .map(|function| run_property(program, file, module, resolutions, function, config))
+        .map(|function| {
+            run_property_with(
+                program,
+                file,
+                module,
+                resolutions,
+                function,
+                config,
+                &mut attempt,
+            )
+        })
         .collect()
 }
 
@@ -136,8 +196,8 @@ pub fn generate_inputs<'a>(
             continue;
         };
         match attempt(&mut interp, function, &args) {
-            Attempt::Passed => cases.push(args),
-            Attempt::Rejected | Attempt::Failed(_) => rejected += 1,
+            PropertyAttempt::Passed(_) => cases.push(args),
+            PropertyAttempt::Rejected | PropertyAttempt::Failed(_) => rejected += 1,
         }
     }
 
@@ -193,19 +253,24 @@ where
     args
 }
 
-fn run_property<'a>(
+fn run_property_with<'a, F>(
     program: &Program<'a>,
     file: FileId,
     module: &'a Module,
     resolutions: &'a Resolutions,
     function: &'a FnDecl,
     config: PropertyConfig,
-) -> PropertyOutcome {
+    attempt: &mut F,
+) -> PropertyOutcome
+where
+    F: FnMut(&'a FnDecl, &[Value]) -> PropertyAttempt,
+{
     let types = TypeIndex::new(module, resolutions);
     let mut rng = Rng::new(config.seed);
-    let mut interp = Interp::make(program, file);
+    let mut generator = Interp::make(program, file);
 
     let mut cases = 0usize;
+    let mut attempts = 0usize;
     let mut rejected = 0usize;
     // A generator that keeps producing inputs the preconditions throw away is
     // not testing anything, so give up rather than run forever.
@@ -216,17 +281,17 @@ fn run_property<'a>(
             break;
         }
 
-        let Some(args) = generate_arguments(&types, &mut rng, function, &mut interp) else {
-            rejected += 1;
+        let Some(args) = generate_arguments(&types, &mut rng, function, &mut generator) else {
             continue;
         };
+        attempts += 1;
 
-        match attempt(&mut interp, function, &args) {
-            Attempt::Passed => cases += 1,
-            Attempt::Rejected => rejected += 1,
-            Attempt::Failed(diagnostic) => {
-                let simpler = Simpler::of(&types, &mut interp);
-                let (args, diagnostic) = shrink(&mut interp, function, args, diagnostic, &simpler);
+        match attempt(function, &args) {
+            PropertyAttempt::Passed(_) => cases += 1,
+            PropertyAttempt::Rejected => rejected = attempts - cases,
+            PropertyAttempt::Failed(diagnostic) => {
+                let simpler = Simpler::of(&types, &mut generator);
+                let (args, diagnostic) = shrink(function, args, diagnostic, &simpler, attempt);
                 return PropertyOutcome {
                     function: function.sig.name.name.clone(),
                     span: function.sig.name.span,
@@ -270,15 +335,7 @@ fn run_property<'a>(
     }
 }
 
-enum Attempt {
-    Passed,
-    /// The input violated a precondition, which makes the generator a bad
-    /// caller rather than the function a bad function.
-    Rejected,
-    Failed(Diagnostic),
-}
-
-fn attempt<'a>(interp: &mut Interp<'a>, function: &'a FnDecl, args: &[Value]) -> Attempt {
+fn attempt<'a>(interp: &mut Interp<'a>, function: &'a FnDecl, args: &[Value]) -> PropertyAttempt {
     let call_args = args
         .iter()
         .cloned()
@@ -286,9 +343,11 @@ fn attempt<'a>(interp: &mut Interp<'a>, function: &'a FnDecl, args: &[Value]) ->
         .collect();
 
     match interp.call_from_outside(function, call_args, function.sig.name.span) {
-        Ok(_) => Attempt::Passed,
-        Err(diagnostic) if diagnostic.code == codes::PRECONDITION_FAILED => Attempt::Rejected,
-        Err(diagnostic) => Attempt::Failed(*diagnostic),
+        Ok(value) => PropertyAttempt::Passed(value),
+        Err(diagnostic) if diagnostic.code == codes::PRECONDITION_FAILED => {
+            PropertyAttempt::Rejected
+        }
+        Err(diagnostic) => PropertyAttempt::Failed(*diagnostic),
     }
 }
 
@@ -305,24 +364,27 @@ fn attempt<'a>(interp: &mut Interp<'a>, function: &'a FnDecl, args: &[Value]) ->
 /// counterexample built out of something nothing shrinks is a counterexample
 /// nobody reads, and it looks exactly like a small one that happens to be
 /// awkward.
-fn shrink<'a>(
-    interp: &mut Interp<'a>,
+fn shrink<'a, F>(
     function: &'a FnDecl,
     mut args: Vec<Value>,
     mut failure: Diagnostic,
     simpler: &Simpler,
-) -> (Vec<Value>, Diagnostic) {
+    attempt: &mut F,
+) -> (Vec<Value>, Diagnostic)
+where
+    F: FnMut(&'a FnDecl, &[Value]) -> PropertyAttempt,
+{
     let mut budget = 300usize;
 
     for index in 0..args.len() {
         if matches!(args[index], Value::Int(_)) {
             shrink_int(
-                interp,
                 function,
                 &mut args,
                 index,
                 &mut failure,
                 &mut budget,
+                attempt,
             );
         }
     }
@@ -340,7 +402,7 @@ fn shrink<'a>(
 
                 let mut attempt_args = args.clone();
                 attempt_args[index] = candidate;
-                if let Attempt::Failed(diagnostic) = attempt(interp, function, &attempt_args) {
+                if let PropertyAttempt::Failed(diagnostic) = attempt(function, &attempt_args) {
                     args = attempt_args;
                     failure = diagnostic;
                     continue 'outer;
@@ -353,14 +415,16 @@ fn shrink<'a>(
     (args, failure)
 }
 
-fn shrink_int<'a>(
-    interp: &mut Interp<'a>,
+fn shrink_int<'a, F>(
     function: &'a FnDecl,
     args: &mut [Value],
     index: usize,
     failure: &mut Diagnostic,
     budget: &mut usize,
-) {
+    attempt: &mut F,
+) where
+    F: FnMut(&'a FnDecl, &[Value]) -> PropertyAttempt,
+{
     let Value::Int(start) = args[index] else {
         return;
     };
@@ -368,11 +432,17 @@ fn shrink_int<'a>(
         return;
     }
 
-    let sign = if start > 0 { 1i64 } else { -1 };
+    let signed = |magnitude: i64| {
+        if start.is_negative() {
+            0i64.saturating_sub(magnitude)
+        } else {
+            magnitude
+        }
+    };
     let magnitude = start.checked_abs().unwrap_or(i64::MAX);
 
     // If zero fails too, there is no smaller counterexample to look for.
-    if let Some(diagnostic) = try_value(interp, function, args, index, 0, budget) {
+    if let Some(diagnostic) = try_value(function, args, index, 0, budget, attempt) {
         args[index] = Value::Int(0);
         *failure = diagnostic;
         return;
@@ -381,9 +451,12 @@ fn shrink_int<'a>(
     let mut good = 0i64;
     let mut bad = magnitude;
 
-    while bad - good > 1 && *budget > 0 {
+    for _ in 0..*budget {
+        if bad - good == 1 {
+            break;
+        }
         let middle = good + (bad - good) / 2;
-        match try_value(interp, function, args, index, middle * sign, budget) {
+        match try_value(function, args, index, signed(middle), budget, attempt) {
             Some(diagnostic) => {
                 bad = middle;
                 *failure = diagnostic;
@@ -392,36 +465,38 @@ fn shrink_int<'a>(
         }
     }
 
-    args[index] = Value::Int(bad * sign);
-    if let Some(diagnostic) = attempt_with(interp, function, args) {
+    args[index] = Value::Int(signed(bad));
+    if let Some(diagnostic) = attempt_with(function, args, attempt) {
         *failure = diagnostic;
     }
 }
 
 /// Runs the function with one argument replaced, restoring it afterwards.
-fn try_value<'a>(
-    interp: &mut Interp<'a>,
+fn try_value<'a, F>(
     function: &'a FnDecl,
     args: &mut [Value],
     index: usize,
     candidate: i64,
     budget: &mut usize,
-) -> Option<Diagnostic> {
+    attempt: &mut F,
+) -> Option<Diagnostic>
+where
+    F: FnMut(&'a FnDecl, &[Value]) -> PropertyAttempt,
+{
     *budget = budget.saturating_sub(1);
     let original = args[index].clone();
     args[index] = Value::Int(candidate);
-    let outcome = attempt_with(interp, function, args);
+    let outcome = attempt_with(function, args, attempt);
     args[index] = original;
     outcome
 }
 
-fn attempt_with<'a>(
-    interp: &mut Interp<'a>,
-    function: &'a FnDecl,
-    args: &[Value],
-) -> Option<Diagnostic> {
-    match attempt(interp, function, args) {
-        Attempt::Failed(diagnostic) => Some(diagnostic),
+fn attempt_with<'a, F>(function: &'a FnDecl, args: &[Value], attempt: &mut F) -> Option<Diagnostic>
+where
+    F: FnMut(&'a FnDecl, &[Value]) -> PropertyAttempt,
+{
+    match attempt(function, args) {
+        PropertyAttempt::Failed(diagnostic) => Some(diagnostic),
         _ => None,
     }
 }

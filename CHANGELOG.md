@@ -40,12 +40,26 @@ release notes.
 
 ### Diagnostics
 
+- `deed test --compiled` runs the properties contracts generate, rather than
+  stopping after written test blocks. The corpus now reports 118 compiled
+  passes instead of 111: the same seven generated properties the interpreter
+  runs, alongside the blocks the backend can compile. The remaining difference
+  is written code the backend names in its six existing skip records.
+
+  Generated inputs use the same generator and precondition filtering as the
+  interpreter. Each accepted value is written into the compiled module's own
+  memory using the MIR layout, the export is called, and its answer is decoded
+  from that memory and compared structurally with the reference answer. The
+  interpreter remains the one implementation of contract evaluation, so this
+  does not create a second `ensures` evaluator that could drift from the first.
+  A wrong contract still fails the property, and a backend answer that differs
+  from the interpreter fails it independently.
+
 - `deed test --compiled` says what it did not compile. It ran a hundred and
-  eleven of the corpus's blocks where the interpreter ran a hundred and
-  thirty-eight, and reported `111 passed, 0 failed`, which is what a complete
-  run looks like. A file the backend refused outright said `no tests found in
-  the compiled backend` and exited zero, which is what a file with no tests in
-  it says.
+  eleven results where the interpreter reported a hundred and thirty-eight,
+  and printed `111 passed, 0 failed`, which is what a complete run looks like.
+  A file the backend refused outright said `no tests found in the compiled
+  backend` and exited zero, which is what a file with no tests in it says.
 
   Skipping is right — the backend compiles a subset of the language on purpose
   — and staying quiet about it was not. Every block that is dropped is now
