@@ -26,6 +26,7 @@ mod library;
 pub mod manifest;
 pub mod program_gen;
 mod report;
+pub mod review;
 mod rows;
 mod shipped;
 pub mod wit;

@@ -6,10 +6,11 @@
 //! the one that drifts.
 //!
 //! Here the risk is specific. `deed-wasm` answers a browser and `deed-mcp`
-//! answers an agent, and both were written to be "text in, JSON out". The
-//! moment one of them grows a field the other does not, an agent and a person
-//! are reading different compilers.
+//! answers an agent for one-file tools. Review has a different pair to hold:
+//! both the CLI and MCP must publish exactly what `deed-driver` decided.
 
+use deed_diagnostics::SourceMap;
+use deed_driver::review::{ReviewPolicy, ReviewReceipt};
 use deed_lsp::{Json, json};
 use deed_mcp::tools;
 
@@ -26,6 +27,30 @@ fn answer(name: &str, argument: &str, value: &str) -> String {
         .and_then(Json::as_str)
         .expect("a tool result carries text")
         .to_string()
+}
+
+fn review_answer(before: &[&str], after: &[&str], policy: Json) -> String {
+    let sources =
+        |items: &[&str]| Json::Array(items.iter().map(|source| Json::string(*source)).collect());
+    let arguments = Json::object(vec![
+        ("before", sources(before)),
+        ("after", sources(after)),
+        ("policy", policy),
+    ]);
+    let result = tools::call("deed_review", Some(&arguments)).expect("review arguments are valid");
+    result
+        .at(&["content"])
+        .and_then(Json::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("text"))
+        .and_then(Json::as_str)
+        .expect("review returns text")
+        .to_string()
+}
+
+fn checked(source: &str, name: &str) -> deed_driver::Checked {
+    let mut sources = SourceMap::new();
+    deed_driver::check_text(&mut sources, name, source)
 }
 
 /// Programs chosen so each verb has something to say about them: one that
@@ -87,6 +112,40 @@ fn formatting_gives_an_agent_what_it_gives_a_page() {
             "fmt drifted on:\n{source}"
         );
     }
+}
+
+#[test]
+fn reviewing_gives_an_agent_what_the_driver_receipts() {
+    let before = "module review/sample\n\n\
+                  type Positive = Int where value > 0\n\n\
+                  effect Store { fn write(value: Int) -> () }\n\n\
+                  fn save(value: Positive) -> Positive { value + 1 }\n";
+    let after = "module review/sample\n\n\
+                 type Positive = Int where value > 0\n\n\
+                 effect Store { fn write(value: Int) -> () }\n\n\
+                 fn save(value: Int) -> Positive\n\
+                   uses Store.write,\n\
+                 {\n\
+                   Store.write(value)\n\
+                   value + 1\n\
+                 }\n";
+    let receipt = ReviewReceipt::between(
+        &[checked(before, "before.deed")],
+        &[checked(after, "after.deed")],
+    );
+    let policy = ReviewPolicy {
+        deny_new_authority: true,
+        deny_weaker_promises: true,
+        deny_new_guarded: true,
+    };
+    let expected = receipt.to_json_with_policy(&receipt.evaluate(policy)) + "\n";
+    let policy = Json::object(vec![
+        ("denyNewAuthority", Json::Bool(true)),
+        ("denyWeakerPromises", Json::Bool(true)),
+        ("denyNewGuarded", Json::Bool(true)),
+    ]);
+
+    assert_eq!(review_answer(&[before], &[after], policy), expected);
 }
 
 /// The corpus is not empty and the verbs are not all answering nothing.

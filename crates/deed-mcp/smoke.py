@@ -55,12 +55,13 @@ fn caller(n: Int) -> Int {
 """
 
 WANTED = {
-    "deed_check": "source",
-    "deed_test": "source",
-    "deed_run": "source",
-    "deed_fmt": "source",
-    "deed_fix": "source",
-    "deed_explain": "code",
+    "deed_check": ["source"],
+    "deed_test": ["source"],
+    "deed_run": ["source"],
+    "deed_fmt": ["source"],
+    "deed_fix": ["source"],
+    "deed_explain": ["code"],
+    "deed_review": ["before", "after"],
 }
 
 
@@ -97,10 +98,15 @@ async def main(binary: str) -> int:
             listed = await session.list_tools()
             offered = {t.name: t for t in listed.tools}
             assert set(offered) == set(WANTED), f"tools are {sorted(offered)}"
-            for name, argument in WANTED.items():
+            for name, required in WANTED.items():
                 schema = field(offered[name], "input_schema", "inputSchema") or {}
-                assert schema.get("required") == [argument], f"{name} requires {schema.get('required')}"
+                assert schema.get("required") == required, f"{name} requires {schema.get('required')}"
                 assert offered[name].description, f"{name} arrives undescribed"
+
+            review_schema = field(offered["deed_review"], "input_schema", "inputSchema") or {}
+            assert review_schema["properties"]["before"]["type"] == "array", review_schema
+            assert review_schema["properties"]["after"]["items"]["type"] == "string", review_schema
+            assert review_schema["properties"]["policy"]["type"] == "object", review_schema
 
             checked = lines(await session.call_tool("deed_check", {"source": CLEAN}))
             assert not [x for x in checked if x["kind"] == "diagnostic"], checked
@@ -135,6 +141,17 @@ async def main(binary: str) -> int:
             page = lines(await session.call_tool("deed_explain", {"code": "DEED4025"}))
             assert page[0]["code"] == "DEED4025", page
             assert page[0]["text"], "the page for a code is empty"
+
+            before = "module smoke/review\n\neffect Audit { fn note(value: Int) -> () }\n\nfn work() -> () { () }\n"
+            after = "module smoke/review\n\neffect Audit { fn note(value: Int) -> () }\n\nfn work() -> () uses Audit.note, { Audit.note(1) }\n"
+            reviewed = lines(await session.call_tool("deed_review", {
+                "before": [before],
+                "after": [after],
+                "policy": {"denyNewAuthority": True},
+            }))
+            assert len(reviewed) == 1 and reviewed[0]["kind"] == "review_receipt", reviewed
+            assert reviewed[0]["authority_added"][0]["authority"] == "Audit.note", reviewed
+            assert reviewed[0]["policy"]["passed"] is False, reviewed
 
             broken = lines(await session.call_tool("deed_check", {"source": "module x\n\nfn f() -> Int {\n"}))
             assert [x for x in broken if x["kind"] == "diagnostic"], "a broken module checked cleanly"

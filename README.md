@@ -153,7 +153,35 @@ an editor does rather than scraping them out of terminal output. It holds no
 capability: a program arrives as text, the answer leaves as text, and a program
 whose row reaches a file is refused before it runs.
 [how-to/let-an-agent-use-the-compiler.md](how-to/let-an-agent-use-the-compiler.md)
-has the six tools and the one line worth reading.
+has the tool reference and the one line worth reading.
+
+## Every agent patch comes with a receipt
+
+`deed review` compares the checked module set before a change with the one
+after it. The first receipt names newly declared authority and obligations
+that fell to a weaker contract tier:
+
+```
+$ deed review --before old/src --after src
+receipt: review required
+authority added (1)
+  + billing/transfer/settle: Audit.note
+obligation tier regressions (1)
+  ! billing/transfer/settle: Positive proven -> guarded
+guarded obligations added (0)
+```
+
+The paths may name files or directories, and imports are resolved independently
+on each side. `--format json` emits the same receipt as one stable object for an
+agent or CI job. Findings are informational unless a policy turns them into a
+gate: `--deny-new-authority`, `--deny-weaker-promises` and
+`--deny-new-guarded` each exit one when its own evidence is present, while still
+printing the receipt and a policy verdict. A side that does not check is refused
+rather than compared.
+
+The same evidence is available to an agent as `deed_review`. It takes the
+before and after module sets as arrays of source text, resolves imports within
+each array, and applies the same three policies without opening a file.
 
 ## Demo
 

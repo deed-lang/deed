@@ -23,8 +23,9 @@ machine cannot reach the compiler, the pitch is untested.
 
 ## Decision
 
-`deed mcp` speaks the Model Context Protocol on stdin and stdout, offering six tools:
-`deed_check`, `deed_test`, `deed_run`, `deed_fmt`, `deed_fix` and `deed_explain`.
+`deed mcp` speaks the Model Context Protocol on stdin and stdout, offering these tools:
+`deed_check`, `deed_test`, `deed_run`, `deed_fmt`, `deed_fix`, `deed_explain` and
+`deed_review`.
 
 Three properties are load-bearing, and each is held by a test rather than by this document.
 
@@ -47,9 +48,11 @@ travels inside the binary.
 
 ### 2. The answers come from the surface the playground already uses
 
-`deed-wasm` answers the same five questions for a browser: text in, JSON out, one file, no
-filesystem. `deed-mcp` calls those functions rather than writing a second copy, and
-`crates/deed-mcp/tests/agreement.rs` compares the two byte for byte over a corpus.
+`deed-wasm` answers the same five one-file questions for a browser: text in, JSON out, one
+file, no filesystem. `deed-mcp` calls those functions rather than writing a second copy.
+Review has no browser equivalent; it delegates evidence and policy to
+`deed_driver::review`, the same implementation the CLI uses. `crates/deed-mcp/tests/agreement.rs`
+compares each pair byte for byte.
 
 The failure this avoids is this repository's most common one: two consumers of one idea
 drifting apart, with the drift landing on whichever one nobody is looking at. Nobody watches
@@ -65,9 +68,9 @@ read.
 
 ## Drawbacks (required)
 
-The single-file limit is the real one. An agent refactoring across modules cannot ask about
-the module set today, and the honest answer is that it has to send whole files and will get
-`DEED3007` for an import this server cannot resolve.
+The one-file tools retain their single-file limit. Review accepts explicit arrays of module
+texts and resolves imports among them, but cannot discover a missing file from a path or
+manifest. That is the capability-free trade: the caller must already hold every source.
 
 A second cost: the tool descriptions are prose, and prose an agent reads is prose that can
 go stale the way any other prose here can. `every_tool_says_what_it_takes` holds the shape
@@ -101,8 +104,8 @@ the transport and the tool table and nothing else.
 
 ## Open Questions (required)
 
-- Whether a module-set tool (several files in one call) is worth adding, or whether that is
-  really asking for the root this decision refused.
+- Resolved 2026-08-12: `deed_review` accepts several source texts in one call. It does not
+  take a root, discover files or weaken the capability decision.
 - Whether agents read the `reason` on a guarded obligation at all. The handshake's
   `instructions` field points at it explicitly, which is a guess about what an agent needs
   told. Nothing measures whether it helps.

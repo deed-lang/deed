@@ -1,10 +1,10 @@
-//! The five questions an agent can ask, and the one thing it can ask about a
-//! diagnostic code.
+//! The questions an agent can ask the compiler, including what changed
+//! between two module sets.
 //!
-//! Each tool takes a whole program's text, because that is the unit this
+//! Most tools take one whole program's text, because that is the unit this
 //! language has: `design/refusals.md` says why there is no REPL, and the same
-//! reasoning applies here. There is no expression to evaluate at a prompt, so
-//! there is nothing smaller than a module to send.
+//! reasoning applies here. Review takes two arrays of those units so imports
+//! can resolve within each in-memory module set.
 //!
 //! Every answer is the JSON the rest of the compiler already publishes, handed
 //! back as text. A tool result in MCP is content, not a typed value, so the
@@ -12,8 +12,10 @@
 //! `deed check --format json` writes means an agent that has seen one has seen
 //! the other.
 
-use deed_diagnostics::json_string;
+use deed_diagnostics::{SourceMap, json_string};
 use deed_driver::fix::fix;
+use deed_driver::review::{ReviewPolicy, ReviewReceipt};
+use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
 use deed_lsp::Json;
 
 use crate::{Failure, INVALID_PARAMS};
@@ -22,9 +24,58 @@ use crate::{Failure, INVALID_PARAMS};
 struct Tool {
     name: &'static str,
     description: &'static str,
-    /// The single argument this tool reads, and what to say about it.
-    argument: (&'static str, &'static str),
+    arguments: &'static [Argument],
 }
+
+#[derive(Clone, Copy)]
+struct Argument {
+    name: &'static str,
+    description: &'static str,
+    kind: ArgumentKind,
+    required: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ArgumentKind {
+    String,
+    Sources,
+    Policy,
+}
+
+const SOURCE: &[Argument] = &[Argument {
+    name: "source",
+    description: "The whole text of one Deed module.",
+    kind: ArgumentKind::String,
+    required: true,
+}];
+
+const CODE: &[Argument] = &[Argument {
+    name: "code",
+    description: "A diagnostic code, like `DEED4025`.",
+    kind: ArgumentKind::String,
+    required: true,
+}];
+
+const REVIEW: &[Argument] = &[
+    Argument {
+        name: "before",
+        description: "Every Deed module before the patch, as source text.",
+        kind: ArgumentKind::Sources,
+        required: true,
+    },
+    Argument {
+        name: "after",
+        description: "Every Deed module after the patch, as source text.",
+        kind: ArgumentKind::Sources,
+        required: true,
+    },
+    Argument {
+        name: "policy",
+        description: "Optional gates for new authority, weaker promises and new Guarded obligations.",
+        kind: ArgumentKind::Policy,
+        required: false,
+    },
+];
 
 /// The tools this server offers, in the order an agent would use them.
 const TOOLS: &[Tool] = &[
@@ -36,7 +87,7 @@ const TOOLS: &[Tool] = &[
                       `proven` when it was settled at compile time, `tested` when a test pins it, \
                       and `guarded` when it falls to a runtime check, in which case `reason` says \
                       what stopped it from being proven. Silence means the program is well formed.",
-        argument: ("source", "The whole text of one Deed module."),
+        arguments: SOURCE,
     },
     Tool {
         name: "deed_test",
@@ -49,7 +100,7 @@ const TOOLS: &[Tool] = &[
                       to its `ensures`, and the seed is on the line so the same run can be asked \
                       for again. Refuses without running when the program does not check: ask \
                       `deed_check` for what is wrong with it.",
-        argument: ("source", "The whole text of one Deed module."),
+        arguments: SOURCE,
     },
     Tool {
         name: "deed_run",
@@ -57,14 +108,14 @@ const TOOLS: &[Tool] = &[
                       running if the program does not check, or if `main`'s row asks for a \
                       capability this server does not hand out: there is no filesystem here, so \
                       a program that reads or writes files is refused rather than failed.",
-        argument: ("source", "The whole text of one Deed module."),
+        arguments: SOURCE,
     },
     Tool {
         name: "deed_fmt",
         description: "Format a Deed program into the one layout the formatter chooses. Returns \
                       the formatted text, or the parse diagnostics when the file does not parse, \
                       because a file with no tree has no layout to pick.",
-        argument: ("source", "The whole text of one Deed module."),
+        arguments: SOURCE,
     },
     Tool {
         name: "deed_fix",
@@ -72,13 +123,18 @@ const TOOLS: &[Tool] = &[
                       repaired program. Only the repairs `deed fix` would apply without asking; \
                       a suggestion the compiler is not sure about is left for the reader and \
                       shows up in `deed_check` instead.",
-        argument: ("source", "The whole text of one Deed module."),
+        arguments: SOURCE,
     },
     Tool {
         name: "deed_explain",
         description: "Explain one diagnostic code, such as DEED4025. Returns the page that code \
                       carries: what it means, why the rule exists, and usually an example.",
-        argument: ("code", "A diagnostic code, like `DEED4025`."),
+        arguments: CODE,
+    },
+    Tool {
+        name: "deed_review",
+        description: "Compare the checked module set before a patch with the set after it. Returns one JSON review receipt naming authority additions, obligation tier regressions and newly introduced Guarded obligations. An optional policy object accepts `denyNewAuthority`, `denyWeakerPromises` and `denyNewGuarded`; its verdict is evidence, not a transport error. Both sides stay in memory: this tool opens no file and holds no capability.",
+        arguments: REVIEW,
     },
 ];
 
@@ -90,7 +146,17 @@ pub fn listing() -> Json {
             TOOLS
                 .iter()
                 .map(|tool| {
-                    let (argument, about) = tool.argument;
+                    let properties = tool
+                        .arguments
+                        .iter()
+                        .map(|argument| (argument.name, argument_schema(argument)))
+                        .collect();
+                    let required = tool
+                        .arguments
+                        .iter()
+                        .filter(|argument| argument.required)
+                        .map(|argument| Json::string(argument.name))
+                        .collect();
                     Json::object(vec![
                         ("name", Json::string(tool.name)),
                         ("description", Json::string(tool.description)),
@@ -98,17 +164,8 @@ pub fn listing() -> Json {
                             "inputSchema",
                             Json::object(vec![
                                 ("type", Json::string("object")),
-                                (
-                                    "properties",
-                                    Json::object(vec![(
-                                        argument,
-                                        Json::object(vec![
-                                            ("type", Json::string("string")),
-                                            ("description", Json::string(about)),
-                                        ]),
-                                    )]),
-                                ),
-                                ("required", Json::Array(vec![Json::string(argument)])),
+                                ("properties", Json::object(properties)),
+                                ("required", Json::Array(required)),
                             ]),
                         ),
                     ])
@@ -116,6 +173,43 @@ pub fn listing() -> Json {
                 .collect(),
         ),
     )])
+}
+
+fn argument_schema(argument: &Argument) -> Json {
+    let mut fields = vec![("description", Json::string(argument.description))];
+    match argument.kind {
+        ArgumentKind::String => fields.push(("type", Json::string("string"))),
+        ArgumentKind::Sources => {
+            fields.push(("type", Json::string("array")));
+            fields.push((
+                "items",
+                Json::object(vec![("type", Json::string("string"))]),
+            ));
+            fields.push(("minItems", Json::number(1)));
+        }
+        ArgumentKind::Policy => {
+            fields.push(("type", Json::string("object")));
+            fields.push((
+                "properties",
+                Json::object(vec![
+                    (
+                        "denyNewAuthority",
+                        Json::object(vec![("type", Json::string("boolean"))]),
+                    ),
+                    (
+                        "denyWeakerPromises",
+                        Json::object(vec![("type", Json::string("boolean"))]),
+                    ),
+                    (
+                        "denyNewGuarded",
+                        Json::object(vec![("type", Json::string("boolean"))]),
+                    ),
+                ]),
+            ));
+            fields.push(("additionalProperties", Json::Bool(false)));
+        }
+    }
+    Json::object(fields)
 }
 
 /// Runs one tool, or says why it could not.
@@ -132,7 +226,11 @@ pub fn call(name: &str, arguments: Option<&Json>) -> Result<Json, Failure> {
         });
     };
 
-    let (wanted, _) = tool.argument;
+    if name == "deed_review" {
+        return review(arguments);
+    }
+
+    let wanted = tool.arguments[0].name;
     let Some(value) = arguments
         .and_then(|arguments| arguments.get(wanted))
         .and_then(Json::as_str)
@@ -144,6 +242,148 @@ pub fn call(name: &str, arguments: Option<&Json>) -> Result<Json, Failure> {
     };
 
     Ok(text_result(&answer(name, value)))
+}
+
+fn review(arguments: Option<&Json>) -> Result<Json, Failure> {
+    let Some(arguments) = arguments else {
+        return Err(invalid(
+            "`deed_review` needs `before` and `after` arguments",
+        ));
+    };
+    let before_sources = source_set(arguments, "before")?;
+    let after_sources = source_set(arguments, "after")?;
+    let (policy, policy_was_given) = policy_of(arguments)?;
+
+    let before = review_side("before", &before_sources);
+    let after = review_side("after", &after_sources);
+    let before_refusal = refusal("before", &before);
+    let after_refusal = refusal("after", &after);
+    if before_refusal.is_some() || after_refusal.is_some() {
+        let mut text = before_refusal.unwrap_or_default();
+        text.push_str(&after_refusal.unwrap_or_default());
+        return Ok(text_result(&text));
+    }
+
+    let receipt = ReviewReceipt::between(&before.checks, &after.checks);
+    let verdict = receipt.evaluate(policy);
+    let mut text = if policy_was_given {
+        receipt.to_json_with_policy(&verdict)
+    } else {
+        receipt.to_json()
+    };
+    text.push('\n');
+    Ok(text_result(&text))
+}
+
+fn source_set<'a>(arguments: &'a Json, name: &str) -> Result<Vec<&'a str>, Failure> {
+    let Some(value) = arguments.get(name) else {
+        return Err(invalid(&format!(
+            "`deed_review` needs a `{name}` argument, as a non-empty array of strings"
+        )));
+    };
+    let Some(items) = value.as_array() else {
+        return Err(invalid(&format!(
+            "`deed_review` needs `{name}` as a non-empty array of strings"
+        )));
+    };
+    if items.is_empty() {
+        return Err(invalid(&format!(
+            "`deed_review` needs at least one `{name}` module"
+        )));
+    }
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.as_str().ok_or_else(|| {
+                invalid(&format!(
+                    "`deed_review` `{name}` module {} is not a string",
+                    index + 1
+                ))
+            })
+        })
+        .collect()
+}
+
+fn policy_of(arguments: &Json) -> Result<(ReviewPolicy, bool), Failure> {
+    let Some(raw) = arguments.get("policy") else {
+        return Ok((ReviewPolicy::default(), false));
+    };
+    let Json::Object(fields) = raw else {
+        return Err(invalid("`deed_review` needs `policy` as an object"));
+    };
+
+    let mut policy = ReviewPolicy::default();
+    for (name, value) in fields {
+        let Json::Bool(enabled) = value else {
+            return Err(invalid(&format!(
+                "`deed_review` policy `{name}` must be a boolean"
+            )));
+        };
+        match name.as_str() {
+            "denyNewAuthority" => policy.deny_new_authority = *enabled,
+            "denyWeakerPromises" => policy.deny_weaker_promises = *enabled,
+            "denyNewGuarded" => policy.deny_new_guarded = *enabled,
+            _ => {
+                return Err(invalid(&format!(
+                    "`deed_review` policy has no `{name}` rule"
+                )));
+            }
+        }
+    }
+    Ok((policy, true))
+}
+
+struct ReviewSide {
+    sources: SourceMap,
+    checks: Vec<Checked>,
+    subjects: usize,
+}
+
+fn review_side(label: &str, texts: &[&str]) -> ReviewSide {
+    let mut sources = SourceMap::new();
+    let mut ids = texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| sources.add(format!("<{label}/{}.deed>", index + 1), *text))
+        .collect::<Vec<_>>();
+    let subjects = ids.len();
+    for module in shipped_for(texts.iter().copied()) {
+        let text = shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text));
+    }
+    let checks = check_all(&sources, &ids);
+    ReviewSide {
+        sources,
+        checks,
+        subjects,
+    }
+}
+
+fn refusal(label: &str, side: &ReviewSide) -> Option<String> {
+    let errors = side.checks.iter().map(Checked::error_count).sum::<usize>();
+    let unnamed = side.checks[..side.subjects]
+        .iter()
+        .filter(|checked| checked.module.name.is_none())
+        .count();
+    if errors == 0 && unnamed == 0 {
+        return None;
+    }
+
+    let mut text = json_report(&side.sources, &side.checks, false);
+    text.push_str(&format!(
+        "{{\"kind\":\"review_refused\",\"side\":{},\"errors\":{errors},\"unnamed\":{unnamed},\"message\":{}}}\n",
+        json_string(label),
+        json_string("every reviewed source must check and declare a module")
+    ));
+    Some(text)
+}
+
+fn invalid(message: &str) -> Failure {
+    Failure {
+        code: INVALID_PARAMS,
+        message: message.to_string(),
+    }
 }
 
 /// What each tool actually asks the compiler.

@@ -120,6 +120,326 @@ impl Drop for Scratch {
     }
 }
 
+const REVIEW_BEFORE: &str = "module review/sample\n\n\
+     type Positive = Int where value > 0\n\n\
+     effect Store {\n\
+       fn read() -> Int\n\
+       fn write(value: Int) -> ()\n\
+     }\n\n\
+     fn sync() -> Int uses Store.read, { Store.read() }\n\n\
+     fn preserve(value: Positive) -> Positive { value + 1 }\n";
+
+const REVIEW_AFTER: &str = "module review/sample\n\n\
+     type Positive = Int where value > 0\n\n\
+     effect Store {\n\
+       fn read() -> Int\n\
+       fn write(value: Int) -> ()\n\
+     }\n\n\
+     fn sync() -> Int\n\
+       uses Store.read, Store.write,\n\
+     {\n\
+       let value = Store.read()\n\
+       Store.write(value)\n\
+       value\n\
+     }\n\n\
+     fn preserve(value: Int) -> Positive { value + 1 }\n";
+
+fn review_fixture(scratch: &Scratch) -> (PathBuf, PathBuf) {
+    scratch.write("before/review/sample.deed", REVIEW_BEFORE);
+    scratch.write("after/review/sample.deed", REVIEW_AFTER);
+    (scratch.path().join("before"), scratch.path().join("after"))
+}
+
+#[test]
+fn review_receipts_authority_and_a_weaker_obligation() {
+    let scratch = Scratch::new("review-human");
+    let (before, after) = review_fixture(&scratch);
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+    ]);
+
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("receipt: review required"), "{text}");
+    assert!(text.contains("+ review/sample/sync: Store.write"), "{text}");
+    assert!(
+        text.contains("! review/sample/preserve: Positive proven -> guarded"),
+        "{text}"
+    );
+}
+
+#[test]
+fn review_json_is_one_stable_receipt_object() {
+    let scratch = Scratch::new("review-json");
+    let (before, after) = review_fixture(&scratch);
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+        "--format=json",
+    ]);
+
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert_eq!(
+        stdout(&output).trim(),
+        "{\"kind\":\"review_receipt\",\"clean\":false,\"authority_added\":[{\"module\":\"review/sample\",\"declaration\":\"sync\",\"authority\":\"Store.write\"}],\"tier_regressions\":[{\"module\":\"review/sample\",\"declaration\":\"preserve\",\"subject\":\"Positive\",\"occurrence\":0,\"before\":\"proven\",\"after\":\"guarded\"}],\"guarded_added\":[]}"
+    );
+}
+
+#[test]
+fn an_unchanged_review_is_clean() {
+    let scratch = Scratch::new("review-clean");
+    let (before, _) = review_fixture(&scratch);
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        before.to_str().unwrap(),
+    ]);
+
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "receipt: clean\nauthority added (0)\nobligation tier regressions (0)\nguarded obligations added (0)\n"
+    );
+}
+
+#[test]
+fn review_policy_can_deny_authority_and_weaker_promises_independently() {
+    let scratch = Scratch::new("review-policy");
+    let (before, after) = review_fixture(&scratch);
+
+    for rule in ["--deny-new-authority", "--deny-weaker-promises"] {
+        let output = run(&[
+            "review",
+            "--before",
+            before.to_str().unwrap(),
+            "--after",
+            after.to_str().unwrap(),
+            rule,
+        ]);
+        assert_eq!(code(&output), 1, "{rule}: {}", stdout(&output));
+        let text = stdout(&output);
+        assert!(text.contains("policy: failed"), "{rule}: {text}");
+        assert!(
+            text.contains(&format!("{}: 1 finding", rule.trim_start_matches("--"))),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn review_policy_denies_a_new_guarded_obligation() {
+    let scratch = Scratch::new("review-new-guarded");
+    let before = scratch.write(
+        "before.deed",
+        "module review/sample\n\ntype Positive = Int where value > 0\n",
+    );
+    let after = scratch.write(
+        "after.deed",
+        "module review/sample\n\n\
+         type Positive = Int where value > 0\n\n\
+         fn accept(value: Int) -> Positive { value }\n",
+    );
+
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+        "--deny-new-guarded",
+    ]);
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("? review/sample/accept: Positive"), "{text}");
+    assert!(text.contains("deny-new-guarded: 1 finding"), "{text}");
+}
+
+#[test]
+fn review_policy_passes_an_unchanged_patch() {
+    let scratch = Scratch::new("review-policy-clean");
+    let (before, _) = review_fixture(&scratch);
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        before.to_str().unwrap(),
+        "--deny-new-authority",
+        "--deny-weaker-promises",
+        "--deny-new-guarded",
+    ]);
+
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        stdout(&output).ends_with("policy: passed\n"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn review_json_carries_a_failed_policy_verdict() {
+    let scratch = Scratch::new("review-policy-json");
+    let (before, after) = review_fixture(&scratch);
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+        "--deny-weaker-promises",
+        "--format=json",
+    ]);
+
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        stdout(&output).trim().ends_with(
+            "\"policy\":{\"passed\":false,\"violations\":[{\"rule\":\"deny-weaker-promises\",\"findings\":1}]}}"
+        ),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn review_resolves_imported_effect_authority_on_each_side() {
+    let scratch = Scratch::new("review-import");
+    let effect = "module services/audit\n\neffect Audit { fn note(value: Int) -> () }\n";
+    scratch.write("before/services/audit.deed", effect);
+    scratch.write("after/services/audit.deed", effect);
+    let before = scratch.write(
+        "before/app/main.deed",
+        "module app/main\n\nuse services/audit.{Audit}\n\nfn work() -> () { () }\n",
+    );
+    let after = scratch.write(
+        "after/app/main.deed",
+        "module app/main\n\nuse services/audit.{Audit}\n\n\
+         fn work() -> () uses Audit.note, { Audit.note(1) }\n",
+    );
+
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        stdout(&output).contains("services/audit/Audit.note"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn review_refuses_to_compare_a_side_that_does_not_check() {
+    let scratch = Scratch::new("review-broken");
+    let before = scratch.write(
+        "before.deed",
+        "module review/sample\n\nfn okay() -> Int { 1 }\n",
+    );
+    let after = scratch.write(
+        "after.deed",
+        "module review/sample\n\nfn broken() -> Missing { 1 }\n",
+    );
+
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("after: error"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn review_reports_both_sides_when_both_do_not_check() {
+    let scratch = Scratch::new("review-both-broken");
+    let before = scratch.write(
+        "before.deed",
+        "module review/sample\n\nfn broken() -> BeforeMissing { 1 }\n",
+    );
+    let after = scratch.write(
+        "after.deed",
+        "module review/sample\n\nfn broken() -> AfterMissing { 1 }\n",
+    );
+
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+    let errors = stderr(&output);
+    assert!(errors.contains("before: error"), "{errors}");
+    assert!(errors.contains("after: error"), "{errors}");
+}
+
+#[test]
+fn review_refuses_an_anonymous_module() {
+    let scratch = Scratch::new("review-anonymous");
+    let before = scratch.write("before.deed", "fn work() -> Int { 1 }\n");
+    let after = scratch.write(
+        "after.deed",
+        "module review/sample\n\nfn work() -> Int { 1 }\n",
+    );
+
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        stderr(&output).contains("needs a module declaration"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn review_refuses_manifest_errors() {
+    let scratch = Scratch::new("review-manifest");
+    let before = scratch.write("before/app.deed", "module app\n\nfn work() -> Int { 1 }\n");
+    scratch.write("before/deed.manifest", "not a manifest directive\n");
+    let after = scratch.write("after/app.deed", "module app\n\nfn work() -> Int { 1 }\n");
+
+    let output = run(&[
+        "review",
+        "--before",
+        before.to_str().unwrap(),
+        "--after",
+        after.to_str().unwrap(),
+    ]);
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+    let errors = stderr(&output);
+    assert!(errors.contains("before: error"), "{errors}");
+    assert!(errors.contains("DEED7001"), "{errors}");
+}
+
 // -- the environment --------------------------------------------------------
 
 /// A `main` that reports one variable, granted or not.
@@ -636,6 +956,9 @@ fn help_and_version_succeed() {
     assert!(stdout(&help).contains("Usage:"));
     assert!(stdout(&help).contains("--obligations"));
     assert!(stdout(&help).contains("--profile-runtime"));
+    assert!(stdout(&help).contains("--deny-new-authority"));
+    assert!(stdout(&help).contains("--deny-weaker-promises"));
+    assert!(stdout(&help).contains("--deny-new-guarded"));
 
     let version = run(&["--version"]);
     assert_eq!(code(&version), 0);

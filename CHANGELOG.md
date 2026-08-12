@@ -202,6 +202,32 @@ release notes.
 
 ### Tools
 
+- `deed review --before <path> --after <path>` gives a patch an evidence
+  receipt. It checks both module sets through the same import and shipped-module
+  path as `deed check`, then reports effect-row entries added to each stable
+  `module/declaration` identity and obligations whose tier regressed, such as
+  `proven -> guarded`. A newly added effectful function or handler counts as new authority,
+  imported effects retain the module that declared them in their identity, and
+  a newly introduced Guarded obligation is a third, separate kind of evidence.
+
+  Human output is for review; `--format json` writes one `review_receipt` object
+  for an agent or CI job. Findings remain informational by default. Three
+  independent policies turn them into an exit-one gate:
+  `--deny-new-authority`, `--deny-weaker-promises` and `--deny-new-guarded`.
+  The receipt is still written, with a policy verdict in human or JSON form.
+  Compiler or manifest errors on either side also exit one but produce no
+  receipt, because comparing evidence the compiler could not establish would
+  make the report look stronger than it is.
+
+  `deed mcp` exposes the same evidence as a seventh tool, `deed_review`. Its
+  `before` and `after` arguments are arrays of module source texts, so imports
+  resolve within each side without giving the server a filesystem. Its optional
+  policy object maps the three CLI gates to `denyNewAuthority`,
+  `denyWeakerPromises` and `denyNewGuarded`. A failed policy is a successful
+  tool call carrying `policy.passed: false`; malformed arguments remain
+  protocol errors, and a side that does not check returns `review_refused`
+  instead of a partial receipt.
+
 - A list of numbers crosses a component boundary. `deed build --component`
   refused any export carrying a list; `List<Int>` now goes both ways, and a
   component runtime reads it as `list<s64>`:

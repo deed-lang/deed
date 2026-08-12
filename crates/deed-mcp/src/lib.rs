@@ -24,16 +24,19 @@
 //! writes about a Deed function.
 //!
 //! That is a real cost and it is written down rather than hidden: an agent
-//! working on a module set has to send every file it wants checked together,
-//! because there is no root here to resolve a second file's `use` against. The
-//! shipped library is the exception, and only because it travels inside the
-//! binary already.
+//! working on a module set has to send every file it wants reviewed as source
+//! text. `deed_review` accepts those texts as two arrays and resolves imports
+//! among each array. There is still no root and no path lookup. The shipped
+//! library is the exception, and only because it travels inside the binary
+//! already.
 //!
 //! ## Why the answers come from `deed-wasm`
 //!
-//! The playground asks the compiler the same five questions an agent does:
-//! text in, JSON out, one file, no filesystem. Those answers live in
-//! [`deed_wasm`], and this crate calls them rather than writing a second copy.
+//! The one-file tools are the same questions the playground asks: text in,
+//! JSON out, one file, no filesystem. Those answers live in [`deed_wasm`], and
+//! this crate calls them rather than writing a second copy. Review has no page
+//! equivalent: it checks two in-memory module sets and delegates the evidence
+//! and policy decision to [`deed_driver::review`], the same source as the CLI.
 //! Two copies would be two answers, and the one an agent got would be the one
 //! nobody was looking at. `crates/deed-mcp/tests/agreement.rs` holds that.
 //!
@@ -172,6 +175,10 @@ impl Server {
                      program that works: it runs the `test` blocks and the \
                      properties the contracts generate, and a property is one \
                      nobody wrote. `deed_run` last, for what `main` prints. \
+                     Before finishing a patch, use `deed_review` with every \
+                     module before and after it; read the receipt and its \
+                     policy verdict rather than treating a successful tool \
+                     call as approval. \
                      `deed_explain` turns any DEED#### code into its page, and \
                      `deed_fmt` into the one layout this language has.",
                 ),

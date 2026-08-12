@@ -1,6 +1,6 @@
 [package]
 name = "deed-mcp"
-description = "The boundary an agent calls across: one program's text in, the compiler's answer out"
+description = "The capability-free agent boundary: module source in, compiler evidence out"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
