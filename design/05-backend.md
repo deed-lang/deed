@@ -2,12 +2,14 @@
 
 ## Why this exists
 
-There is no code generation today: `deed run`, `deed check` and `deed test` all go through
-a tree-walking interpreter, and `design/01-principles.md`'s P10 section measured what that
-costs. That measurement is still open. Call cost has an argument list and a binding that
-cost something, a frame pool was tried and ruled out, and a slot per name was measured and
-found not to matter. Nothing in this document depends on that question closing, and it does
-not reopen it.
+There is code generation today. `deed check` stays in the checking pipeline; `deed run` and
+`deed test` use the tree-walking reference interpreter by default and use the WebAssembly
+backend with `--compiled`; `deed build` writes a core module and can also write a component.
+`design/01-principles.md`'s P10 table measured the interpreter before that backend existed.
+It remains the baseline that explains why compilation was built for embedding and structural
+authority rather than from an unmeasured speed claim. Call cost has an argument list and a
+binding that cost something, a frame pool was tried and ruled out, and a slot per name was
+measured and found not to matter.
 
 The reason to compile Deed is not that the interpreter is slow. It is that an interpreter is
 a single artifact: it needs its own toolchain, its own process, and it cannot be embedded

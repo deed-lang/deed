@@ -270,11 +270,12 @@ just wastes the time of anyone who takes this seriously.
 
 ### What a run costs
 
-The other one, and the one people ask about first. There is no code generation: a tree
-walking interpreter runs `test` blocks and `main`. Nothing had measured what that costs,
-which meant the question everybody starts with, whether a compiler should be a bytecode
-machine or native code, had nothing under it. The question in front of it is what a run
-spends its time on now.
+The other one, and the one people ask about first. When this measurement was written, only
+the tree-walking interpreter ran `test` blocks and `main`; the WebAssembly backend came
+later. Nothing had measured what the interpreter cost, which meant the question everybody
+started with, whether a compiler should be a bytecode machine or native code, had nothing
+under it. This table is the baseline that made the backend a decision about embedding and
+authority rather than a guessed performance project.
 
 `cargo run -p deed-driver --example interpreting --release` asks. On one machine:
 
