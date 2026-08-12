@@ -105,6 +105,12 @@ with no contracts, then the contracts are decoration and the pitch is wrong.
 That is a real possible outcome and the reason to run this before believing the
 pitch, rather than after.
 
+The first comparison is now recorded in [STARLARK.md](STARLARK.md). One
+contracts-free Starlark run passed 6/6 where the five Deed MCP runs passed 5/6.
+That does not prove contracts hurt, but it means these six tasks do not support
+the stronger claim that contracts helped. The next benchmark has to make a
+contract's value observable rather than translating routine functions.
+
 ## What it has said so far
 
 [RESULTS.md](RESULTS.md) is the record: one model, one build, six tasks, five

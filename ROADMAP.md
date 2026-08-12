@@ -314,9 +314,11 @@ from zero. Everything after it is multiplication; this one is addition.
 - [ ] Ship a second model family in the benchmark. Today only `OPENAI_API_KEY`
       is configured, so "does this hold across model families" is unmeasured,
       and the result is quotable only with that caveat attached.
-- [ ] The comparison arm: the same six tasks in a language with no contracts.
-      `benchmarks/README.md` already names this as the thing that would
-      falsify the pitch. Running it is worth more than any announcement.
+- [x] The comparison arm: the same six behaviours in contracts-free Starlark.
+      One no-tool run passed 6/6 where the five Deed MCP runs passed 5/6. This
+      does not establish an effect size, but it does falsify the claim that the
+      current six tasks show contracts helping. The exact answers and the next
+      benchmark requirement are in `benchmarks/STARLARK.md`.
 
 ### Stage 2 — Make the second repository not need us
 
