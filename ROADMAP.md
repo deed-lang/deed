@@ -179,7 +179,7 @@ still absent, and both of them want a stable install base first.
   **2026-07-06** — three weeks before this repository existed. A placeholder.
   `cargo install deed` still installs somebody else's crate.
 - **`deed-lang` is ours**, along with the nineteen crates the compiler is made
-  of, all at 0.2.9 (2026-08-09). `cargo install deed-lang` installs a `deed`.
+      of, all at 0.2.10 (2026-08-12). `cargo install deed-lang` installs a `deed`.
 
 Getting there took four days' worth of defects out of one afternoon, all found
 with `cargo package --list` and `cargo publish --workspace --dry-run` rather
@@ -210,13 +210,10 @@ crates take about two and a half hours. `cargo publish --workspace` cannot
 resume: a crate already on the index is a warning under `--dry-run` and an
 error on the real run. Publish them one at a time, in dependency order.
 
-⚠️ **The two install paths are not on the same version.** The releases are at
-`v0.2.10`; crates.io is still at `0.2.9`, because tagging does not publish and
-nothing has run the queue since. So `install.sh` gives a compiler that joins
-text without walking off the end of its memory and writes a component for a
-module carrying strings, and `cargo install deed-lang` gives one that does
-neither. Whichever way this is closed — by publishing or by saying so on the
-install page — it should not be closed by leaving both sentences up.
+**The two install paths are on the same version.** The release and all twenty
+crates.io packages are at 0.2.10 as of 2026-08-12. This was verified through the
+registry API and by installing `deed-lang` into an empty root, then running
+`deed --version`, `deed new` and the generated project's three tests.
 
 ```powershell
 # Are they the same today?
@@ -274,7 +271,8 @@ project without reading the compiler's source.
 
 - [x] Claim **`deed-lang`** on crates.io. Do this first; it is the only item
       here that can be lost by waiting. *Done 2026-08-09: `deed-lang` and the
-      nineteen crates the compiler is made of, all at 0.2.9.*
+      nineteen crates the compiler is made of; all were published at 0.2.10 on
+      2026-08-12.*
 - [x] `deed new <name>` — scaffolds a module, a test, and whatever manifest
       `how-to/depend-on-another-module.md` specifies. Held by a driver test that
       runs `deed new` into a temp directory and then runs `deed test` on the
@@ -407,9 +405,8 @@ tests the premise rather than the execution.
 - The gap is not technical, and no amount of compiler work closes it.
 - Stage 0 is closed. Somebody who hears about Deed can install it in one line,
   or with `cargo install deed-lang`, and `deed new` gives them a project that
-  checks. Nothing on that path now requires reading this repository. The one
-  thing left on it is that the two ways do not currently install the same
-  version (§4c).
+      checks. Nothing on that path now requires reading this repository, and both
+      install paths deliver 0.2.10 (§4c).
 - The next action is the one nobody else can do for us: **give somebody outside
   this repository a reason to write a `.deed` file**, and the two remaining
   Stage 1 items with no clock on them are the measurements that would make the
