@@ -33,20 +33,44 @@ what each of the calls below comes back with.
 | `deed_fmt` | `source` | The one layout the formatter chooses, or the parse diagnostics. |
 | `deed_fix` | `source` | The program with every machine-applicable repair applied, and how many went in. |
 | `deed_explain` | `code` | The page for one diagnostic code, like `DEED4025`. |
+| `deed_review` | `before`, `after`, optional `policy` | One receipt for a patch: authority additions, weaker obligation tiers, new Guarded obligations, and any policy violations. |
 
 The order matters, and the server says so in its handshake because an agent that is not
 told picks one. `deed_check`, then `deed_fix` for the repairs the compiler is sure about,
 then `deed_test`, then `deed_run`. Skipping the third step is the easy mistake: the first
 model to be pointed at this server made sixty-five checks across six tasks and never ran a
-test, on tasks that were scored on whether their tests pass.
+test, on tasks that were scored on whether their tests pass. Before finishing a patch,
+`deed_review` compares every module before and after it.
 
 Checking is not passing. That is not a caveat, it is the distinction the whole language is
 arranged around: the check settles what the contract can settle, and `deed_test` runs what
 is left, which is the `test` blocks and the properties generated from the contracts.
 
-Every tool takes a whole module, because that is the unit this language has.
+The one-file tools take a whole module, because that is the unit this language has.
 [`design/refusals.md`](../design/refusals.md) says why there is no REPL, and the same
-reasoning applies: there is no expression to evaluate on its own.
+reasoning applies: there is no expression to evaluate on its own. `deed_review` takes arrays
+of whole modules so each side of a patch can resolve imports entirely in memory.
+
+## Review the patch
+
+Send every module in each version, including modules needed to resolve a local `use`:
+
+```json
+{
+  "before": ["module app\n\nfn save() -> () { () }\n"],
+  "after": ["module app\n\neffect Audit { fn note() -> () }\n\nfn save() -> () uses Audit.note, { Audit.note() }\n"],
+  "policy": {
+    "denyNewAuthority": true,
+    "denyWeakerPromises": true,
+    "denyNewGuarded": true
+  }
+}
+```
+
+The answer is one `review_receipt` JSON object. Without `policy`, findings are evidence and
+nothing is denied. With it, read `policy.passed`: `false` is still a successful MCP tool
+call, because the receipt is the answer rather than a transport failure. A side with
+compiler errors returns its diagnostics and `review_refused`, never a partial receipt.
 
 ## The line worth reading
 
@@ -145,9 +169,9 @@ directory *before* running it rather than part way through.
 
 That is [`design/04-capabilities.md`](../design/04-capabilities.md)'s rule applied to the
 compiler's own tooling. It also has a cost worth knowing before you hit it: there is no root
-here, so a `use` that names another one of your files cannot be resolved and comes back as
-`DEED3007`. Send the module set as one program, or check those files with `deed check` on a
-real path.
+here, so the one-file tools cannot resolve a `use` that names another one of your files.
+`deed_review` can resolve modules explicitly included in its arrays, but it cannot discover
+or fetch one. Use `deed check` on a real path when discovery is the question.
 
 The reasoning in full, including what was rejected, is in
 [`design/decisions/2026-07-31-agent-surface.md`](../design/decisions/2026-07-31-agent-surface.md).

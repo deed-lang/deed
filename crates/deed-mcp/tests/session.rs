@@ -29,22 +29,36 @@ fn hello() -> &'static str {
     r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#
 }
 
-/// The tool call a client makes, with one string argument.
-fn call(id: i64, name: &str, argument: &str, value: &str) -> String {
-    let params = Json::object(vec![
-        ("name", Json::string(name)),
-        (
-            "arguments",
-            Json::object(vec![(argument, Json::string(value))]),
-        ),
-    ]);
+fn call_with_arguments(id: i64, name: &str, arguments: Json) -> String {
     Json::object(vec![
         ("jsonrpc", Json::string("2.0")),
         ("id", Json::number(id)),
         ("method", Json::string("tools/call")),
-        ("params", params),
+        (
+            "params",
+            Json::object(vec![("name", Json::string(name)), ("arguments", arguments)]),
+        ),
     ])
     .to_text()
+}
+
+/// The tool call a client makes, with one string argument.
+fn call(id: i64, name: &str, argument: &str, value: &str) -> String {
+    call_with_arguments(
+        id,
+        name,
+        Json::object(vec![(argument, Json::string(value))]),
+    )
+}
+
+fn review_call(id: i64, before: &[&str], after: &[&str], policy: Option<Json>) -> String {
+    let sources =
+        |items: &[&str]| Json::Array(items.iter().map(|source| Json::string(*source)).collect());
+    let mut arguments = vec![("before", sources(before)), ("after", sources(after))];
+    if let Some(policy) = policy {
+        arguments.push(("policy", policy));
+    }
+    call_with_arguments(id, "deed_review", Json::object(arguments))
 }
 
 /// The text a tool call came back with.
@@ -223,8 +237,7 @@ fn ping_is_answered_with_an_empty_result() {
     assert_eq!(answers[1].get("result"), Some(&Json::object(vec![])));
 }
 
-/// Every tool is listed with a description and a schema naming its one
-/// argument.
+/// Every tool is listed with a description and a schema naming its arguments.
 ///
 /// A tool with no schema is a tool an agent cannot call without guessing, and
 /// guessing is what this whole surface exists to remove.
@@ -256,15 +269,62 @@ fn every_tool_says_what_it_takes() {
             .at(&["inputSchema", "required"])
             .and_then(Json::as_array)
             .unwrap_or_else(|| panic!("`{name}` has no required arguments"));
-        assert_eq!(required.len(), 1, "`{name}` should take exactly one thing");
-
-        let argument = required[0].as_str().expect("an argument is named");
-        assert!(
-            tool.at(&["inputSchema", "properties", argument, "type"])
-                .and_then(Json::as_str)
-                == Some("string"),
-            "`{name}`'s `{argument}` is not described as a string"
-        );
+        if name == "deed_review" {
+            assert_eq!(
+                required.iter().filter_map(Json::as_str).collect::<Vec<_>>(),
+                ["before", "after"]
+            );
+            for argument in ["before", "after"] {
+                assert_eq!(
+                    tool.at(&["inputSchema", "properties", argument, "type"])
+                        .and_then(Json::as_str),
+                    Some("array")
+                );
+                assert_eq!(
+                    tool.at(&["inputSchema", "properties", argument, "items", "type"])
+                        .and_then(Json::as_str),
+                    Some("string")
+                );
+            }
+            assert_eq!(
+                tool.at(&["inputSchema", "properties", "policy", "type"])
+                    .and_then(Json::as_str),
+                Some("object")
+            );
+            for rule in ["denyNewAuthority", "denyWeakerPromises", "denyNewGuarded"] {
+                assert_eq!(
+                    tool.at(&[
+                        "inputSchema",
+                        "properties",
+                        "policy",
+                        "properties",
+                        rule,
+                        "type",
+                    ])
+                    .and_then(Json::as_str),
+                    Some("boolean"),
+                    "`deed_review` policy has no boolean `{rule}`"
+                );
+            }
+            assert_eq!(
+                tool.at(&[
+                    "inputSchema",
+                    "properties",
+                    "policy",
+                    "additionalProperties",
+                ]),
+                Some(&Json::Bool(false))
+            );
+        } else {
+            assert_eq!(required.len(), 1, "`{name}` should take exactly one thing");
+            let argument = required[0].as_str().expect("an argument is named");
+            assert_eq!(
+                tool.at(&["inputSchema", "properties", argument, "type"])
+                    .and_then(Json::as_str),
+                Some("string"),
+                "`{name}`'s `{argument}` is not described as a string"
+            );
+        }
     }
 }
 
@@ -290,10 +350,205 @@ fn the_tools_on_offer_are_exactly_these() {
             "deed_explain",
             "deed_fix",
             "deed_fmt",
+            "deed_review",
             "deed_run",
             "deed_test",
         ]
     );
+}
+
+#[test]
+fn the_agent_guide_names_exactly_the_tools_on_offer() {
+    let guide = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../how-to/let-an-agent-use-the-compiler.md"),
+    )
+    .expect("the agent guide should be there");
+    let mut documented = guide
+        .lines()
+        .filter_map(|line| line.strip_prefix("| `deed_"))
+        .filter_map(|line| line.split('`').next())
+        .map(|name| format!("deed_{name}"))
+        .collect::<Vec<_>>();
+    documented.sort();
+
+    let answers = session(&[hello(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#]);
+    let mut offered = answers[1]
+        .at(&["result", "tools"])
+        .and_then(Json::as_array)
+        .expect("tools/list returns tools")
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(Json::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    offered.sort();
+
+    assert_eq!(documented, offered);
+}
+
+#[test]
+fn reviewing_two_module_sets_returns_a_policy_receipt() {
+    let audit = "module services/audit\n\neffect Audit { fn note(value: Int) -> () }\n";
+    let before = "module app/main\n\nuse services/audit.{Audit}\n\nfn work() -> () { () }\n";
+    let after = "module app/main\n\nuse services/audit.{Audit}\n\n\
+                 fn work() -> () uses Audit.note, { Audit.note(1) }\n";
+    let policy = Json::object(vec![("denyNewAuthority", Json::Bool(true))]);
+    let request = review_call(2, &[before, audit], &[after, audit], Some(policy));
+    let answers = session(&[hello(), &request]);
+    let receipt = json::parse(content(&answers[1]).trim()).expect("the receipt is JSON");
+
+    assert_eq!(
+        receipt
+            .at(&["authority_added"])
+            .and_then(Json::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("authority"))
+            .and_then(Json::as_str),
+        Some("services/audit/Audit.note")
+    );
+    assert_eq!(receipt.at(&["policy", "passed"]), Some(&Json::Bool(false)));
+    assert!(answers[1].get("result").is_some());
+    assert!(answers[1].get("error").is_none());
+}
+
+#[test]
+fn every_review_policy_field_enforces_its_driver_rule() {
+    let proven = "module review/sample\n\n\
+                  type Positive = Int where value > 0\n\n\
+                  fn preserve(value: Positive) -> Positive { value + 1 }\n";
+    let guarded = "module review/sample\n\n\
+                   type Positive = Int where value > 0\n\n\
+                   fn preserve(value: Int) -> Positive { value + 1 }\n";
+    let no_function = "module review/sample\n\ntype Positive = Int where value > 0\n";
+    let new_guarded = "module review/sample\n\n\
+                       type Positive = Int where value > 0\n\n\
+                       fn accept(value: Int) -> Positive { value }\n";
+
+    for (field, before, after, rule) in [
+        (
+            "denyWeakerPromises",
+            proven,
+            guarded,
+            "deny-weaker-promises",
+        ),
+        (
+            "denyNewGuarded",
+            no_function,
+            new_guarded,
+            "deny-new-guarded",
+        ),
+    ] {
+        let policy = Json::object(vec![(field, Json::Bool(true))]);
+        let request = review_call(2, &[before], &[after], Some(policy));
+        let answers = session(&[hello(), &request]);
+        let receipt = json::parse(content(&answers[1]).trim()).expect("the receipt is JSON");
+        assert_eq!(
+            receipt
+                .at(&["policy", "violations"])
+                .and_then(Json::as_array)
+                .and_then(|items| items.first())
+                .and_then(|violation| violation.get("rule"))
+                .and_then(Json::as_str),
+            Some(rule),
+            "{field} mapped to the wrong policy"
+        );
+    }
+}
+
+#[test]
+fn review_resolves_the_shipped_modules_named_in_its_sources() {
+    let source = "module app/main\n\nuse std/list.{sum}\n\n\
+                  fn total(items: List<Int>) -> Int { sum(items) }\n";
+    let request = review_call(2, &[source], &[source], None);
+    let answers = session(&[hello(), &request]);
+    let receipt = json::parse(content(&answers[1]).trim()).expect("the receipt is JSON");
+
+    assert_eq!(
+        receipt.get("kind").and_then(Json::as_str),
+        Some("review_receipt")
+    );
+    assert_eq!(receipt.get("clean"), Some(&Json::Bool(true)));
+}
+
+#[test]
+fn review_refuses_broken_or_unnamed_sources_without_failing_the_tool_call() {
+    let before = "module app/main\n\nfn work() -> Int { 1 }\n";
+    let broken = "module app/main\n\nfn work() -> Missing { 1 }\n";
+    let unnamed = "fn work() -> Int { 1 }\n";
+
+    for after in [broken, unnamed] {
+        let request = review_call(2, &[before], &[after], None);
+        let answers = session(&[hello(), &request]);
+        let records = content(&answers[1])
+            .lines()
+            .map(|line| json::parse(line).expect("review refusal lines are JSON"))
+            .collect::<Vec<_>>();
+        let kinds = records
+            .iter()
+            .filter_map(|record| record.get("kind").and_then(Json::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&"review_refused"), "{kinds:?}");
+        assert!(!kinds.contains(&"review_receipt"), "{kinds:?}");
+        assert!(answers[1].get("result").is_some());
+        assert!(answers[1].get("error").is_none());
+    }
+}
+
+#[test]
+fn review_rejects_malformed_policy() {
+    let source = "module app/main\n\nfn work() -> Int { 1 }\n";
+    for policy in [
+        Json::string("strict"),
+        Json::object(vec![("unknownRule", Json::Bool(true))]),
+        Json::object(vec![("denyNewAuthority", Json::string("yes"))]),
+    ] {
+        let request = review_call(2, &[source], &[source], Some(policy));
+        let answers = session(&[hello(), &request]);
+        assert_eq!(
+            answers[1].at(&["error", "code"]).and_then(Json::as_i64),
+            Some(deed_mcp::INVALID_PARAMS)
+        );
+        assert!(
+            answers[1]
+                .at(&["error", "message"])
+                .and_then(Json::as_str)
+                .is_some_and(|message| message.contains("policy"))
+        );
+    }
+}
+
+#[test]
+fn review_rejects_missing_empty_or_non_string_module_sets() {
+    let source = Json::Array(vec![Json::string(
+        "module app/main\n\nfn work() -> Int { 1 }\n",
+    )]);
+    let invalid = [
+        Json::object(vec![("after", source.clone())]),
+        Json::object(vec![
+            ("before", Json::string("module app/main\n")),
+            ("after", source.clone()),
+        ]),
+        Json::object(vec![
+            ("before", Json::Array(vec![])),
+            ("after", source.clone()),
+        ]),
+        Json::object(vec![
+            ("before", Json::Array(vec![Json::number(1)])),
+            ("after", source),
+        ]),
+    ];
+
+    for arguments in invalid {
+        let request = call_with_arguments(2, "deed_review", arguments);
+        let answers = session(&[hello(), &request]);
+        assert_eq!(
+            answers[1].at(&["error", "code"]).and_then(Json::as_i64),
+            Some(deed_mcp::INVALID_PARAMS),
+            "{}",
+            answers[1].to_text()
+        );
+    }
 }
 
 #[test]

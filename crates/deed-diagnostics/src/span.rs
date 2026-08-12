@@ -47,6 +47,10 @@ impl Span {
         offset >= self.start && offset < self.end
     }
 
+    pub fn contains_span(self, other: Span) -> bool {
+        other.start >= self.start && other.end <= self.end
+    }
+
     pub fn as_range(self) -> std::ops::Range<usize> {
         self.start as usize..self.end as usize
     }
@@ -69,6 +73,20 @@ mod tests {
         let s = Span::at(4);
         assert!(s.is_empty());
         assert!(!s.contains(4));
+    }
+
+    #[test]
+    fn a_span_contains_itself_and_spans_strictly_inside_it() {
+        let outer = Span::new(2, 8);
+        assert!(outer.contains_span(outer));
+        assert!(outer.contains_span(Span::new(3, 7)));
+    }
+
+    #[test]
+    fn a_span_does_not_contain_one_reaching_past_either_edge() {
+        let outer = Span::new(2, 8);
+        assert!(!outer.contains_span(Span::new(1, 7)));
+        assert!(!outer.contains_span(Span::new(3, 9)));
     }
 
     #[test]

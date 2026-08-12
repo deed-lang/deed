@@ -12,6 +12,7 @@ deed, a contract-first language
 Usage:
   deed new   <name>
   deed check [options] <path>...
+    deed review --before <path>... --after <path>... [options]
   deed test  [options] <path>...
   deed run   [options] <path>... [-- <argument>...]
   deed build [options] <path>...
@@ -25,6 +26,11 @@ Usage:
 
 Options:
   --format <human|json>   How to print diagnostics. Default: human.
+    --before <path>         A file or directory before the change. Repeatable.
+    --after <path>          A file or directory after the change. Repeatable.
+    --deny-new-authority    With `review`, fail if authority was added.
+    --deny-weaker-promises With `review`, fail if an obligation's tier regressed.
+    --deny-new-guarded      With `review`, fail if a new Guarded obligation appeared.
   --obligations           Report which tier each refinement obligation landed in.
   --timings               Report how long each pass took.
   --profile-runtime       With `run`, report where runtime went.
@@ -75,6 +81,10 @@ and a new project has none.
 `deed test --compiled` runs test blocks and the properties contracts generate
 through the compiled backend. Blocks the backend cannot compile are skipped and
 named, so the summary says both how much ran and what did not.
+`deed review` compares two checked module sets. Its receipt names authority
+added to effect rows and refinement obligations that moved to a weaker tier.
+Findings are informational unless a `--deny-*` policy is enabled. Code that
+does not check is refused before the two sets are compared.
 `deed run` calls `main`, handing it the one `System` capability there is.
 Everything after `--` goes to the program, which reads it with `Io.args`.
 Standard input is read when, and only when, `main`'s row says `Io.line`. A
@@ -199,8 +209,20 @@ pub struct CheckArgs {
 }
 
 #[derive(Debug)]
+pub struct ReviewArgs {
+    pub before: Vec<PathBuf>,
+    pub after: Vec<PathBuf>,
+    pub format: Format,
+    pub deny_new_authority: bool,
+    pub deny_weaker_promises: bool,
+    pub deny_new_guarded: bool,
+}
+
+#[derive(Debug)]
 pub enum Command {
     Check(CheckArgs),
+    /// Compare the authority and contract evidence in two module sets.
+    Review(ReviewArgs),
     /// Write a new project into a directory of this name.
     New(String),
     /// Print the page for one diagnostic code.
@@ -284,6 +306,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
                 (Some(name), None) => Ok(Command::New(name)),
             };
         }
+        "review" => return parse_review(args),
         "check" => Mode::Check,
         "test" => Mode::Test,
         "run" => Mode::Run,
@@ -293,7 +316,7 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
         "doc" => Mode::Doc,
         other => {
             return Err(format!(
-                "unknown command `{other}`, the choices are `new`, `check`, `test`, `run`, `build`, `doc`, `fmt`, `fix`, `explain`, `lsp`, `debug` and `mcp`"
+                "unknown command `{other}`, the choices are `new`, `check`, `review`, `test`, `run`, `build`, `doc`, `fmt`, `fix`, `explain`, `lsp`, `debug` and `mcp`"
             ));
         }
     };
@@ -459,6 +482,70 @@ pub fn parse<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String>
     }))
 }
 
+fn parse_review<I: Iterator<Item = String>>(mut args: I) -> Result<Command, String> {
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    let mut format = Format::Human;
+    let mut deny_new_authority = false;
+    let mut deny_weaker_promises = false;
+    let mut deny_new_guarded = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => return Ok(Command::Help),
+            "--deny-new-authority" => deny_new_authority = true,
+            "--deny-weaker-promises" => deny_weaker_promises = true,
+            "--deny-new-guarded" => deny_new_guarded = true,
+            "--before" => before.push(PathBuf::from(
+                args.next()
+                    .ok_or_else(|| "`--before` needs a path".to_string())?,
+            )),
+            other if other.starts_with("--before=") => {
+                before.push(PathBuf::from(&other["--before=".len()..]));
+            }
+            "--after" => after.push(PathBuf::from(
+                args.next()
+                    .ok_or_else(|| "`--after` needs a path".to_string())?,
+            )),
+            other if other.starts_with("--after=") => {
+                after.push(PathBuf::from(&other["--after=".len()..]));
+            }
+            "--format" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "`--format` needs a value, `human` or `json`".to_string())?;
+                format = parse_format(&value)?;
+            }
+            other if other.starts_with("--format=") => {
+                format = parse_format(&other["--format=".len()..])?;
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown option `{other}`"));
+            }
+            path => {
+                return Err(format!(
+                    "review path `{path}` must follow `--before` or `--after`"
+                ));
+            }
+        }
+    }
+
+    if before.is_empty() || after.is_empty() {
+        return Err(
+            "`deed review` needs at least one `--before` and one `--after` path".to_string(),
+        );
+    }
+
+    Ok(Command::Review(ReviewArgs {
+        before,
+        after,
+        format,
+        deny_new_authority,
+        deny_weaker_promises,
+        deny_new_guarded,
+    }))
+}
+
 fn parse_format(value: &str) -> Result<Format, String> {
     match value {
         "human" => Ok(Format::Human),
@@ -493,6 +580,53 @@ mod tests {
             panic!("should parse");
         };
         assert_eq!(check.mode, Mode::Test);
+    }
+
+    #[test]
+    fn review_has_explicit_repeatable_sides_a_format_and_policies() {
+        let Ok(Command::Review(review)) = parse(args(&[
+            "review",
+            "--before",
+            "old/a.deed",
+            "--before=old/b.deed",
+            "--after=new",
+            "--format=json",
+            "--deny-new-authority",
+            "--deny-weaker-promises",
+            "--deny-new-guarded",
+        ])) else {
+            panic!("should parse");
+        };
+        assert_eq!(review.before.len(), 2);
+        assert_eq!(review.after, vec![std::path::PathBuf::from("new")]);
+        assert_eq!(review.format, Format::Json);
+        assert!(review.deny_new_authority);
+        assert!(review.deny_weaker_promises);
+        assert!(review.deny_new_guarded);
+    }
+
+    #[test]
+    fn review_needs_both_sides_and_labels_every_path() {
+        let missing = parse(args(&["review", "--before", "old"])).unwrap_err();
+        assert!(missing.contains("one `--after`"), "{missing}");
+
+        let unlabelled = parse(args(&["review", "old", "--after", "new"])).unwrap_err();
+        assert!(unlabelled.contains("must follow"), "{unlabelled}");
+    }
+
+    #[test]
+    fn review_distinguishes_an_unknown_option_from_an_unlabelled_path() {
+        let unknown = parse(args(&[
+            "review", "--before", "old", "--after", "new", "--strict",
+        ]))
+        .unwrap_err();
+        assert_eq!(unknown, "unknown option `--strict`");
+
+        let unlabelled = parse(args(&[
+            "review", "--before", "old", "--after", "new", "extra",
+        ]))
+        .unwrap_err();
+        assert!(unlabelled.contains("must follow"), "{unlabelled}");
     }
 
     #[test]

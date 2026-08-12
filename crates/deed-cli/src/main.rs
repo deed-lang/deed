@@ -12,11 +12,12 @@ use std::process::ExitCode;
 
 use deed_ast::Item;
 use deed_diagnostics::{Diagnostic, FileId, SourceMap, render_human};
+use deed_driver::review::{PolicyVerdict, ReviewPolicy, ReviewReceipt};
 use deed_driver::{Checked, ObligationReport};
 use deed_interp::{PropertyAttempt, PropertyConfig, PropertyInterpreter, RuntimeProfile};
 use deed_typeck::Tier;
 
-use crate::args::{CheckArgs, Command, Format, Mode, USAGE};
+use crate::args::{CheckArgs, Command, Format, Mode, ReviewArgs, USAGE};
 
 /// Something went wrong with the invocation rather than with the code.
 const EXIT_USAGE: u8 = 2;
@@ -65,10 +66,170 @@ fn run() -> ExitCode {
         Command::Explain(code) => run_explain(&code),
         Command::New(name) => run_new(&name),
         Command::Check(check) => run_check(check),
+        Command::Review(review) => run_review(review),
         Command::Lsp => run_lsp(),
         Command::Debug => run_debug(),
         Command::Mcp => run_mcp(),
     }
+}
+
+fn run_review(args: ReviewArgs) -> ExitCode {
+    let before = match load_review_side(&args.before) {
+        Ok(checked) => checked,
+        Err(error) => {
+            eprintln!("error: before: {error}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    let after = match load_review_side(&args.after) {
+        Ok(checked) => checked,
+        Err(error) => {
+            eprintln!("error: after: {error}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+
+    let before_invalid = report_review_diagnostics("before", &before);
+    let after_invalid = report_review_diagnostics("after", &after);
+    if before_invalid || after_invalid {
+        return ExitCode::FAILURE;
+    }
+
+    let receipt = ReviewReceipt::between(&before.checks, &after.checks);
+    let policy = ReviewPolicy {
+        deny_new_authority: args.deny_new_authority,
+        deny_weaker_promises: args.deny_weaker_promises,
+        deny_new_guarded: args.deny_new_guarded,
+    };
+    let verdict = receipt.evaluate(policy);
+    let enforced = !policy.is_empty();
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    let result = match args.format {
+        Format::Human => report_review_human(&mut out, &receipt, enforced.then_some(&verdict)),
+        Format::Json if enforced => writeln!(out, "{}", receipt.to_json_with_policy(&verdict)),
+        Format::Json => writeln!(out, "{}", receipt.to_json()),
+    };
+    match result {
+        Ok(()) if verdict.passed() => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::from(EXIT_USAGE)
+        }
+    }
+}
+
+fn load_review_side(paths: &[PathBuf]) -> Result<CheckedModuleSet, String> {
+    let files = collect_module_files(paths)?;
+    let mut resolved = resolve_module_set(files)?;
+    check_module_set(&mut resolved)
+}
+
+fn report_review_diagnostics(label: &str, checked: &CheckedModuleSet) -> bool {
+    let manifest_has_errors = checked
+        .manifest_diagnostics
+        .iter()
+        .flatten()
+        .any(Diagnostic::is_error);
+    let compiler_has_errors = checked
+        .checks
+        .iter()
+        .flat_map(|file| &file.diagnostics)
+        .any(Diagnostic::is_error);
+
+    for diagnostic in checked.manifest_diagnostics.iter().flatten() {
+        eprintln!("{label}: {}", render_human(&checked.sources, diagnostic));
+    }
+    for file in &checked.checks {
+        if file.module.name.is_none() {
+            eprintln!(
+                "error: {label}: `{}` needs a module declaration for a stable review identity",
+                checked.sources.file(file.file).name()
+            );
+        }
+        for diagnostic in &file.diagnostics {
+            eprintln!("{label}: {}", render_human(&checked.sources, diagnostic));
+        }
+    }
+    manifest_has_errors || compiler_has_errors
+}
+
+fn report_review_human(
+    out: &mut impl Write,
+    receipt: &ReviewReceipt,
+    verdict: Option<&PolicyVerdict>,
+) -> io::Result<()> {
+    writeln!(
+        out,
+        "receipt: {}",
+        if receipt.is_clean() {
+            "clean"
+        } else {
+            "review required"
+        }
+    )?;
+    writeln!(out, "authority added ({})", receipt.authority_added.len())?;
+    for change in &receipt.authority_added {
+        writeln!(
+            out,
+            "  + {}/{}: {}",
+            change.module, change.declaration, change.authority
+        )?;
+    }
+    writeln!(
+        out,
+        "obligation tier regressions ({})",
+        receipt.tier_regressions.len()
+    )?;
+    for change in &receipt.tier_regressions {
+        let occurrence = match change.occurrence {
+            0 => String::new(),
+            at => format!(" #{}", at + 1),
+        };
+        writeln!(
+            out,
+            "  ! {}/{}: {}{} {} -> {}",
+            change.module,
+            change.declaration,
+            change.subject,
+            occurrence,
+            change.before.name(),
+            change.after.name()
+        )?;
+    }
+    writeln!(
+        out,
+        "guarded obligations added ({})",
+        receipt.guarded_added.len()
+    )?;
+    for change in &receipt.guarded_added {
+        let occurrence = match change.occurrence {
+            0 => String::new(),
+            at => format!(" #{}", at + 1),
+        };
+        writeln!(
+            out,
+            "  ? {}/{}: {}{}",
+            change.module, change.declaration, change.subject, occurrence
+        )?;
+    }
+    if let Some(verdict) = verdict {
+        writeln!(
+            out,
+            "policy: {}",
+            if verdict.passed() { "passed" } else { "failed" }
+        )?;
+        for violation in &verdict.violations {
+            writeln!(
+                out,
+                "  {}: {}",
+                violation.rule.name(),
+                plural(violation.findings, "finding")
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Writes a new project into a directory named after it.
@@ -203,23 +364,105 @@ fn run_mcp() -> ExitCode {
     }
 }
 
-fn run_check(args: CheckArgs) -> ExitCode {
+fn collect_module_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
-    for path in &args.paths {
+    for path in paths {
         if let Err(error) = collect(path, &mut files) {
-            eprintln!("error: {}: {error}", path.display());
-            return ExitCode::from(EXIT_USAGE);
+            return Err(format!("{}: {error}", path.display()));
         }
     }
 
     if files.is_empty() {
-        eprintln!("error: no `.deed` files found");
-        return ExitCode::from(EXIT_USAGE);
+        return Err("no `.deed` files found".to_string());
     }
 
     // Deterministic order, so output can be diffed between runs.
     files.sort();
     files.dedup();
+    Ok(files)
+}
+
+struct ResolvedModuleSet {
+    files: Vec<PathBuf>,
+    subject: usize,
+    shipped: Vec<&'static str>,
+    manifests: Vec<(String, String, Vec<Diagnostic>)>,
+}
+
+fn resolve_module_set(mut files: Vec<PathBuf>) -> Result<ResolvedModuleSet, String> {
+    // What was named is the subject; what an import needed is context. So the
+    // library a program uses is compiled alongside it and checked, and its
+    // tests and its `main` are not the ones you asked about.
+    let subject = files.len();
+    let mut shipped = Vec::new();
+    let mut manifests = Vec::new();
+    resolve_imports(&mut files, &mut shipped, &mut manifests).map_err(|error| error.to_string())?;
+    Ok(ResolvedModuleSet {
+        files,
+        subject,
+        shipped,
+        manifests,
+    })
+}
+
+struct CheckedModuleSet {
+    sources: SourceMap,
+    checks: Vec<Checked>,
+    manifest_diagnostics: Vec<Vec<Diagnostic>>,
+}
+
+fn check_module_set(resolved: &mut ResolvedModuleSet) -> Result<CheckedModuleSet, String> {
+    let mut sources = SourceMap::new();
+    let mut ids = Vec::new();
+
+    for path in &resolved.files {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        ids.push(sources.add(display_path(path), text));
+    }
+
+    // Last, so that the subject is still the first `subject` of them. A module
+    // that came out of the compiler is context by definition: nobody named it.
+    for module in &resolved.shipped {
+        let Some(text) = deed_driver::shipped_source(module) else {
+            continue;
+        };
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
+    }
+
+    // Register manifest files in the source map so their text appears in
+    // diagnostics, then re-anchor each diagnostic to the registered file id.
+    let manifest_diagnostics = std::mem::take(&mut resolved.manifests)
+        .into_iter()
+        .map(|(name, text, diagnostics)| {
+            let file = sources.add(name, text);
+            diagnostics
+                .into_iter()
+                .map(|mut diagnostic| {
+                    diagnostic.file = file;
+                    diagnostic
+                })
+                .collect()
+        })
+        .collect();
+
+    // Every file at once, so a `use` has something to point at.
+    let checks = deed_driver::check_all(&sources, &ids);
+    Ok(CheckedModuleSet {
+        sources,
+        checks,
+        manifest_diagnostics,
+    })
+}
+
+fn run_check(args: CheckArgs) -> ExitCode {
+    let files = match collect_module_files(&args.paths) {
+        Ok(files) => files,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
 
     if args.mode == Mode::Fmt {
         return run_fmt(&files, args.check_only);
@@ -235,16 +478,13 @@ fn run_check(args: CheckArgs) -> ExitCode {
         return ExitCode::from(EXIT_USAGE);
     }
 
-    // What was named is the subject; what an import needed is context. So the
-    // library a program uses is compiled alongside it and checked, and its
-    // tests and its `main` are not the ones you asked about.
-    let subject = files.len();
-    let mut shipped: Vec<&'static str> = Vec::new();
-    let mut manifests: Vec<(String, String, Vec<Diagnostic>)> = Vec::new();
-    if let Err(error) = resolve_imports(&mut files, &mut shipped, &mut manifests) {
-        eprintln!("error: {error}");
-        return ExitCode::from(EXIT_USAGE);
-    }
+    let mut resolved = match resolve_module_set(files) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
 
     // If --locked was given, verify every input matches the recorded hash
     // before touching anything. A changed or missing file exits here rather
@@ -264,49 +504,23 @@ fn run_check(args: CheckArgs) -> ExitCode {
         }
     }
 
-    let mut sources = SourceMap::new();
-    let mut ids = Vec::new();
-
-    for path in &files {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(error) => {
-                eprintln!("error: {}: {error}", path.display());
-                return ExitCode::from(EXIT_USAGE);
-            }
-        };
-        ids.push(sources.add(display_path(path), text));
-    }
-
-    // Last, so that the subject is still the first `subject` of them. A module
-    // that came out of the compiler is context by definition: nobody named it.
-    for module in &shipped {
-        let Some(text) = deed_driver::shipped_source(module) else {
-            continue;
-        };
-        ids.push(sources.add(format!("<shipped>/{module}.deed"), text.to_string()));
-    }
-
-    // Register manifest files in the source map so their text appears in
-    // diagnostics, then re-anchor each diagnostic to the registered file id.
-    let manifest_diagnostics: Vec<Vec<Diagnostic>> = manifests
-        .into_iter()
-        .map(|(name, text, diagnostics)| {
-            let file = sources.add(name, text);
-            diagnostics
-                .into_iter()
-                .map(|mut d| {
-                    d.file = file;
-                    d
-                })
-                .collect()
-        })
-        .collect();
-
-    // Every file at once, so a `use` has something to point at. Checking them
-    // one at a time would mean an import could never resolve, which is how it
-    // used to work and why nothing crossing a module boundary was checked.
-    let checks = deed_driver::check_all(&sources, &ids);
+    let CheckedModuleSet {
+        sources,
+        checks,
+        manifest_diagnostics,
+    } = match check_module_set(&mut resolved) {
+        Ok(checked) => checked,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    let ResolvedModuleSet {
+        files,
+        subject,
+        shipped,
+        ..
+    } = resolved;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
