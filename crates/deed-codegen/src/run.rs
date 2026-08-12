@@ -450,6 +450,20 @@ pub fn call(module: &Module, name: &str, args: &[Value]) -> Result<Option<Value>
     Ok(call_measured(module, name, args)?.value)
 }
 
+/// Calls an export after letting the caller build its arguments in the
+/// module's own memory.
+pub fn call_prepared(
+    module: &Module,
+    name: &str,
+    prepare: impl FnOnce(&mut HostCall<'_>) -> Result<Vec<Value>, Trap>,
+) -> Result<(Option<Value>, Vec<u8>), Trap> {
+    let index = validated_export(module, name)?;
+    let mut memory = memory_of(module);
+    let args = prepare(&mut HostCall::new(&[], &mut memory))?;
+    let (outcome, memory) = run_export(module, index, &args, BUDGET, memory)?;
+    Ok((outcome.value, memory))
+}
+
 /// Calls an exported function and reports what it allocated and ran.
 pub fn call_measured(module: &Module, name: &str, args: &[Value]) -> Result<Outcome, Trap> {
     call_within(module, name, args, BUDGET)
@@ -468,21 +482,43 @@ pub fn call_within(
     args: &[Value],
     budget: u64,
 ) -> Result<Outcome, Trap> {
+    Ok(call_within_and_memory(module, name, args, budget)?.0)
+}
+
+fn call_within_and_memory(
+    module: &Module,
+    name: &str,
+    args: &[Value],
+    budget: u64,
+) -> Result<(Outcome, Vec<u8>), Trap> {
+    let index = validated_export(module, name)?;
+    run_export(module, index, args, budget, memory_of(module))
+}
+
+fn validated_export(module: &Module, name: &str) -> Result<u32, Trap> {
     if let Err(crate::validate::Invalid(reason)) = crate::validate::validate(module) {
         return Err(Trap::Invalid(reason));
     }
 
-    let index = module
+    module
         .exports
         .iter()
         .find(|(exported, _)| exported == name)
         .map(|(_, index)| *index)
-        .ok_or_else(|| Trap::Unimplemented(format!("no export named {name}")))?;
+        .ok_or_else(|| Trap::Unimplemented(format!("no export named {name}")))
+}
 
+fn run_export(
+    module: &Module,
+    index: u32,
+    args: &[Value],
+    budget: u64,
+    memory: Vec<u8>,
+) -> Result<(Outcome, Vec<u8>), Trap> {
     let mut run = Run {
         module,
         fuel: budget,
-        memory: memory_of(module),
+        memory,
         host: None,
     };
     let before = run.bump();
@@ -492,11 +528,14 @@ pub fn call_within(
         // in memory and memory is what this owns.
         Err(Trap::Unreachable) => Err(run.why(None).unwrap_or(Trap::Unreachable)),
         Err(other) => Err(other),
-        Ok(value) => Ok(Outcome {
-            value,
-            allocated: run.bump().saturating_sub(before),
-            steps: budget.saturating_sub(run.fuel),
-        }),
+        Ok(value) => {
+            let outcome = Outcome {
+                value,
+                allocated: run.bump().saturating_sub(before),
+                steps: budget.saturating_sub(run.fuel),
+            };
+            Ok((outcome, run.memory))
+        }
     }
 }
 

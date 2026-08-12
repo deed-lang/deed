@@ -266,6 +266,64 @@ fn checking_the_worked_example_is_silent_and_succeeds() {
 
 #[test]
 fn compiled_tests_report_the_same_complete_count_as_the_interpreter() {
+    let scratch = Scratch::new("compiled-property-count");
+    let file = scratch.write(
+        "properties.deed",
+        "module a\n\n\
+                 choice Tone {\n    Soft,\n    Hard,\n}\n\n\
+                 choice Mood {\n    Calm,\n    Loud { by: Int, tone: Tone },\n}\n\n\
+                 record Sample {\n    numbers: List<Int>,\n    moods: List<Mood>,\n    word: String,\n    mood: Mood,\n    yes: Bool,\n    nothing: (),\n}\n\n\
+         fn same(n: Int) -> Int\n\
+           ensures ok => result == n,\n\
+         { n }\n\n\
+         fn maybe_one() -> Result<Int, String>\n\
+           ensures ok => result == 1,\n\
+         { ok(1) }\n\n\
+                 fn same_sample(sample: Sample) -> Sample\n\
+                     ensures ok => result == sample,\n\
+                 { sample }\n\n\
+                 fn same_result(value: Result<Sample, String>) -> Result<Sample, String>\n\
+                     ensures\n\
+                         ok  => result == result,\n\
+                         err => result == result,\n\
+                 { value }\n\n\
+                 fn same_unit(value: ()) -> ()\n\
+                     ensures ok => result == result,\n\
+                 { value }\n\n\
+                 fn same_bool(value: Bool) -> Bool\n\
+                     ensures ok => result == value,\n\
+                 { value }\n",
+    );
+
+    let interpreted = run(&["test", file.to_str().unwrap()]);
+    let compiled = run(&["test", "--compiled", file.to_str().unwrap()]);
+    assert_eq!(
+        code(&interpreted),
+        0,
+        "{}{}",
+        stdout(&interpreted),
+        stderr(&interpreted)
+    );
+    assert_eq!(
+        code(&compiled),
+        0,
+        "{}{}",
+        stdout(&compiled),
+        stderr(&compiled)
+    );
+    assert_eq!(stdout(&compiled), stdout(&interpreted));
+    assert!(
+        stdout(&compiled).contains("6 passed, 0 failed"),
+        "{}",
+        stdout(&compiled)
+    );
+    assert!(stdout(&compiled).contains("property maybe_one (100 cases)"));
+    assert!(stdout(&compiled).contains("property same_result (100 cases)"));
+    assert!(stdout(&compiled).contains("property same_unit (100 cases)"));
+}
+
+#[test]
+fn compiled_written_tests_keep_their_own_count() {
     let output = run(&[
         "test",
         "--compiled",
@@ -274,6 +332,76 @@ fn compiled_tests_report_the_same_complete_count_as_the_interpreter() {
     assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
     assert!(
         stdout(&output).contains("1 passed, 0 failed"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(!stdout(&output).contains("no tests found"));
+}
+
+#[test]
+fn compiled_assert_refuses_accepts_contract_failures_and_not_assertions() {
+    let scratch = Scratch::new("compiled-refuses-kind");
+    let accepted = scratch.write(
+        "accepted.deed",
+        "module accepted\n\n\
+         fn positive(n: Int) -> Int where n > 0, { n }\n\n\
+         test \"a contract refusal counts\" {\n\
+             assert refuses positive(0)\n\
+         }\n",
+    );
+    let rejected = scratch.write(
+        "rejected.deed",
+        "module rejected\n\n\
+         fn asserts() -> Int {\n\
+             assert false\n\
+             0\n\
+         }\n\n\
+         test \"an assertion is not a refusal\" {\n\
+             assert refuses asserts()\n\
+         }\n",
+    );
+
+    let accepted = run(&["test", "--compiled", accepted.to_str().unwrap()]);
+    assert_eq!(
+        code(&accepted),
+        0,
+        "{}{}",
+        stdout(&accepted),
+        stderr(&accepted)
+    );
+    assert!(stdout(&accepted).contains("1 passed, 0 failed"));
+
+    let rejected = run(&["test", "--compiled", rejected.to_str().unwrap()]);
+    assert_eq!(
+        code(&rejected),
+        1,
+        "{}{}",
+        stdout(&rejected),
+        stderr(&rejected)
+    );
+    assert!(
+        stdout(&rejected).contains("assert refuses` probe trapped unexpectedly"),
+        "{}",
+        stdout(&rejected)
+    );
+}
+
+#[test]
+fn compiled_tests_run_the_properties_contracts_generate() {
+    let scratch = Scratch::new("compiled-property");
+    let file = scratch.write(
+        "property.deed",
+        "module a\n\n\
+         fn wrong(n: Int) -> Int\n\
+           ensures ok => result == n,\n\
+         { n + 1 }\n\n\
+         test \"the written block passes\" {\n    assert true\n}\n",
+    );
+
+    let output = run(&["test", "--compiled", file.to_str().unwrap()]);
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        stdout(&output).contains("FAIL  property wrong"),
         "{}",
         stdout(&output)
     );

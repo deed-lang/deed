@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use deed_ast::Item;
 use deed_diagnostics::{Diagnostic, FileId, SourceMap, render_human};
 use deed_driver::{Checked, ObligationReport};
-use deed_interp::{PropertyConfig, RuntimeProfile};
+use deed_interp::{PropertyAttempt, PropertyConfig, PropertyInterpreter, RuntimeProfile};
 use deed_typeck::Tier;
 
 use crate::args::{CheckArgs, Command, Format, Mode, USAGE};
@@ -1087,6 +1087,303 @@ fn compiled_args(module: &deed_codegen::Module, name: &str) -> Option<Vec<deed_c
     )
 }
 
+fn encode_property_value(
+    program: &deed_mir::Program,
+    ty: &deed_mir::Ty,
+    value: &deed_interp::Value,
+    memory: &mut deed_codegen::HostCall<'_>,
+) -> Option<deed_codegen::Value> {
+    match (ty, value) {
+        (deed_mir::Ty::Unit, deed_interp::Value::Unit) => Some(deed_codegen::Value::I64(0)),
+        (deed_mir::Ty::Bool, deed_interp::Value::Bool(value)) => {
+            Some(deed_codegen::Value::I32(i32::from(*value)))
+        }
+        (deed_mir::Ty::Int, deed_interp::Value::Int(value)) => {
+            Some(deed_codegen::Value::I64(*value))
+        }
+        (deed_mir::Ty::Str, deed_interp::Value::Str(value)) => memory.write_text(value),
+        (deed_mir::Ty::List(element), deed_interp::Value::List(values)) => {
+            let values = values
+                .iter()
+                .map(|value| encode_property_value(program, element, value, memory))
+                .collect::<Option<Vec<_>>>()?;
+            memory.write_list(&values)
+        }
+        (deed_mir::Ty::Aggregate(id), value) => {
+            let layout = program.layouts.get(id.0)?;
+            let variant_name = match value {
+                deed_interp::Value::Record(_) => layout.variants.first()?.name.as_str(),
+                deed_interp::Value::Variant(value) => value.name.as_str(),
+                deed_interp::Value::Result { ok, .. } => {
+                    if *ok {
+                        "ok"
+                    } else {
+                        "err"
+                    }
+                }
+                _ => return None,
+            };
+            let variant_index = layout
+                .variants
+                .iter()
+                .position(|variant| variant.name == variant_name)?;
+            let variant = &layout.variants[variant_index];
+            let mut fields = Vec::with_capacity(variant.fields.len());
+            for field in &variant.fields {
+                let value = match value {
+                    deed_interp::Value::Record(values) => values.get(&field.name)?,
+                    deed_interp::Value::Variant(value) => value.fields.get(&field.name)?,
+                    deed_interp::Value::Result { value, .. } => value,
+                    _ => return None,
+                };
+                fields.push(encode_property_value(program, &field.ty, value, memory)?);
+            }
+            memory.write_aggregate(layout.is_tagged().then_some(variant_index as i64), &fields)
+        }
+        _ => None,
+    }
+}
+
+fn encode_property_args(
+    program: &deed_mir::Program,
+    function: &str,
+    values: &[deed_interp::Value],
+    memory: &mut deed_codegen::HostCall<'_>,
+) -> Option<Vec<deed_codegen::Value>> {
+    let function = program.function(program.find(function)?);
+    if function.params.len() != values.len() {
+        return None;
+    }
+
+    let mut args = Vec::new();
+    for (ty, value) in function.params.iter().zip(values) {
+        if matches!(ty, deed_mir::Ty::Unit) {
+            if !matches!(value, deed_interp::Value::Unit) {
+                return None;
+            }
+            continue;
+        }
+        args.push(encode_property_value(program, ty, value, memory)?);
+    }
+    Some(args)
+}
+
+fn property_word(memory: &[u8], at: usize) -> Option<i64> {
+    let bytes = memory.get(at..at.checked_add(deed_codegen::layout::WORD as usize)?)?;
+    Some(i64::from_le_bytes(bytes.try_into().ok()?))
+}
+
+fn decode_property_word(
+    program: &deed_mir::Program,
+    ty: &deed_mir::Ty,
+    word: i64,
+    memory: &[u8],
+    expected: Option<&deed_interp::Value>,
+    remaining: &[()],
+) -> Option<deed_interp::Value> {
+    let (_, remaining) = remaining.split_first()?;
+    match ty {
+        deed_mir::Ty::Unit => Some(deed_interp::Value::Unit),
+        deed_mir::Ty::Bool => Some(deed_interp::Value::Bool(word != 0)),
+        deed_mir::Ty::Int => Some(deed_interp::Value::Int(word)),
+        deed_mir::Ty::Str => {
+            let at = usize::try_from(word).ok()?;
+            let characters = usize::try_from(property_word(memory, at)?).ok()?;
+            let bytes = usize::try_from(property_word(
+                memory,
+                at.checked_add(deed_codegen::layout::WORD as usize)?,
+            )?)
+            .ok()?;
+            let start = at.checked_add(2 * deed_codegen::layout::WORD as usize)?;
+            let text = std::str::from_utf8(memory.get(start..start.checked_add(bytes)?)?).ok()?;
+            (text.chars().count() == characters).then(|| deed_interp::Value::str(text))
+        }
+        deed_mir::Ty::List(element) => {
+            let at = usize::try_from(word).ok()?;
+            let len = usize::try_from(property_word(memory, at)?).ok()?;
+            let elements = at.checked_add(deed_codegen::layout::WORD as usize)?;
+            let bytes = len.checked_mul(deed_codegen::layout::WORD as usize)?;
+            memory.get(elements..elements.checked_add(bytes)?)?;
+            let expected = match expected {
+                Some(deed_interp::Value::List(values)) => Some(values.as_slice()),
+                _ => None,
+            };
+            let mut values = Vec::with_capacity(len);
+            for index in 0..len {
+                let slot = at.checked_add(deed_codegen::layout::element_offset(index) as usize)?;
+                values.push(decode_property_word(
+                    program,
+                    element,
+                    property_word(memory, slot)?,
+                    memory,
+                    expected.and_then(|values| values.get(index)),
+                    remaining,
+                )?);
+            }
+            Some(deed_interp::Value::List(std::rc::Rc::new(values)))
+        }
+        deed_mir::Ty::Aggregate(id) => {
+            let layout = program.layouts.get(id.0)?;
+            let at = usize::try_from(word).ok()?;
+            let variant_index = if layout.is_tagged() {
+                usize::try_from(property_word(memory, at)?).ok()?
+            } else {
+                0
+            };
+            let variant = layout.variants.get(variant_index)?;
+            let expected_fields = match expected {
+                Some(deed_interp::Value::Record(fields)) => Some(fields.as_ref()),
+                Some(deed_interp::Value::Variant(value)) => Some(&value.fields),
+                _ => None,
+            };
+            let expected_result = match expected {
+                Some(deed_interp::Value::Result { value, .. }) => Some(value.as_ref()),
+                _ => None,
+            };
+            let mut fields = deed_interp::Fields::new();
+            for (index, field) in variant.fields.iter().enumerate() {
+                let slot = at
+                    .checked_add(
+                        deed_codegen::layout::field_offset(layout.is_tagged(), index) as usize,
+                    )?;
+                let expected = expected_fields
+                    .and_then(|fields| fields.get(&field.name))
+                    .or(expected_result);
+                fields.insert(
+                    field.name.clone(),
+                    decode_property_word(
+                        program,
+                        &field.ty,
+                        property_word(memory, slot)?,
+                        memory,
+                        expected,
+                        remaining,
+                    )?,
+                );
+            }
+
+            if layout.name.starts_with("Result<") {
+                let payload = fields.remove("value")?;
+                return match variant.name.as_str() {
+                    "ok" => Some(deed_interp::Value::ok(payload)),
+                    "err" => Some(deed_interp::Value::err(payload)),
+                    _ => None,
+                };
+            }
+            if layout.choice {
+                let origin = match expected? {
+                    deed_interp::Value::Variant(value) => std::rc::Rc::clone(&value.origin),
+                    _ => return None,
+                };
+                Some(deed_interp::Value::variant(
+                    origin,
+                    variant.name.clone(),
+                    fields,
+                ))
+            } else {
+                Some(deed_interp::Value::record(fields))
+            }
+        }
+        deed_mir::Ty::Capability | deed_mir::Ty::Closure => None,
+    }
+}
+
+fn decode_property_result(
+    program: &deed_mir::Program,
+    function: &str,
+    compiled: Option<deed_codegen::Value>,
+    memory: &[u8],
+    expected: &deed_interp::Value,
+) -> Option<deed_interp::Value> {
+    let ty = &program.function(program.find(function)?).ret;
+    match (ty, compiled) {
+        (deed_mir::Ty::Unit, None) => Some(deed_interp::Value::Unit),
+        (deed_mir::Ty::Bool, Some(deed_codegen::Value::I32(value))) => {
+            Some(deed_interp::Value::Bool(value != 0))
+        }
+        (ty, Some(deed_codegen::Value::I64(word))) => {
+            decode_property_word(program, ty, word, memory, Some(expected), &[(); 65])
+        }
+        _ => None,
+    }
+}
+
+fn compiled_property_attempt<'a>(
+    file: FileId,
+    lowered: &deed_mir::Program,
+    compiled: &deed_codegen::Module,
+    reference: &mut PropertyInterpreter<'a>,
+    function: &'a deed_ast::FnDecl,
+    values: &[deed_interp::Value],
+) -> PropertyAttempt {
+    let interpreted = reference.attempt(function, values);
+    if matches!(interpreted, PropertyAttempt::Rejected) {
+        return PropertyAttempt::Rejected;
+    }
+
+    let compiled_outcome = deed_codegen::call_prepared(compiled, &function.sig.name.name, |call| {
+        encode_property_args(lowered, &function.sig.name.name, values, call).ok_or_else(|| {
+            deed_codegen::Trap::Unimplemented(format!(
+                "the generated inputs to `{}` do not cross the compiled call boundary",
+                function.sig.name.name
+            ))
+        })
+    });
+    match interpreted {
+        PropertyAttempt::Failed(diagnostic) => PropertyAttempt::Failed(diagnostic),
+        PropertyAttempt::Passed(value) => match compiled_outcome {
+            Ok((answer, memory)) => match decode_property_result(
+                lowered,
+                &function.sig.name.name,
+                answer,
+                &memory,
+                &value,
+            ) {
+                Some(decoded) if decoded == value => PropertyAttempt::Passed(value),
+                Some(decoded) => PropertyAttempt::Failed(
+                    Diagnostic::error(
+                        deed_mir::codes::ASSERTION_FAILED,
+                        file,
+                        function.sig.name.span,
+                        format!(
+                            "the compiled `{}` answered {decoded:?}, while the interpreter answered {value:?}",
+                            function.sig.name.name
+                        ),
+                    )
+                    .with_primary_label("the two runtimes disagreed on this generated input"),
+                ),
+                None => PropertyAttempt::Failed(
+                    Diagnostic::error(
+                        deed_mir::codes::NOT_RUNNABLE,
+                        file,
+                        function.sig.name.span,
+                        format!(
+                            "the compiled property runner could not read `{}`'s answer",
+                            function.sig.name.name
+                        ),
+                    )
+                    .with_primary_label("this compiled answer could not be decoded"),
+                ),
+            },
+            Err(trap) => PropertyAttempt::Failed(
+                compiled_diagnostic(file, &trap).unwrap_or_else(|| {
+                    Diagnostic::error(
+                        deed_mir::codes::NOT_RUNNABLE,
+                        file,
+                        function.sig.name.span,
+                        format!(
+                            "the compiled `{}` stopped on a generated input: {trap}",
+                            function.sig.name.name
+                        ),
+                    )
+                    .with_primary_label("the compiled property run stopped here")
+                }),
+            ),
+        },
+        PropertyAttempt::Rejected => unreachable!("rejected inputs returned above"),
+    }
+}
+
 fn run_compiled_main(
     out: &mut impl Write,
     sources: &SourceMap,
@@ -1624,6 +1921,7 @@ fn run_compiled_tests(
     let mut failed: Vec<(String, String)> = Vec::new();
     let mut ran = 0usize;
     let mut skipped: Vec<String> = Vec::new();
+    let program = deed_driver::program_of(checks);
 
     for (at, checked) in checks[..subject.min(checks.len())].iter().enumerate() {
         let name = sources.file(checked.file).name().to_string();
@@ -1644,7 +1942,10 @@ fn run_compiled_tests(
             skipped.push(format!("{name}: test {:?}: {}", block.name, block.why));
         }
 
-        if lowered.tests.is_empty() {
+        let has_properties = checked.module.items.iter().any(|item| {
+            matches!(item, deed_ast::Item::Function(function) if deed_interp::is_testable(function, &checked.module, &checked.resolutions))
+        });
+        if lowered.tests.is_empty() && !has_properties {
             continue;
         }
 
@@ -1700,6 +2001,39 @@ fn run_compiled_tests(
                 writeln!(out, "  ok    {label}")?;
             } else {
                 writeln!(out, "  FAIL  {label}")?;
+            }
+        }
+
+        let mut reference = PropertyInterpreter::new(&program, checked.file);
+        let properties = deed_interp::run_properties_with(
+            &program,
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            PropertyConfig::default(),
+            |function, values| {
+                compiled_property_attempt(
+                    checked.file,
+                    &lowered,
+                    &compiled,
+                    &mut reference,
+                    function,
+                    values,
+                )
+            },
+        );
+        for property in properties {
+            ran += 1;
+            let label = format!("property {} ({} cases)", property.function, property.cases);
+            match property.failure {
+                None => {
+                    passed += 1;
+                    writeln!(out, "  ok    {label}")?;
+                }
+                Some(diagnostic) => {
+                    writeln!(out, "  FAIL  {label}")?;
+                    failed.push((label, render_human(sources, &diagnostic)));
+                }
             }
         }
     }
@@ -2756,5 +3090,170 @@ mod compiled_tests {
             ])
         );
         assert!(compiled_args(&module, "missing").is_none());
+    }
+
+    #[test]
+    fn a_compiled_property_uses_the_compiled_answer() {
+        let mut sources = SourceMap::new();
+        let checked = deed_driver::check_text(
+            &mut sources,
+            "test.deed",
+            "module a\n\n\
+             fn same(n: Int) -> Int\n\
+               ensures ok => result == n,\n\
+             { n }\n",
+        );
+        let function = checked
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                deed_ast::Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("the function should parse");
+
+        let mut program = deed_interp::Program::new();
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+            checked.rows(),
+            checked.operators(),
+        );
+        let mut reference = PropertyInterpreter::new(&program, checked.file);
+
+        let mut compiled = deed_codegen::Module::new();
+        let ty = compiled.intern_type(FuncType {
+            params: vec![ValType::I64],
+            results: vec![ValType::I64],
+        });
+        let function_index = compiled.add_func(Func {
+            type_index: ty,
+            locals: vec![],
+            body: vec![Ins::I64Const(0), Ins::Return],
+        });
+        compiled.export("same", function_index);
+
+        let outcome = compiled_property_attempt(
+            checked.file,
+            &{
+                let mut program = deed_mir::Program::new();
+                program.add_function(deed_mir::Function::new(
+                    "same",
+                    vec![deed_mir::Ty::Int],
+                    deed_mir::Ty::Int,
+                ));
+                program
+            },
+            &compiled,
+            &mut reference,
+            function,
+            &[deed_interp::Value::Int(7)],
+        );
+        let PropertyAttempt::Failed(diagnostic) = outcome else {
+            panic!("the deliberately different compiled answer should fail");
+        };
+        assert_eq!(diagnostic.code, deed_mir::codes::ASSERTION_FAILED);
+    }
+
+    #[test]
+    fn a_compiled_property_reads_the_boxed_answer_from_memory() {
+        let mut sources = SourceMap::new();
+        let checked = deed_driver::check_text(
+            &mut sources,
+            "test.deed",
+            "module a\n\n\
+             fn maybe_one() -> Result<Int, String>\n\
+               ensures ok => result == 1,\n\
+             { ok(1) }\n",
+        );
+        let function = checked
+            .module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                deed_ast::Item::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("the function should parse");
+
+        let mut program = deed_interp::Program::new();
+        program.add(
+            checked.file,
+            &checked.module,
+            &checked.resolutions,
+            checked.guards(),
+            checked.rows(),
+            checked.operators(),
+        );
+        let mut reference = PropertyInterpreter::new(&program, checked.file);
+
+        let lowered = deed_mir::lower(&checked.module, &checked.resolutions, &checked.types)
+            .expect("the function should lower");
+        let mut compiled = deed_codegen::compile(&lowered).expect("the function should compile");
+        let exported = compiled
+            .exports
+            .iter()
+            .find(|(name, _)| name == "maybe_one")
+            .map(|(_, index)| *index)
+            .expect("the function should be exported");
+        let function_index = exported as usize - compiled.imports.len();
+        let answer = deed_codegen::layout::HEAP_START + 1024;
+        compiled.funcs[function_index].body = vec![Ins::I64Const(answer as i64), Ins::Return];
+        let mut aggregate = Vec::new();
+        aggregate.extend_from_slice(&0i64.to_le_bytes());
+        aggregate.extend_from_slice(&2i64.to_le_bytes());
+        compiled.data.push((answer, aggregate));
+
+        let outcome = compiled_property_attempt(
+            checked.file,
+            &lowered,
+            &compiled,
+            &mut reference,
+            function,
+            &[],
+        );
+        let PropertyAttempt::Failed(diagnostic) = outcome else {
+            panic!("the deliberately different boxed answer should fail");
+        };
+        assert_eq!(diagnostic.code, deed_mir::codes::ASSERTION_FAILED);
+    }
+
+    #[test]
+    fn a_corrupt_compiled_list_length_is_not_allocated_by_the_runner() {
+        let memory = i64::MAX.to_le_bytes();
+        assert!(
+            decode_property_word(
+                &deed_mir::Program::new(),
+                &deed_mir::Ty::List(Box::new(deed_mir::Ty::Int)),
+                0,
+                &memory,
+                None,
+                &[(); 65],
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_list_that_exactly_fills_the_remaining_memory_is_read() {
+        let mut memory = Vec::new();
+        memory.extend_from_slice(&1i64.to_le_bytes());
+        memory.extend_from_slice(&7i64.to_le_bytes());
+        assert_eq!(
+            decode_property_word(
+                &deed_mir::Program::new(),
+                &deed_mir::Ty::List(Box::new(deed_mir::Ty::Int)),
+                0,
+                &memory,
+                None,
+                &[(); 65],
+            ),
+            Some(deed_interp::Value::List(std::rc::Rc::new(vec![
+                deed_interp::Value::Int(7),
+            ])))
+        );
     }
 }
