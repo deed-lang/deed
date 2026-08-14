@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use deed_ast::Item;
-use deed_diagnostics::json_string;
+use deed_diagnostics::{SourceMap, json_string};
 use deed_resolve::{ExportKind, Exports, RowEntry};
 use deed_typeck::Tier;
 
-use crate::{Checked, ObligationReport};
+use crate::{Checked, ObligationReport, check_all, json_report, shipped_for, shipped_source};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AuthorityChange {
@@ -221,6 +221,73 @@ impl ReviewReceipt {
             self.is_clean()
         )
     }
+}
+
+/// Reviews two in-memory module sets and writes the same JSON receipt every
+/// compiler surface hands to its caller.
+pub fn review_sources(before: &[&str], after: &[&str], policy: Option<ReviewPolicy>) -> String {
+    let before = review_side("before", before);
+    let after = review_side("after", after);
+    let before_refusal = refusal("before", &before);
+    let after_refusal = refusal("after", &after);
+    if before_refusal.is_some() || after_refusal.is_some() {
+        let mut text = before_refusal.unwrap_or_default();
+        text.push_str(&after_refusal.unwrap_or_default());
+        return text;
+    }
+
+    let receipt = ReviewReceipt::between(&before.checks, &after.checks);
+    let mut text = match policy {
+        Some(policy) => receipt.to_json_with_policy(&receipt.evaluate(policy)),
+        None => receipt.to_json(),
+    };
+    text.push('\n');
+    text
+}
+
+struct ReviewSide {
+    sources: SourceMap,
+    checks: Vec<Checked>,
+    subjects: usize,
+}
+
+fn review_side(label: &str, texts: &[&str]) -> ReviewSide {
+    let mut sources = SourceMap::new();
+    let mut ids = texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| sources.add(format!("<{label}/{}.deed>", index + 1), *text))
+        .collect::<Vec<_>>();
+    let subjects = ids.len();
+    for module in shipped_for(texts.iter().copied()) {
+        let text = shipped_source(module).expect("a module that ships has a source");
+        ids.push(sources.add(format!("<shipped>/{module}.deed"), text));
+    }
+    let checks = check_all(&sources, &ids);
+    ReviewSide {
+        sources,
+        checks,
+        subjects,
+    }
+}
+
+fn refusal(label: &str, side: &ReviewSide) -> Option<String> {
+    let errors = side.checks.iter().map(Checked::error_count).sum::<usize>();
+    let unnamed = side.checks[..side.subjects]
+        .iter()
+        .filter(|checked| checked.module.name.is_none())
+        .count();
+    if errors == 0 && unnamed == 0 {
+        return None;
+    }
+
+    let mut text = json_report(&side.sources, &side.checks, false);
+    text.push_str(&format!(
+        "{{\"kind\":\"review_refused\",\"side\":{},\"errors\":{errors},\"unnamed\":{unnamed},\"message\":{}}}\n",
+        json_string(label),
+        json_string("every reviewed source must check and declare a module")
+    ));
+    Some(text)
 }
 
 fn compare_obligations(

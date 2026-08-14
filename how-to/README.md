@@ -12,6 +12,7 @@ These pages answer questions the corpus already answers in code.
 - [How do I use somebody else's Deed module?](depend-on-another-module.md)
 - [How do I use Deed in an editor?](use-deed-in-an-editor.md)
 - [How do I let an agent use the compiler?](let-an-agent-use-the-compiler.md)
+- [How do I review an agent patch in CI?](review-an-agent-patch-in-ci.md)
 
 Each page points at code that is already in this repository, already exercised by
 the test suite, and short enough to read before opening the full example.

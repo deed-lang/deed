@@ -16,6 +16,32 @@ release notes.
 
 ### Language
 
+- None yet.
+
+### Diagnostics
+
+- None yet.
+
+### Standard library
+
+- None yet.
+
+### Tools
+
+- None yet.
+
+### Measurements
+
+- None yet.
+
+## 0.2.11 (2026-08-14)
+
+### Programs that used to compile and no longer do
+
+- None yet.
+
+### Language
+
 - A call can be written through something other than a name. Both engines used
   to refuse it, and both accepted the same value one line earlier:
 
@@ -227,6 +253,16 @@ release notes.
   tool call carrying `policy.passed: false`; malformed arguments remain
   protocol errors, and a side that does not check returns `review_refused`
   instead of a partial receipt.
+
+  The released browser artifact exports the same comparison as `deed_review`
+  over a before and after source buffer. A page can therefore demonstrate a
+  receipt by asking the pinned compiler in the reader's tab, rather than by
+  copying output into HTML or reimplementing the comparison in JavaScript.
+
+  `how-to/review-an-agent-patch-in-ci.md` carries a complete GitHub Actions
+  workflow. It installs the tagged binary, materializes the pull request's
+  base and head commits as detached worktrees, and runs all three policy gates
+  on those immutable trees.
 
 - A list of numbers crosses a component boundary. `deed build --component`
   refused any export carrying a list; `List<Int>` now goes both ways, and a

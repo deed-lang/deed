@@ -48,9 +48,9 @@ language server are all in that one file.
 Start with the [tutorial](TUTORIAL.md) if you want one program built up one step at a time.
 
 ```
-$ tar xzf deed-v0.2.10-x86_64-unknown-linux-gnu.tar.gz
-$ ./deed-v0.2.10-x86_64-unknown-linux-gnu/deed --version
-deed 0.2.10
+$ tar xzf deed-v0.2.11-x86_64-unknown-linux-gnu.tar.gz
+$ ./deed-v0.2.11-x86_64-unknown-linux-gnu/deed --version
+deed 0.2.11
 ```
 
 With Rust 1.85 or newer instead, from crates.io or from a clone:
@@ -182,6 +182,9 @@ rather than compared.
 The same evidence is available to an agent as `deed_review`. It takes the
 before and after module sets as arrays of source text, resolves imports within
 each array, and applies the same three policies without opening a file.
+[The CI guide](how-to/review-an-agent-patch-in-ci.md) is a complete pull-request
+workflow that compares the two commit trees rather than a runner's mutable
+working directory.
 
 ## Demo
 
