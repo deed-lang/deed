@@ -28,10 +28,39 @@ release notes.
 
 ### Tools
 
+- None yet.
+
+### Measurements
+
+- None yet.
+
+## 0.2.12 (2026-08-14)
+
+### Programs that used to compile and no longer do
+
+- None yet.
+
+### Language
+
+- None yet.
+
+### Diagnostics
+
+- None yet.
+
+### Standard library
+
+- None yet.
+
+### Tools
+
 - The declared minimum Rust toolchain is now 1.88, matching the let-chain
   syntax already used by the parser and resolver. Rust 1.87 and older failed
   before `deed-lang` could compile. CI now builds the workspace with 1.88 so
   the declaration cannot silently fall behind the source again.
+- The `deed-lang` package now carries its README and the ownership marker used
+  by the official MCP Registry. Root `server.json` describes `deed mcp` as a
+  Cargo-installed stdio server.
 
 ### Measurements
 

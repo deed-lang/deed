@@ -9,6 +9,7 @@
 # it would rewrite sentences that were true when they were written.
 name = "deed-lang"
 description = "The deed command line tool"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
