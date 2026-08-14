@@ -43,6 +43,20 @@ function call(verb, source) {
   return result;
 }
 
+function review(before, after) {
+  const beforeInput = encoder.encode(before);
+  const afterInput = encoder.encode(after);
+  const beforePtr = wasm.deed_alloc(beforeInput.length);
+  const afterPtr = wasm.deed_alloc(afterInput.length);
+  bytes().set(beforeInput, beforePtr);
+  bytes().set(afterInput, afterPtr);
+  wasm.deed_review(beforePtr, beforeInput.length, afterPtr, afterInput.length);
+  const result = readResult();
+  wasm.deed_free(beforePtr, beforeInput.length);
+  wasm.deed_free(afterPtr, afterInput.length);
+  return result;
+}
+
 const failures = [];
 const check = (what, condition, saw) => {
   if (condition) return;
@@ -93,8 +107,9 @@ for (const [verb, source] of [
   }
 }
 
-// The four verbs answer different questions, so each one is checked for the
-// answer only it gives rather than for "did not trap".
+// The four one-source verbs answer different questions, so each one is checked
+// for the answer only it gives rather than for "did not trap". Review takes
+// two sources and is checked separately below.
 check("check is quiet about a clean program", call("deed_check", HELLO).includes('"kind":"obligation"') || call("deed_check", HELLO) === "", "");
 check("run reports what the program printed", call("deed_run", HELLO).includes('"kind":"output"'), call("deed_run", HELLO));
 check("test reports a passing test", call("deed_test", 'module main\n\ntest "one" {\n    assert 1 == 1\n}\n').includes('"passed":true'), "");
@@ -126,6 +141,18 @@ check(
   call("deed_check", "module main\n\nfn main() -> Int {\n    nonesuch\n}\n").includes('"kind":"diagnostic"'),
   "",
 );
+
+{
+  const before = "module review/sample\n\neffect Store { fn write(value: Int) -> () }\n";
+  const after = `${before}\nfn sync(value: Int) -> () uses Store.write, { Store.write(value) }\n`;
+  const receipt = review(before, after);
+  check(
+    "review receipts reach a foreign engine",
+    receipt.includes('"kind":"review_receipt"') &&
+      receipt.includes('"authority":"Store.write"'),
+    receipt,
+  );
+}
 
 // The two exports that are not verbs.
 const tokens = call("deed_tokens", HELLO)
@@ -173,6 +200,6 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `the artifact answers: deed ${version}, four verbs, ${tokens.length} classified ranges, ` +
+  `the artifact answers: deed ${version}, five verbs, ${tokens.length} classified ranges, ` +
     `${pages.length} diagnostic pages, every line parses`,
 );

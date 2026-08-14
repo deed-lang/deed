@@ -24,7 +24,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.10"
+version = "0.2.11"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/deed-lang/deed"
@@ -36,25 +36,25 @@ rust-version = "1.85"
 # `deed-x.workspace = true`. These have to equal the version above, and
 # `crates/deed-driver/tests/publishing.rs` says so rather than trusting it.
 [workspace.dependencies]
-deed-ast = { path = "crates/deed-ast", version = "0.2.10" }
-deed-codegen = { path = "crates/deed-codegen", version = "0.2.10" }
-deed-dap = { path = "crates/deed-dap", version = "0.2.10" }
-deed-diagnostics = { path = "crates/deed-diagnostics", version = "0.2.10" }
-deed-driver = { path = "crates/deed-driver", version = "0.2.10" }
-deed-effects = { path = "crates/deed-effects", version = "0.2.10" }
-deed-explain = { path = "crates/deed-explain", version = "0.2.10" }
-deed-fetch = { path = "crates/deed-fetch", version = "0.2.10" }
-deed-fmt = { path = "crates/deed-fmt", version = "0.2.10" }
-deed-interp = { path = "crates/deed-interp", version = "0.2.10" }
-deed-lexer = { path = "crates/deed-lexer", version = "0.2.10" }
-deed-lsp = { path = "crates/deed-lsp", version = "0.2.10" }
-deed-mcp = { path = "crates/deed-mcp", version = "0.2.10" }
-deed-mir = { path = "crates/deed-mir", version = "0.2.10" }
-deed-parser = { path = "crates/deed-parser", version = "0.2.10" }
-deed-resolve = { path = "crates/deed-resolve", version = "0.2.10" }
-deed-rt = { path = "crates/deed-rt", version = "0.2.10" }
-deed-typeck = { path = "crates/deed-typeck", version = "0.2.10" }
-deed-wasm = { path = "crates/deed-wasm", version = "0.2.10" }
+deed-ast = { path = "crates/deed-ast", version = "0.2.11" }
+deed-codegen = { path = "crates/deed-codegen", version = "0.2.11" }
+deed-dap = { path = "crates/deed-dap", version = "0.2.11" }
+deed-diagnostics = { path = "crates/deed-diagnostics", version = "0.2.11" }
+deed-driver = { path = "crates/deed-driver", version = "0.2.11" }
+deed-effects = { path = "crates/deed-effects", version = "0.2.11" }
+deed-explain = { path = "crates/deed-explain", version = "0.2.11" }
+deed-fetch = { path = "crates/deed-fetch", version = "0.2.11" }
+deed-fmt = { path = "crates/deed-fmt", version = "0.2.11" }
+deed-interp = { path = "crates/deed-interp", version = "0.2.11" }
+deed-lexer = { path = "crates/deed-lexer", version = "0.2.11" }
+deed-lsp = { path = "crates/deed-lsp", version = "0.2.11" }
+deed-mcp = { path = "crates/deed-mcp", version = "0.2.11" }
+deed-mir = { path = "crates/deed-mir", version = "0.2.11" }
+deed-parser = { path = "crates/deed-parser", version = "0.2.11" }
+deed-resolve = { path = "crates/deed-resolve", version = "0.2.11" }
+deed-rt = { path = "crates/deed-rt", version = "0.2.11" }
+deed-typeck = { path = "crates/deed-typeck", version = "0.2.11" }
+deed-wasm = { path = "crates/deed-wasm", version = "0.2.11" }
 
 [workspace.lints.clippy]
 all = "warn"

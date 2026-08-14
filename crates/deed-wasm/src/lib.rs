@@ -20,7 +20,8 @@
 //!   then calls [`deed_free`] on it.
 //! - [`deed_test`], [`deed_run`] and [`deed_fmt`]: the other three verbs,
 //!   same calling shape, different question. [`deed_fmt`] is the one that
-//!   can answer with the program rather than about it.
+//!   can answer with the program rather than about it. [`deed_review`] takes
+//!   two such buffers and compares what a reviewer has to trust.
 //! - [`deed_tokens`] and [`deed_explain`]: not verbs. One says how the
 //!   compiler's own lexer classified each byte range, so a page can colour
 //!   Deed without a second grammar to keep in step. The other hands over
@@ -43,6 +44,7 @@ use std::path::Path;
 
 use deed_ast::Item;
 use deed_diagnostics::{Diagnostic, SourceMap, json_string, render_json};
+use deed_driver::review::review_sources as review_source_sets;
 use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
 use deed_fmt::format as format_source;
 use deed_interp::{Program, PropertyConfig, run_main, run_properties, run_tests};
@@ -159,6 +161,12 @@ pub fn check_source(source: &str) -> String {
 pub fn diagnostics_of(source: &str) -> Vec<Diagnostic> {
     let (_, mut checks) = checked_of(source);
     checks.swap_remove(0).diagnostics
+}
+
+/// Compares one module before and after a patch using the same receipt as
+/// `deed review` and the MCP `deed_review` tool.
+pub fn review_source(before: &str, after: &str) -> String {
+    review_source_sets(&[before], &[after], None)
 }
 
 /// Parses and checks `source` plus whatever it imports from the shipped
@@ -527,6 +535,30 @@ pub unsafe extern "C" fn deed_check(ptr: *const u8, len: usize) {
     set_result(check_source(&source));
 }
 
+/// The `review` entry point: reads two separately allocated UTF-8 source
+/// buffers and leaves one review receipt, or the diagnostics and refusal for
+/// a side that did not check.
+///
+/// # Safety
+///
+/// Each pointer/length pair must describe its own buffer allocated through
+/// [`deed_alloc`], and the host must have finished writing both buffers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn deed_review(
+    before_ptr: *const u8,
+    before_len: usize,
+    after_ptr: *const u8,
+    after_len: usize,
+) {
+    // SAFETY: forwarded from this function's own contract.
+    let before = unsafe { std::slice::from_raw_parts(before_ptr, before_len) };
+    // SAFETY: forwarded from this function's own contract.
+    let after = unsafe { std::slice::from_raw_parts(after_ptr, after_len) };
+    let before = String::from_utf8_lossy(before);
+    let after = String::from_utf8_lossy(after);
+    set_result(review_source(&before, &after));
+}
+
 /// The `test` entry point: same input shape as [`deed_check`], and leaves
 /// one JSON object a line at [`deed_result_ptr`]/[`deed_result_len`], one per
 /// `test` block: `{"kind":"test","name":...,"passed":bool}`, then one
@@ -642,8 +674,41 @@ mod tests {
         result
     }
 
+    fn call_review(before: &str, after: &str) -> String {
+        let before = before.as_bytes();
+        let after = after.as_bytes();
+        let before_ptr = deed_alloc(before.len());
+        let after_ptr = deed_alloc(after.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(before.as_ptr(), before_ptr, before.len());
+            std::ptr::copy_nonoverlapping(after.as_ptr(), after_ptr, after.len());
+            deed_review(before_ptr, before.len(), after_ptr, after.len());
+        }
+
+        let out_ptr = deed_result_ptr();
+        let out_len = deed_result_len();
+        let text = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
+        let result = String::from_utf8(text.to_vec()).expect("review should write UTF-8");
+        unsafe {
+            deed_free(before_ptr, before.len());
+            deed_free(after_ptr, after.len());
+            deed_free(out_ptr, out_len);
+        }
+        result
+    }
+
     fn call_check(source: &str) -> String {
         call_export(deed_check, source)
+    }
+
+    #[test]
+    fn a_page_gets_the_same_review_receipt_as_the_other_surfaces() {
+        let before = "module review/sample\n\neffect Store { fn write(value: Int) -> () }\n";
+        let after = "module review/sample\n\neffect Store { fn write(value: Int) -> () }\n\nfn sync(value: Int) -> () uses Store.write, { Store.write(value) }\n";
+        assert_eq!(
+            call_review(before, after),
+            "{\"kind\":\"review_receipt\",\"clean\":false,\"authority_added\":[{\"module\":\"review/sample\",\"declaration\":\"sync\",\"authority\":\"Store.write\"}],\"tier_regressions\":[],\"guarded_added\":[]}\n"
+        );
     }
 
     /// The `(start, end, class)` triples `token_classes` wrote, in order.

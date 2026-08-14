@@ -12,10 +12,9 @@
 //! `deed check --format json` writes means an agent that has seen one has seen
 //! the other.
 
-use deed_diagnostics::{SourceMap, json_string};
+use deed_diagnostics::json_string;
 use deed_driver::fix::fix;
-use deed_driver::review::{ReviewPolicy, ReviewReceipt};
-use deed_driver::{Checked, check_all, json_report, shipped_for, shipped_source};
+use deed_driver::review::{ReviewPolicy, review_sources};
 use deed_lsp::Json;
 
 use crate::{Failure, INVALID_PARAMS};
@@ -253,26 +252,12 @@ fn review(arguments: Option<&Json>) -> Result<Json, Failure> {
     let before_sources = source_set(arguments, "before")?;
     let after_sources = source_set(arguments, "after")?;
     let (policy, policy_was_given) = policy_of(arguments)?;
-
-    let before = review_side("before", &before_sources);
-    let after = review_side("after", &after_sources);
-    let before_refusal = refusal("before", &before);
-    let after_refusal = refusal("after", &after);
-    if before_refusal.is_some() || after_refusal.is_some() {
-        let mut text = before_refusal.unwrap_or_default();
-        text.push_str(&after_refusal.unwrap_or_default());
-        return Ok(text_result(&text));
-    }
-
-    let receipt = ReviewReceipt::between(&before.checks, &after.checks);
-    let verdict = receipt.evaluate(policy);
-    let mut text = if policy_was_given {
-        receipt.to_json_with_policy(&verdict)
-    } else {
-        receipt.to_json()
-    };
-    text.push('\n');
-    Ok(text_result(&text))
+    let policy = policy_was_given.then_some(policy);
+    Ok(text_result(&review_sources(
+        &before_sources,
+        &after_sources,
+        policy,
+    )))
 }
 
 fn source_set<'a>(arguments: &'a Json, name: &str) -> Result<Vec<&'a str>, Failure> {
@@ -332,51 +317,6 @@ fn policy_of(arguments: &Json) -> Result<(ReviewPolicy, bool), Failure> {
         }
     }
     Ok((policy, true))
-}
-
-struct ReviewSide {
-    sources: SourceMap,
-    checks: Vec<Checked>,
-    subjects: usize,
-}
-
-fn review_side(label: &str, texts: &[&str]) -> ReviewSide {
-    let mut sources = SourceMap::new();
-    let mut ids = texts
-        .iter()
-        .enumerate()
-        .map(|(index, text)| sources.add(format!("<{label}/{}.deed>", index + 1), *text))
-        .collect::<Vec<_>>();
-    let subjects = ids.len();
-    for module in shipped_for(texts.iter().copied()) {
-        let text = shipped_source(module).expect("a module that ships has a source");
-        ids.push(sources.add(format!("<shipped>/{module}.deed"), text));
-    }
-    let checks = check_all(&sources, &ids);
-    ReviewSide {
-        sources,
-        checks,
-        subjects,
-    }
-}
-
-fn refusal(label: &str, side: &ReviewSide) -> Option<String> {
-    let errors = side.checks.iter().map(Checked::error_count).sum::<usize>();
-    let unnamed = side.checks[..side.subjects]
-        .iter()
-        .filter(|checked| checked.module.name.is_none())
-        .count();
-    if errors == 0 && unnamed == 0 {
-        return None;
-    }
-
-    let mut text = json_report(&side.sources, &side.checks, false);
-    text.push_str(&format!(
-        "{{\"kind\":\"review_refused\",\"side\":{},\"errors\":{errors},\"unnamed\":{unnamed},\"message\":{}}}\n",
-        json_string(label),
-        json_string("every reviewed source must check and declare a module")
-    ));
-    Some(text)
 }
 
 fn invalid(message: &str) -> Failure {
