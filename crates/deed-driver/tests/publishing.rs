@@ -156,15 +156,15 @@ fn no_crate_names_a_sibling_by_path_alone() {
                 "{} names a sibling by path, which cannot be published",
                 path.display()
             );
-            if let Some(name) = line.strip_suffix(".workspace = true") {
-                if name.starts_with("deed-") {
-                    assert!(
-                        names.iter().any(|declared| declared == name),
-                        "{} inherits `{name}`, which the workspace does not declare",
-                        path.display()
-                    );
-                    inherited += 1;
-                }
+            if let Some(name) = line.strip_suffix(".workspace = true")
+                && name.starts_with("deed-")
+            {
+                assert!(
+                    names.iter().any(|declared| declared == name),
+                    "{} inherits `{name}`, which the workspace does not declare",
+                    path.display()
+                );
+                inherited += 1;
             }
         }
     }

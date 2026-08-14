@@ -189,14 +189,13 @@ fn declared_codes(root: &Path) -> Vec<(String, String, String)> {
                 let content = rest.strip_prefix(' ').unwrap_or(rest);
                 doc_lines.push(content.to_string());
             } else if let Some(rest) = trimmed.strip_prefix("pub const ") {
-                if let Some((name, rest)) = rest.split_once(':') {
-                    if let Some(start) = rest.find("\"DEED") {
-                        if let Some(end) = rest[start + 1..].find('"') {
-                            let code = rest[start + 1..start + 1 + end].to_string();
-                            let doc = doc_lines.join("\n");
-                            codes.push((name.trim().to_string(), code, doc));
-                        }
-                    }
+                if let Some((name, rest)) = rest.split_once(':')
+                    && let Some(start) = rest.find("\"DEED")
+                    && let Some(end) = rest[start + 1..].find('"')
+                {
+                    let code = rest[start + 1..start + 1 + end].to_string();
+                    let doc = doc_lines.join("\n");
+                    codes.push((name.trim().to_string(), code, doc));
                 }
                 doc_lines.clear();
             } else if !trimmed.is_empty() && !trimmed.starts_with("//") {
@@ -240,14 +239,13 @@ fn collect_test_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) 
             collect_test_files(&path, root, out);
         } else if path.extension().is_some_and(|e| e == "rs")
             && path.file_name().is_some_and(|n| n != "codes.rs")
+            && let Ok(text) = fs::read_to_string(&path)
         {
-            if let Ok(text) = fs::read_to_string(&path) {
-                let rel = path
-                    .strip_prefix(root)
-                    .map(|p| p.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-                out.push((rel, text));
-            }
+            let rel = path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+            out.push((rel, text));
         }
     }
 }

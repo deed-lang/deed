@@ -683,7 +683,7 @@ impl Strings {
         let mut bytes = (text.chars().count() as i64).to_le_bytes().to_vec();
         bytes.extend_from_slice(&(text.len() as i64).to_le_bytes());
         bytes.extend_from_slice(text.as_bytes());
-        while bytes.len() % layout::WORD as usize != 0 {
+        while !bytes.len().is_multiple_of(layout::WORD as usize) {
             bytes.push(0);
         }
         self.next += bytes.len() as u32;

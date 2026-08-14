@@ -3378,10 +3378,8 @@ impl<'a> Interp<'a> {
 
             // Keep the original failure; only replace a non-failing outcome
             // with a `finally` failure.
-            if !body_failed {
-                if let Err(signal) = finally_result {
-                    outcome = Err(signal);
-                }
+            if !body_failed && let Err(signal) = finally_result {
+                outcome = Err(signal);
             }
         }
 

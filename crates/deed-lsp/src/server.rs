@@ -256,11 +256,11 @@ impl Server {
         // A `use` path is not a resolved name and has no type. Go to definition
         // and documentLink already open the file; hover should still say what
         // module it is and whether this workspace can open it.
-        if range.is_none() {
-            if let Some((path_span, about)) = self.hover_use_path(&checked, offset) {
-                lines.push(about);
-                range = Some(path_span);
-            }
+        if range.is_none()
+            && let Some((path_span, about)) = self.hover_use_path(&checked, offset)
+        {
+            lines.push(about);
+            range = Some(path_span);
         }
 
         let Some(range) = range else {
@@ -2557,10 +2557,10 @@ fn comment_folds(document: &Document, trivia: &[deed_lexer::Trivia], ranges: &mu
 
     for item in trivia {
         if item.kind != deed_lexer::TriviaKind::Line {
-            if let Some((start, end)) = run.take() {
-                if end > start {
-                    ranges.push(comment_fold(start, end));
-                }
+            if let Some((start, end)) = run.take()
+                && end > start
+            {
+                ranges.push(comment_fold(start, end));
             }
             continue;
         }
@@ -2581,10 +2581,10 @@ fn comment_folds(document: &Document, trivia: &[deed_lexer::Trivia], ranges: &mu
         };
     }
 
-    if let Some((start, end)) = run {
-        if end > start {
-            ranges.push(comment_fold(start, end));
-        }
+    if let Some((start, end)) = run
+        && end > start
+    {
+        ranges.push(comment_fold(start, end));
     }
 }
 
@@ -2703,10 +2703,8 @@ fn collect_block_spans(offset: u32, block: &Block, spans: &mut Vec<Span>) {
         .stmts
         .iter()
         .any(|stmt| collect_stmt_spans(offset, stmt, spans));
-    if !found {
-        if let Some(tail) = &block.tail {
-            collect_expr_spans(offset, tail, spans);
-        }
+    if !found && let Some(tail) = &block.tail {
+        collect_expr_spans(offset, tail, spans);
     }
     push_span_if_new(block.span, spans);
 }
@@ -2797,10 +2795,9 @@ fn collect_expr_spans(offset: u32, expr: &Expr, spans: &mut Vec<Span>) -> bool {
         } => {
             if !collect_expr_spans(offset, condition, spans)
                 && !collect_block_spans_checked(offset, then_branch, spans)
+                && let Some(else_b) = else_branch
             {
-                if let Some(else_b) = else_branch {
-                    collect_expr_spans(offset, else_b, spans);
-                }
+                collect_expr_spans(offset, else_b, spans);
             }
         }
         Expr::Match {
