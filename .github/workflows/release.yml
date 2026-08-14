@@ -88,9 +88,9 @@ jobs:
           else
             cp "target/${{ matrix.target }}/release/deed" "$staging/"
           fi
-          # The licence travels with the binary, and so does the one page that
-          # says what to type first.
-          cp LICENSE "$staging/"
+          # Both licence choices travel with the binary, and so does the one
+          # page that says what to type first.
+          cp LICENSE LICENSE-MIT "$staging/"
           cp README.md "$staging/"
           if [ "${{ runner.os }}" = "Windows" ]; then
             (cd dist && 7z a "$name.zip" "$name" > /dev/null)

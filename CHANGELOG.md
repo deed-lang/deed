@@ -28,7 +28,8 @@ release notes.
 
 ### Tools
 
-- None yet.
+- Cargo packages, release archives and the VS Code extension are available
+  under MIT or Apache-2.0, at the user's option.
 
 ### Measurements
 

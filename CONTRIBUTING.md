@@ -198,6 +198,12 @@ One PR, one concern. Link the issue it closes. If a PR changes behaviour that a 
 document describes, update the document in the same PR, because a design that lags the code
 is worse than no design at all.
 
+## Licensing contributions
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for
+inclusion in Deed is licensed under MIT or Apache-2.0, at the recipient's option, without
+additional terms or conditions.
+
 ## Merging a coding agent's PR
 
 These land like anything else, with one extra step at the merge.

@@ -1011,4 +1011,4 @@ attacking right now, not the code.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE), at your option.

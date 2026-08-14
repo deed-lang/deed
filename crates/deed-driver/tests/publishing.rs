@@ -82,6 +82,74 @@ fn every_internal_dependency_asks_for_the_version_this_workspace_is() {
 }
 
 #[test]
+fn every_published_crate_offers_the_dual_license() {
+    let expected = "MIT OR Apache-2.0";
+    assert_eq!(
+        field(&manifest(), "[workspace.package]", "license"),
+        expected
+    );
+    let apache = std::fs::read(root().join("LICENSE")).expect("the Apache license");
+    let mit = std::fs::read(root().join("LICENSE-MIT")).expect("the MIT license");
+    assert!(apache.starts_with(b"                                 Apache License"));
+    assert!(mit.starts_with(b"MIT License"));
+
+    let mut inherited = 0;
+    for entry in std::fs::read_dir(root().join("crates")).expect("crates/") {
+        let crate_root = entry.expect("an entry").path();
+        let path = crate_root.join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        assert!(
+            text.lines()
+                .any(|line| line.trim() == "license.workspace = true"),
+            "{} does not inherit the workspace license",
+            path.display()
+        );
+        assert_eq!(
+            std::fs::read(crate_root.join("LICENSE")).expect("the packaged Apache license"),
+            apache,
+            "{} packages a different Apache license",
+            crate_root.display()
+        );
+        assert_eq!(
+            std::fs::read(crate_root.join("LICENSE-MIT")).expect("the packaged MIT license"),
+            mit,
+            "{} packages a different MIT license",
+            crate_root.display()
+        );
+        inherited += 1;
+    }
+    assert!(
+        inherited > 10,
+        "only {inherited} package licenses were checked"
+    );
+
+    for (path, claim) in [
+        (
+            "editors/vscode/package.json",
+            "\"license\": \"MIT OR Apache-2.0\"",
+        ),
+        (
+            "README.md",
+            "[MIT](LICENSE-MIT) or [Apache-2.0](LICENSE), at your option",
+        ),
+        (
+            ".github/workflows/release.yml",
+            "cp LICENSE LICENSE-MIT \"$staging/\"",
+        ),
+        (
+            "CONTRIBUTING.md",
+            "licensed under MIT or Apache-2.0, at the recipient's option",
+        ),
+    ] {
+        let text = std::fs::read_to_string(root().join(path))
+            .unwrap_or_else(|error| panic!("could not read {path}: {error}"));
+        assert!(text.contains(claim), "{path} does not say `{claim}`");
+    }
+}
+
+#[test]
 fn every_internal_dependency_points_at_the_crate_of_that_name() {
     for (name, path, _) in declared() {
         assert_eq!(path, format!("crates/{name}"), "`{name}` points elsewhere");

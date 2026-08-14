@@ -124,7 +124,8 @@ finished. Nothing here needs work; it is listed so it is not redone.
   `"name": "Deed"`, `"scopeName": "source.deed"`. Linguist highlights with
   TextMate grammars, not tree-sitter, so this is the right artifact and it
   already exists.
-- **A permissive licence.** Apache-2.0, which is on Linguist's accepted list.
+- **A permissive licence.** MIT or Apache-2.0, at the user's option; both are on
+      Linguist's accepted list.
 - **Real samples.** `std/*.deed` and `examples/*.deed` are working programs, not
   tutorials. Linguist rejects "hello world and other examples found in
   tutorials"; `std/list.deed` and `examples/transfer.deed` are neither.
