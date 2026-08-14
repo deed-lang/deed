@@ -48,9 +48,9 @@ language server are all in that one file.
 Start with the [tutorial](TUTORIAL.md) if you want one program built up one step at a time.
 
 ```
-$ tar xzf deed-v0.2.11-x86_64-unknown-linux-gnu.tar.gz
-$ ./deed-v0.2.11-x86_64-unknown-linux-gnu/deed --version
-deed 0.2.11
+$ tar xzf deed-v0.2.12-x86_64-unknown-linux-gnu.tar.gz
+$ ./deed-v0.2.12-x86_64-unknown-linux-gnu/deed --version
+deed 0.2.12
 ```
 
 With Rust 1.88 or newer instead, from crates.io or from a clone:
@@ -61,7 +61,8 @@ $ cargo install --path crates/deed-cli
 ```
 
 `deed` on crates.io belongs to somebody else, so the package is `deed-lang`.
-The binary it installs is `deed`.
+The binary it installs is `deed`; the [package README](crates/deed-cli/README.md)
+keeps the short install and MCP entry points next to the package metadata.
 
 **What the version promises.** `0.x` says the language can still move, so a file that
 compiles against one minor release may not compile against the next. Breaking moves are
@@ -152,6 +153,7 @@ stdout, so the machine writing the code can ask the compiler the same questions
 an editor does rather than scraping them out of terminal output. It holds no
 capability: a program arrives as text, the answer leaves as text, and a program
 whose row reaches a file is refused before it runs.
+Its official Registry name is `mcp-name: io.github.deed-lang/deed`.
 [how-to/let-an-agent-use-the-compiler.md](how-to/let-an-agent-use-the-compiler.md)
 has the tool reference and the one line worth reading.
 

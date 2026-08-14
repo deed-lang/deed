@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.deed-lang/deed",
+  "title": "Deed",
+  "description": "Contract-first language and MCP server for capability-aware code and patch review.",
+  "websiteUrl": "https://deed-lang.github.io/agents/",
+  "repository": {
+    "url": "https://github.com/deed-lang/deed",
+    "source": "github",
+    "subfolder": "crates/deed-cli"
+  },
+  "version": "0.2.12",
+  "packages": [
+    {
+      "registryType": "cargo",
+      "registryBaseUrl": "https://crates.io",
+      "identifier": "deed-lang",
+      "version": "0.2.12",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}
