@@ -28,6 +28,12 @@ fn manifest() -> String {
     std::fs::read_to_string(root().join("Cargo.toml")).expect("the workspace manifest")
 }
 
+fn normalized_text(path: &Path) -> String {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", path.display()))
+        .replace("\r\n", "\n")
+}
+
 /// The value of a `key = "value"` line in a section.
 fn field(text: &str, section: &str, key: &str) -> String {
     let body = text
@@ -88,10 +94,10 @@ fn every_published_crate_offers_the_dual_license() {
         field(&manifest(), "[workspace.package]", "license"),
         expected
     );
-    let apache = std::fs::read(root().join("LICENSE")).expect("the Apache license");
-    let mit = std::fs::read(root().join("LICENSE-MIT")).expect("the MIT license");
-    assert!(apache.starts_with(b"                                 Apache License"));
-    assert!(mit.starts_with(b"MIT License"));
+    let apache = normalized_text(&root().join("LICENSE"));
+    let mit = normalized_text(&root().join("LICENSE-MIT"));
+    assert!(apache.starts_with("                                 Apache License"));
+    assert!(mit.starts_with("MIT License"));
 
     let mut inherited = 0;
     for entry in std::fs::read_dir(root().join("crates")).expect("crates/") {
@@ -107,13 +113,13 @@ fn every_published_crate_offers_the_dual_license() {
             path.display()
         );
         assert_eq!(
-            std::fs::read(crate_root.join("LICENSE")).expect("the packaged Apache license"),
+            normalized_text(&crate_root.join("LICENSE")),
             apache,
             "{} packages a different Apache license",
             crate_root.display()
         );
         assert_eq!(
-            std::fs::read(crate_root.join("LICENSE-MIT")).expect("the packaged MIT license"),
+            normalized_text(&crate_root.join("LICENSE-MIT")),
             mit,
             "{} packages a different MIT license",
             crate_root.display()

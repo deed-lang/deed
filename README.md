@@ -48,9 +48,9 @@ language server are all in that one file.
 Start with the [tutorial](TUTORIAL.md) if you want one program built up one step at a time.
 
 ```
-$ tar xzf deed-v0.2.12-x86_64-unknown-linux-gnu.tar.gz
-$ ./deed-v0.2.12-x86_64-unknown-linux-gnu/deed --version
-deed 0.2.12
+$ tar xzf deed-v0.2.13-x86_64-unknown-linux-gnu.tar.gz
+$ ./deed-v0.2.13-x86_64-unknown-linux-gnu/deed --version
+deed 0.2.13
 ```
 
 With Rust 1.88 or newer instead, from crates.io or from a clone:

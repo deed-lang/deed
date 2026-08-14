@@ -9,13 +9,13 @@
     "source": "github",
     "subfolder": "crates/deed-cli"
   },
-  "version": "0.2.12",
+  "version": "0.2.13",
   "packages": [
     {
       "registryType": "cargo",
       "registryBaseUrl": "https://crates.io",
       "identifier": "deed-lang",
-      "version": "0.2.12",
+      "version": "0.2.13",
       "transport": {
         "type": "stdio"
       },
