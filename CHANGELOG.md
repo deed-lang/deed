@@ -28,7 +28,10 @@ release notes.
 
 ### Tools
 
-- None yet.
+- The declared minimum Rust toolchain is now 1.88, matching the let-chain
+  syntax already used by the parser and resolver. Rust 1.87 and older failed
+  before `deed-lang` could compile. CI now builds the workspace with 1.88 so
+  the declaration cannot silently fall behind the source again.
 
 ### Measurements
 

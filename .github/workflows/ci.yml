@@ -41,6 +41,21 @@ jobs:
       - name: cargo test --doc
         run: cargo test --doc --workspace
 
+  msrv:
+    name: minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace --locked
+
   mutants:
     name: mutants on the diff, shard ${{ matrix.shard }}
     runs-on: ubuntu-latest

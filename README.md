@@ -53,7 +53,7 @@ $ ./deed-v0.2.11-x86_64-unknown-linux-gnu/deed --version
 deed 0.2.11
 ```
 
-With Rust 1.85 or newer instead, from crates.io or from a clone:
+With Rust 1.88 or newer instead, from crates.io or from a clone:
 
 ```
 $ cargo install deed-lang
