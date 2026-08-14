@@ -28,6 +28,32 @@ release notes.
 
 ### Tools
 
+- None yet.
+
+### Measurements
+
+- None yet.
+
+## 0.2.13 (2026-08-15)
+
+### Programs that used to compile and no longer do
+
+- None yet.
+
+### Language
+
+- None yet.
+
+### Diagnostics
+
+- None yet.
+
+### Standard library
+
+- None yet.
+
+### Tools
+
 - Cargo packages, release archives and the VS Code extension are available
   under MIT or Apache-2.0, at the user's option.
 
