@@ -800,10 +800,10 @@ fn instantiate_nominal(
     nominals: &HashMap<String, Nominal<'_>>,
     shapes: &mut Vec<crate::Layout>,
 ) -> Result<crate::LayoutId, Unlowered> {
-    if args.is_empty() {
-        if let Some(id) = layouts.get(name) {
-            return Ok(*id);
-        }
+    if args.is_empty()
+        && let Some(id) = layouts.get(name)
+    {
+        return Ok(*id);
     }
 
     let nominal = match nominals.get(name) {

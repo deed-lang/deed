@@ -2483,13 +2483,12 @@ fn resolve_imports(
     let mut seed_texts: Vec<String> = Vec::new();
     for path in files.iter() {
         let text = std::fs::read_to_string(path).unwrap_or_default();
-        if let Some((module, _)) = deed_driver::imports_of(&text) {
-            if let Some(root) = root_of(path, &module) {
-                if known_roots.insert(root.clone()) {
-                    read_manifest(&root, &mut component_roots, &mut fetched, manifests);
-                    roots.push(root);
-                }
-            }
+        if let Some((module, _)) = deed_driver::imports_of(&text)
+            && let Some(root) = root_of(path, &module)
+            && known_roots.insert(root.clone())
+        {
+            read_manifest(&root, &mut component_roots, &mut fetched, manifests);
+            roots.push(root);
         }
         seed_texts.push(text);
     }
@@ -2540,13 +2539,12 @@ fn resolve_imports(
                 let Ok(text) = std::fs::read_to_string(&candidate) else {
                     continue;
                 };
-                if let Some((m, _)) = deed_driver::imports_of(&text) {
-                    if let Some(new_root) = root_of(&candidate, &m) {
-                        if known_roots.insert(new_root.clone()) {
-                            read_manifest(&new_root, &mut component_roots, &mut fetched, manifests);
-                            roots.push(new_root);
-                        }
-                    }
+                if let Some((m, _)) = deed_driver::imports_of(&text)
+                    && let Some(new_root) = root_of(&candidate, &m)
+                    && known_roots.insert(new_root.clone())
+                {
+                    read_manifest(&new_root, &mut component_roots, &mut fetched, manifests);
+                    roots.push(new_root);
                 }
                 known_files.insert(candidate.clone());
                 new_files.push(candidate.clone());

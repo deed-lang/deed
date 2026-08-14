@@ -1580,13 +1580,13 @@ impl<'a> Checker<'a> {
         );
         // The arity lives on the declaration. Without this pin the reader is
         // left counting angle brackets against a name that is already known.
-        if let Some((file, at)) = declared_here {
-            if !at.is_empty() {
-                diagnostic = match file {
-                    Some(other) => diagnostic.with_secondary_in(other, at, "declared here"),
-                    None => diagnostic.with_secondary(at, "declared here"),
-                };
-            }
+        if let Some((file, at)) = declared_here
+            && !at.is_empty()
+        {
+            diagnostic = match file {
+                Some(other) => diagnostic.with_secondary_in(other, at, "declared here"),
+                None => diagnostic.with_secondary(at, "declared here"),
+            };
         }
         self.emit(diagnostic);
         false
@@ -4627,15 +4627,13 @@ impl<'a> Checker<'a> {
                     // Same pin MISSING_FIELDS already has: the declaration is
                     // where the real fields live, and a wrong name is the other
                     // half of the same question.
-                    if let Some((file, at)) = declared_here {
-                        if !at.is_empty() {
-                            diagnostic = match file {
-                                Some(other) => {
-                                    diagnostic.with_secondary_in(other, at, "declared here")
-                                }
-                                None => diagnostic.with_secondary(at, "declared here"),
-                            };
-                        }
+                    if let Some((file, at)) = declared_here
+                        && !at.is_empty()
+                    {
+                        diagnostic = match file {
+                            Some(other) => diagnostic.with_secondary_in(other, at, "declared here"),
+                            None => diagnostic.with_secondary(at, "declared here"),
+                        };
                     }
                     self.emit(diagnostic);
                     if let Some(value) = &init.value {
@@ -4686,13 +4684,13 @@ impl<'a> Checker<'a> {
             .with_note(
                 "every field has to be given, because a partially built value is not a value",
             );
-            if let Some((file, at)) = declared_here {
-                if !at.is_empty() {
-                    diagnostic = match file {
-                        Some(other) => diagnostic.with_secondary_in(other, at, "declared here"),
-                        None => diagnostic.with_secondary(at, "declared here"),
-                    };
-                }
+            if let Some((file, at)) = declared_here
+                && !at.is_empty()
+            {
+                diagnostic = match file {
+                    Some(other) => diagnostic.with_secondary_in(other, at, "declared here"),
+                    None => diagnostic.with_secondary(at, "declared here"),
+                };
             }
             self.emit(diagnostic);
         }

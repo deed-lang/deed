@@ -837,10 +837,10 @@ impl<'a> TypeIndex<'a> {
                 match self.resolutions.def(def).kind {
                     DefKind::Builtin => match name.name.as_str() {
                         "Int" => Some(Value::Int(rng.int())),
-                        "Bool" => Some(Value::Bool(rng.next() % 2 == 0)),
+                        "Bool" => Some(Value::Bool(rng.next().is_multiple_of(2))),
                         "String" => Some(Value::Str(rng.word().into())),
                         "Result" => {
-                            let ok = rng.next() % 2 == 0;
+                            let ok = rng.next().is_multiple_of(2);
                             let inner =
                                 self.generate(args.get(usize::from(!ok))?, rng, interp, depth + 1)?;
                             Some(if ok {

@@ -1220,18 +1220,18 @@ impl<'a> Parser<'a> {
             // disambiguate and no reason to reserve the words for the rest
             // of the language.
             if self.eat_named("state") {
-                if let Some(field_name) = self.expect_ident("handler state") {
-                    if self.expect(TokenKind::Colon, "handler state").is_some() {
-                        let ty = self.parse_type();
-                        if self.at(&TokenKind::Eq) {
-                            self.state_has_no_initialiser();
-                        }
-                        state.push(FieldDecl {
-                            span: field_name.span.to(ty.span()),
-                            name: field_name,
-                            ty,
-                        });
+                if let Some(field_name) = self.expect_ident("handler state")
+                    && self.expect(TokenKind::Colon, "handler state").is_some()
+                {
+                    let ty = self.parse_type();
+                    if self.at(&TokenKind::Eq) {
+                        self.state_has_no_initialiser();
                     }
+                    state.push(FieldDecl {
+                        span: field_name.span.to(ty.span()),
+                        name: field_name,
+                        ty,
+                    });
                 }
             } else if self.eat_named("finally") {
                 finally = Some(self.parse_block());
@@ -2334,10 +2334,10 @@ impl<'a> Parser<'a> {
         // `xs ++ ys` and `x :: xs`, borrowed from languages where a list has
         // operators. Doubled, both of them, and nothing in this grammar puts
         // two of either in a row, so the shape is safe to read here.
-        if !self.continues_a_new_line() {
-            if let Some(borrowed) = self.borrowed_operator() {
-                lhs = self.no_such_list_operator(lhs, borrowed);
-            }
+        if !self.continues_a_new_line()
+            && let Some(borrowed) = self.borrowed_operator()
+        {
+            lhs = self.no_such_list_operator(lhs, borrowed);
         }
 
         while let Some((op, bp, spelled)) = self.infix_operator() {
